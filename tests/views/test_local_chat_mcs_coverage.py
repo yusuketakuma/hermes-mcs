@@ -299,9 +299,11 @@ def test_last_reply_is_incomplete_while_replies_are_missing(snapshot):
 
 
 def test_mention_self_unknown_without_own_identity():
+    import message_metadata
+    assert local_chat_view.flags is message_metadata.flags      # the chat cards' own reading
     metadata = {"mentions": [{"type": "user", "id": 8}], "mentions_status": "observed",
                 "is_pinned": None, "pin_status": "invalid", "is_bookmarked": False, "bookmark_status": "observed"}
-    assert local_chat_view._flags(metadata, None) == {
+    assert local_chat_view.flags(metadata, None) == {
         "mention_self": {"value": None, "state": "self_unknown"},
         "pinned": {"value": None, "state": "invalid"}, "bookmarked": {"value": False, "state": "observed"}}
 
@@ -421,7 +423,7 @@ def test_source_search_says_what_was_not_searched_and_pages(snapshot, monkeypatc
     assert any("添付OCRは設定で無効" in note for note in data["notes"])
     assert "source_ref" not in json.dumps(data) and data["range_complete"] is True and data["next_cursor"] is None
     empty = chat.response(snapshot, {2}, "sources", "project=2&q=存在しない語")
-    assert empty["items"] == [] and empty["empty"] == "検索した取得済み原資料に一致するものはありません。"
+    assert empty["items"] == [] and empty["empty"] == "調べた範囲の取得済み原資料には、一致する記載は見つかりませんでした。"
     import patient_search
     monkeypatch.setattr(patient_search, "SCAN_LIMIT", 1)
     first = chat.response(snapshot, {2}, "sources", "project=2&q=合成記録")
@@ -560,11 +562,15 @@ def test_timeline_reads_each_post_detail_once_per_page(snapshot, monkeypatch):
     assert not any("WHERE message_id=?" in s and "profession,organization" in s for s in statements)
 
 
-def test_unfetched_actor_reading_is_the_stamp_reader_s_own(snapshot):
+def test_page_actor_readings_are_the_stamp_reader_s_own(snapshot):
     from stamp_read import reaction_actor_summary
     view = mcs_view.View(snapshot)
     try:
-        assert local_chat_view._actors_not_fetched() == reaction_actor_summary(view.db, 999, now=NOW)
+        rows = [view._message(1, 10), view._message(1, 20)]
+        reads = local_chat_view._PageReads(view, 1, rows)
+        now = view.meta["generated_at"]
+        assert reads.actors == {mid: reaction_actor_summary(view.db, mid, now=now) for mid in (10, 20)}
+        assert reads.actors[10]["state"] == "complete" and reads.actors[20]["state"] == "not_fetched"
     finally:
         view.close()
 
@@ -586,7 +592,8 @@ def test_source_search_returns_each_range_s_unsearched_counts(snapshot, monkeypa
     import mcs_util
     import notify_views
     monkeypatch.setattr(mcs_util, "load_config", lambda: {})
-    assert chat.response(snapshot, {2}, "sources", "project=2&q=合成")["skipped"] is None    # not reported yet
+    assert chat.response(snapshot, {2}, "sources", "project=2&q=合成")["skipped"] == {
+        "ocr_pending": 0, "body_unavailable": 0, "unclassified": 0}
     real = notify_views.patient_search_view
     monkeypatch.setattr(notify_views, "patient_search_view", lambda *a, **k: {
         **real(*a, **k), "skipped": {"ocr_pending": 2, "body_unavailable": 1, "unclassified": 0, "other": 9}})
@@ -734,3 +741,71 @@ def test_a_multi_post_page_reads_only_its_own_revisions(snapshot):
     assert reads.revisions == {10: ("full", NOW + 10)}      # 12's deletion is not on this page
     scan = [s for s in statements if "FROM message_revisions r" in s]
     assert len(scan) == 1 and "r.message_id IN (" in scan[0]
+
+
+def test_attachment_fetch_failure_keeps_its_http_status(tmp_path):
+    errors = ["http_404", "http_4041", "network_error", "/private/合成/path", "http_abc"]
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    try:
+        with store.db:
+            store.db.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'合成 花子')")
+            store.db.executemany("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,body_state,"
+                                 "content_hash) VALUES(?,1,?,'合成','full',printf('%064x',?))",
+                                 [(10 + i, 100 + i, 10 + i) for i in range(len(errors))])
+            store.db.executemany("INSERT INTO attachments(message_id,name,state,error) VALUES(?,'合成.pdf','failed',?)",
+                                 [(10 + i, error) for i, error in enumerate(errors)])
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    shown = [chat.response(snapshot, {1}, "attachments", f"project=1&message={10 + i}")["items"][0]["error"]
+             for i in range(len(errors))]
+    # the collector's http_NNN keeps its number; anything else stays normalised as before
+    assert shown == ["http_404", "other_error", "network_error", "other_error", "other_error"]
+
+
+def test_rollup_reads_registered_data_without_the_unfetched_items(tmp_path, monkeypatch):
+    # The rollup freshness signature hashes registered_data's default output: listing unfetched items for a
+    # reader must not change it, or every such patient's rollup would read as stale.
+    import registered_data as shared
+    import rollup
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    a, b = {"id": 11, "name": "合成検査A"}, {"id": 12, "name": "合成検査B"}
+    try:
+        with store.db:
+            store.db.execute("INSERT INTO patients(project_id,patient_name,project_type,karte_id) "
+                             "VALUES(1,'合成 花子','medical',501)")
+            store.artifact_add_tx("project_metadata_v1", _metadata("observation_items", rows=[
+                {"lab_test_item": a}, {"lab_test_item": b}]), project_id=1)
+            store.artifact_add_tx("project_metadata_v1", _metadata(
+                "observation_values", item_id=11, rows=[], definition={"lab_test_item": a}), project_id=1)
+        base = shared.registered_data(store.db, "aggregate", 1, None)
+        listed = shared.registered_data(store.db, "aggregate", 1, None, unfetched_items=True)
+        assert [(r["dataset"], r["state"]) for r in base["records"]] == [
+            ("medication_periods", "unknown"), ("observation_items", "complete"), ("observation_values", "empty")]
+        assert base["total"] == 3 and listed["total"] == 4 and listed["records"][:3] == base["records"]
+        assert shared.registered_data(store.db, "detail", 1, 2)["total"] == 3     # the limit counts stored only
+        calls = []
+        real = shared.registered_data
+        monkeypatch.setattr(shared, "registered_data", lambda *args, **kwargs: calls.append(kwargs) or real(
+            *args, **kwargs))
+        first = rollup._message_source_signature_snapshot(store.db, 1, NOW)
+        assert calls == [{}]                         # the signature reads the stored targets only
+        monkeypatch.setattr(shared, "registered_data", lambda *args, **kwargs: base)
+        assert rollup._message_source_signature_snapshot(store.db, 1, NOW) == first
+    finally:
+        store.close()
+
+
+def test_source_search_with_unreadable_settings_says_ocr_is_unknown(snapshot, monkeypatch, tmp_path):
+    import mcs_util
+    import notify_views
+    path = tmp_path / "config.json"
+    path.write_text("{", encoding="utf-8")
+    real = mcs_util.config_read_state
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: real(str(path)))
+    data = chat.response(snapshot, {2}, "sources", "project=2&q=合成記録")
+    assert data["state"] == "searched" and {item["message_id"] for item in data["items"]} == {30, 31}
+    assert notify_views.OCR_SEARCH_SETTINGS_UNREADABLE in data["notes"]
+    assert not any("設定で無効" in note for note in data["notes"])

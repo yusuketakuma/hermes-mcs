@@ -300,7 +300,7 @@ def patient_label(db, pid) -> str:
 
 
 UNKNOWN_DATE = "日付不明"
-UNKNOWN_TIME = "時刻不明"
+UNKNOWN_CLOCK_LABEL = "時刻不明"
 
 
 def mmdd(posted_at) -> str:
@@ -322,7 +322,7 @@ def _deleted_line(posted_at, sender: str) -> str:
 def posted_hhmm(posted_at) -> str:
     if isinstance(posted_at, str) and len(posted_at) >= 16:
         return posted_at[11:16]
-    return UNKNOWN_TIME
+    return UNKNOWN_CLOCK_LABEL
 
 
 def posted_time_label(posted_at) -> str:
@@ -542,7 +542,7 @@ def attachment_ocr_records(db, mid):
 
 # Every state attachment_ocr.view / current reports; an unknown one says so instead of a wrong word.
 OCR_STATE_LABELS = {"complete": "完了", "empty": "文字なし", "unprocessed": "未処理", "failed": "失敗",
-                    "unsupported": "対応していない形式", "unavailable": "原本なしのため作成できず",
+                    "unsupported": "対応していない形式", "unavailable": "原本を取得できていないため作成できず",
                     "rejected_by_policy": "表の読み取りが不確かなため除外"}
 
 

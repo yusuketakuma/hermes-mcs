@@ -205,15 +205,18 @@ def test_item_without_a_values_attempt_is_listed_as_not_fetched(context_db, monk
     waiting = {"lab_test_item": {**DEFINITION["lab_test_item"], "id": 56, "name": "合成の未取得項目"}}
     pin = _metadata(store, "observation_items", [fetched, waiting])
     _metadata(store, "observation_values", [VALUE], item_id=55, definition=fetched, pin=pin)
-    detail = registered_data(store.db, "detail", 1, None)
+    detail = registered_data(store.db, "detail", 1, None, unfetched_items=True)
     values = {r["item_id"]: r for r in detail["records"] if r["dataset"] == "observation_values"}
     assert set(values) == {55, 56} and detail["total"] == len(detail["records"])
     assert values[55]["state"] == "complete"
     # not reached by the rotation yet: unknown/not_fetched with no rows, never an empty (no values) fact
     assert (values[56]["state"], values[56]["reason"], values[56]["rows"]) == ("unknown", "not_fetched", [])
     assert values[56]["definition"]["lab_test_item"]["name"] == "合成の未取得項目"
-    aggregate = registered_data(store.db, "aggregate", 1, None)
+    aggregate = registered_data(store.db, "aggregate", 1, None, unfetched_items=True)
     unfetched = [r for r in aggregate["records"] if r["dataset"] == "observation_values" and r["state"] == "unknown"]
     assert len(unfetched) == 1 and unfetched[0]["rows_total"] == 0 and unfetched[0]["fields"] == []
+    # the stored targets alone (what the rollup signature and read_model read) leave the item out
+    stored = registered_data(store.db, "detail", 1, None)
+    assert [r["item_id"] for r in stored["records"] if r["dataset"] == "observation_values"] == [55]
     lines = "\n".join(notify_views._registered_clinical_lines(store.db, 1))
     assert "・観測値: " in lines and "未取得・未確認 1項目" in lines

@@ -45,8 +45,12 @@ def _with_unfetched_values(db, targets, now):
     return sorted(targets + added, key=lambda t: (t["project_id"], t["dataset"], t["item_id"] or 0))
 
 
-def registered_data(db, scope, project_id, limit):
-    """Read optional registered clinical data separately from chat and memo reports."""
+def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
+    """Read optional registered clinical data separately from chat and memo reports.
+
+    ``unfetched_items`` (for a reader that shows each item's state) also lists every item of the validated
+    observation-item list whose values were never attempted, as 未取得; without it the records are the
+    stored targets only, which the rollup freshness signature hashes."""
     if not table_exists(db, "patients") or not {"project_type", "karte_id"} <= {
             row[1] for row in db.execute("PRAGMA table_info(patients)")}:
         return None
@@ -72,12 +76,17 @@ def registered_data(db, scope, project_id, limit):
           AND json_extract(a.content,'$.item_id')>0 ELSE 0 END
         ) """
     now = snapshot_meta(db)["generated_at"]
-    targets = [dict(row) for row in db.execute(
-        sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id", params)]
-    targets = _with_unfetched_values(db, targets, now)
-    total = len(targets)
+    query = sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id"
+    if unfetched_items:
+        targets = _with_unfetched_values(db, [dict(row) for row in db.execute(query, params)], now)
+        total = len(targets)
+        targets = targets if limit is None else targets[:limit]
+    else:
+        total = db.execute(sql + "SELECT COUNT(*) FROM targets", params).fetchone()[0]
+        targets = [dict(row) for row in db.execute(query + (" LIMIT ?" if limit is not None else ""),
+                                                   [*params, limit] if limit is not None else params)]
     records = []
-    for target in targets if limit is None else targets[:limit]:
+    for target in targets:
         result = target.pop("_result", None) or get_project_metadata(
             db, target["project_id"], target["dataset"], item_id=target["item_id"], now=now)
         if result["definition"] is None and target.get("_item_row") is not None:

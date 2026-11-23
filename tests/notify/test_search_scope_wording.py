@@ -50,7 +50,7 @@ def test_search_row_without_a_date_has_no_placeholder(led):
 
 
 @pytest.mark.parametrize("archived,reason", [(1, None), (0, "forbidden")])
-def test_unsearchable_room_says_why_for_every_transport(led, archived, reason):
+def test_unsearchable_room_says_why_in_the_search_action(led, archived, reason):
     _patient(led, archived=archived)
     led.db.execute("UPDATE patients SET fetch_reason=? WHERE project_id=1", (reason,))
     _msg(led, 101)
@@ -83,8 +83,11 @@ def test_summary_card_and_read_model_agree_on_an_unlinked_karte(led):
     _patient(led)
     led.artifact_add("karte_summary", json.dumps({"comment": "合成の連携メモ", "empty": False}),
                      project_id=1, meta={"karte_id": 7, "fetched_at": 1})
-    assert notify_views.karte_summary_status(led.db, 1)["state"] == "not_fetched"
-    assert read_model._project_metadata(led.db, "detail", 1, None)["records"][0]["state"] == "unknown"
+    # stored but not this patient's: the same "unknown" reading, never 未取得
+    status = notify_views.karte_summary_status(led.db, 1)
+    assert status["state"] == read_model._project_metadata(led.db, "detail", 1, None)["records"][0]["state"] == "unknown"
+    assert status["line"] == "連携サマリー（MCS）: 未確認" and status["comment"] is None
+    assert "■ 連携サマリー（MCS）: 未確認" in notify_views.patient_summary_text(led.db, 1)[1]
     led.db.execute("UPDATE patients SET karte_id=7 WHERE project_id=1")
     assert notify_views.karte_summary_status(led.db, 1)["state"] == "present"
     assert read_model._project_metadata(led.db, "detail", 1, None)["records"][0]["state"] == "reported"
@@ -112,3 +115,23 @@ def test_search_returns_each_ranges_unsearched_counts(led, monkeypatch):
         return {**original(*args, **kwargs), "pending": 2, "unavailable": 3, "unclassified": 1}
     monkeypatch.setattr(patient_search, "search", counted)
     assert _search(led)["skipped"] == {"ocr_pending": 2, "body_unavailable": 3, "unclassified": 1}
+
+
+def test_search_counts_unsearched_sources_from_the_stored_posts(led):
+    _patient(led)
+    _msg(led, 101)
+    _msg(led, 102)
+    _msg(led, 103)
+    led.db.execute("UPDATE messages SET body_state='snippet',body_text=NULL WHERE message_id IN (102,103)")
+    led.db.commit()
+    result = _search(led)
+    assert result["skipped"] == {"ocr_pending": 0, "body_unavailable": 2, "unclassified": 0}
+    assert any("本文未取得・確認不能の原資料が2件" in note for note in result["notes"])
+
+
+def test_unreadable_settings_leave_the_ocr_side_unknown(led):
+    _patient(led)
+    _msg(led, 101)
+    notes = notify_views.patient_search_view(led.db, 1, "本文", settings_unreadable=True)["notes"]
+    assert notify_views.OCR_SEARCH_SETTINGS_UNREADABLE in notes
+    assert not any("設定で無効" in note for note in notes)

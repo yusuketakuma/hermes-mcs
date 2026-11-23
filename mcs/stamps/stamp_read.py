@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from contextlib import suppress
 
 from message_observations import METADATA_SHADOW_BACKOFF_S
 
@@ -54,50 +53,7 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
     state: complete | stale (expired or reactions changed since) |
     failed (last walk incomplete; counts are the last complete set) |
     not_fetched. Counts outside 'complete' are past observations only."""
-    from self_identity import self_sender_id
-    now = time.time() if now is None else now
-    out = {"state": "not_fetched", "complete_at": None, "checked_at": None,
-           "counts": {}, "self_included": None, "actors": []}
-    with suppress(sqlite3.OperationalError):   # tables absent on a pre-22-F db
-        f = db.execute("SELECT complete_at,checked_at,last_error FROM "
-                       "message_reaction_actor_fetch WHERE message_id=?",
-                       (message_id,)).fetchone()
-        if f is None:
-            return out
-        out.update(complete_at=f[0], checked_at=f[1])
-        if f[0] is not None:
-            self_id = self_sender_id(db)
-            columns = {r[1] for r in db.execute(
-                "PRAGMA table_info(message_reaction_actors)")}
-            name_col = "actor_name" if "actor_name" in columns else "NULL"
-            org_col = "organization" if "organization" in columns else "NULL"
-            current = " AND removed_at IS NULL" if "removed_at" in columns else ""
-            for actor, kind, prof, name, org in db.execute(
-                    "SELECT actor_id,reaction_type,profession," + name_col + "," + org_col +
-                    " FROM message_reaction_actors WHERE message_id=?" + current +
-                    " ORDER BY observed_at,actor_id", (message_id,)):
-                by_kind = out["counts"].setdefault(prof or "", {})
-                by_kind[kind] = by_kind.get(kind, 0) + 1
-                out["actors"].append({"reaction_type": kind, "name": name,
-                                      "profession": prof, "organization": org,
-                                      "self": self_id is not None and actor == self_id})
-                if self_id is not None and actor == self_id:
-                    out["self_included"] = True
-            if self_id is not None and out["self_included"] is None:
-                out["self_included"] = False
-            seen = db.execute(
-                "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
-                "WHERE message_id=? AND last_error IS NULL AND json_valid(content) "
-                "AND json_type(content,'$.reactions.value')='array' "
-                "ORDER BY checked_at DESC,source='capture' DESC LIMIT 1",
-                (message_id,)).fetchone()
-            changed = seen is not None and seen[0] is not None and seen[0] > f[0]
-        if f[2] is not None:
-            out["state"] = "failed"
-        elif f[0] is not None:
-            out["state"] = ("stale" if changed or f[0] <= now - REACTION_ACTORS_TTL_S
-                            else "complete")
-    return out
+    return reaction_actor_summaries(db, [message_id], now=now)[message_id]
 
 
 _BATCH = 500   # message ids per IN list, below SQLite's bound-parameter limit
