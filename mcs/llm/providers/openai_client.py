@@ -74,6 +74,23 @@ def select_profile(purpose, chosen, configured_model):
     return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
 
 
+def legacy_request_proven(previous, current_body):
+    """Prove the old low-effort Responses envelope without persisting the prompt."""
+    if (previous.get('model') != MODEL or 'effort' in previous or 'profile' in previous
+            or not isinstance(current_body, dict)
+            or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
+                                     'store', 'service_tier', 'prompt_cache_options', 'tools'}
+            or current_body.get('model') not in CURRENT_PRICE_VERSIONS
+            or current_body.get('instructions') != SYSTEM
+            or not isinstance(current_body.get('input'), str)
+            or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
+            or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
+        return False
+    old_body = {**current_body, 'model': MODEL,
+                'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
+    return payload_hash(old_body) == previous.get('request_fp')
+
+
 def request_contract_error(body, selection):
     """The refusal code when ``body`` breaks the priced Responses contract, else None."""
     if selection is not None and body.get("reasoning") != {"effort": selection["effort"]}:

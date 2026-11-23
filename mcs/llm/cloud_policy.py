@@ -18,7 +18,7 @@ import anthropic_client
 import cloud_client
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
-import openai_client
+import openai_client  # noqa: F401  existing callers read cloud_policy.openai_client
 import provider_registry
 
 from cloud_usage_accounting import (
@@ -833,21 +833,10 @@ def _semantic_financial_identity(meta):
     return target, source, phase
 
 
-def _legacy_luna_low_proven(previous, current_body):
-    """Prove the old low-effort Responses envelope without persisting the prompt."""
-    if (previous.get('model') != openai_client.MODEL or 'effort' in previous or 'profile' in previous
-            or not isinstance(current_body, dict)
-            or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
-                                     'store', 'service_tier', 'prompt_cache_options', 'tools'}
-            or current_body.get('model') not in openai_client.CURRENT_PRICE_VERSIONS
-            or current_body.get('instructions') != openai_client.SYSTEM
-            or not isinstance(current_body.get('input'), str)
-            or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
-            or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
-        return False
-    old_body = {**current_body, 'model': openai_client.MODEL,
-                'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
-    return payload_hash(old_body) == previous.get('request_fp')
+def _legacy_request_proven(previous, current_body):
+    """Prove an older record's request without persisting the prompt; each provider knows its own old shape."""
+    return any(module.legacy_request_proven(previous, current_body)
+               for module in provider_registry.PROVIDER_MODULES.values())
 
 
 def _selection_differs(previous, candidate, current_body):
@@ -857,7 +846,7 @@ def _selection_differs(previous, candidate, current_body):
     if not isinstance(new_effort, str):
         return False
     old_effort = previous.get('effort')
-    if old_effort is None and _legacy_luna_low_proven(previous, current_body):
+    if old_effort is None and _legacy_request_proven(previous, current_body):
         old_effort = 'low'
     return isinstance(old_effort, str) and old_effort != new_effort
 
@@ -1081,7 +1070,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     continue
                 prompt_verified = True
                 guard_match = 'logical_equal'
-            elif _legacy_luna_low_proven(previous, current_body):
+            elif _legacy_request_proven(previous, current_body):
                 prompt_verified = True
                 guard_match = 'legacy_low_verified'
             else:
