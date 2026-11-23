@@ -32,7 +32,7 @@
     <nav id="patients" aria-label="患者"></nav>
     <button id="more-patients" class="sidebar-more" hidden>患者をさらに表示</button>
   </aside>
-  <div class="workspace">
+  <div id="workspace" class="workspace">
     <header class="page-head">
       <button id="patients-toggle" class="patients-toggle" type="button" aria-controls="sidebar" aria-expanded="false">患者</button>
       <div class="page-title">
@@ -50,7 +50,7 @@
       <form id="message-form" role="search"><label class="sr-only" for="message-search">この患者の本文・投稿者を検索</label><input id="message-search" type="search" placeholder="本文・投稿者を検索" maxlength="500" autocomplete="off"><button class="button">検索</button><button id="clear-search" class="text-button" type="button" hidden>解除</button></form>
     </div>
     <div class="content">
-      <main id="timeline-panel" aria-label="本文"><section id="panel-view" class="panel-view" aria-live="polite" hidden></section><div id="coverage" class="coverage" hidden></div><button id="older" class="load-more" hidden>以前の投稿を表示</button><div id="timeline"></div><div id="timeline-status" class="empty" role="status">患者を読込中…</div></main>
+      <main id="timeline-panel" aria-label="本文" tabindex="-1"><section id="panel-view" class="panel-view" aria-live="polite" hidden></section><button id="older" class="load-more" hidden>以前の投稿を表示</button><div id="timeline"></div><div id="timeline-status" class="empty" role="status">患者を読込中…</div></main>
       <aside id="side-status" class="side-status mcs-only" aria-label="いまの状況"></aside>
       <aside id="detail" class="detail mcs-only" aria-label="投稿の詳細"><div class="detail-heading"><h2>投稿の詳細</h2><button id="close-detail" class="text-button" type="button" hidden>閉じる</button></div><div id="detail-content"></div></aside>
     </div>

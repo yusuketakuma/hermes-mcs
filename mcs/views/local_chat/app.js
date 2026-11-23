@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, onSelect: null, onSearch: null};
+const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, listOpener: null, detailOpener: null, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 // A date without the year when it falls in the current JST year: 11/18, otherwise 2025/11/18.
@@ -52,15 +52,28 @@ const shell = {
   main(...nodes) {
     // A screen that takes the main area ends any timeline load still on its way.
     ++state.mainRequest;
-    for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
+    for (const id of ["older", "timeline", "timeline-status"]) $(id).hidden = true;
     $("panel-view").hidden = false; $("panel-view").replaceChildren(...nodes);
     shell.openList(false);
   },
   openList(open = true) {
+    // The phone sheet is modal: the page behind is inert, focus moves into the sheet and back to the opener.
+    const wasOpen = document.body.classList.contains("list-open");
+    if (open === wasOpen) return;
+    if (open) state.listOpener = document.activeElement;
     document.body.classList.toggle("list-open", open);
     $("patients-toggle").setAttribute("aria-expanded", String(open));
+    $("workspace").inert = open;
+    if (open) $("patient-search").focus();
+    else if ($("sidebar").contains(document.activeElement) || !document.activeElement || document.activeElement === document.body) restoreFocus(state.listOpener, $("patients-toggle"));
   },
 };
+function restoreFocus(opener, fallback) {(opener?.isConnected && !opener.hidden ? opener : fallback)?.focus({preventScroll: true});}
+// The element that scrolls the main column: the column itself, or the page on phones where the page scrolls.
+function scroller() {
+  const panel = $("timeline-panel"), style = globalThis.getComputedStyle?.(panel);
+  return !style || /auto|scroll/.test(style.overflowY) ? panel : document.scrollingElement || document.documentElement;
+}
 function fail(error) {$("error").textContent = error.message || "表示できませんでした。更新して再度お試しください。"; $("error").hidden = false;}
 async function api(kind, values = {}) {
   const params = new URLSearchParams();
@@ -105,7 +118,13 @@ async function loadPatients(more = false) {
     if (!state.project && !state.patients.length) {shell.heading("患者タイムライン"); $("timeline-status").textContent = "閲覧範囲に保存済みの患者がいません。";}
   } catch (error) {if (request === state.patientRequest) fail(error);}
 }
-function closeDetail() {++state.detailRequest; $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));}
+function closeDetail() {
+  ++state.detailRequest;
+  // Focus inside the closing detail goes back to whatever opened it.
+  const hadFocus = $("detail").contains(document.activeElement);
+  $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));
+  if (hadFocus) restoreFocus(state.detailOpener, $("timeline-panel"));
+}
 function selectPatient(patient) {
   shell.openList(false);
   state.project = patient.project_id; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
@@ -136,9 +155,9 @@ async function loadPatientContext(project) {
     for (const group of groups.slice(0, 4)) {
       const item = group.items[0], entry = el("div", null, "context-brief"), label = el("div", null, "context-label");
       const text = `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`, line = el("span", text, "context-text");
-      line.title = text; label.append(el("b", group.label));
-      if (item.scope_note) label.append(el("small", item.scope_note, "context-scope"));
+      line.title = text; label.append(el("b", group.label), el("small", item.posted_at_ts == null ? "日付未取得" : shortDate(item.posted_at_ts), "context-date"));
       entry.append(label, line);
+      if (item.scope_note) entry.append(el("small", item.scope_note, "context-scope"));
       preview.append(entry);
     }
     const details = el("details", null, "context-records");
@@ -178,12 +197,14 @@ function post(row, detailed = false) {
     if (files) footer.append(chip(`添付 ${files}件`, "muted"));
     if (row.parent_id) footer.append(chip("返信の検索結果", "info"));
   }
-  if (row.stamp_line) footer.append(chip(row.stamp_line, /未取得|失敗|古い/.test(row.stamp_line) ? "warn" : "muted"));
+  if (row.stamp_line) footer.append(chip(row.stamp_line, stampIncomplete.test(row.stamp_line) ? "warn" : "muted"));
   if (!row.body_complete && row.body_state !== "deleted") footer.append(chip("本文は一部未取得です", "warn"));
   if (row.reply_count > row.stored_replies) footer.append(chip("未取得の返信があります", "warn"));
   if (footer.children.length) content.append(footer);
   article.append(content); return article;
 }
+// Every non-complete wording of stamp_format.thread_stamp_line / actor_line (not actor names such as 氏名不明).
+const stampIncomplete = /^スタンプ 未取得|再取得失敗|押した人 (?:取得失敗|古い情報)|取得状態不明/;
 function chronological(rows) {return rows.slice().sort((a,b) => (a.posted_at_ts ?? -Infinity) - (b.posted_at_ts ?? -Infinity) || a.message_id - b.message_id);}
 async function loadTimeline(more = false) {
   if (!state.project) return;
@@ -200,7 +221,7 @@ async function loadTimeline(more = false) {
       if (day !== lastDay) {fragment.append(el("div", day, "date-divider")); lastDay = day;}
       fragment.append(post(row));
     }
-    const panel = $("timeline-panel"), height = panel.scrollHeight;
+    const panel = scroller(), height = panel.scrollHeight;
     if (more) {
       const first = $("timeline").firstElementChild;
       if (first?.className === "date-divider" && first.textContent === lastDay) first.remove();
@@ -239,7 +260,9 @@ function contextSection(row) {
 async function openDetail(row) {
   const request = ++state.detailRequest, project = state.project;
   const root = row.parent_id && row.parent_available !== false ? row.parent_id : row.message_id;
+  if (!$("detail").contains(document.activeElement)) state.detailOpener = document.activeElement;
   $("detail").classList.add("open"); $("close-detail").hidden = false; $("detail-content").replaceChildren(el("p", "詳細を読込中…", "empty"));
+  $("close-detail").focus({preventScroll: true});
   try {
     const [source, replies] = await Promise.all([api("evidence", {project, message: root}), api("thread", {project, message: root})]);
     if (request !== state.detailRequest) return;
@@ -303,10 +326,12 @@ async function loadSections() {
 }
 function showView(key) {state.panel = key; state.panelPage = 0; closeDetail(); loadMain();}
 function viewTabs() {
-  const strip = tabs(state.sections, state.panel, showView);
+  const strip = tabs(state.sections, state.panel, showView), hadFocus = $("view-tabs").contains(document.activeElement);
   $("view-tabs").replaceChildren(strip);
-  // On narrow screens the chosen tab may sit past the edge of the scrolling strip.
-  strip.children[state.sections.findIndex(([key]) => key === state.panel)]?.scrollIntoView({block: "nearest", inline: "nearest"});
+  // The chosen tab keeps keyboard focus across the rebuild and, on narrow screens, scrolls into view.
+  const selected = strip.children[state.sections.findIndex(([key]) => key === state.panel)];
+  selected?.scrollIntoView({block: "nearest", inline: "nearest"});
+  if (hadFocus) selected?.focus();
 }
 function loadMain() {
   const timeline = !state.panel;
@@ -380,7 +405,13 @@ function sideCard(key, title, request, project) {
   const loaded = api("panel", {project, section: key}).then(data => {
     if (!current()) return;
     const view = data.panel, items = view.items || [];
-    body.replaceChildren(...items.slice(0, sideLimit).map(panelItem));
+    // Each item keeps its kind (the signal type or reply group) as a small heading.
+    let group;
+    body.replaceChildren();
+    for (const item of items.slice(0, sideLimit)) {
+      if (item.group && item.group !== group) {group = item.group; body.append(el("h4", group, "side-group"));}
+      body.append(panelItem(item));
+    }
     if (!items.length) body.append(el("p", view.empty || "表示できる記録はありません。", "side-note"));
     if (items.length > sideLimit || view.more || view.pages > 1) body.append(el("p", "続きは「すべて見る」で表示します。", "side-note"));
     for (const note of view.notes || []) body.append(el("p", note, "state-note"));
@@ -397,7 +428,7 @@ async function loadPanel() {
     const data = await api("panel", {project, section, page: state.panelPage || null});
     if (request !== state.mainRequest) return;
     $("panel-view").replaceChildren(renderPanel(data.panel, page => {state.panelPage = page; loadPanel();}));
-    $("timeline-panel").scrollTop = 0;
+    scroller().scrollTop = 0;
   } catch (error) {if (request === state.mainRequest) {$("panel-view").replaceChildren(el("p", "表示できませんでした。", "empty")); fail(error);}}
 }
 async function showMeds(target, message, request, page = 0) {
@@ -414,7 +445,11 @@ $("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch |
 $("more-patients").onclick = () => loadPatients(true);
 $("patients-toggle").onclick = () => shell.openList(!document.body.classList.contains("list-open"));
 $("close-list").onclick = () => shell.openList(false);
-$("sidebar").onkeydown = event => {if (event.key === "Escape") shell.openList(false);};
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  if (document.body.classList.contains("list-open")) shell.openList(false);
+  else if ($("detail").classList.contains("open")) closeDetail();
+});
 $("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; closeDetail(); loadMain();};
 $("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadMain();};
 $("older").onclick = () => loadTimeline(true);
