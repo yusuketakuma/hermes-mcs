@@ -431,6 +431,18 @@ def fresh_marker_init(root, data_token, update_fd):
     return marker
 
 
+def fresh_resume(root, update_fd):
+    """Accept only an interrupted first install that has saved no settings yet."""
+    root = Path(os.path.abspath(root))
+    _fresh_update_lock(root, int(update_fd))
+    _fresh_root_clean(root)
+    if (os.path.lexists(root / 'config.json')
+            or set(os.listdir(root / 'data')) != {'update.lock', _FRESH_MARKER}):
+        raise ValueError('fresh_resume_unverified')
+    _fresh_marker_read(root)
+    _fresh_update_lock(root, int(update_fd))
+
+
 def _fresh_inventory(root, data_token, lock_fd):
     values = data_token.split()
     if len(values) != 5 or any(not value.isdigit() for value in values):
@@ -790,6 +802,14 @@ def main(argv):
             fresh_marker_sync(Path(os.path.abspath(config_path)).parent, desired[0])
         except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
             print('初回導入の記録を確認できません。設定と記録を保持します。', file=sys.stderr)
+            return 1
+        return 0
+    if mode == 'fresh-resume':
+        try:
+            if len(desired) != 1:
+                return 1
+            fresh_resume(Path(os.path.abspath(config_path)).parent, desired[0])
+        except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
             return 1
         return 0
     if mode == 'fresh-init':
