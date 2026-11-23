@@ -151,8 +151,11 @@ def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
     monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("must not load local configuration"))
     path = Path(snapshot)
     before = hashlib.sha256(path.read_bytes()).digest()
-    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1"), ("attachments", "project=1&message=1")):
+    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1")):
         chat.response(snapshot, {1}, kind, query)
+    # Attachments read the OCR exclusion policy from configuration, and still write nothing.
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    chat.response(snapshot, {1}, "attachments", "project=1&message=1")
     assert hashlib.sha256(path.read_bytes()).digest() == before
 
 

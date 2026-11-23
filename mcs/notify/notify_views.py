@@ -83,13 +83,16 @@ def patient_summary_text(db, project_id, *, cfg=None, now=None) -> tuple:
                          + (f"（最終言及 {m['last']}）" if m.get("last") else "")
                          + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
                          for m in meds[:15])
+            if len(meds) > 15:
+                lines.append(f"  他{len(meds) - 15}剤（原記録で確認）")
             if not meds:
                 lines.append("・現在使用中の薬剤: 未確認")
             for key, label in (("planned_medications", "予定"), ("unverified_medications", "確認待ち")):
                 candidates = [m for m in roll.get(key) or [] if isinstance(m, dict) and m.get("name")]
                 if candidates:
                     lines.append(f"・{label}: " + " / ".join(" ".join(str(m[k]) for k in
-                        ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5]))
+                        ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5])
+                        + (f" 他{len(candidates) - 5}剤" if len(candidates) > 5 else ""))
             vit = roll.get("latest_vitals")
             vline = (vital_line({"vitals": vit}, {})
                      if isinstance(vit, dict) else None)
@@ -114,7 +117,7 @@ def _open_task_lines(db, project_id, now=None) -> list[str]:
     """■ 未完了タスク — what needs action comes first in the summary;
     an overdue due date is marked."""
     tasks = db.execute(
-        "SELECT request_id,title,assignee,due_date FROM requests "
+        "SELECT request_id,title,assignee,due_date,COUNT(*) OVER () AS total FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
         "ORDER BY due_date IS NULL, due_date, request_id LIMIT 10",
         (project_id,)).fetchall()
@@ -127,6 +130,8 @@ def _open_task_lines(db, project_id, now=None) -> list[str]:
                     + (" ⚠期限切れ" if t["due_date"] < today else "")
                     if t["due_date"] else "")
                  for t in tasks)
+    if tasks and tasks[0]["total"] > len(tasks):
+        lines.append(f"  他{tasks[0]['total'] - len(tasks)}件（期限の早い順に{len(tasks)}件を表示）")
     return lines
 
 
@@ -255,15 +260,18 @@ def _pharmacy_state_lines(db, project_id, roll, *, cfg=None) -> list[str]:
     return lines
 
 
+REGISTERED_NAMES = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
+REGISTERED_STATES = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
+                     "failed": "取得失敗", "stale": "古い・定義変更あり"}
+
+
 def _registered_clinical_lines(db, project_id) -> list[str]:
     """Private fetch-state summary, kept separate from reported chat facts."""
     from registered_data import registered_data
     registered = registered_data(db, "detail", project_id, 8)
     if registered is None or not registered["total"]:
         return []
-    names = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
-    states = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
-              "failed": "取得失敗", "stale": "古い・定義変更あり"}
+    names, states = REGISTERED_NAMES, REGISTERED_STATES
     lines = ["■ MCS登録情報（チャットとは別の記録・抜粋）"]
     for dataset, name in names.items():
         records = [r for r in registered["records"] if r["dataset"] == dataset]
@@ -304,7 +312,8 @@ REPLY_LABELS = {"ack": "了解", "intent": "対応予定", "progress": "対応�
 
 def _request_reply_lines(db, project_id, roll) -> list:
     """#25: rollupの依頼候補ごとのスレッド内返信状況（記録上）とLoop候補の有無。"""
-    reqs = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)][:5]
+    found = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)]
+    reqs = found[:5]
     lines = ["■ 依頼候補の返信状況" + ("" if reqs else ": なし")]
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
@@ -324,8 +333,13 @@ def _request_reply_lines(db, project_id, roll) -> list:
                 "AND a.message_id=? AND json_valid(a.content) "
                 "AND json_extract(a.content,'$.origin.revision')=m.content_hash "
                 "LIMIT 1", (project_id, mid)).fetchone():
-            line += "・Loop候補（semantic shadow）あり"
+            line += "・未完了のやり取りの候補あり"
         lines.append(line)
+    if len(found) > len(reqs):
+        from rollup_builder import REQUEST_LIMIT
+        # the cached rollup keeps REQUEST_LIMIT requests, so a full list may hide more
+        more = f"{len(found) - len(reqs)}件" + ("以上" if len(found) >= REQUEST_LIMIT else "")
+        lines.append(f"  他{more}（すべては「連絡・返答の確認」で確認）")
     return lines
 
 
@@ -372,6 +386,33 @@ def _karte_summary_line(ks) -> str:
             f"{inline_text(ks['comment'], 80)}")
 
 
+def karte_summary_status(db, project_id) -> dict:
+    """The MCS 患者連携サマリー whole, for a reader with room for it: ``state`` not_fetched / failed
+    (never obtained, latest GET failed) / empty / present, the stored comment, its MCS update date and
+    updater profession, ``failed_at`` of a failed latest GET (the shown summary is then the last one
+    obtained) and the one-line wording the summary card uses."""
+    block = _karte_summary_from_artifact(db, project_id)
+    try:
+        row = db.execute("SELECT karte_summary_failed_at FROM patients WHERE project_id=?",
+                         (project_id,)).fetchone()
+    except sqlite3.OperationalError:     # a snapshot older than the failure record
+        row = None
+    failed_at = row[0] if row is not None and type(row[0]) in (int, float) else None
+
+    def text(value):
+        return value if isinstance(value, str) and value else None
+    if not isinstance(block, dict):
+        state = "failed" if failed_at is not None else "not_fetched"
+    else:
+        state = "empty" if block.get("empty") or not text(block.get("comment")) else "present"
+    present = state == "present"
+    return {"state": state, "comment": text(block.get("comment")) if present else None,
+            "updated_at": text(block.get("updated_at")) if isinstance(block, dict) else None,
+            "updater_profession": text(block.get("updater_profession")) if isinstance(block, dict) else None,
+            "failed_at": failed_at,
+            "line": ("連携サマリー（MCS）: 取得失敗" if state == "failed" else _karte_summary_line(block))}
+
+
 def _coverage_line(db, project_id) -> str:
     """How much of the room is stored — completion records only, never
     a gapless claim: what was not fetched is unknown, not absent."""
@@ -402,7 +443,7 @@ _FETCH_REASON_JA = {
     "session_expired": "ログイン切れ", "parent_body_incomplete": "本文の取得が未完了",
     "thread_incomplete": "返信の取得が未完了", "unavailable": "取得できず",
     "unread_capped": "未読件数の上限", "replies_missing": "返信の一部が未取得",
-    "http_error": "サーバー応答エラー",
+    "http_error": "サーバー応答エラー", "forbidden": "閲覧権限なし",
 }
 
 
@@ -671,8 +712,11 @@ def _question_term(query):
     return term, latest
 
 
-def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict:
-    """Search all terms across patient originals with resumable, source-bound pages."""
+def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False) -> dict:
+    """Search all terms across patient originals with resumable, source-bound pages.
+
+    ``keep_message_id`` adds the post to open (the post itself, or the post carrying the attachment),
+    the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out."""
     import patient_search
     patient_search.parse_query(query)
     question = _question_term(query)
@@ -687,6 +731,8 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict
         prefix = '' if row['source'] == 'chat' else '添付元 '
         availability = '' if row['original_available'] else '（原本ファイルはローカル未保存）'
         items.append({"project_id": project_id, "source_ref": row['source_ref'],
+                      **({"message_id": row['message_id'], "source": row['source'], "page": row['page']}
+                         if keep_message_id else {}),
                       "text": f"・{prefix}{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])} {label}{availability} "
                               f"{inline_text(row['profession'], 20) or '職種不明'}: "
                               f"{_snippet(row['body_text'], terms[0], width=160)}"})
@@ -1032,6 +1078,58 @@ def _bare_quote(text: str, category) -> str:
         if m and text[m.end():].strip():
             return text[m.end():]
     return text
+
+
+def _stamp_time(at, now) -> str:
+    """MM/DD HH:MM, with the year only when it is not the year of ``now``."""
+    year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
+    return at.strftime(("%m/%d" if at.year == year else "%Y/%m/%d") + " %H:%M")
+
+
+def context_status_lines(db, project_id, ev, *, now=None, history=True) -> list[str]:
+    """How complete a patient-context reading is: reflection time, history acquisition (``history``),
+    analysis and source coverage — the status lines every patient-context view ends with."""
+    status = []
+    context_coverage = ev["coverage"].get("context") or ev["coverage"].get("nightly") or {}
+    if ev.get("as_of"):
+        status.append("患者コンテキストの反映時点: " + _stamp_time(datetime.fromtimestamp(ev["as_of"], JST), now))
+    if history:
+        status.append(_coverage_line(db, project_id))
+    inference = ev["coverage"].get("inference") or {}
+    if inference and not inference.get("complete"):
+        sources = inference.get("sources") or {}
+        status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
+                      f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
+        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
+        status.append(patient_context_status.status_text(inference.get("status")))
+        gap = (inference.get("dependencies") or {}).get("coverage")
+        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
+                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
+            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
+                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
+                             if gap["terminal"] and gap["repairable"] else ""))
+    if context_coverage:
+        status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
+        status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
+        status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
+        attachments = context_coverage.get("attachments") or {}
+        if attachments.get("count"):
+            processing = attachments.get("processing") or {}
+            analysis = attachments.get("analysis")
+            state = "解析状況不明"
+            if processing.get("mode") == "off":
+                state = "OCR無効・内容未点検"
+            elif processing.get("mode") == "invalid":
+                state = "OCR設定不正・解析状況不明"
+            elif analysis == "complete":
+                state = "内容の点検完了"
+            elif analysis == "partial":
+                state = (f"内容の点検済み {attachments.get('analyzed', 0)}ページ / "
+                         f"未点検 {attachments.get('unscanned', 0)}ページ")
+            if processing.get("mode") == "on":
+                state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
+            status.append(f"添付 {attachments['count']}件（{state}）")
+    return status
 
 
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
@@ -1445,7 +1543,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
                        if row["quotes"] else tail)
-    context_coverage = ev["coverage"].get("context") or ev["coverage"].get("nightly") or {}
+    inference = ev["coverage"].get("inference") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     document_coverage = view.get("document_coverage")
     if document_coverage is not None:
@@ -1467,44 +1565,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
     if pump_coverage.get("documents"):
         status.append(f"PCA: {pump_coverage['documents']}資料・記載値は未確認"
                       + ("・点検未完了" if not pump_coverage.get("complete") else ""))
-    if ev.get("as_of"):
-        status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
-    if section != "care_events":
-        status.append(_coverage_line(db, project_id))
-    inference = ev["coverage"].get("inference") or {}
-    if inference and not inference.get("complete"):
-        sources = inference.get("sources") or {}
-        status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
-                      f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
-        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
-        status.append(patient_context_status.status_text(inference.get("status")))
-        gap = (inference.get("dependencies") or {}).get("coverage")
-        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
-                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
-            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
-                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
-                             if gap["terminal"] and gap["repairable"] else ""))
-    if context_coverage:
-        status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
-        status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
-        status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
-        attachments = context_coverage.get("attachments") or {}
-        if attachments.get("count"):
-            processing = attachments.get("processing") or {}
-            analysis = attachments.get("analysis")
-            state = "解析状況不明"
-            if processing.get("mode") == "off":
-                state = "OCR無効・内容未点検"
-            elif processing.get("mode") == "invalid":
-                state = "OCR設定不正・解析状況不明"
-            elif analysis == "complete":
-                state = "内容の点検完了"
-            elif analysis == "partial":
-                state = (f"内容の点検済み {attachments.get('analyzed', 0)}ページ / "
-                         f"未点検 {attachments.get('unscanned', 0)}ページ")
-            if processing.get("mode") == "on":
-                state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
-            status.append(f"添付 {attachments['count']}件（{state}）")
+    status.extend(context_status_lines(db, project_id, ev, now=now, history=section != "care_events"))
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
     if section == "care_events":

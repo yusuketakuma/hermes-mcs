@@ -331,8 +331,10 @@ def test_patient_summary_request_reply_states(led):
     assert "■ 依頼候補の返信状況" not in text
     sec = "\n".join(notify_views._request_reply_lines(led.db, 1, {"recent_requests": reqs}))
     assert "・09-30 残薬確認 — 返信: 完了と取消の記録あり" in sec
-    assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
+    assert "・09-29 処方変更 — 返信: 記録なし・未完了のやり取りの候補あり" in sec
     assert sec.count("\n・") == 5
+    assert sec.endswith("\n  他2件（すべては「連絡・返答の確認」で確認）")   # the rest are counted, not dropped
+    assert "semantic" not in sec and "Loop" not in sec
     assert "返信記録が見つからないことは対応がなかったことを意味しません" not in sec
 
 

@@ -1,9 +1,23 @@
 """Project authorized patient timelines from an existing published local snapshot."""
-from mcs_queries import register_search_fold
+import base64
+import binascii
+import json
+import re
+import sqlite3
+
+import clinical_urgency
+from mcs_contract import project_url
+from mcs_queries import UNKNOWN_TIME, register_search_fold
 from mcs_util import search_fold
-from stamp_format import stamp_counts, thread_stamp_line
-from structured_view import structured_lines
-from patient_context_view import SECTION_LABELS
+from message_metadata import mentions_self
+from notify_render import SUMMARY_EMPTY_LABELS, URGENCY_PLAIN, patient_heading, project_identity, summary_empty_state
+from self_identity import is_self_message
+from snapshot_access import table_exists
+from stamp_contract import STAMP_EMOJI
+from stamp_format import self_stamps, stamp_counts, thread_stamp_line
+from stamp_read import reaction_actor_summary
+from structured_view import structured_lines, urgency_qc_suffix
+from patient_context_view import SECTION_LABELS, observed_revisions
 from patient_context import extract_context
 import notify_views
 
@@ -19,11 +33,22 @@ def require_project(project, allowed):
         raise ValueError("project_not_allowed")
 
 
+# A collector reason code as stored; anything else is not shown verbatim.
+_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# The patient-list item shape: these columns plus identity, freshness and open-signal counts.
+_PATIENT_COLUMNS = ("project_id", "patient_name", "fetch_state", "history_floor", "is_archived",
+                    "message_count", "latest_at")
+
+
 def patients(view, allowed, *, query="", cursor=None):
+    """The launch scope's patients, the most recently active first (newest stored post, then ID)."""
     if not isinstance(query, str) or len(query) > 200:
         raise ValueError("bad_query")
-    sql = """SELECT p.project_id AS _key,p.project_id,p.patient_name,p.fetch_state,
-        p.history_floor,p.is_archived,
+    columns = {row[1] for row in view.db.execute("PRAGMA table_info(patients)")}
+    optional = ", ".join(f"p.{name}" if name in columns else f"NULL AS {name}" for name in (
+        "fetch_reason", "last_complete_fetch", "project_type", "station_name", "disease", "initial_import"))
+    sql = f"""SELECT p.project_id,p.patient_name,p.fetch_state,
+        p.history_floor,p.is_archived,{optional},
         (SELECT count(*) FROM messages m WHERE m.project_id=p.project_id) AS message_count,
         (SELECT max(posted_at_ts) FROM messages m WHERE m.project_id=p.project_id) AS latest_at
         FROM patients p WHERE 1=1"""
@@ -36,8 +61,60 @@ def patients(view, allowed, *, query="", cursor=None):
     for term in query.split():
         sql += " AND (instr(mcs_fold(p.patient_name),?)>0 OR CAST(p.project_id AS TEXT)=?)"
         params.extend((search_fold(term), term))
-    return {"snapshot": view.meta, **view._page(
-        sql, params, ["p.project_id"], ["local-chat-patients", scope, query], 60, cursor)}
+    # A patient with no dated post sorts after every dated one.
+    sql = (f"SELECT * FROM (SELECT *,COALESCE(latest_at,{UNKNOWN_TIME}) AS _activity,project_id AS _key "
+           f"FROM ({sql})) WHERE 1=1")
+    page = view._page(sql, params, ["_activity", "_key"], ["local-chat-patients-by-activity", scope, query],
+                      60, cursor, key_fields=("_activity", "_key"))
+    signals = _signal_counts(view.db)
+    page["items"] = [_patient(view.db, row, signals) for row in page["items"]]
+    return {"snapshot": view.meta, **page}
+
+
+def _patient(db, row, signals):
+    import initial_import_state
+
+    pid = row["project_id"]
+    result = {key: row[key] for key in _PATIENT_COLUMNS}
+    identity = project_identity(db, pid) or {"group": False, "group_name": ""}
+    reason = row["fetch_reason"]
+    code = None if reason is None else reason if isinstance(reason, str) and _REASON_CODE.fullmatch(reason) else "other"
+    try:
+        capture = initial_import_state.load(db, pid) if row["initial_import"] is not None else None
+        phase = None if capture is None else capture["capture_phase"]
+    except ValueError:
+        phase = "unknown"
+    counts, confirmed = signals
+    result.update(
+        heading=patient_heading(db, pid), project_type=_text(row["project_type"], 32),
+        is_group=identity["group"], group_name=identity["group_name"] or None,
+        station_name=_text(row["station_name"], 200), disease=_text(row["disease"], 500),
+        # The medical-room page only: a group room's address is not derived from its ID.
+        mcs_url=None if identity["group"] else project_url(pid),
+        fetch_reason=code, fetch_reason_label=None if code is None else "理由を判別できません"
+        if code == "other" else notify_views.fetch_reason_ja(code),
+        last_complete_fetch=row["last_complete_fetch"] if type(row["last_complete_fetch"]) in (int, float) else None,
+        initial_import=phase,
+        open_signals={"count": None if counts is None else counts.get(pid, 0),
+                      "state": "failed" if counts is None else "confirmed" if confirmed else "partial"})
+    return result
+
+
+def _text(value, cap):
+    return value.strip() if isinstance(value, str) and value.strip() and len(value) <= cap else None
+
+
+def _signal_counts(db, project_id=None):
+    """({project_id: open signals}, every detector finished and every state readable), or (None, False)."""
+    import mcs_signals
+    try:
+        found = mcs_signals.current_open(db, project_id=project_id, limit=2**31)
+    except (sqlite3.Error, ValueError, TypeError, KeyError):
+        return None, False
+    counts = {}
+    for signal in found["items"]:
+        counts[signal["project_id"]] = counts.get(signal["project_id"], 0) + 1
+    return counts, found["pipeline_last_run_at"] is not None and not found["errors"]
 
 
 def patient_names(view, allowed):
@@ -52,10 +129,19 @@ def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None
         if query or cursor or message_id is not None:
             raise ValueError("bad_arguments")
         data = view.read("patient_context", project=project, view="background")
+        # Allergies lead the strip: the header shows only its first groups, and a long record must not
+        # push them out of sight (the rest keep the fixed category order).
+        ordered = sorted(data["sections"], key=lambda section: section["category"] != "allergies")
         return {"snapshot": view.meta, "sections": [
-            {"label": SECTION_LABELS.get(section["category"], (section["category"],))[0],
+            {"key": section["category"],
+             "label": SECTION_LABELS.get(section["category"], (section["category"],))[0],
              "items": [_context_item(item, section["category"]) for item in section["items"]]}
-            for section in data["sections"]]}
+            for section in ordered],
+            "summary": [{"text": sentence["text"]} for sentence in data.get("summary") or []
+                        if isinstance(sentence, dict) and isinstance(sentence.get("text"), str)],
+            "as_of": data.get("as_of") if type(data.get("as_of")) in (int, float) else None,
+            "status": notify_views.context_status_lines(view.db, project, data, now=view.meta["generated_at"]),
+            "karte_summary": notify_views.karte_summary_status(view.db, project)}
     if kind not in ("timeline", "search", "thread", "attachments", "evidence"):
         raise ValueError("unknown_view")
     if kind == "attachments" and view._require_message(project, message_id)["body_state"] == "deleted":
@@ -66,7 +152,19 @@ def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None
         result["items"] = [_message(view, row) for row in result["items"]]
     elif kind == "evidence":
         result["message"] = _message(view, result["message"])
+    elif kind == "attachments":
+        for item in result["items"]:
+            item["ocr"] = _ocr(item["ocr"])
     return result
+
+
+# A policy-rejected OCR result names its proof and policy binding; the workspace needs the state and the room.
+_OCR_KEYS = ("state", "page_count", "artifact_id", "original_available", "pages", "medical",
+             "reason", "original_project_url")
+
+
+def _ocr(ocr):
+    return {key: ocr[key] for key in _OCR_KEYS if key in ocr}
 
 
 def _context_item(item, category):
@@ -106,24 +204,112 @@ def _message(view, row):
             "posted_at_ts", "body_state", "body_complete", "reply_count", "stored_replies",
             "attachments", "metadata_flags", "reaction_actors", "physician_viewed",
             "patient_context")
+    db, mid, deleted = view.db, row["message_id"], row.get("body_state") == "deleted"
     result = {key: row.get(key) for key in keys}
     result["patient_context"] = [_context_item(item, item["category"])
                                  for item in row.get("patient_context") or []]
-    result["parent_available"] = not row.get("parent_id") or view.db.execute(
+    result["parent_available"] = not row.get("parent_id") or db.execute(
         "SELECT 1 FROM messages WHERE project_id=? AND message_id=?",
         (row["project_id"], row["parent_id"])).fetchone() is not None
-    result["body_text"] = None if row.get("body_state") == "deleted" else row.get("body_text")
-    result["summary_lines"] = structured_lines(view.db, row["message_id"], drug_candidates=False,
+    result["body_text"] = None if deleted else row.get("body_text")
+    result["summary_lines"] = structured_lines(db, mid, drug_candidates=False,
                                                 plain=True, request_first=True)
-    sender = view.db.execute("SELECT profession,organization FROM messages WHERE message_id=?",
-                             (row["message_id"],)).fetchone()
-    result.update(profession=sender[0], organization=sender[1])
-    metadata = {**row["message_metadata"], "own_post": row["is_self_sender"]}
-    result["stamp_line"] = (thread_stamp_line(metadata, row.get("reaction_actors"))
+    sender = db.execute("SELECT profession,organization FROM messages WHERE message_id=?",
+                        (mid,)).fetchone()
+    result.update(profession=sender[0], organization=sender[1],
+                  sender_self=row["is_self_sender"], sender_own_station=row["is_own_station_sender"])
+    own = row["is_self_sender"]
+    metadata = {**row["message_metadata"], "own_post": own}
+    # Who pressed each stamp, for every post as on the chat thread (one's own post counts others only).
+    actors = row.get("reaction_actors") or reaction_actor_summary(db, mid, now=view.meta["generated_at"])
+    result["stamp_line"] = (thread_stamp_line(metadata, actors)
                             if stamp_counts(metadata) != {} or metadata["last_error"] else "")
-    if row.get("body_state") == "deleted":
-        result.update(summary_lines=[], stamp_line="", patient_context=[], attachments=[])
+    result["stamps"] = _stamps(metadata, actors)
+    result["flags"] = _flags(metadata, view._identity()[0])
+    result["summary_state"] = "done" if result["summary_lines"] else summary_empty_state(db, mid, None)
+    result["urgency"] = _urgency(db, mid)
+    result["last_reply"] = None if row.get("parent_id") else _last_reply(view, row)
+    revision = (observed_revisions(db, row["project_id"], message_id=mid).get(mid)
+                if table_exists(db, "message_revisions") else None)
+    result["change_observed_at"] = revision[1] if revision and revision[0] == "full" else None
+    result["deleted_observed_at"] = revision[1] if revision and revision[0] == "deleted" else None
+    if deleted:
+        result.update(summary_lines=[], stamp_line="", patient_context=[], attachments=[],
+                      stamps=None, flags=None, summary_state=None, urgency=None)
+    result["summary_state_label"] = (None if result["summary_state"] in (None, "done")
+                                     else "要約 " + SUMMARY_EMPTY_LABELS[result["summary_state"]])
     return result
+
+
+def _stamps(metadata, actors):
+    """Stamp counts (others only on one's own post), one's own presses and who pressed, each with its state."""
+    counts = stamp_counts(metadata)
+    observed = metadata["reactions_status"] == "observed"
+    actors = actors or {}
+    complete_at = actors.get("complete_at")
+    return {"state": metadata["reactions_status"], "refresh_failed": bool(metadata["last_error"]),
+            "observed_at": metadata["reactions_observed_at"],
+            "counts": None if counts is None else [{"emoji": emoji, "count": n} for emoji, n in counts.items()],
+            "self": self_stamps(metadata) if observed else None,
+            "actors": {"state": actors.get("state") or "not_fetched",
+                       "observed_at": complete_at if type(complete_at) in (int, float) else None,
+                       "items": [{"emoji": STAMP_EMOJI.get(actor.get("reaction_type"), "❔"),
+                                  "name": actor.get("name") if isinstance(actor.get("name"), str) else None,
+                                  "profession": actor.get("profession") if isinstance(actor.get("profession"), str)
+                                  else None, "self": actor.get("self") is True}
+                                 for actor in actors.get("actors") or []]
+                       if type(complete_at) in (int, float) else []}}
+
+
+def _flags(metadata, self_id):
+    """@self, pin and bookmark: value true/false only when observed, otherwise null with the state."""
+    hit = mentions_self(metadata, self_id)
+    mention = ("observed" if hit is not None else
+               "self_unknown" if metadata["mentions_status"] == "observed" else metadata["mentions_status"])
+
+    def observed(value, status):
+        return {"value": value if status == "observed" else None, "state": status}
+    return {"mention_self": {"value": hit, "state": mention},
+            "pinned": observed(metadata["is_pinned"], metadata["pin_status"]),
+            "bookmarked": observed(metadata["is_bookmarked"], metadata["bookmark_status"])}
+
+
+URGENT_REQUEST = "急ぎの確認依頼（本人の緊急状態とは別）"
+URGENCY_REVIEW = "緊急度: 要確認（対象人物・時点の根拠を確認）"
+
+
+def _urgency(db, mid):
+    """The urgency the post's summary shows, as fields: the same reading structured_lines words."""
+    details = clinical_urgency.message_urgency_details(db, mid)
+    level = {"llm": "high", "rule": "flag"}.get(details["source"])
+    review = ("urgent_request" if details["kind"] == "request" else
+              "subject_unconfirmed" if details["held"] else None)
+    if level is None and review is None:
+        return None
+    return {"level": level, "label": URGENCY_PLAIN.get(details["source"]),
+            "reasons": list(details["reasons"]) if level else [],
+            "qc_note": urgency_qc_suffix(db, mid) if level == "high" else "",
+            "review": review, "review_label": {"urgent_request": URGENT_REQUEST,
+                                               "subject_unconfirmed": URGENCY_REVIEW}.get(review)}
+
+
+def _last_reply(view, row):
+    """The newest stored reply of a root post, and whether every reply is stored and dated."""
+    pid, mid = row["project_id"], row["message_id"]
+    reply = view.db.execute(
+        "SELECT sender_id,sender_name,profession,organization,posted_at,posted_at_ts FROM messages "
+        "WHERE project_id=? AND parent_id=? AND body_state IS NOT 'deleted' "
+        "ORDER BY posted_at_ts IS NULL,posted_at_ts DESC,message_id DESC LIMIT 1", (pid, mid)).fetchone()
+    if reply is None:
+        return None
+    undated = view.db.execute("SELECT 1 FROM messages WHERE project_id=? AND parent_id=? "
+                              "AND posted_at_ts IS NULL LIMIT 1", (pid, mid)).fetchone()
+    total = row.get("reply_count")
+    return {"sender_name": reply["sender_name"], "profession": reply["profession"],
+            "organization": reply["organization"], "posted_at": reply["posted_at"],
+            "posted_at_ts": reply["posted_at_ts"],
+            "self": is_self_message(view.db, reply["sender_id"], self_id=view._identity()[0]),
+            "complete": type(total) is int and row.get("stored_replies", 0) >= total and undated is None}
 
 
 DRUG_FIELDS = ("code", "code_system", "name", "generic_name", "unit")
@@ -191,3 +377,104 @@ def _signals(view, project):
     import patient_brief
 
     return patient_brief.open_signals(view.db, project)
+
+
+def counts(view, allowed, project):
+    """Heading counts of one patient: open signals and request replies, each with whether it is confirmed."""
+    import patient_context_view as pcv
+
+    require_project(project, allowed)
+    found, confirmed = _signal_counts(view.db, project)
+    signals = {"count": None if found is None else found.get(project, 0),
+               "state": "failed" if found is None else "confirmed" if confirmed else "partial"}
+    try:
+        talk = pcv.replies(view.db, project)
+    except (sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
+        replies = {"requests": None, "not_found": None, "unknown": None, "state": "failed"}
+    else:
+        waiting = pcv._open_requests(talk)
+        replies = {"requests": len(talk["items"]), "not_found": len(waiting["unanswered"]),
+                   "unknown": len(waiting["reply_unknown"]), "state": "observed"}
+    return {"snapshot": view.meta, "open_signals": signals, "replies": replies}
+
+
+# Rows shown per registered dataset; rows_total says how many the record holds.
+REGISTERED_ROWS = 200
+
+
+def registered(view, allowed, project):
+    """MCS registered clinical data (medication periods, observation items and values), a record kept
+    apart from chat: every dataset with its acquisition state; the care team is not included."""
+    from mcs_util import load_config
+    from project_metadata_contract import REFERENCE_FIELDS
+    from registered_data import registered_data
+
+    require_project(project, allowed)
+    enabled = load_config().get("clinical_metadata") is True
+    data = registered_data(view.db, "detail", project, None)
+    if data is None:
+        return {"snapshot": view.meta, "state": "unavailable", "collection_enabled": enabled, "datasets": []}
+    datasets = []
+    for record in data["records"]:
+        definition = record.get("definition") or {}
+        lab = definition.get("lab_test_item") or {}
+        rows = record.get("rows") or []
+        datasets.append({
+            "dataset": record["dataset"], "label": notify_views.REGISTERED_NAMES[record["dataset"]],
+            "state": record["state"], "state_label": notify_views.REGISTERED_STATES.get(record["state"], "未確認"),
+            "reason": record.get("reason"), "last_complete_at": record.get("last_complete_at"),
+            "attempted_at": record.get("attempted_at"), "historical": record.get("historical") is True,
+            "item": ({"name": lab.get("name"), "unit": lab.get("unit"),
+                      "reference": {key: definition[key] for key in REFERENCE_FIELDS
+                                    if definition.get(key) is not None}}
+                     if record["dataset"] == "observation_values" else None),
+            "rows_total": len(rows), "rows": [_registered_row(record["dataset"], row)
+                                              for row in rows[:REGISTERED_ROWS]]})
+    return {"snapshot": view.meta, "state": "listed" if datasets else "not_linked",
+            "collection_enabled": enabled, "datasets": datasets}
+
+
+def _registered_row(dataset, row):
+    """A registered row without MCS internal IDs."""
+    from project_metadata_contract import REFERENCE_FIELDS
+
+    if dataset == "medication_periods":
+        return {"begin_date": row.get("begin_date"), "end_date": row.get("end_date"),
+                "medicines": [m.get("name") for m in row.get("medicine_informations") or []]}
+    if dataset == "observation_items":
+        lab = row.get("lab_test_item") or {}
+        return {"name": lab.get("name"), "unit": lab.get("unit"),
+                "reference": {key: row[key] for key in REFERENCE_FIELDS if row.get(key) is not None}}
+    return {"issued_at": row.get("observation_issued_at"),
+            **{key: row.get(key) for key in ("scalar", "max", "min", "left", "right")}}
+
+
+def source_search(view, allowed, project, query, *, cursor=None):
+    """Search the patient's stored posts and attachment OCR text with the chat cards' 🔎 projection,
+    saying what was not searched (unscanned range, pending OCR, unavailable bodies, OCR disabled)."""
+    from mcs_util import load_config
+
+    require_project(project, allowed)
+    position = None
+    if cursor:
+        try:
+            position = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+        except (ValueError, UnicodeError, binascii.Error, RecursionError):
+            raise ValueError("search_cursor_invalid") from None
+    try:
+        result = notify_views.patient_search_view(view.db, project, query, cfg=load_config(), cursor=position,
+                                                  keep_message_id=True)
+    except ValueError as exc:
+        if str(exc) != "patient_scope_unavailable":
+            raise
+        # Original sources of an archived or no-longer-permitted room are not read for search.
+        return {"snapshot": view.meta, "state": "unavailable", "title": None, "head": [], "items": [], "notes": [],
+                "empty": "この患者はアーカイブ済みか閲覧権限がないため、原資料を検索していません。",
+                "range_complete": False, "next_cursor": None}
+    next_cursor = result["next_cursor"]
+    return {"snapshot": view.meta, "state": "searched", "title": result["title"], "head": result["head"],
+            "items": [{key: item[key] for key in ("text", "message_id", "source", "page")}
+                      for item in result["items"]],
+            "notes": result["notes"], "empty": result["empty"], "range_complete": result["range_complete"],
+            "next_cursor": None if next_cursor is None else base64.urlsafe_b64encode(
+                json.dumps(next_cursor, separators=(",", ":")).encode()).decode()}

@@ -449,6 +449,16 @@ def _page_processing_status(progresses):
     return "preparing" if pending else "complete"
 
 
+SUMMARY_EMPTY_LABELS = {"failed": "作成失敗", "attention": "要確認", "pending": "処理待ち"}
+
+
+def summary_empty_state(db, mid, progress) -> str:
+    """Why a post has no usable summary: ``failed`` (retries exhausted on the current body),
+    ``attention`` (verified progress needs review) or ``pending``; SUMMARY_EMPTY_LABELS words it."""
+    return ("failed" if extraction_failed(db, mid) else
+            "attention" if progress and progress["state"] == "attention" else "pending")
+
+
 def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
                    include_progress=True, compact_progress=True, legacy_ocr=False,
                    request_first=False) -> dict:
@@ -462,8 +472,7 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
     state = (progress_by_mid.get(mid) if progress_by_mid is not None
              else progress_state(db, mid, cfg))
     if not block:
-        empty = ("作成失敗" if extraction_failed(db, mid) else
-                 "要確認" if state and state["state"] == "attention" else "処理待ち")
+        empty = SUMMARY_EMPTY_LABELS[summary_empty_state(db, mid, state)]
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
     if (include_progress and (label or progress_by_mid is not None)
             and state and state["state"] != "complete"):
