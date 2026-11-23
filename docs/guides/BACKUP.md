@@ -63,7 +63,7 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 `patient-context-reset-*.db`（自動では削除しません）は `data/backups` にあります。
 鍵・policy・外部媒体は使いません。在宅記録の台帳（[ローカルのチャット表示](LOCAL_CHAT.md)の
 `--homecare-db`）が `data/homecare.db` にあるときは、その日次の `homecare-YYYYMMDD.db`（3世代）と
-更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db`（適用が成功したとき、または中断した適用を復旧で完了したときに新しい3つへ整理）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
+更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db`（適用が成功したときに新しい3つへ整理。`mcs recover` で完了した更新や強制終了で残ったコピーは、次に成功した適用で整理）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
 まだ作っていないときは、台帳のバックアップは作りません。
 
 ```bash
