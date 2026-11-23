@@ -134,6 +134,9 @@ def tailnet(monkeypatch):
     monkeypatch.setattr(remote, "tailscale_cli", lambda: "/stub/tailscale")
     monkeypatch.setattr(remote, "_run", run)
     monkeypatch.setattr(remote, "port_in_use", lambda port: port in state.busy)
+    state.answering = True
+    monkeypatch.setattr(remote, "workspace_answers", lambda port, host: state.answering)
+    monkeypatch.setattr(remote, "POLL_S", 0)
     monkeypatch.setattr(mcs_util, "load_config_checked", lambda *a, **k: state.cfg)
     monkeypatch.setattr(config_edit, "apply", lambda changes: (state.saved.append(changes), ({}, []))[1])
 
@@ -194,6 +197,81 @@ def test_setup_never_publishes_a_port_another_program_holds(tailnet, capsys):
     # Re-running on the port the workspace already uses is fine: that listener is the workspace itself.
     tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
     assert tailnet.run() == 0
+
+
+def test_setup_publishes_only_a_port_this_workspace_answers_on(tailnet, capsys):
+    # launchd listing the agent is not proof: another program may hold the saved port while the agent is down.
+    tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
+    tailnet.answering = False
+    assert tailnet.run() == 1 and tailnet.services == 1
+    assert not any(c[:1] == ["serve"] for c in tailnet.calls)
+    out = capsys.readouterr().out
+    assert "8770 番で応答していることを確認できなかった" in out and "tailscale serve --bg" not in out
+    tailnet.answering = True
+    assert tailnet.run() == 0 and ["serve", "--bg", "http://127.0.0.1:8770"] in tailnet.calls
+
+
+def resident_answer(server, headers, path):
+    from email.message import Message
+
+    handler = mcs_local_chat.ChatHandler.__new__(mcs_local_chat.ChatHandler)
+    handler.server, handler.path, handler.headers = server, path, Message()
+    for name, value in headers.items():
+        handler.headers[name] = value
+    sent = []
+    handler._send = lambda *args: sent.append(args)
+    handler.do_GET()
+    return sent[0][0], (sent[0][1:] or (b"",))[0]
+
+
+def test_only_the_resident_workspace_of_this_name_passes_the_probe(tmp_path):
+    import homecare_catalog
+    import homecare_store
+
+    registry = homecare_catalog.registry(["pharmacy"])
+    homecare_store.connect(tmp_path / "homecare.db", registry.modules).close()
+    server = SimpleNamespace(server_port=8770, token="unused", csrf="unused", snapshot="unused", allowed=None,
+                             homecare=tmp_path / "homecare.db", homecare_registry=registry, route_settings=None,
+                             tailnet_host=HOST)
+    assert remote.is_workspace(*resident_answer(server, remote.probe_headers(HOST), remote.PROBE_PATH))
+    # A workspace still running with an earlier name answers, but not as the one just saved.
+    server.tailnet_host = "old-mac.example-tailnet.ts.net"
+    assert not remote.is_workspace(*resident_answer(server, remote.probe_headers(HOST), remote.PROBE_PATH))
+    assert not remote.is_workspace(200, b"<html>another program</html>")
+
+
+def test_the_probe_asks_this_mac_only_and_treats_no_answer_as_not_the_workspace():
+    import http.client
+
+    opened = []
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            opened.append((host, port))
+            self.answer = SimpleNamespace(status=403, read=lambda limit: mcs_local_chat.UNREGISTERED[:limit])
+
+        def request(self, method, path, headers):
+            opened.append((method, path, headers))
+
+        def getresponse(self):
+            return self.answer
+
+        def close(self):
+            opened.append("closed")
+
+    assert remote.workspace_answers(8770, HOST, connection=Connection)
+    assert opened == [("127.0.0.1", 8770), ("GET", remote.PROBE_PATH, remote.probe_headers(HOST)), "closed"]
+
+    class Refused(Connection):
+        def request(self, *args, **kwargs):
+            raise ConnectionRefusedError
+
+    class Garbled(Connection):
+        def getresponse(self):
+            raise http.client.BadStatusLine("x")
+
+    assert not remote.workspace_answers(8770, HOST, connection=Refused)
+    assert not remote.workspace_answers(8770, HOST, connection=Garbled)
 
 
 def test_the_workspace_starts_before_the_port_is_published(tailnet, monkeypatch):
