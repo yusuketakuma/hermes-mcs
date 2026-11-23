@@ -148,7 +148,7 @@ def command(args, *, services) -> int:
         if restored:
             # Publishing the new port by hand now would point the tailnet at a port nothing listens on.
             print(f"tailnet への公開を {port} 番に変更できなかったため、これまでの {current['port']} 番の公開に戻しました。"
-                  "Tailscale の状態を確かめてから、mcs setup remote --port をもう一度実行してください。")
+                  f"Tailscale の状態を確かめてから、mcs setup remote --port {port} をもう一度実行してください。")
         else:
             print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
                   f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")

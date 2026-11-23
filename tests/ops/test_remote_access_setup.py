@@ -224,3 +224,4 @@ def test_a_refused_port_change_returns_to_the_published_port(tailnet, capsys):
     # Publishing 9000 by hand would point the tailnet at a port the workspace has left.
     out = capsys.readouterr().out
     assert "8770 番の公開に戻しました" in out and "tailscale serve" not in out
+    assert "mcs setup remote --port 9000 を" in out  # the command to rerun, ready to copy
