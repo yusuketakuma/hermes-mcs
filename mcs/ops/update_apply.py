@@ -697,7 +697,6 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 provider_migration_needed = _provider_migration_needed()  # re-read under run.lock
             except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                 return bail("provider_settings_unverified")
-            tree_may_change = True
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),
@@ -729,6 +728,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if borrowed is not None:
                 release_apply_owner._check_git_metadata(REPO, deadline=time.monotonic() + 10)
             journal(state, "merge")
+            tree_may_change = True
             r = _git(["merge", "--ff-only", target_ref],
                      timeout=T_MERGE)
             if r.returncode != 0:

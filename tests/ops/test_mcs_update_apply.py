@@ -910,3 +910,26 @@ def test_an_interrupt_before_any_change_discards_its_home_care_copy(
     with pytest.raises(KeyboardInterrupt):
         updater.apply("v1.2.0", sha, "cid-interrupted")
     assert discarded == ["copy-1"]
+
+
+def test_a_stop_failure_before_the_merge_discards_its_home_care_copy(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    import local_backup
+    discarded = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-1")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate", discarded.append)
+
+    def stop_failed(*_a, **_k):
+        raise updater.UpdateError("quiesce_unconfirmed")
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    assert updater.apply("v1.2.0", sha, "cid-stop-failed") != 0
+    assert discarded == ["copy-1"]
