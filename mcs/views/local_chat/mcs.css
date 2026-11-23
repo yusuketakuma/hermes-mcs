@@ -17,7 +17,8 @@
 .context-brief { min-width: 0; }
 .context-label { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
 .context-label b { flex-shrink: 0; font-weight: 600; color: var(--muted); }
-.context-label .context-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--warn-ink); }
+.context-label .context-date { flex-shrink: 0; color: var(--muted); }
+.context-brief .context-scope { color: var(--warn-ink); overflow-wrap: anywhere; }
 .context-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--fs-sm); }
 .context-records { max-height: 45vh; overflow: auto; }
 .context-records > summary { cursor: pointer; color: var(--accent); font-weight: 550; white-space: nowrap; padding: 1px 0; }
@@ -27,10 +28,6 @@
 .patient-context .detail-section h3 { font-size: var(--fs-xs); margin-bottom: 4px; }
 .patient-context .detail-section p { font-size: var(--fs-sm); }
 .patient-context blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--line-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
-
-/* ---------- Heading states ---------- */
-/* Fetch-state chips replace the old banner above the timeline: they never shrink, the meta text does. */
-body[data-mode="mcs"] #patient-chips { flex-wrap: nowrap; flex-shrink: 0; }
 
 /* ---------- View tabs and post search ---------- */
 .view-bar { display: flex; align-items: center; gap: 12px; padding: 0 20px; border-bottom: 1px solid var(--line); }
@@ -69,6 +66,7 @@ body[data-mode="mcs"] #patient-chips { flex-wrap: nowrap; flex-shrink: 0; }
 .side-note { margin: 4px 0; font-size: var(--fs-sm); color: var(--muted); }
 .side-body .state-note { margin: 4px 0; line-height: 1.5; }
 .side-body .panel-item { padding: 6px 0; }
+.side-body .side-group { margin: 6px 0 0; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
 .side-body .panel-item:last-of-type { border-bottom: 0; }
 .side-body .panel-item p, .side-body .panel-item blockquote { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--fs-sm); }
 
@@ -109,6 +107,10 @@ body[data-mode="mcs"] #patient-chips { flex-wrap: nowrap; flex-shrink: 0; }
 .panel-item-meta small { font-size: var(--fs-xs); color: var(--muted); }
 .panel-item-meta .text-button { padding: 0 2px; font-size: var(--fs-xs); }
 .panel > .state-note { margin: 4px 0; }
+/* A panel inside a card (the visit sheet's MCS views): the card frames it, so title and empty text stay small. */
+.card .panel h2 { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--ink-2); }
+.card .panel .empty { padding: 4px 0; text-align: left; }
+.card .panel h3 { margin-top: 8px; }
 .panel-pager { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: var(--fs-sm); }
 
 /* ---------- Narrower screens ---------- */
@@ -121,13 +123,19 @@ body[data-mode="mcs"] #patient-chips { flex-wrap: nowrap; flex-shrink: 0; }
   .context-preview { gap: 0 14px; }
   #message-search { width: 180px; }
 }
+@media (max-width: 899px) {
+  .context-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 699px) {
   /* The name stays on the 48px bar; the state chips get a full-width row under it instead of being cut off.
      ID and counts stay in the patient sheet. */
   body[data-mode="mcs"] .page-title, body[data-mode="mcs"] .page-sub { display: contents; }
   body[data-mode="mcs"] .page-title h1 { flex: 1; min-width: 0; line-height: var(--head-h); }
   body[data-mode="mcs"] .page-meta { display: none; }
-  body[data-mode="mcs"] #patient-chips { order: 4; flex-basis: 100%; flex-wrap: wrap; margin-top: -6px; padding-bottom: 6px; }
+  /* A zero-height break ends the bar's first line; chips and the snapshot time (how old the data is) follow. */
+  body[data-mode="mcs"] .page-head::after { content: ""; order: 3; flex-basis: 100%; }
+  body[data-mode="mcs"] #patient-chips { order: 4; flex-wrap: wrap; margin: -4px 0 6px; }
+  body[data-mode="mcs"] .snapshot-time { display: block; order: 6; max-width: none; margin: -4px 0 6px; white-space: normal; text-align: left; line-height: 1.7; }
 
   .patient-context { grid-template-columns: minmax(0, 1fr); padding: 4px 12px 6px; }
   .context-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }

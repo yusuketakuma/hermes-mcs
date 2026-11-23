@@ -2,7 +2,7 @@
 // Dependency-free DOM contract checks, run by the Python test when Node is available.
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 class Element {
-  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}, toggle(){}};}
+  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; const names = new Set(); this.classList = {add: name => names.add(name), remove: name => names.delete(name), toggle: (name, on) => on ? names.add(name) : names.delete(name), contains: name => names.has(name)};}
   append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
@@ -11,9 +11,12 @@ class Element {
   set id(value) {nodes.set(value, this);}
   setAttribute() {}
   scrollIntoView() {}
+  focus() {document.activeElement = this;}
+  contains(node) {for (; node; node = node.parentNode) if (node === this) return true; return false;}
 }
 const nodes = new Map();
-const document = {body: new Element("body"), getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
+const listeners = {};
+const document = {body: new Element("body"), activeElement: null, addEventListener(type, handler) {(listeners[type] ||= []).push(handler);}, getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
 const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promise(() => {})};
 vm.createContext(sandbox);
 const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");
@@ -205,5 +208,58 @@ async function checkSideStatus() {
   await vm.runInContext("loadSideStatus()", sandbox);
   assert.equal(rail.children.length, 0, "no patient, no rail");
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); console.log("local chat DOM contracts passed");}
+async function checkReviewFixes() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  // Stamp tone: every non-complete wording of stamp_format is amber; actor names such as 氏名不明 are not.
+  const tone = line => run("post")({message_id: 1, body_state: "full", body_complete: true, stamp_line: line}).children[1].children.find(node => node.className === "post-footer").children.find(node => node.textContent === line).className;
+  for (const line of ["スタンプ 未取得", "スタンプ 未取得・再取得失敗", "スタンプ 👍2 · 押した人 取得失敗", "スタンプ 👍2 · 押した人 古い情報", "押した人（取得状態不明）: なし", "スタンプ 👍1 · 11-18 10:00時点・再取得失敗"]) assert.equal(tone(line), "chip chip-warn", line);
+  for (const line of ["スタンプ なし · 11-18 10:00時点", "スタンプ 👍1 氏名不明 · 11-18 10:00時点", "スタンプ 👍1 · 投稿時点"]) assert.equal(tone(line), "chip chip-muted", line);
+  // On phones the page scrolls, not the main column: the newest post is scrolled to on the page.
+  const page = new Element("html"); page.scrollHeight = 900; document.scrollingElement = page;
+  sandbox.getComputedStyle = node => ({overflowY: node === byId("timeline-panel") ? "visible" : "auto"});
+  run("state.project = 101; state.query = ''");
+  sandbox.api = async () => ({items: [{message_id: 1, posted_at_ts: 1793491200, body_state: "full", body_text: "合成"}], next_cursor: null});
+  await run("loadTimeline()");
+  assert.equal(page.scrollTop, 900);
+  sandbox.api = async () => ({panel: {title: "合成", items: []}});
+  run("state.panel = 'summary'"); await run("loadPanel()");
+  assert.equal(page.scrollTop, 0);
+  delete sandbox.getComputedStyle; run("state.panel = ''");
+  // A view tab keeps keyboard focus across the tablist rebuild.
+  run("state.sections = [['', 'タイムライン'], ['summary', 'まとめ']]; viewTabs()");
+  sandbox.api = () => new Promise(() => {});
+  const summaryTab = byId("view-tabs").children[0].children[1];
+  summaryTab.focus(); summaryTab.onclick();
+  const rebuilt = byId("view-tabs").children[0].children[1];
+  assert.notEqual(rebuilt, summaryTab); assert.equal(document.activeElement, rebuilt);
+  run("state.panel = ''");
+  // Esc closes the open detail and focus returns to the opener; with the sheet open, Esc closes the sheet first.
+  const opener = new Element("button"); opener.focus();
+  sandbox.api = async kind => kind === "evidence" ? {message: {message_id: 1, body_state: "full", body_complete: true}} : {items: []};
+  await run("openDetail({message_id: 1})");
+  assert.equal(document.activeElement, byId("close-detail"));
+  byId("detail").append(byId("close-detail")); byId("close-detail").focus();
+  byId("detail").classList.add("open");
+  run("shell.openList(true)");
+  assert.equal(document.activeElement, byId("patient-search")); assert.equal(byId("workspace").inert, true);
+  byId("sidebar").append(byId("patient-search"));
+  listeners.keydown.forEach(handler => handler({key: "Escape"}));
+  assert.equal(document.body.classList.contains("list-open"), false); assert.equal(byId("workspace").inert, false);
+  assert.equal(document.activeElement, byId("close-detail"), "the sheet hands focus back to its opener");
+  listeners.keydown.forEach(handler => handler({key: "Escape"}));
+  assert.equal(byId("detail").classList.contains("open"), false);
+  assert.equal(document.activeElement, opener, "the detail hands focus back to its opener");
+  // Context preview: the post date beside the label, the scope note on its own line.
+  run("state.project = 101");
+  sandbox.api = async () => ({sections: [{label: "アレルギー", items: [{subject: "patient", text: "合成", posted_at_ts: null, scope_note: "続きあり・分類範囲は未確認"}]}]});
+  await run("loadPatientContext(101)");
+  const brief = find(byId("patient-context"), node => node.className === "context-brief");
+  assert.match(content(brief), /日付未取得/);
+  assert.equal(brief.children.find(node => node.className === "context-scope").textContent, "続きあり・分類範囲は未確認");
+  // The rail shows each item's kind.
+  sandbox.api = async (kind, params) => ({panel: {items: params.section === "signals" ? [{group: "合成の種類", text: "合成の未解消"}] : []}});
+  await run("loadSideStatus()");
+  assert.match(content(byId("side-status")), /合成の種類[\s\S]*合成の未解消/);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});
