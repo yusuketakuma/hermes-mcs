@@ -142,8 +142,9 @@ def _chat_candidates(db, project_id: int, dataset: str, now: float,
 
 class MetadataIndex:
     """One patient's project-metadata attempts read in one pass, so many targets of the same patient do not
-    each re-scan its fetch history: per (dataset, entity, item) the newest attempt and newest complete attempt,
-    selected by exactly the predicate of get_project_metadata's own query; contents are read only for those."""
+    each re-scan its fetch history: per (dataset, integer entity, null-or-integer item) the newest attempt and
+    newest complete attempt of valid JSON; contents are read only for those. The one attempt-selection rule of
+    get_project_metadata (all datasets but care_team_as_of reads and consultations)."""
 
     _SQL = ("SELECT artifact_id,json_extract(content,'$.dataset') AS dataset,"
             "CASE WHEN json_type(content,'$.entity_id')='integer' "
@@ -199,8 +200,9 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     complete acquisition. Group consultations have patient_association='unknown'.
     include_chat adds separate unconfirmed candidates for clinical datasets only;
     omitted/False never inspects chat. No identity matching or authority is assigned.
-    ``index`` (a MetadataIndex of this connection and patient) serves the artifact selection for reading
-    many targets of one patient; the result is the same as without it.
+    Attempts are selected through a MetadataIndex (built here, or ``index``, one of this connection and
+    patient, to share across many targets of one patient); care_team_as_of and consultations keep their own
+    queries, whose predicates differ.
     """
     from mcs_contract import valid_id as _valid_id
 
@@ -246,20 +248,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
         result["reason"] = "association_unverified"
         return result
     result["scope"] = target["scope"]
-    # Group provenance must validate the latest attempt, including numeric aliases.
-    entity_filter = ("" if dataset == "consultations" else
-                     "AND json_type(content,'$.entity_id')='integer' "
-                     "AND typeof(json_extract(content,'$.entity_id'))='integer' ")
-    # Invalid JSON cannot be evidence for any dataset or target.
-    base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
-            "AND CASE WHEN json_valid(content) THEN "
-            "json_extract(content,'$.dataset')=? " + entity_filter +
-            "AND json_extract(content,'$.entity_id')=? "
-            "AND (json_type(content,'$.item_id') IS NULL OR "
-            "json_type(content,'$.item_id') IN ('null','integer')) "
-            "AND typeof(json_extract(content,'$.item_id')) IN ('null','integer') "
-            "AND json_extract(content,'$.item_id') IS ? ELSE 0 END ")
-    params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], item_id)
+    # Invalid JSON cannot be evidence for any dataset or target. The karte/roster datasets select through
+    # MetadataIndex (one predicate for a single target and for a patient's many); two reads keep their own:
     if care_team_as_of is not None:
         # An unreadable observation may belong before the cutoff; never
         # skip it and revive an older roster as confirmed membership.
@@ -277,9 +267,22 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                 "WHEN json_type(content,'$.dataset')='text' THEN 0 ELSE 1 END ELSE 1 END ")
         params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], care_team_as_of)
         result.update(as_of=care_team_as_of, attempt_artifact_id=None, complete_artifact_id=None)
-    if index is not None and care_team_as_of is None and dataset != "consultations":
-        latest, complete = index.select(dataset, target["entity_id"], item_id)
+    elif dataset == "consultations":
+        # Group provenance must validate the latest attempt, including numeric aliases: no entity type filter.
+        base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
+                "AND CASE WHEN json_valid(content) THEN "
+                "json_extract(content,'$.dataset')=? "
+                "AND json_extract(content,'$.entity_id')=? "
+                "AND (json_type(content,'$.item_id') IS NULL OR "
+                "json_type(content,'$.item_id') IN ('null','integer')) "
+                "AND typeof(json_extract(content,'$.item_id')) IN ('null','integer') "
+                "AND json_extract(content,'$.item_id') IS ? ELSE 0 END ")
+        params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], item_id)
     else:
+        base = None
+        index = index if index is not None else MetadataIndex(db, project_id)
+        latest, complete = index.select(dataset, target["entity_id"], item_id)
+    if base is not None:
         latest = db.execute(base + "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
         complete = db.execute(base + "AND CASE WHEN json_valid(content) "
                               "THEN json_extract(content,'$.complete')=1 ELSE 0 END "
@@ -368,18 +371,9 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                     pin = payload["definition_source_artifact_id"]
                     if not _valid_id(pin):
                         raise SchemaError("metadata view: definition generation invalid")
-                    latest_definition = index.select("observation_items", target["entity_id"], None)[1] \
-                        if index is not None else db.execute(
-                        "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? "
-                        "AND CASE WHEN json_valid(content) THEN json_extract(content,'$.dataset')='observation_items' "
-                        "AND json_type(content,'$.entity_id')='integer' "
-                        "AND typeof(json_extract(content,'$.entity_id'))='integer' "
-                        "AND json_extract(content,'$.entity_id')=? "
-                        "AND json_extract(content,'$.item_id') IS NULL "
-                        "AND json_extract(content,'$.complete')=1 ELSE 0 END "
-                        "ORDER BY artifact_id DESC LIMIT 1", (ARTIFACT_KIND, project_id, target["entity_id"])).fetchone()
-                    definition = index.definition(now, max_age_s) if index is not None else get_project_metadata(
-                        db, project_id, "observation_items", now=now, max_age_s=max_age_s)
+                    # the newest complete item list and its read come from the same patient index
+                    latest_definition = index.select("observation_items", target["entity_id"], None)[1]
+                    definition = index.definition(now, max_age_s)
                     mapped = (latest_definition is not None and latest_definition["artifact_id"] == pin
                               and any(row["lab_test_item"]["id"] == item_id for row in definition["rows"]))
                     if "definition_fingerprint" in payload:
