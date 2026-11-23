@@ -176,3 +176,37 @@ def test_newer_clean_qc_supersedes_older_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_llm.run_pending(db)["selected"] == 0
     db.close()
+
+
+def test_reaudited_local_fix_is_the_cloud_lanes_second_attempt_not_local_work(tmp_path, monkeypatch):
+    """The local feedback re-extract is attempt 1 (no marker); a flag that
+    survives it is never re-extracted locally again and names the source the
+    cloud lane may give its single second attempt."""
+    db = _ledger(tmp_path)
+    chash = _seed_qc_flagged(db)
+    calls = []
+    monkeypatch.setattr(extract_llm_runner, "llm_extract",
+                        lambda body, **kw: calls.append(kw.get("feedback")) or {"vitals": {"hr": 48}, "summary": "s2"})
+    assert extract_llm.run_pending(db, limit=10, budget_s=120)["done"] == 1
+    fixed = db.artifacts("extract_llm", message_id=1)[-1]
+    assert json.loads(fixed["meta"])["qc_fix"] == {"qc": json.loads(fixed["meta"])["qc_fix"]["qc"], "applied": True}
+    followup = f"SELECT ({extract_llm._qc_cloud_followup_sql()}) FROM messages m WHERE m.message_id=1"
+    assert db.db.execute(followup).fetchone()[0] is None      # not re-audited yet
+    _qc_artifact(db, 1, fixed["artifact_id"], chash, {"qc": "done", "items": [
+        {"section": "vitals", "index": "hr", "item": {"vitals": {"hr": 48}},
+         "verdict": "NO_MATCH", "noul": 0.1}]})
+    assert extract_llm.run_pending(db, limit=10, budget_s=120)["selected"] == 0
+    assert len(calls) == 1
+    assert db.db.execute(followup).fetchone()[0] == fixed["artifact_id"]
+
+
+@pytest.mark.parametrize("row,attempt", [
+    ({"qc_cloud": 7, "_cloud_mode": "on"}, 2),
+    ({"qc_cloud": 7, "_cloud_mode": "off"}, None),
+    ({"qc_cloud": None, "_cloud_mode": "on"}, None),
+    ({}, None),
+])
+def test_only_the_cloud_second_attempt_records_attempt_two(row, attempt):
+    for applied in (True, False):
+        marker = extract_llm_runner._qc_fix(row, {"qc": 9}, applied)
+        assert marker == {"qc": 9, "applied": applied, **({"attempt": attempt} if attempt else {})}

@@ -70,7 +70,11 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 ## Jevと評価の境界
 
 通常の意味チェック・監査は`semantic.mode`、認証、scope、日次予算等を満たした場合に呼び出します。
-`semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続ローカル再抽出は1回に制限します。
+`semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続再抽出はローカル1回に制限します。
+その結果の再監査でも指摘が残る投稿は、保存済み投稿の再抽出の再開期間中だけ、既存の`reextract`経路と
+その送信条件（費用上限・停止・施設の確認・scope・履歴範囲・`held_prior`・QCの60日範囲）でクラウド1回を加えます。
+`meta.qc_fix.attempt`は2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
+送信後の失敗はローカルで再実行せず`applied:false, attempt:2`で確定し、残った指摘は`mcs view qc`の確認候補に出します。
 モデルは`jev-1.13.0`へ固定し、応答モデル不一致を拒否します。
 429/5xx/transportのretryはjobの残予算内、401/403はretryしません。
 

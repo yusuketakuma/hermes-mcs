@@ -409,7 +409,10 @@ def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held,
 
 
 def _cloud_reextract(ledger, row, *, background=False):
-    if row["qc_src"] or row["thin_src"] or row["human_src"] or row["attempts"]:
+    # Only the QC second attempt (qc_cloud, selected by the cloud lane) carries
+    # local-only quality work to the cloud; its audit notes go with the prompt.
+    qc_cloud = row["qc_cloud"] if "qc_cloud" in row.keys() else None
+    if ((row["qc_src"] or row["thin_src"]) and not qc_cloud) or row["human_src"] or row["attempts"]:
         return False
     if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
             f"AND EXISTS ({_hold_sql()})", (row["message_id"],)).fetchone():

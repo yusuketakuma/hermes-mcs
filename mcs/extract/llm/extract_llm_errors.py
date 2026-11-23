@@ -347,7 +347,7 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> f
                 ledger.db.commit()
                 return None
             if current is None or any(current[key] != r.get(key)
-                                      for key in ('qc_src', 'thin_src', 'human_src', 'attempts')):
+                                      for key in ('qc_src', 'qc_cloud', 'thin_src', 'human_src', 'attempts')):
                 ledger.db.commit()
                 return None
         if isinstance(r, dict):

@@ -318,27 +318,52 @@ def pending_pred(db, *, include_thin: bool = True, version: int | None = None) -
              OR ({_has_kind('extract_qc', 'q0')}
                  AND EXISTS ({_qc_flagged_sql(val="1", version=version)}))
              OR {thin})
-        AND NOT EXISTS (SELECT 1 FROM artifacts f
-                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
-                          {current_extract_pred('f')}
-                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={version}
-                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
+        AND NOT EXISTS ({_qc_fixed_sql(version=version)})
         AND (NOT {_has_kind(UPGRADE_KIND, 'u0', project=True)} OR NOT EXISTS ({_hold_sql(version=version)})))
              OR ({_has_kind(EXTRACT_FEEDBACK_KIND, 'h0')}
                  AND EXISTS ({_human_flagged_sql(val="1", version=version)})))"""
 
 
-_QC_ACTIONABLE_SQL = """CASE WHEN json_valid(q.content) THEN
-           (json_type(q.content,'$.items')='array'
-            AND EXISTS (SELECT 1 FROM json_each(q.content,'$.items') qi
+def qc_actionable_sql(alias: str = "q") -> str:
+    """Whether the audit row ``alias`` still reports unsupported items or an urgency mismatch."""
+    return f"""CASE WHEN json_valid({alias}.content) THEN
+           (json_type({alias}.content,'$.items')='array'
+            AND EXISTS (SELECT 1 FROM json_each({alias}.content,'$.items') qi
                         WHERE qi.type='object'
                           AND json_extract(qi.value,'$.verdict')
                               ='NO_MATCH'))
-           OR (json_type(q.content,'$.urgency')='object'
-               AND json_extract(q.content,'$.urgency.jev') IS NOT NULL
-               AND json_extract(q.content,'$.urgency.jev') IS NOT
-                   json_extract(q.content,'$.urgency.extracted'))
+           OR (json_type({alias}.content,'$.urgency')='object'
+               AND json_extract({alias}.content,'$.urgency.jev') IS NOT NULL
+               AND json_extract({alias}.content,'$.urgency.jev') IS NOT
+                   json_extract({alias}.content,'$.urgency.extracted'))
            ELSE 0 END"""
+
+
+_QC_ACTIONABLE_SQL = qc_actionable_sql("q")
+
+
+def qc_fix_attempt_sql(meta: str) -> str:
+    """Automatic QC re-extractions an extraction's ``meta`` records: 0, 1, 2, or NULL when unreadable.
+
+    The first (local) feedback re-extract wrote ``qc_fix`` without an attempt,
+    so a missing attempt reads as 1; the cloud second attempt records 2."""
+    doc = json_or_null(meta)
+    return f"""(CASE WHEN json_extract({doc},'$.qc_fix') IS NULL THEN 0
+           WHEN json_type({doc},'$.qc_fix')<>'object' THEN NULL
+           WHEN json_type({doc},'$.qc_fix.attempt') IS NULL THEN 1
+           WHEN json_type({doc},'$.qc_fix.attempt')='integer'
+                AND json_extract({doc},'$.qc_fix.attempt') IN (1,2)
+             THEN json_extract({doc},'$.qc_fix.attempt') END)"""
+
+
+def _qc_fixed_sql(*, version: int | None = None) -> str:
+    """Rows: a current extraction of this generation that already carries a QC settle marker."""
+    version = _generation(version)
+    return f"""SELECT 1 FROM artifacts f
+                        WHERE f.kind='{KIND}' AND f.message_id=m.message_id
+                          {current_extract_pred('f')}
+                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={version}
+                          AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL"""
 
 
 def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id", *, version: int | None = None) -> str:
@@ -362,6 +387,20 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id", *, version: int 
          AND ({_QC_ACTIONABLE_SQL})
         WHERE a.kind='{KIND}' AND a.artifact_id={src}
         ORDER BY q.artifact_id DESC LIMIT 1"""
+
+
+def _qc_cloud_followup_sql(val: str = "qf.artifact_id") -> str:
+    """Scalar subquery: the current extraction its newest audit still flags after one local QC re-extract.
+
+    The cloud lane gives such a row its single second attempt: the flagged
+    source (``_qc_flagged_sql``, which pins the newest current extraction and
+    its newest current audit) must carry ``qc_fix`` from the first attempt and
+    no human report may be pending on it. A source not yet re-audited is not
+    flagged, and an attempt-2 marker ends the sequence."""
+    return f"""SELECT {val} FROM artifacts qf
+        WHERE qf.artifact_id=({_qc_flagged_sql()})
+          AND {qc_fix_attempt_sql('qf.meta')}=1
+          AND NOT EXISTS ({_human_flagged_sql(val="1")})"""
 
 
 def _qc_feedback(ledger, src_artifact_id):

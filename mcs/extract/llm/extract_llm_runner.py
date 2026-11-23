@@ -232,6 +232,14 @@ def _rebuild_meta(r, extra):
     return {**(extra or {}), "local_rebuild": local_rebuild.tag(r["_local_rebuild"])}
 
 
+def _qc_fix(r, qc, applied):
+    """The qc_fix settle marker; the cloud second attempt records attempt 2 (a missing attempt reads as 1)."""
+    marker = {"qc": qc["qc"], "applied": applied}
+    if r.get("qc_cloud") and r.get("_cloud_mode") == "on":
+        marker["attempt"] = 2
+    return marker
+
+
 def _rebuild_guard(ledger, r):
     """...and re-proves its permit inside the same adoption transaction (other rows: unchanged)."""
     if r.get("_local_rebuild") is None:
@@ -873,7 +881,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 key[1:]: d.get(key, 0) for key in ("_items_dropped", "_evidence_dropped")}}
         outcome = _commit_extraction_atomic(
             ledger, r, json.dumps(d, ensure_ascii=False), ctx, integrity,
-            {"qc": qc["qc"], "applied": True} if qc else None,
+            _qc_fix(r, qc, True) if qc else None,
             extra or None, used_keys,
             check_current=qc is None and not r["thin_src"] and not r["human_src"],
             expected_prior=r.get("_expected_prior"),
@@ -940,7 +948,37 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             transport = r.get("_transport")
             at = r.get("_transport_at")
 
+            def settle_qc():
+                # A QC-flagged row whose feedback re-extract failed keeps the
+                # audited artifact — re-mint it with qc_fix so the flag settles
+                # instead of burning an LLM call every cycle. True once written.
+                src = ledger.db.execute(
+                    "SELECT content FROM artifacts WHERE artifact_id=?",
+                    (qc["src"],)).fetchone()
+                prior = _prior_extract(ledger.db, r)
+                if (src is not None and prior is not None and prior["artifact_id"] == qc["src"]
+                        and prior["content"] == src["content"]):
+                    # these writes are never carried: a skipped one
+                    # re-selects the row for another paid call, so
+                    # wait out the tick (default 60 s), not write_wait_s
+                    with _settle_lock() as held:
+                        if held:
+                            return _commit_extraction_atomic(
+                                ledger, r, src["content"], ctx, None,
+                                _qc_fix(r, qc, False), _rebuild_meta(r, None), (),
+                                check_current=False, mark_context=False,
+                                expected_prior=_prior_identity(prior),
+                                adoption_guard=_rebuild_guard(ledger, r)) == "written"
+                return False
+
             def cloud_retry():
+                if (qc is not None and r.get("qc_cloud")
+                        and r.get("_defer_reason") == "cloud_fallback" and settle_qc()):
+                    # The QC second attempt was sent and failed with a known
+                    # outcome: it settles (attempt 2, not applied) and never
+                    # reruns locally or resends. An unwritten settle keeps the
+                    # retry backoff below, which also ends cloud selection.
+                    return
                 # the paid cloud attempt failed and local produced nothing: the
                 # retry backoff keeps the next pass from re-sending the same body
                 with _settle_lock() as held:
@@ -1013,27 +1051,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             cloud_retry()
                         return
                 if qc is not None:
-                    # A QC-flagged row that failed its feedback re-
-                    # extract keeps the audited artifact — re-mint it
-                    # with qc_fix so the flag settles instead of
-                    # burning an LLM call every cycle.
-                    src = ledger.db.execute(
-                        "SELECT content FROM artifacts WHERE artifact_id=?",
-                        (qc["src"],)).fetchone()
-                    prior = _prior_extract(ledger.db, r)
-                    if (src is not None and prior is not None and prior["artifact_id"] == qc["src"]
-                            and prior["content"] == src["content"]):
-                        # these writes are never carried: a skipped one
-                        # re-selects the row for another paid call, so
-                        # wait out the tick (default 60 s), not write_wait_s
-                        with _settle_lock() as held:
-                            if held:
-                                _commit_extraction_atomic(
-                                    ledger, r, src["content"], ctx, None,
-                                    {"qc": qc["qc"], "applied": False}, _rebuild_meta(r, None), (),
-                                    check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior),
-                                    adoption_guard=_rebuild_guard(ledger, r))
+                    settle_qc()
                     return
                 if r["human_src"]:
                     # A failed report re-extract settles like the thin

@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "抽出監査の指摘が残る投稿を、再抽出の再開期間中にクラウドで1回だけ再抽出",
+  "summary": "抽出結果の監査（semantic.extract_qc=\"annotate\"）で指摘を受け、ローカルで指摘を添えて再抽出したあとも、監査し直した結果に本文に裏付けが見つからない項目または緊急度の相違が残る投稿を、保存済み投稿の再抽出の再開期間（cloud_llm.reextract_backlog_until）の間だけ、クラウドでもう1回だけ再抽出するようになりました。このとき投稿本文に加えて、監査が指摘した項目名と緊急度の指摘も Anthropic・OpenAI の送信先へ送ります。送信条件は既存の再開期間と同じ（費用上限、cloud-llm stop、施設の確認、project_ids・exclude_project_ids の範囲、cloud-llm resume で記録した履歴の範囲、旧抽出の保留なし）で、さらに投稿日時が直近60日以内のものに限ります。新しい設定項目や送信経路はなく、再開期間外には送りません。クラウドの再抽出後も指摘が残る投稿は mcs view qc の確認候補（needs_confirmation、--needs-confirmation で絞り込み）に表示し、それ以上自動では再抽出しません。チャットのカード表示は変わりません。また、ローカルの再抽出を済ませた投稿は、再開期間中でも通常の再抽出としてクラウドへ送らなくなりました。",
+  "upgrade": "既存の更新手順（mcs_update.py の再起動処理を含む）で、抽出worker・再抽出用のクラウドworker・Hermes gateway または独立 host へ反映されます。Git の差分だけを反映した場合は、これらを再起動するまで旧コードのままです。クラウドへ送るのは cloud_llm.reextract_backlog_until を設定した再開期間中だけで、設定していない環境では送信は増えません。抽出コードを変更したため、抽出コードの digest を含む意味チェック候補の識別子と添付ページの抽出契約が変わり、更新後に候補の再評価や添付ページのローカル再抽出が発生する場合があります。保存済みの抽出結果・設定の書換えはありません。既存の qc_fix の記録（回数の記録なし）はローカルの1回目として扱います。",
+  "details": [
+    "抽出の qc_fix に attempt を追加し、クラウドの2回目だけ attempt: 2 を記録する。成功時は applied: true、送信後の失敗時はローカルで再実行せず元の抽出を applied: false で確定する。",
+    "選択は既存の reextract 経路（cloud_followup）に qc_cloud 列を加え、最新の監査が1回目の再抽出結果を指摘し続け、人の誤り報告がない投稿だけを対象にする。claim 時も同じ列を照合する。",
+    "cloud-llm estimate も同じ経路の絞り込み（extract_llm_selection.cloud_lane_sql）を使う。",
+    "mcs view qc の一覧に qc_attempts（0・1・2）と needs_confirmation を追加し、集計に needs_confirmation の件数を加えた。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_qc.py",
+    "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/extract/llm/extract_llm_provider.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_errors.py",
+    "mcs/ops/cloud_cli.py",
+    "mcs/views/mcs_view.py"
+  ]
+}

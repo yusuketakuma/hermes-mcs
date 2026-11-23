@@ -366,13 +366,15 @@ class View:
             row["payload_valid"] = row["payload_hash"] is not None
         return {**page, "semantic_paused": paused(self.db, pid)}
 
-    def _qc(self, pid, mid, limit, cursor):
+    def _qc(self, pid, mid, limit, cursor, needs_confirmation=False):
         """extract_qc annotation view — Jev quality control over v2
         extractions. Verdicts are annotations only: they never modified
         the extraction they describe. Without --message-id: aggregate
         counts plus a paginated list of messages whose QC flagged at
-        least one item or could not run. With --message-id: the full
-        per-item verdicts for that message."""
+        least one item or could not run; each row reports the automatic
+        QC re-extractions behind its extraction and whether it is a
+        confirmation candidate (``--needs-confirmation`` lists only those).
+        With --message-id: the full per-item verdicts for that message."""
         import extract_llm
         from mcs_queries import (JSON_OBJECT_SQL, current_qc_pred,
                                  json_or_null, qc_source_id)
@@ -409,6 +411,16 @@ class View:
                  f"THEN json_extract({content},'$.items') ELSE '[null]' END")
         base = ("FROM artifacts a JOIN messages m "
                 "ON m.message_id=a.message_id WHERE " + cur)
+        # The audited extraction (current_qc_pred pins it to the newest one).
+        audited = (f" LEFT JOIN artifacts s ON s.kind='{extract_llm.KIND}' AND s.message_id=a.message_id"
+                   f" AND s.artifact_id=json_extract({json_or_null('a.meta')},'$.source_artifact_id')")
+        attempts = extract_llm.qc_fix_attempt_sql("s.meta")
+        from_cloud = (f"EXISTS(SELECT 1 FROM json_each({json_or_null('s.meta')},"
+                      "'$.provider_provenance.providers') pp WHERE pp.value IS NOT 'local')")
+        # Still flagged after the bounded automatic re-extractions: the local one
+        # and the cloud one, or a retained result that already came from the cloud.
+        confirm = (f"(json_extract({content},'$.qc')='done' AND ({extract_llm.qc_actionable_sql('a')})"
+                   f" AND ({attempts}=2 OR ({attempts}=1 AND {from_cloud})))")
         summary = dict(self.db.execute(
             "SELECT COUNT(*) total,"
             " COALESCE(SUM(json_extract(a.content,'$.qc')='done'),0)"
@@ -449,9 +461,15 @@ class View:
           FROM sources
         """, (*scope_params, pid)).fetchone()
         summary.update(dict(scope_counts))
+        summary["needs_confirmation"] = self.db.execute(
+            "SELECT COUNT(*) FROM artifacts a JOIN messages m ON m.message_id=a.message_id"
+            + audited + " WHERE " + cur + " AND " + confirm, (pid,)).fetchone()[0]
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
-            "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
+            f"m.posted_at_ts,m.sender_name,a.content,a.created_at,{attempts} AS qc_attempts,"
+            f"{confirm} AS needs_confirmation FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id" + audited + " WHERE " + cur
+            + (" AND " + confirm if needs_confirmation else "") +
             f" AND (json_extract({content},'$.qc')='unevaluated'"
             f"  OR json_extract({content},'$.coverage.unchecked')>0"
             f"  OR EXISTS(SELECT 1 FROM json_each({items}) je"
@@ -460,8 +478,10 @@ class View:
             f"  OR (json_extract({content},'$.urgency.jev') IS NOT NULL"
             f"      AND json_extract({content},'$.urgency.jev')"
             f"          IS NOT json_extract({content},'$.urgency.extracted')))",
-            [pid], ["a.artifact_id"], ["qc", pid], limit, cursor)
+            [pid], ["a.artifact_id"], ["qc", pid] + (["needs_confirmation"] if needs_confirmation else []),
+            limit, cursor)
         for row in page["items"]:
+            row["needs_confirmation"] = bool(row["needs_confirmation"])
             content = loads_dict(row.pop("content") or "{}") or {}
             row["qc_state"] = content.get("qc")
             row["coverage"] = content.get("coverage")
@@ -493,6 +513,11 @@ class View:
             "pending": "対象内の現行抽出に対するQC未実施件数（キュー済みを含む）",
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
+            "qc_attempts": "抽出チェックの指摘を受けた自動の再抽出の回数"
+                           "（0=なし、1=ローカル1回、2=ローカル1回とクラウド1回。読めない記録は null）",
+            "needs_confirmation": "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、"
+                                  "本文に裏付けが見つからない項目または緊急度の相違が残る抽出。"
+                                  "誤りと確定したものではない",
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
                                 "current=1 はまだ再抽出されていない報告。"
                                 "field=urgency は緊急度判定の誤り報告",
@@ -818,7 +843,8 @@ class View:
              message_id=None, request_id=None, status=None, command_id=None,
              payload_hash=None, since=None, until=None, scope="aggregate",
              dataset=None, item_id=None, publication=False, unread_only=False,
-             include_chat=False, max_age_s=None, view=None, role=None):
+             include_chat=False, max_age_s=None, view=None, role=None,
+             needs_confirmation=False):
         projectless = ("status", "read_model", "cross_lists", "response_observations")
         if (project is not None and not requests.positive(project)) \
                 or (kind not in projectless and project is None):
@@ -827,6 +853,8 @@ class View:
                 or include_chat and (kind != "project_metadata"
                                      or dataset not in CLINICAL_DATASETS)):
             raise ValueError("bad_comparison_scope")
+        if type(needs_confirmation) is not bool or needs_confirmation and kind != "qc":
+            raise ValueError("bad_needs_confirmation")
         if kind == "response_observations":
             if type(publication) is not bool:
                 raise ValueError("bad_publication")
@@ -875,7 +903,7 @@ class View:
             "attachments": lambda: self._attachments(project, message_id, limit, cursor),
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
             "staff": lambda: self._staff(project, limit),
-            "qc": lambda: self._qc(project, message_id, limit, cursor),
+            "qc": lambda: self._qc(project, message_id, limit, cursor, needs_confirmation),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
             "comparison": lambda: self._comparison(project, message_id),
@@ -1021,6 +1049,8 @@ def _parser():
             sub.add_argument("--message-id", type=int, required=True)
         if kind == "qc":
             sub.add_argument("--message-id", type=int)
+            sub.add_argument("--needs-confirmation", action="store_true",
+                             help="list only confirmation candidates")
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)
             sub.add_argument("--payload-hash", required=True)
