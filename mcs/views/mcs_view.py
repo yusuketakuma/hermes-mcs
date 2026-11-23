@@ -566,18 +566,20 @@ class View:
 
     def _attachments(self, project, message_id, limit, cursor):
         from attachment_ocr import view as ocr_view
-        from mcs_util import load_config
+        from mcs_util import config_read_state
 
         self._require_message(project, message_id)
-        # the OCR exclusion policy is configuration: without it a policy-rejected file reads as failed
-        cfg = load_config()
+        # The OCR exclusion policy is configuration: without it a policy-rejected file reads as failed. A
+        # config.json that cannot be read leaves every OCR state unknown (and no text that policy might exclude).
+        cfg, config_state = config_read_state()
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
         for item in result["items"]:
             item["error"] = _reason(item["error"])
-            item["ocr"] = ocr_view(self.db, item["attachment_id"], project_id=project,
-                                   include_text=True, cfg=cfg)
+            item["ocr"] = ({"state": "unknown", "reason": "config_unreadable"} if config_state == "unreadable"
+                           else ocr_view(self.db, item["attachment_id"], project_id=project,
+                                         include_text=True, cfg=cfg))
         return result
 
     @semantic_transport.with_local_model_scope

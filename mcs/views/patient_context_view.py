@@ -542,10 +542,11 @@ def first_changes_baseline(now) -> float:
     return now - FIRST_CHANGES_BASELINE_S
 
 
-def observed_revisions(db, project_id, *, since=None, message_id=None) -> dict:
+def observed_revisions(db, project_id, *, since=None, message_id=None, message_ids=None) -> dict:
     """{message_id: (body_state, observed_at)} of each post's newest observed edit ('full') or deletion
     ('deleted'): a revision of a fully read body after a fully read (or deleted) one, observed by the
-    collector at ``observed_at`` (not the author's edit time); optionally since ``since`` or for one post."""
+    collector at ``observed_at`` (not the author's edit time); optionally since ``since``, for one post
+    or for the posts in ``message_ids``."""
     sql = ("SELECT r.message_id, r.body_state, MAX(r.observed_at) FROM message_revisions r "
            "JOIN messages m ON m.message_id=r.message_id "
            "JOIN message_revisions prior ON prior.message_id=r.message_id AND prior.seq=("
@@ -561,6 +562,12 @@ def observed_revisions(db, project_id, *, since=None, message_id=None) -> dict:
     if message_id is not None:
         sql += " AND r.message_id=?"
         params.append(message_id)
+    if message_ids is not None:
+        message_ids = list(message_ids)
+        if not message_ids:
+            return {}
+        sql += " AND r.message_id IN (" + ",".join("?" * len(message_ids)) + ")"
+        params.extend(message_ids)
     return {mid: (state, at) for mid, state, at in db.execute(sql + " GROUP BY r.message_id", params)}
 
 

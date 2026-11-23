@@ -280,10 +280,8 @@ class _PageReads:
         self.undated = {r[0] for r in db.execute(
             f"SELECT DISTINCT parent_id FROM messages WHERE project_id=? AND parent_id IN ({root_marks}) "
             "AND posted_at_ts IS NULL", [project, *roots])} if roots else set()
-        # observed_revisions reads one post or the whole room: a single post (the evidence route) reads its own
-        self.revisions = ({} if not ids or not table_exists(db, "message_revisions") else
-                          observed_revisions(db, project, message_id=ids[0]) if len(ids) == 1 else
-                          observed_revisions(db, project))
+        self.revisions = (observed_revisions(db, project, message_ids=ids)
+                          if ids and table_exists(db, "message_revisions") else {})
         try:
             self.actor_fetched = {r[0] for r in db.execute(
                 f"SELECT message_id FROM message_reaction_actor_fetch WHERE message_id IN ({marks})", ids)}

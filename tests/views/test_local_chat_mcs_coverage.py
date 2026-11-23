@@ -449,7 +449,7 @@ def test_policy_rejected_attachment_reaches_the_workspace(snapshot, monkeypatch)
     import attachment_ocr
     import mcs_util
     cfg = {"attachment_ocr": {"enabled": True, "reject_uncertain": True}}
-    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: (cfg, "read"))
     seen = []
 
     def view(db, attachment_id, project_id=None, include_text=False, *, cfg=None):
@@ -706,4 +706,31 @@ def test_a_single_post_reads_only_its_own_revisions(snapshot):
         view.close()
     assert set(reads.revisions) == {10}
     scan = [s for s in statements if "FROM message_revisions r" in s]
-    assert len(scan) == 1 and "r.message_id=" in scan[0]
+    assert len(scan) == 1 and "r.message_id IN (" in scan[0]
+
+
+def test_unreadable_settings_leave_attachment_ocr_unknown(snapshot, monkeypatch, tmp_path):
+    import attachment_ocr
+    import mcs_util
+    path = tmp_path / "config.json"
+    path.write_text("{", encoding="utf-8")
+    real = mcs_util.config_read_state
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: real(str(path)))
+    monkeypatch.setattr(attachment_ocr, "view", lambda *a, **k: pytest.fail("policy cannot be decided"))
+    files = chat.response(snapshot, {1}, "attachments", "project=1&message=10")["items"]
+    # not "failed": whether the policy excludes the file is unknown, and no text it might exclude is shown
+    assert [item["ocr"] for item in files] == [{"state": "unknown", "reason": "config_unreadable"}]
+
+
+def test_a_multi_post_page_reads_only_its_own_revisions(snapshot):
+    view = mcs_view.View(snapshot)
+    statements = []
+    try:
+        rows = [view._message(1, 10), view._message(1, 11)]
+        view.db.set_trace_callback(statements.append)
+        reads = local_chat_view._PageReads(view, 1, rows)
+    finally:
+        view.close()
+    assert reads.revisions == {10: ("full", NOW + 10)}      # 12's deletion is not on this page
+    scan = [s for s in statements if "FROM message_revisions r" in s]
+    assert len(scan) == 1 and "r.message_id IN (" in scan[0]
