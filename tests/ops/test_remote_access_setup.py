@@ -58,6 +58,11 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     monkeypatch.setattr(service_management, "agent_loaded", lambda label, *, paths: False)
     monkeypatch.setattr(service_management, "agent_reconcile",
                         lambda label, dst, note, dry, *, paths: converged.append(label) or True)
+    # The loaded job runs whatever the plist on disk says: these cases move both together.
+    monkeypatch.setattr(service_management, "loaded_remote_settings",
+                        lambda *, paths: (agents / "ai.mcs.local-chat.plist").exists() and plistlib.loads(
+                            (agents / "ai.mcs.local-chat.plist").read_bytes())["EnvironmentVariables"][
+                            "MCS_REMOTE_ACCESS_SETTINGS"] or None)
     retired = []
     monkeypatch.setattr(service_management, "retire_agents",
                         lambda labels, note, dry, *, paths: retired.append(set(labels)) or 0)
@@ -85,6 +90,52 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     assert service_management.sync_remote_access(subs, {"runtime_mode": mode, "remote_access": {}}, manifest,
                                                  lambda _m: None, False, paths=paths) == 0
     assert retired == [{"ai.mcs.local-chat"}]
+
+
+def test_a_reload_left_to_the_waiter_stays_pending_until_the_loaded_job_runs_the_saved_settings(tmp_path, monkeypatch):
+    import service_management
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    paths = SimpleNamespace(platform="darwin", agents_dir=str(agents), checkout=str(REPO), uid=501)
+    subs = {"PYTHON": "/venv/python3", "REPO": str(REPO), "DATA": str(tmp_path / "data"), "RUN_LOG_HELPER": "/h.py"}
+    reloads, notes = [], []
+    # The old job is still draining: launchd lists it with the settings it started with, and the reload is
+    # handed to a waiter that may time out.
+    monkeypatch.setattr(service_management, "agent_loaded", lambda label, *, paths: True)
+    monkeypatch.setattr(service_management, "loaded_remote_settings", lambda *, paths: "0ld5e771n95")
+    monkeypatch.setattr(service_management, "agent_reconcile",
+                        lambda label, dst, note, dry, *, paths: reloads.append(label) or True)
+    cfg = {"runtime_mode": "hermes", "remote_access": {"tailnet_host": HOST, "port": 9000}}
+    for _ in range(2):
+        manifest = {"agents": []}
+        assert service_management.sync_remote_access(subs, cfg, manifest, notes.append, False, paths=paths) == 0
+        assert manifest["agents"][-1]["loaded"] is False
+    # The second run's plist is already current, yet it reloads again because the loaded job is not.
+    assert reloads == ["ai.mcs.local-chat"] * 2
+    assert sum("読み込み直しを待っています" in note for note in notes) == 2
+    # Unknown (launchctl did not say) is not a mismatch: nothing reloads without a reason.
+    monkeypatch.setattr(service_management, "loaded_remote_settings", lambda *, paths: None)
+    manifest = {"agents": []}
+    assert service_management.sync_remote_access(subs, cfg, manifest, notes.append, False, paths=paths) == 0
+    assert reloads == ["ai.mcs.local-chat"] * 2 and manifest["agents"][-1]["loaded"] is True
+
+
+def test_the_loaded_settings_are_read_from_the_launchd_environment(monkeypatch):
+    import service_management
+
+    listing = ("gui/501/ai.mcs.local-chat = {\n\tstate = running\n\tenvironment = {\n"
+               "\t\tMCS_REMOTE_ACCESS_SETTINGS => 0123456789abcdef\n\t\tXPC_SERVICE_NAME => ai.mcs.local-chat\n\t}\n}\n")
+    answers = iter([SimpleNamespace(returncode=0, stdout=listing), SimpleNamespace(returncode=113, stdout=""),
+                    SimpleNamespace(returncode=0, stdout="state = running\n")])
+    calls = []
+    monkeypatch.setattr(service_management.lifecycle_io, "run_bounded",
+                        lambda argv, **kw: calls.append(argv) or next(answers))
+    paths = SimpleNamespace(uid=501)
+    assert service_management.loaded_remote_settings(paths=paths) == "0123456789abcdef"
+    assert calls[0] == ["launchctl", "print", "gui/501/ai.mcs.local-chat"]
+    assert service_management.loaded_remote_settings(paths=paths) is None
+    assert service_management.loaded_remote_settings(paths=paths) is None
 
 
 def test_the_agent_template_takes_every_setting_from_the_config():
