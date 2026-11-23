@@ -36,6 +36,8 @@ def connect(path, modules) -> sqlite3.Connection:
     if not path.exists():
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    else:
+        _require_homecare_file(path)
     db = sqlite3.connect(str(path), isolation_level=None, timeout=10)
     try:
         db.row_factory = sqlite3.Row
@@ -46,6 +48,17 @@ def connect(path, modules) -> sqlite3.Connection:
         db.close()
         raise
     return db
+
+
+def _require_homecare_file(path):
+    """Look before writing: any other SQLite file (a snapshot, the ledger) is left byte-for-byte as it was."""
+    probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        probe.close()
+    if tables and "schema_migrations" not in tables:
+        raise RuntimeError(f"not a homecare database: {path}")
 
 
 def _migrate(db, modules):

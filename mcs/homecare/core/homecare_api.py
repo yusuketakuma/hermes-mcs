@@ -10,7 +10,7 @@ import homecare_team as team
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
-                    "admin_required", "not_qualified", "role_not_allowed", "invalid_fields", "not_found",
+                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "invalid_fields", "not_found",
                     "project_not_allowed", "bad_request"})
 
 
@@ -37,13 +37,19 @@ def read(db, route, params, *, registry, mcs_patients):
                 "candidates": [] if project else links.candidates(db, patient_id, scope.values())}
     if route == "linked":
         project = _id(params.get("project"))
+        if project not in {row["project_id"] for row in mcs_patients()}:
+            raise ValueError("project_not_allowed")
         patient = links.patient_of(db, project)
         return {"patient": None if patient is None else records.get(db, "patient", patient)}
     raise ValueError("bad_request")
 
 
-def write(db, op, body, *, registry, allowed):
-    """POST api/hc/<op>; the body names its actor, and updates carry the version they edit."""
+def write(db, op, body, *, registry, allowed, mcs_patients):
+    """POST api/hc/<op>; the body names its actor, and updates carry the version they edit.
+
+    A new link must name an MCS room in the current snapshot and scope; an unlink only needs the scope, so a
+    link to a room that has since left the snapshot can still be corrected.
+    """
     if not isinstance(body, dict):
         raise ValueError("bad_request")
     actor = body.get("actor")
@@ -65,7 +71,8 @@ def write(db, op, body, *, registry, allowed):
         return {"ok": True}
     if op in ("link", "unlink"):
         project = _id(body.get("project"))
-        if allowed is not None and project not in allowed:
+        if allowed is not None and project not in allowed \
+                or op == "link" and project not in {row["project_id"] for row in mcs_patients()}:
             raise ValueError("project_not_allowed")
         getattr(links, op)(db, _id(body.get("patient")), project, actor=actor, reason=body.get("reason", ""))
         return {"ok": True}

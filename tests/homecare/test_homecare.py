@@ -137,6 +137,7 @@ def test_qualifications_of_a_disabled_module_survive_an_update(tmp_path):
     ({"preferred_contact": "keyperson"}, ["keyperson_name", "keyperson_phone", "keyperson_relation"]),
     ({"preferred_contact": "facility"}, ["contact_phone"]),
     ({"phone": "", "preferred_contact": "patient"}, ["phone"]),
+    ({"phone": "-", "preferred_contact": "patient"}, ["phone"]),
     ({"status": "deleted"}, ["status"]),
     ({"primary_pharmacist_id": 1}, ["primary_pharmacist_id"]),
     ({"address": "あ" * 201}, ["address"])])
@@ -196,6 +197,36 @@ def test_care_team_roles_need_the_declared_qualification_and_hand_over(db):
     assert kinds == ["care_team.assign", "care_team.end", "care_team.assign", "care_team.end"]
 
 
+@pytest.mark.parametrize("change", [{"active": False}, {"qualifications": ["core.clerk"]}])
+def test_staff_holding_a_role_must_hand_it_over_before_leaving_or_losing_its_qualification(db, change):
+    me = first_staff(db)
+    other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
+    row = patient(db, me["staff_id"])
+    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], "pharmacy.primary_pharmacist",
+                actor=me["staff_id"])
+    with pytest.raises(ValueError, match="still_assigned"):
+        records.update(db, "staff", other["staff_id"], change, expected_version=1, actor=me["staff_id"],
+                       registry=REGISTRY)
+    assert records.get(db, "staff", other["staff_id"])["version"] == 1
+    team.end(db, REGISTRY, team.current(db, row["patient_id"])[0]["assignment_id"], actor=me["staff_id"])
+    records.update(db, "staff", other["staff_id"], change, expected_version=1, actor=me["staff_id"],
+                   registry=REGISTRY)
+
+
+def test_an_existing_file_that_is_not_a_homecare_database_is_left_untouched(tmp_path):
+    snapshot = tmp_path / "snapshot.db"
+    with sqlite3.connect(snapshot) as other:
+        other.execute("CREATE TABLE patients(project_id INTEGER)")
+    other.close()
+    before = snapshot.read_bytes()
+    alias = tmp_path / "alias.db"
+    alias.symlink_to(snapshot)
+    for path in (snapshot, alias):
+        with pytest.raises(RuntimeError, match="not a homecare database"):
+            homecare_store.connect(path, REGISTRY.modules)
+    assert snapshot.read_bytes() == before and not (tmp_path / "snapshot.db-wal").exists()
+
+
 def test_links_are_one_to_one_append_only_and_suggested_only_on_exact_name(db):
     me = first_staff(db)
     one, two = patient(db, me["staff_id"]), patient(db, me["staff_id"], name="合成 太郎")
@@ -222,15 +253,20 @@ def test_links_are_one_to_one_append_only_and_suggested_only_on_exact_name(db):
 def test_api_scopes_links_and_returns_browser_safe_errors(db):
     me = first_staff(db)
     row = patient(db, me["staff_id"])
-    with pytest.raises(ValueError, match="project_not_allowed"):
-        homecare_api.write(db, "link", {"patient": row["patient_id"], "project": 99, "actor": me["staff_id"]},
-                           registry=REGISTRY, allowed={11})
+    scope = lambda: [{"project_id": 11, "patient_name": "合成 花子"}]  # noqa: E731
+    for project, allowed in ((99, {11}), (12, None)):  # outside the launch scope; not in the snapshot
+        with pytest.raises(ValueError, match="project_not_allowed"):
+            homecare_api.write(db, "link", {"patient": row["patient_id"], "project": project, "actor": me["staff_id"]},
+                               registry=REGISTRY, allowed=allowed, mcs_patients=scope)
     homecare_api.write(db, "link", {"patient": row["patient_id"], "project": 11, "actor": me["staff_id"]},
-                       registry=REGISTRY, allowed={11})
+                       registry=REGISTRY, allowed={11}, mcs_patients=scope)
     homecare_api.write(db, "team.assign", {"patient": row["patient_id"], "staff": me["staff_id"],
                                            "role": "pharmacy.primary_pharmacist", "actor": me["staff_id"]},
-                       registry=REGISTRY, allowed={11})
-    scope = lambda: [{"project_id": 11, "patient_name": "合成 花子"}]  # noqa: E731
+                       registry=REGISTRY, allowed={11}, mcs_patients=scope)
+    assert homecare_api.read(db, "linked", {"project": "11"}, registry=REGISTRY,
+                             mcs_patients=scope)["patient"]["patient_id"] == row["patient_id"]
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        homecare_api.read(db, "linked", {"project": "11"}, registry=REGISTRY, mcs_patients=lambda: [])
     read = homecare_api.read(db, "patient", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
     assert read["mcs"] == {"project_id": 11, "patient_name": "合成 花子"} and read["candidates"] == []
     assert [member["role"] for member in read["team"]] == ["pharmacy.primary_pharmacist"]

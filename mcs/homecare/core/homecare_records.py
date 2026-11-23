@@ -83,7 +83,8 @@ def _clean_patient(values):
     else:
         # The preferred contact must be reachable by phone (same rule as the pharmacy board it replaces).
         required = {"patient": ("phone",), "keyperson": ("keyperson_name", "keyperson_relation", "keyperson_phone")}
-        bad.extend(field for field in required.get(row["preferred_contact"], ("contact_phone",)) if not row[field])
+        bad.extend(field for field in required.get(row["preferred_contact"], ("contact_phone",))
+                   if not row[field] or field.endswith("phone") and not any(c.isdigit() for c in row[field]))
     row["status"] = values.get("status", "active")
     if row["status"] not in STATUSES:
         bad.append("status")
@@ -155,6 +156,7 @@ def update(db, kind, record_id, values, *, expected_version, actor, registry):
             if record_id == actor and not (row["active"] and row["admin"]):
                 # Nobody locks themselves out of the register.
                 raise InvalidFields([field for field in ("active", "admin") if not row[field]])
+            _require_assignments_still_valid(db, registry, record_id, row["active"], codes)
             _set_qualifications(db, record_id, codes)
             table, key = "staff", "staff_id"
         else:
@@ -165,6 +167,15 @@ def update(db, kind, record_id, values, *, expected_version, actor, registry):
         after = get(db, kind, record_id)
         audit(db, actor, f"{kind}.update", record_id, before, after)
     return after
+
+
+def _require_assignments_still_valid(db, registry, staff_id, active, codes):
+    """Hand a patient over first: leaving, or losing the qualification a held role needs, is refused."""
+    for row in db.execute("SELECT DISTINCT role FROM care_team WHERE staff_id=? AND ended_at IS NULL", (staff_id,)):
+        spec = registry.roles.get(row["role"])
+        # A disabled module's roles cannot be checked and stay as they are, like its qualifications.
+        if spec is not None and not (active and set(spec.requires) & set(codes)):
+            raise ValueError("still_assigned")
 
 
 def _insert(db, table, row, now):

@@ -88,7 +88,8 @@ def homecare_response(server, method, route, query=None, body=None):
             params = {key: _one(params, key) for key in list(params)}
             return homecare_api.read(db, route, params, registry=registry,
                                      mcs_patients=lambda: mcs_patients(server.snapshot, server.allowed))
-        return homecare_api.write(db, route, body, registry=registry, allowed=server.allowed)
+        return homecare_api.write(db, route, body, registry=registry, allowed=server.allowed,
+                                  mcs_patients=lambda: mcs_patients(server.snapshot, server.allowed))
     finally:
         db.close()
 

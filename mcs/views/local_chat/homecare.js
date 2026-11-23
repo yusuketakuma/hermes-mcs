@@ -17,7 +17,7 @@ const STAFF_FORM = [
 const HC_ERRORS = {version_conflict: "ほかの人が先に更新しました。入力は残しています。最新を読み直してから、もう一度保存してください。",
   already_linked: "この患者か MCS の患者は、すでに別の相手と対応付けられています。", not_linked: "対応付けが見つかりません。読み直してください。",
   already_assigned: "この職員はすでにこの役割の担当です。", admin_required: "この操作は管理者だけができます。",
-  not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。",
+  not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。",
   actor_required: "操作者を選んでください。", invalid_fields: "入力を確認してください。", not_found: "記録が見つかりません。",
   project_not_allowed: "この MCS の患者は閲覧範囲の外です。"};
 async function hcPost(op, body) {
@@ -140,30 +140,39 @@ async function showHcPatient(patientId) {
   const patient = data.patient;
   $("patient-name").textContent = patient.name;
   $("patient-meta").textContent = `薬局の患者台帳 · ${patient.kana || "フリガナ未登録"}`;
-  const link = el("section", null, "detail-section"); link.append(el("h3", "MCS の患者"));
+  const team = el("section", null, "detail-section"), link = el("section", null, "detail-section");
+  // Team and link actions redraw only their own sections, so unsaved edits in the record form stay.
+  const refresh = async () => {
+    const fresh = await api("hc/patient", {patient: patientId});
+    if (hc.patient === patientId) {careTeam(team, patientId, fresh.team, refresh); mcsLink(link, patientId, fresh, refresh);}
+  };
+  careTeam(team, patientId, data.team, refresh); mcsLink(link, patientId, data, refresh);
+  hcMain("基本情報", recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, link);
+}
+function mcsLink(link, patientId, data, refresh) {
+  const relink = async (op, project) => {try {await hcPost(op, {patient: patientId, project}); await loadHcPatients(); await refresh();} catch (error) {fail(error);}};
+  link.replaceChildren(el("h3", "MCS の患者"));
   if (data.mcs.project_id) {
     link.append(el("p", `${data.mcs.patient_name || "閲覧範囲外の患者"}（MCS ID ${data.mcs.project_id}）と対応付けています。`));
     if (data.mcs.patient_name) {const open = el("button", "MCS のタイムラインを開く", "text-button"); open.onclick = () => openMcs(data.mcs.project_id); link.append(open);}
     const undo = el("button", "対応付けを解除", "text-button");
-    undo.onclick = async () => {try {await hcPost("unlink", {patient: patientId, project: data.mcs.project_id}); showHcPatient(patientId);} catch (error) {fail(error);}};
+    undo.onclick = () => relink("unlink", data.mcs.project_id);
     link.append(undo);
   } else {
     link.append(el("p", "まだ MCS の患者と対応付けていません。氏名が同じでも自動では対応付けません。"));
     for (const candidate of data.candidates) {
       const pick = el("button", `${candidate.patient_name}（MCS ID ${candidate.project_id}）と対応付ける`, "text-button");
-      pick.onclick = async () => {try {await hcPost("link", {patient: patientId, project: candidate.project_id}); await loadHcPatients(); showHcPatient(patientId);} catch (error) {fail(error);}};
+      pick.onclick = () => relink("link", candidate.project_id);
       link.append(pick);
     }
     const manual = el("form", null, "hc-inline"), input = el("input"); input.placeholder = "MCS の患者ID"; input.inputMode = "numeric";
     manual.append(input, el("button", "この ID と対応付ける", "button"));
-    manual.onsubmit = async event => {event.preventDefault(); try {await hcPost("link", {patient: patientId, project: Number(input.value)}); await loadHcPatients(); showHcPatient(patientId);} catch (error) {fail(error);}};
+    manual.onsubmit = event => {event.preventDefault(); relink("link", Number(input.value));};
     link.append(manual);
   }
-  hcMain("基本情報", recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), careTeam(patientId, data.team), link);
 }
-function careTeam(patientId, members) {
-  const box = el("section", null, "detail-section"), reload = () => showHcPatient(patientId);
-  box.append(el("h3", "ケアチーム（この事業所の担当）"));
+function careTeam(box, patientId, members, reload) {
+  box.replaceChildren(el("h3", "ケアチーム（この事業所の担当）"));
   for (const member of members) {
     const row = el("p", `${hc.meta.roles[member.role]?.label || member.role}: ${member.staff_name}`), stop = el("button", "担当を外す", "text-button");
     stop.onclick = async () => {try {await hcPost("team.end", {assignment: member.assignment_id}); reload();} catch (error) {fail(error);}};
@@ -171,7 +180,7 @@ function careTeam(patientId, members) {
   }
   if (!members.length) box.append(el("p", "担当者はまだいません。"));
   const roles = Object.entries(hc.meta.roles);
-  if (!roles.length) return box;
+  if (!roles.length) return;
   const form = el("form", null, "hc-inline"), role = el("select"), person = el("select");
   for (const [code, spec] of roles) {const option = el("option", spec.label); option.value = code; role.append(option);}
   const people = () => {
@@ -182,7 +191,6 @@ function careTeam(patientId, members) {
   form.append(role, person, el("button", "担当にする", "button"));
   form.onsubmit = async event => {event.preventDefault(); try {await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value}); reload();} catch (error) {fail(error);}};
   box.append(form);
-  return box;
 }
 async function openMcs(projectId) {
   $("patient-search").value = "";
@@ -198,6 +206,10 @@ function setMode(mode) {
   document.querySelector(".snapshot-bar").hidden = mode !== "mcs";
   $("view-select").parentNode.hidden = mode !== "mcs";
   if (mode === "mcs") {
+    $("patient-name").textContent = "患者を選んでください"; $("patient-meta").textContent = "";
+    ++state.contextRequest; ++state.mainRequest; $("patient-context").replaceChildren(); $("coverage").hidden = true; $("older").hidden = true;
+    $("timeline").replaceChildren(); $("panel-view").replaceChildren();
+    $("timeline-status").textContent = "患者を選ぶと投稿を表示します。";
     $("panel-view").hidden = !state.panel; $("timeline").hidden = false; $("timeline-status").hidden = false;
     return loadPatients();
   }
