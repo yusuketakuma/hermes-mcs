@@ -158,6 +158,63 @@ def _attachment_mentions(db, project_id, parent_mid, cfg):
 
 
 
+def dictionary_state(db, cfg):
+    """Return the matching state, annotation progress and active dictionary shared by readers."""
+    progress = drug_map.read_annotation_progress(db)
+    dictionary = "invalid" if progress and progress.get("invalid") else (
+        "unconfigured" if not progress or not progress.get("dictionary") else "derived")
+    pin = (cfg or {}).get("drug_map")
+    if pin is not None and dictionary != "invalid":
+        pinned, error = drug_map.configured(cfg)
+        # Only an approved pin that derive has not reached yet is still being matched.
+        dictionary = ("invalid" if error else "reference_only" if not pinned.approved
+                      else "pending" if not progress or not progress.get("dictionary")
+                      or progress["dictionary"][1] != pin["sha256"] else "derived")
+    active, active_state = drug_map.active_dictionary(db, cfg or {})
+    return dictionary, progress, active, active_state
+
+
+def query_identities(active, name):
+    """Official identities of a searched name; empty unless exactly one identity resolves."""
+    if active is None:
+        return set()
+    related = active.related_names(name)
+    return set(related["identities"]) if related["status"] == "resolved" and related["official_identity"] else set()
+
+
+def mention_sources(view, project_id, rows, *, dictionary, progress, cfg, memo=None):
+    """Yield the current mention source of each stored full post, then its current OCR pages."""
+    ocr = (isinstance((cfg or {}).get('attachment_ocr'), dict)
+           and cfg['attachment_ocr'].get('enabled') is True)
+    for row in rows:
+        mid = row['message_id']
+        result = (None if row['body_state'] != 'full' else memo[mid] if memo is not None and mid in memo
+                  else mentions(view.reader, mid, cfg=cfg))
+        if result is not None:
+            refs = ({r['i']: r for r in drug_map.current_refs_with_progress(view.db, mid, progress)}
+                    if dictionary == 'derived' else {})
+            yield row, result[0], result[1], refs, None
+        if ocr:
+            yield from _attachment_mentions(view.db, project_id, mid, cfg)
+
+
+def mention_candidate(med, stored, active):
+    """The stored candidate, else one resolved on read; and whether the mention names a drug."""
+    known = med.get("name_state") not in ("unknown", "ambiguous")
+    if stored is None and active is not None and known:
+        stored = {**active.resolve(med["name"]), "dict_sha256": active.sha256,
+                  "resolver_version": drug_map.RESOLVER_VERSION, "resolved_on_read": True}
+    return stored, known
+
+
+def matches(med, ref, *, name=None, identities=frozenset()):
+    """An exact folded name, or a resolved candidate sharing one of the searched identities."""
+    if name is not None and drug_map.fold(name) == drug_map.fold(med["name"]):
+        return True
+    codes = {c["code"] for c in (ref or {}).get("cands", [])}
+    return (ref or {}).get("status") == "resolved" and bool(set(identities) & codes)
+
+
 def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, cursor=None, cfg=None):
     """Page stored posts, preserving every medication mention and explicit coverage gaps."""
     if type(project_id) is not int or project_id <= 0:
@@ -189,22 +246,8 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         raise ValueError("unknown_project")
     failed = view.db.execute("SELECT count(*) FROM fetch_jobs WHERE project_id=? AND state='failed'",
                              (project_id,)).fetchone()[0]
-    progress = drug_map.read_annotation_progress(view.db)
-    dictionary = "invalid" if progress and progress.get("invalid") else (
-        "unconfigured" if not progress or not progress.get("dictionary") else "derived")
-    pin = (cfg or {}).get("drug_map")
-    if pin is not None and dictionary != "invalid":
-        pinned, error = drug_map.configured(cfg)
-        # Only an approved pin that derive has not reached yet is still being matched.
-        dictionary = ("invalid" if error else "reference_only" if not pinned.approved
-                      else "pending" if not progress or not progress.get("dictionary")
-                      or progress["dictionary"][1] != pin["sha256"] else "derived")
-    active, active_state = drug_map.active_dictionary(view.db, cfg or {})
-    query_codes = set()
-    if name is not None and active is not None:
-        related = active.related_names(name)
-        if related["status"] == "resolved" and related["official_identity"]:
-            query_codes = set(related["identities"])
+    dictionary, progress, active, active_state = dictionary_state(view.db, cfg)
+    query_codes = query_identities(active, name) if name is not None else set()
     from mcs_queries import UNKNOWN_TIME
     page = view._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                       ["drug_timeline", project_id, name, since, until], limit, cursor)
@@ -221,33 +264,15 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     ocr_enabled = (isinstance((cfg or {}).get('attachment_ocr'), dict)
                    and cfg['attachment_ocr'].get('enabled') is True)
 
-    def sources():
-        for row in page['items']:
-            mid = row['message_id']
-            result = (None if row['body_state'] != 'full' else memo[mid] if mid in memo
-                      else mentions(view.reader, mid, cfg=cfg))
-            if result is not None:
-                refs = ({r['i']: r for r in drug_map.current_refs_with_progress(view.db, mid, progress)}
-                        if dictionary == 'derived' else {})
-                yield row, result[0], result[1], refs, None
-            if ocr_enabled:
-                yield from _attachment_mentions(view.db, project_id, mid, cfg)
-
     items = []
     matching_pending = ocr_mentions = 0
-    for row, source, meds, refs, original in sources():
+    for row, source, meds, refs, original in mention_sources(
+            view, project_id, page['items'], dictionary=dictionary, progress=progress, cfg=cfg, memo=memo):
         for i, med in enumerate(meds):
-            ref = refs.get(i) if source[1] == "extract_llm" else None
-            known_name = med.get("name_state") not in ("unknown", "ambiguous")
-            if ref is None and active is not None and known_name:
-                ref = {**active.resolve(med["name"]), "dict_sha256": active.sha256,
-                       "resolver_version": drug_map.RESOLVER_VERSION, "resolved_on_read": True}
-            if name is not None and not known_name:
+            ref, known_name = mention_candidate(
+                med, refs.get(i) if source[1] == "extract_llm" else None, active)
+            if name is not None and not (known_name and matches(med, ref, name=name, identities=query_codes)):
                 continue
-            if name is not None and drug_map.fold(name) != drug_map.fold(med["name"]):
-                codes = {c["code"] for c in (ref or {}).get("cands", [])}
-                if (ref or {}).get("status") != "resolved" or not (query_codes & codes):
-                    continue
             if ref is None and known_name and dictionary in ("derived", "pending"):
                 matching_pending += 1
             subject = med.get("subject", "unknown")

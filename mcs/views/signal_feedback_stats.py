@@ -284,7 +284,8 @@ def _feedback_by_type(scope, types, selected, dismissals,
               "request_age_changed", "project_missing", "project_archived",
               "evidence_missing", "evidence_deleted", "evidence_aged_out",
               "request_registered", "responder_post", "self_reaction_observed",
-              "followup_record", "volume_below_threshold", "multiple_exclusions"}
+              "followup_record", "volume_below_threshold", "reply_observed",
+              "multiple_exclusions"}
     by_type = {}
     for name in sorted(types):
         eps = [ep for ep in selected if ep["type"] == name]

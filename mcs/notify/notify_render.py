@@ -584,6 +584,7 @@ SIGNAL_TYPE_LABEL = {
     "transition_reconciliation": "移行時の薬確認",
     "med_change_no_followup": "服薬変更後の記録なし",
     "rx_request_visibility": "処方依頼",
+    "pharmacist_inquiry_unanswered": "照会の返答未記録",
     "adherence_concern": "服薬状況",
     "symptom_after_med_change": "服薬変更後の症状",
     "request_overdue": "期限超過",

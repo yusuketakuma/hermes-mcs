@@ -90,8 +90,34 @@ python3 mcs/ops/mcs_drug.py reconcile --project 1 --limit 50 --json
 - 薬歴未取得はunknown、古いcompleteはstale、失敗後の過去データはhistoricalのまま。薬名が欠けた薬歴がある場合、比較先なしを不一致へ断定しない。
 - coverageには未取得本文、未抽出、取得失敗、返信取得漏れ、履歴範囲、snapshot世代を保持する。比較は投稿の現在ページに限り、薬歴側にしかない薬を全投稿に存在しないと断定しない。
 
+## 6. 薬剤の言及がある患者を横断して探す
+
+```sh
+python3 mcs/ops/mcs_drug.py patients --name '架空製品錠5mg'
+python3 mcs/ops/mcs_drug.py master-impact --before OLD.zip --before-pin OLD.json --after NEW.zip --after-pin NEW.json --json > /private/path/impact.json
+python3 mcs/ops/mcs_drug.py patients --master-impact /private/path/impact.json
+python3 mcs/ops/mcs_drug.py patients --formulary-changed
+```
+
+出荷調整・回収・販売中止・添付文書の改訂を受けたとき、該当する薬の言及がある在宅患者を洗い出す。
+[drug_patients.find](../../mcs/medications/drug_patients.py) は公開snapshotの全患者について、項目4のtimelineと同じ現在世代の言及（`drug_timeline.mention_sources`）・候補（`mention_candidate`）・名前照合（`matches`）を使う。追加取得・LLM呼出しは行わない。
+
+- `--name`: 表記の完全一致と、項目1の単一公式コードに属する別名・規格。
+- `--master-impact`: 項目3の出力（私有ファイル、owner-onlyの0600）に載った公式コードを採用辞書の項目へ対応させる。採用辞書に無いコードは探せない。
+- `--formulary-changed`: `formulary-check` で本文の変化を観測し、まだ `formulary-ack` していない添付文書の品名。
+- 患者ごとに言及件数・投稿数・最新の言及（投稿日時・投稿ID・記載の種類）を返し、最新の言及が新しい順に並べる。アーカイブ済みの患者は `--include-archived` のときだけ含める。
+- 言及は服用中の確定ではない（`current_use_confirmed=false`）。未抽出・未取得・取得失敗の件数をcoverageと説明文に残し、一覧に無い患者を「その薬を使っていない」と扱わない。
+
+## 7. 他の機能から使う医薬品の共通入口
+
+[drug_catalog](../../mcs/medications/drug_catalog.py) は、在宅記録（処方歴など）が `drug_map` の内部を知らずに医薬品を検索・照会するための読取り専用の入口。
+
+- `search(cfg, query, *, limit=20)` は名称・別名・公式コードの部分一致で製品を返し、`lookup(cfg, code)` は公式の医薬品コード1件を返す。各項目は `code`・`code_system`（`mhlw_medicine`）・`name`・`generic_name`・`unit`・`form_code`・`source_edition`（辞書のid・SHA256・版）。
+- 設定で固定した承認済みの辞書（`drug_map`）だけを使う。未設定・未承認・不正のときは推測せず空（`lookup` は `None`）を返し、理由は `status(cfg)` で分かる。チャット投稿の照合世代（`active_dictionary`）とは独立している。
+- 呼出し側は `code`・`code_system`・入力時の名称を保存し、マスター更新後も古い記録を読めるようにする。
+
 ## 検証と未検証事項
 
-[薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
+[薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py)・[患者横断テスト](../../tests/medications/test_drug_patients.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
 
 合成テストは実患者の抽出精度、薬歴取得の網羅性、臨床判断の妥当性を証明しない。今回、実API・原本DB・実LLM・本番辞書の承認や切替・外部exportは実行していない。

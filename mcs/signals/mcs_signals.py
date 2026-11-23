@@ -440,6 +440,8 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     addressed requests belong to pharmacist_request_unanswered."""
     orgs, profs, targets = self_sets(sig_cfg, db)
     extra = "".join(",?" for _ in targets)
+    # the pharmacy's own inquiries belong to pharmacist_inquiry_unanswered
+    own_pred, own_params = _self_author_pred(orgs, "m")
     # streamed: one statement consumed before any other read, so the
     # snapshot is the same as fetchall without holding every Row
     rows = db.execute(
@@ -465,8 +467,9 @@ def _rx_request_visibility(db, now, th, sig_cfg):
                    OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%内服%'
                    OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%残薬%'
                    OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%一包化%')
+              {own_pred}
             ORDER BY m.project_id, m.message_id""",
-        (now - th["fyi_max_age_d"] * DAY_S, *targets))
+        (now - th["fyi_max_age_d"] * DAY_S, *targets, *own_params))
     groups = {}
     for pid, mid, ts, rto, act in rows:
         groups.setdefault((pid, mid, ts), []).append((rto, act))
@@ -486,6 +489,81 @@ def _rx_request_visibility(db, now, th, sig_cfg):
             "context": {},
             "note": f"他職種宛の処方関連依頼の言及があります — 「{detail}」"
                     "（薬局側の準備・照合の機会としての記録上の言及です）"}
+
+
+# requests.to spellings meaning 'addressed to a physician' for the
+# pharmacist's own inquiries; 医 covers 医師・主治医・医院・クリニックの医師.
+PHYSICIAN_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%医%' "
+                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%先生%' "
+                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%ドクター%' "
+                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%Dr%'")
+INQUIRY_ACTION_SQL = " OR ".join(
+    f"json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%{word}%'"
+    for word in ("処方", "薬", "内服", "疑義", "照会", "提案", "増量", "減量", "中止", "変更", "残薬", "一包化"))
+
+
+def _inquiry_replied(db, pid, mid, ts, orgs):
+    """A later post by someone outside the own organizations in the same
+    thread, or by a physician anywhere in the room."""
+    other = "".join(f" AND {_member_sql('reply.organization')}=0" for _ in orgs)
+    return db.execute(
+        "SELECT 1 FROM messages reply, messages m WHERE m.message_id=? "
+        "AND reply.project_id=? AND reply.posted_at_ts>? "
+        "AND reply.body_state IS NOT 'deleted' "
+        "AND (reply.parent_id=COALESCE(m.parent_id,m.message_id) "
+        "OR reply.profession LIKE '%医師%')" + other + " LIMIT 1",
+        (mid, pid, ts, *orgs)).fetchone() is not None
+
+
+def _pharmacist_inquiry(db, now, th, sig_cfg):
+    """Medication inquiries and proposals posted by a configured own
+    organization to a physician, with no later reply in the thread by
+    someone else and no later physician post in the room — 'a reply
+    could not be confirmed on the record' (phone/fax replies are
+    outside the record). Without self_organizations nothing fires:
+    the pharmacy's own posts cannot be told apart."""
+    orgs, _, _ = self_sets(sig_cfg, db)
+    if not orgs:
+        return
+    own = " OR ".join(f"{_member_sql('m.organization')}>0" for _ in orgs)
+    # streamed: one statement consumed before any other read
+    rows = db.execute(
+        f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
+                   json_extract({JSON_OBJECT_SQL},'$.action') AS act
+            FROM artifacts a
+            JOIN messages m ON m.message_id=a.message_id
+            JOIN patients p ON p.project_id=m.project_id
+            JOIN json_each({json_or_null('a.content')},'$.requests') je
+            WHERE a.kind IN ({FACT_KINDS_SQL})
+              {current_fact_pred()}
+              AND m.posted_at_ts IS NOT NULL
+              AND m.posted_at_ts >= ?
+              AND m.posted_at_ts <= ?
+              AND COALESCE(p.is_archived,0)=0
+              AND ({own})
+              AND {ITEM_CONFIRMED_SQL}
+              AND {REQ_ACTIONABLE_SQL}
+              AND NOT ({PHARM_TARGET_SQL})
+              AND ({PHYSICIAN_TARGET_SQL})
+              AND ({INQUIRY_ACTION_SQL})
+            ORDER BY m.project_id, m.message_id""",
+        (now - th["fyi_max_age_d"] * DAY_S,
+         now - th["request_response_days"] * DAY_S, *orgs))
+    groups = {}
+    for pid, mid, ts, act in rows:
+        groups.setdefault((pid, mid, ts), []).append(act)
+    for (pid, mid, ts), acts in groups.items():
+        acts = [a for a in acts if isinstance(a, str) and a]
+        if not acts or _inquiry_replied(db, pid, mid, ts, orgs):
+            continue
+        days = int((now - ts) / DAY_S)
+        yield _key("pharmacist_inquiry_unanswered", pid, mid), {
+            "type": "pharmacist_inquiry_unanswered", "project_id": pid,
+            "evidence": {"message_ids": [mid], "request_actions": acts},
+            "context": {"days_unanswered": days},
+            "note": f"薬局から医師への照会・提案の言及（「{'」「'.join(acts)}」）から"
+                    f"{th['request_response_days']}日以上経過し、記録上の返答を確認できませんでした"
+                    "（電話・FAXなど記録外の返答は含みません）"}
 
 
 # body phrases that flag adherence/management difficulty even when the
@@ -750,6 +828,7 @@ DETECTORS = (("request_overdue", _request_overdue),
              ("med_change_no_followup", _med_followup),
              ("pharmacist_request_unanswered", _pharmacist_request),
              ("rx_request_visibility", _rx_request_visibility),
+             ("pharmacist_inquiry_unanswered", _pharmacist_inquiry),
              ("adherence_concern", _adherence_concern),
              ("discharge_notice", _discharge_notice),
              ("symptom_after_med_change", _symptom_after_med),
@@ -868,6 +947,7 @@ def _resolution(db, old, now, th, sig_cfg):
             horizon = {
                 "med_change_no_followup": th["followup_max_age_d"],
                 "pharmacist_request_unanswered": th["fyi_max_age_d"],
+                "pharmacist_inquiry_unanswered": th["fyi_max_age_d"],
                 "rx_request_visibility": th["fyi_max_age_d"],
                 "adherence_concern": th["fyi_max_age_d"],
                 "symptom_after_med_change": th["fyi_max_age_d"],
@@ -901,6 +981,12 @@ def _resolution(db, old, now, th, sig_cfg):
                         and sig_cfg.get("self_reaction_response") is True
                         and _self_reaction_response(db, mid)):
                     causes.append("self_reaction_observed")
+            elif stype == "pharmacist_inquiry_unanswered" and len(mids) == 1:
+                orgs, _, _ = self_sets(sig_cfg, db)
+                message = messages[0]
+                if (message is not None and message["posted_at_ts"] is not None
+                        and _inquiry_replied(db, pid, mids[0], message["posted_at_ts"], orgs)):
+                    causes.append("reply_observed")
             elif stype == "med_change_no_followup" and mids and complete:
                 if all(request_registered(db, mid) for mid in mids):
                     causes.append("request_registered")
@@ -1238,6 +1324,7 @@ SIGNAL_TIERS = {
     "transition_reconciliation": "immediate",
     "med_change_no_followup": "digest",
     "rx_request_visibility": "digest",
+    "pharmacist_inquiry_unanswered": "digest",
     "adherence_concern": "digest",
     "symptom_after_med_change": "digest",
     "request_overdue": "digest",
