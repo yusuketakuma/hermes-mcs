@@ -301,3 +301,46 @@ def test_summary_counts_every_valued_item_past_the_examples(context_db, monkeypa
     assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目1", "合成項目2", "合成項目3"]
     assert "  他6項目の観測値は抜粋外（原記録で確認）" in lines
     assert not any("取得状態は抜粋外" in line for line in lines)
+
+
+def test_patient_index_reads_every_target_as_the_single_target_read(context_db, monkeypatch):
+    from project_metadata_view import MetadataIndex
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 7)]
+    old_pin = _metadata(store, "observation_items", items[:5], at=50)
+    _metadata(store, "medication_periods", [], at=60)
+    _metadata(store, "medication_periods", [], complete=False, reason="fetch_error", at=70)  # failed after success
+    _metadata(store, "observation_values", [VALUE], item_id=1, definition=items[0], pin=old_pin, at=50)
+    pin = _metadata(store, "observation_items", items, at=100)
+    second = _metadata(store, "observation_values", [EMPTY_ROW, VALUE], item_id=2, definition=items[1], pin=pin)
+    _metadata(store, "observation_values", [VALUE], item_id=3, definition=items[2], pin=pin, at=40)
+    _metadata(store, "observation_values", [], item_id=3, complete=False, reason="fetch_error", at=90)
+    _metadata(store, "observation_values", [], item_id=4, complete=False, reason="fetch_error")   # never complete
+    _metadata(store, "observation_values", [VALUE], item_id=5, definition=items[4], at=10)       # legacy, unpinned
+    # rows no target may select: unreadable JSON, a bool/float alias of an item or karte, another patient's
+    # copies of item 2's current attempt whose identity only an alias would match (bool/float item or karte)
+    alias = {**_payload(store, second), "rows": normalize_rows("observation_values", [{"scalar": 99}])}
+    for raw in ("{not json", json.dumps({**alias, "item_id": True}), json.dumps({**alias, "item_id": 2.0}),
+                json.dumps({**alias, "entity_id": 10.0}), json.dumps({**alias, "dataset": 7})):
+        store.artifact_add(ARTIFACT_KIND, raw, project_id=1)
+    _metadata(store, "observation_values", [VALUE], pid=2, item_id=2, definition=items[1])
+    for now in (110, 200_000):                     # fresh, and every complete attempt stale
+        index = MetadataIndex(store.db, 1)
+        targets = [("medication_periods", None), ("observation_items", None),
+                   *(("observation_values", i) for i in range(1, 9))]     # 6: listed, never attempted; 7-8: unknown
+        for dataset, item in targets:
+            single = get_project_metadata(store.db, 1, dataset, item_id=item, now=now)
+            assert get_project_metadata(store.db, 1, dataset, item_id=item, now=now, index=index) == single
+        states = {i: get_project_metadata(store.db, 1, "observation_values", item_id=i, now=now, index=index)["state"]
+                  for i in range(1, 7)}
+        if now == 110:     # the fixture covers each state the batch must reproduce
+            assert set(states.values()) >= {"complete", "stale", "failed", "unknown"}
+    with pytest.raises(ValueError):
+        get_project_metadata(store.db, 1, "observation_items", now=110, index=MetadataIndex(store.db, 2))
+
+
+def test_registered_data_refuses_a_bounded_unfetched_listing(context_db, monkeypatch):
+    _clinical(context_db, monkeypatch)
+    with pytest.raises(ValueError, match="^registered_unfetched_items_limit$"):
+        registered_data(context_db.db, "detail", 1, 8, unfetched_items=True)

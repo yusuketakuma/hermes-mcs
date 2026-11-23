@@ -162,7 +162,7 @@ KNOWN_ERROR_CODES = frozenset({
     "restart_unverified", "restore_time_invalid", "role_not_allowed", "route_failed", "route_unavailable", "semantic_prior_registry_config_invalid", "semantic_prior_registry_source_unverified", "semantic_prior_registry_state_unverified",
     "semantic_prior_registry_unavailable", "slack_setup_client_unverified", "still_assigned", "tally_invalid", "too_many_stops", "unknown_module", "unknown_section", "upgrade_scope_kind_invalid",
     "upgrade_scope_version_invalid", "visit_not_qualified",
-    "llm_admission_path_unset",
+    "llm_admission_path_unset", "registered_unfetched_items_limit",
 })
 
 

@@ -32,7 +32,20 @@ def first_valued_row(rows):
                  and any(row.get(key) is not None for key in VALUE_KEYS)), None)
 
 
-def _with_unfetched_values(db, targets, now):
+class _Indexes(dict):
+    """One MetadataIndex per patient, built on first use, so every target of a patient shares one read."""
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def __missing__(self, project_id):
+        from project_metadata_view import MetadataIndex
+        self[project_id] = MetadataIndex(self.db, project_id)
+        return self[project_id]
+
+
+def _with_unfetched_values(db, targets, now, indexes):
     """Add an observation_values target for every item of the validated observation-item list that has no
     stored values attempt, so an item the rotation has not reached reads 未取得 (state unknown, reason
     not_fetched) instead of being missing; never a fact that the item has no values."""
@@ -43,7 +56,8 @@ def _with_unfetched_values(db, targets, now):
     for target in targets:
         if target["dataset"] != "observation_items":
             continue
-        target["_result"] = get_project_metadata(db, target["project_id"], "observation_items", now=now)
+        target["_result"] = get_project_metadata(db, target["project_id"], "observation_items", now=now,
+                                                 index=indexes[target["project_id"]])
         for row in target["_result"]["rows"]:
             lab = row.get("lab_test_item") if isinstance(row, dict) else None
             item_id = lab.get("id") if isinstance(lab, dict) else None
@@ -60,7 +74,10 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
 
     ``unfetched_items`` (for a reader that shows each item's state) also lists every item of the validated
     observation-item list whose values were never attempted, as 未取得; without it the records are the
-    stored targets only, which the rollup freshness signature hashes."""
+    stored targets only, which the rollup freshness signature hashes. ``unfetched_items`` reads every item
+    (``limit`` None): a bounded excerpt would drop items without counting them, so the pair is refused."""
+    if unfetched_items and limit is not None:
+        raise ValueError("registered_unfetched_items_limit")
     if not table_exists(db, "patients") or not {"project_type", "karte_id"} <= {
             row[1] for row in db.execute("PRAGMA table_info(patients)")}:
         return None
@@ -86,11 +103,11 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
           AND json_extract(a.content,'$.item_id')>0 ELSE 0 END
         ) """
     now = snapshot_meta(db)["generated_at"]
+    indexes = _Indexes(db)
     query = sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id"
     if unfetched_items:
-        targets = _with_unfetched_values(db, [dict(row) for row in db.execute(query, params)], now)
+        targets = _with_unfetched_values(db, [dict(row) for row in db.execute(query, params)], now, indexes)
         total = len(targets)
-        targets = targets if limit is None else targets[:limit]
     else:
         total = db.execute(sql + "SELECT COUNT(*) FROM targets", params).fetchone()[0]
         targets = [dict(row) for row in db.execute(query + (" LIMIT ?" if limit is not None else ""),
@@ -98,7 +115,8 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
     records = []
     for target in targets:
         result = target.pop("_result", None) or get_project_metadata(
-            db, target["project_id"], target["dataset"], item_id=target["item_id"], now=now)
+            db, target["project_id"], target["dataset"], item_id=target["item_id"], now=now,
+            index=indexes[target["project_id"]])
         if result["definition"] is None and target.get("_item_row") is not None:
             # no values attempt carries a definition yet: the validated item list names the item
             result = {**result, "definition": target["_item_row"]}

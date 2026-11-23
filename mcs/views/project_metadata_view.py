@@ -140,11 +140,58 @@ def _chat_candidates(db, project_id: int, dataset: str, now: float,
             "item_association": "not_inferred"}
 
 
+class MetadataIndex:
+    """One patient's project-metadata attempts read in one pass, so many targets of the same patient do not
+    each re-scan its fetch history: per (dataset, entity, item) the newest attempt and newest complete attempt,
+    selected by exactly the predicate of get_project_metadata's own query; contents are read only for those."""
+
+    _SQL = ("SELECT artifact_id,json_extract(content,'$.dataset') AS dataset,"
+            "CASE WHEN json_type(content,'$.entity_id')='integer' "
+            "AND typeof(json_extract(content,'$.entity_id'))='integer' "
+            "THEN json_extract(content,'$.entity_id') END AS entity_id,"
+            "(json_type(content,'$.item_id') IS NULL OR json_type(content,'$.item_id') IN ('null','integer')) "
+            "AND typeof(json_extract(content,'$.item_id')) IN ('null','integer') AS item_ok,"
+            "json_extract(content,'$.item_id') AS item_id,"
+            "json_extract(content,'$.complete')=1 AS complete "
+            "FROM artifacts WHERE kind=? AND project_id=? AND json_valid(content)")
+
+    def __init__(self, db, project_id: int):
+        self.db, self.project_id = db, project_id
+        self._latest: dict = {}
+        self._complete: dict = {}
+        self._definitions: dict = {}
+        for row in db.execute(self._SQL, (ARTIFACT_KIND, project_id)):
+            if row["entity_id"] is None or not row["item_ok"]:
+                continue
+            key = (row["dataset"], row["entity_id"], row["item_id"])
+            self._latest[key] = max(self._latest.get(key, 0), row["artifact_id"])
+            if row["complete"]:
+                self._complete[key] = max(self._complete.get(key, 0), row["artifact_id"])
+
+    def _row(self, artifact_id):
+        return None if artifact_id is None else self.db.execute(
+            "SELECT artifact_id,content FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+
+    def select(self, dataset: str, entity_id: int, item_id: int | None):
+        """``(latest, complete)`` rows as the per-target queries return them (None when absent)."""
+        key = (dataset, entity_id, item_id)
+        return self._row(self._latest.get(key)), self._row(self._complete.get(key))
+
+    def definition(self, now, max_age_s):
+        """The observation-item list read that every values item of this patient checks its pin against."""
+        key = (now, max_age_s)
+        if key not in self._definitions:
+            self._definitions[key] = get_project_metadata(self.db, self.project_id, "observation_items",
+                                                          now=now, max_age_s=max_age_s, index=self)
+        return self._definitions[key]
+
+
 def get_project_metadata(db, project_id: int, dataset: str, *,
                          item_id: int | None = None, show_names: bool = False,
                          include_chat: bool = False,
                          now: float | None = None, max_age_s: float = 86400,
-                         care_team_as_of: float | None = None) -> dict[str, JSON]:
+                         care_team_as_of: float | None = None,
+                         index: MetadataIndex | None = None) -> dict[str, JSON]:
     """Show last complete data as historical after failures/expiry, never as current.
 
     Reads ledger or snapshot only. Empty is a complete empty acquisition; unknown
@@ -152,6 +199,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
     complete acquisition. Group consultations have patient_association='unknown'.
     include_chat adds separate unconfirmed candidates for clinical datasets only;
     omitted/False never inspects chat. No identity matching or authority is assigned.
+    ``index`` (a MetadataIndex of this connection and patient) serves the artifact selection for reading
+    many targets of one patient; the result is the same as without it.
     """
     from mcs_contract import valid_id as _valid_id
 
@@ -169,7 +218,7 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
             or (dataset != "observation_values" and item_id is not None))
     except OverflowError:
         invalid = True
-    if invalid:
+    if invalid or index is not None and (index.db is not db or index.project_id != project_id):
         raise ValueError("invalid metadata view options")
     target = metadata_target(db, project_id, dataset)
     result: dict[str, JSON] = {"state": "unknown", "reason": "not_fetched", "rows": [],
@@ -228,10 +277,13 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                 "WHEN json_type(content,'$.dataset')='text' THEN 0 ELSE 1 END ELSE 1 END ")
         params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], care_team_as_of)
         result.update(as_of=care_team_as_of, attempt_artifact_id=None, complete_artifact_id=None)
-    latest = db.execute(base + "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
-    complete = db.execute(base + "AND CASE WHEN json_valid(content) "
-                          "THEN json_extract(content,'$.complete')=1 ELSE 0 END "
-                          "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
+    if index is not None and care_team_as_of is None and dataset != "consultations":
+        latest, complete = index.select(dataset, target["entity_id"], item_id)
+    else:
+        latest = db.execute(base + "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
+        complete = db.execute(base + "AND CASE WHEN json_valid(content) "
+                              "THEN json_extract(content,'$.complete')=1 ELSE 0 END "
+                              "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
     if latest is None:
         return result
     if provenance is not None:
@@ -316,7 +368,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                     pin = payload["definition_source_artifact_id"]
                     if not _valid_id(pin):
                         raise SchemaError("metadata view: definition generation invalid")
-                    latest_definition = db.execute(
+                    latest_definition = index.select("observation_items", target["entity_id"], None)[1] \
+                        if index is not None else db.execute(
                         "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? "
                         "AND CASE WHEN json_valid(content) THEN json_extract(content,'$.dataset')='observation_items' "
                         "AND json_type(content,'$.entity_id')='integer' "
@@ -325,8 +378,8 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
                         "AND json_extract(content,'$.item_id') IS NULL "
                         "AND json_extract(content,'$.complete')=1 ELSE 0 END "
                         "ORDER BY artifact_id DESC LIMIT 1", (ARTIFACT_KIND, project_id, target["entity_id"])).fetchone()
-                    definition = get_project_metadata(db, project_id, "observation_items", now=now,
-                                                      max_age_s=max_age_s)
+                    definition = index.definition(now, max_age_s) if index is not None else get_project_metadata(
+                        db, project_id, "observation_items", now=now, max_age_s=max_age_s)
                     mapped = (latest_definition is not None and latest_definition["artifact_id"] == pin
                               and any(row["lab_test_item"]["id"] == item_id for row in definition["rows"]))
                     if "definition_fingerprint" in payload:
