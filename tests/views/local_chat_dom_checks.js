@@ -301,7 +301,7 @@ async function checkDisplayGaps() {
   // F2: every attachment state, reason, size, OCR state, page and finding is shown.
   const entry = file => content(run("attachmentEntry")(file));
   const failed = entry({attachment_id: 1, name: "合成.pdf", state: "failed", bytes: 0, error: "download_failed", ocr: {state: "unavailable", page_count: 0}});
-  assert.match(failed, /ファイル: 取得失敗/); assert.match(failed, /理由: ダウンロードに失敗/); assert.match(failed, /原本がないため作成できません/);
+  assert.match(failed, /ファイル: 取得失敗/); assert.match(failed, /理由: ダウンロードに失敗/); assert.match(failed, /原本を取得できていないため作成できません/);
   assert.doesNotMatch(failed, /0 B/);
   assert.match(entry({attachment_id: 2, state: "downloaded", bytes: 2048, error: "not_recorded", ocr: {state: "failed"}}), /文字記録: 作成に失敗[\s\S]*2 KB/);
   assert.match(entry({attachment_id: 3, state: "downloaded", bytes: 10, ocr: {state: "unsupported"}}), /対応していない形式/);

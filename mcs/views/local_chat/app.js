@@ -326,7 +326,7 @@ async function loadPatientContext(project) {
     if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。", "context-empty"));
   }
 }
-const karteStates = {not_fetched: "未取得", failed: "取得失敗", empty: "空（MCS に記載がありません）", present: "あり"};
+const karteStates = {not_fetched: "未取得", unknown: "未確認", failed: "取得失敗", empty: "空（MCS に記載がありません）", present: "あり"};
 function karteCard(karte) {
   // MCS 患者連携サマリー: the whole comment when present, otherwise exactly which of 未取得 / 取得失敗 / 空 it is.
   if (!karte) return card("連携サマリー（MCS）", [el("p", "連携サマリーの状態を取得できませんでした。", "state-note")]);
@@ -582,7 +582,7 @@ async function showMessageInfo(row, request, withContext = true) {
   } catch (error) {if (request === state.detailRequest) fail(error);}
 }
 const fileStates = {downloaded: "取得済み", pending: "未取得", failed: "取得失敗", pruned: "原本保持期間終了"};
-const ocrStates = {complete: "作成済み", empty: "文字なし（読み取れる文字がありませんでした）", unprocessed: "未作成", failed: "作成に失敗", unsupported: "対応していない形式のため作成していません", unavailable: "原本がないため作成できません", rejected_by_policy: "表の読み取りが不確かなため除外しました"};
+const ocrStates = {complete: "作成済み", empty: "文字なし（読み取れる文字がありませんでした）", unprocessed: "未作成", failed: "作成に失敗", unsupported: "対応していない形式のため作成していません", unavailable: "原本を取得できていないため作成できません", rejected_by_policy: "表の読み取りが不確かなため除外しました"};
 const fileErrors = {download_failed: "ダウンロードに失敗", download_too_large: "サイズの上限を超えています", download_empty: "空のファイルでした", disk_full: "保存領域が不足しています", url_not_allowed: "許可されていない取得先です", deadline_exceeded: "時間内に終わりませんでした", network_error: "通信エラー", http_error: "MCS サーバーのエラー", session_expired: "ログインの期限切れ", no_token: "ログインしていません", forbidden: "閲覧が許可されていません", response_too_large: "応答が大きすぎます", db_write_failed: "保存に失敗", rate_limited: "MCS サーバーから時間をおくよう求められました"};
 // Collector error codes in Japanese; an HTTP status keeps its number, anything else is never shown raw.
 const fileErrorText = code => fileErrors[code] || (/^http_\d{3}$/.test(code) ? `MCS サーバーのエラー（HTTP ${code.slice(5)}）` : "理由を判別できません");
