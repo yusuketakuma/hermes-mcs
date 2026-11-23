@@ -6,6 +6,8 @@
 
 ## 実行コードの所有先
 
+`mcs/core/` は役割ごとのフォルダに分けます。`ledger/` は台帳の読み書きの補助（取込・意味解析の原典管理・投稿メタデータ・添付の後続通知・登録データ検証・snapshot参照）、`runtime/` は実行時の補助（worker回収・host時刻・healthの判定方針）、`records/` は監査・外部送信審査・backup名・保守エラーの記録です。次のファイルは `mcs/core/` 直下に残します。導入済みの更新処理・復旧スクリプトがパスや直接importで使うもの（`ledger.py`・`mcs_util.py`・`mcs_runtime.py`・`runtime_entry.py`・`writer_lock.py`・`quarantine_bootstrap.py` など）と、`semantic_candidate._MODULES` の候補指紋に含まれるもの（`mcs_queries`・`inference_version` など）です。候補指紋は関数のファイルパスを含むので、移すと承認済みの候補が一致しなくなります。import はflat（`_mcs_path`）なので、`mcs/` 内の移動でimport文は変わりません。
+
 | 所有先 | 責務・主要入口 | 状態と副作用 |
 |---|---|---|
 | `mcs/core/` | `ledger`の台帳writerと`ledger_capture`・`ledger_semantic_sources`の2つのMixin、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
@@ -13,8 +15,8 @@
 | `mcs/core/patient_context_artifacts.py` | 患者文脈の原CHUNK・採用済み修復候補の選択、参照・範囲・part・元費用証拠の共通検証 | 表示と依存喪失の記録が同じ保存集合を読む。呼出元のconnectionとtransactionを借用し、Jev判定・認可・公開・通信を行わない |
 | `mcs/core/writer_lock.py`・`safe_io` | writerの取得・コード/更新世代の照合、安全なファイル公開とFD所有権移管 | 取得したFDは呼出元が保持・解放する。借用接続をclose/commitせず、ファイル公開は既存の同期・置換順序を守る |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
-| `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
-| `mcs/core/worker_process.py` | 通信workerの終了後のpipe排出・FD閉鎖・wait | workerを生成・停止する呼出元から終了対象を受け取る。プロセスグループのTERM/KILL・停止判断は移さない |
+| `mcs/core/ledger/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
+| `mcs/core/runtime/worker_process.py` | 通信workerの終了後のpipe排出・FD閉鎖・wait | workerを生成・停止する呼出元から終了対象を受け取る。プロセスグループのTERM/KILL・停止判断は移さない |
 | `mcs/ingest/` | `mcs_adapter`の取得統括と`mcs_authentication`の認証Mixin、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側。`collection_stages`が取得・再ログイン・walk cursorのstageを実行し、`run_check`が順序・全体締切・run lockを所有 |
 | `mcs/ingest/health_report.py` | healthの観測・集計・coverage | 借用connectionと過去health記録を読み、書込み失敗のincidentは`run_check`が記録 |
 | `mcs/llm/` | `cloud_inference`の共通実行、`cloud_policy`のscope/予算、`cloud_usage_accounting`の費用計算、`cloud_history_scope`の承認済み原文範囲、`cloud_backlog`の背景worker | 通信状態の読書きは明示された保存先/借用接続上で行う。抽出結果・claim・carryのDB保存と解放は担当workerが所有 |
@@ -34,7 +36,7 @@
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope、`notify_spool`が保存先と公開、`notify_sender`がDBを持たないCLI送信を所有。`notify_actions`と`notify_transport`が同一transactionの適用/配送事実を確定し、公開はcommit後に行う |
 | `mcs/stamps/` | `stamp_contract`は種別・設定・集計検証、`stamp_read`は押下者の読取、`stamp_format`は表示、`stamp_write`は人承認操作 | 読取は同一connectionを借用する。承認と待ち行列はreceiptと同一TX、送信はcommit後のrun lock内。`MCSAdapter`が通信を所有し、DB復元で巻き戻さない試行記録で二重送信を防ぐ |
 | `mcs/homecare/` | 在宅ケアの記録（旧 zaitaku-calender の移行先）。`core/` は職種に共通の機能（`homecare_store` の専用DB `homecare.db`・モジュール別の番号付き前進専用migration・監査・transaction、`homecare_modules` のモジュール宣言と登録、`homecare_records` の職員と資格・患者台帳、`homecare_team` のケアチーム、`homecare_links` のMCS患者との人が確定する1対1の対応付け、`homecare_api` のJSON経路）。`pharmacy/` などの職種別モジュールは資格・役割・表・画面を宣言し、`homecare_catalog` が出荷するモジュールの固定一覧を持つ | モジュールはコアだけをimportし、モジュール同士・コアからモジュールへのimportはしない（`homecare_catalog`だけが両者をつなぐ）。表と種類のコードはモジュール名で始める。ledgerと別のDBで、MCSの原本・スナップショットへ書き込まない。更新は版の一致が必要で、対応付けと監査は追記のみ。画面の配信と書込みの検証は`mcs_local_chat`が所有 |
-| `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`はメンション・固定表示。保存済み観測の検証は`core/message_observations`。呼出元のDBを再openしない |
+| `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`はメンション・固定表示。保存済み観測の検証は`core/ledger/message_observations`。呼出元のDBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
 | `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
@@ -87,7 +89,7 @@ SDKチェックは`scripts/development/`、オフライン評価の実行コー�
 - 原典QAの質問識別子は`semantic_audit`、実行guard・予算予約は`semantic_runtime`、元予約・回答・判定方針・PASSの読取検証は`semantic_usage_receipts`が正本です。クラウド原典の依存記録は全選択範囲の証拠を照合し、現在の設定・権限・公開許可は呼出元で別に確認します。
 - 集計と抽出監査は`stats_contract`の同じ期間/患者範囲/上限を使います。表示上限と全体件数を分け、監査の定義識別子は実際の計算契約に結び付けます。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
-- スタンプは読取り・表示・操作を`stamps/`へ集約します。一般のメタデータ検証は`core/message_observations`に置き、収集や送信が表示moduleを経由しない構成にします。操作の設定・本人照合・復元時の停止条件は[スタンプ管理契約](../specs/stamp-management.md)が正本です。
+- スタンプは読取り・表示・操作を`stamps/`へ集約します。一般のメタデータ検証は`core/ledger/message_observations`に置き、収集や送信が表示moduleを経由しない構成にします。操作の設定・本人照合・復元時の停止条件は[スタンプ管理契約](../specs/stamp-management.md)が正本です。
 - 人承認の復旧は`notify_recovery`から`notify_transport`の借用transaction上の確定処理を使います。復旧receiptと状態を同時にcommitし、spec公開はその後に行います。読取側は`notify_scope`へ直接依存します。
 - 薬剤照合の進捗と現行参照の読取は`drug_map`の実体が正本です。統計/通知/薬剤履歴は同じsnapshotと一巡の進捗を共有し、テスト用の関数同一性で別経路へ分岐しません。
 - 共通hashの検証は`mcs_util`、版タグの文法は`update_policy`が正本です。操作契約や表示がqueue CLIを経由せず、queueの保存・ロック・順序は`mcs_requests`が所有します。hostの遅延bootstrap後に必要な処理を読む契約は維持します。
