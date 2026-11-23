@@ -1307,3 +1307,15 @@ def test_a_changed_contract_ends_even_while_the_spending_cap_is_missing(qc_windo
     changed = {name: {**contract, "max_tokens": contract["max_tokens"] + 1} for name, contract in pin.items()}
     assert judged(changed) == ("gone", "contract_changed"), "a withdrawal outranks the missing cap"
 
+
+
+def test_an_open_attempt_whose_post_left_the_qc_window_ends(qc_window, monkeypatch):
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET posted_at_ts=?",
+                          (time.time() - semantic_qc.QC_REALTIME_MAX_AGE_S - 86400,))
+    _local_pass(ledger)
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')], "selection no longer resumes it: it ends"
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1

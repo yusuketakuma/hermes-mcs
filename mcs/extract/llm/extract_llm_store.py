@@ -1,5 +1,6 @@
 """Atomically adopt extraction and checkpoint outputs under source and lease fences."""
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -255,9 +256,15 @@ def _cloud_attempt_withdrawn(ledger, cfg, r) -> bool:
     It has when its records disagree, a readable configuration, review and
     key file no longer offer its pinned contract (cloud_policy.resolve_contract
     ``gone``), or a newer audit changed the notes it started under
-    (``_qc_attempt_superseded``); a waiting or unverifiable contract has not."""
+    (``_qc_attempt_superseded``), or the post left the QC window, where
+    selection no longer resumes it (so the open set stays within that window);
+    a waiting or unverifiable contract has not."""
     started = _open_attempt_contracts(ledger.db, r)
+    scope, scope_params = semantic_qc.qc_scope_sql(time.time())
+    in_window = ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? AND {scope}",
+                                  (r["message_id"], r["project_id"], *scope_params)).fetchone() is not None
     return bool(started) and (any(contract != started[0] for contract in started)
+                              or not in_window
                               or _qc_attempt_superseded(ledger, r)
                               or cloud_policy.resolve_contract(cfg, started[0], route="reextract", purpose="backlog",
                                                                root=HOME, wait=False).state == "gone")
@@ -310,10 +317,11 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
     Nothing here sends or reserves."""
     if ledger.db.in_transaction:
         return 0
-    def withdrawn(cfg, r):   # judging stops at the pass deadline, so selection is never delayed past it
-        return time.monotonic() < deadline and _cloud_attempt_withdrawn(ledger, cfg, r)
+    def any_withdrawn(cfg):   # judging stops at the pass deadline, so selection is never delayed past it
+        return any(_cloud_attempt_withdrawn(ledger, cfg, r) for r in itertools.takewhile(
+            lambda _r: time.monotonic() < deadline, _open_cloud_attempts(ledger.db)))
     cfg = load_config_checked(wait=False)
-    if cfg is None or not any(withdrawn(cfg, r) for r in _open_cloud_attempts(ledger.db)):
+    if cfg is None or not any_withdrawn(cfg):
         return 0
     close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
     closed = 0
@@ -326,7 +334,7 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
             # so the budget is spent on writes as it goes rather than on judging every candidate first
             if time.monotonic() >= close_by:
                 break
-            if not withdrawn(cfg, r):
+            if not _cloud_attempt_withdrawn(ledger, cfg, r):
                 continue
             try:
                 with _stale_gc_transaction(ledger.db, close_by):
