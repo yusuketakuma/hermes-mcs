@@ -38,7 +38,6 @@ jobs:
         mode: [standalone, hermes]
     env:
       MODE: ${{ matrix.mode }}
-      LOG: ${{ runner.temp }}/fresh-install-${{ matrix.mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -52,7 +51,9 @@ jobs:
             printf '127.0.0.1 %s\n::1 %s\n' "$host" "$host" | sudo tee -a /etc/hosts >/dev/null
           done
           sudo dscacheutil -flushcache
+          LOG="$RUNNER_TEMP/fresh-install-$MODE"
           mkdir -p "$LOG"
+          echo "LOG=$LOG" >> "$GITHUB_ENV"
       - name: clean user state
         run: |
           # 既に入っている MCS・Hermes の痕跡がないことを確かめる（新規の Mac と同じ前提）
