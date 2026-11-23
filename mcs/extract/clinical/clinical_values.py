@@ -372,15 +372,11 @@ _COMPLETE_RESULT = re.compile(r"(?:デス|デシタ)?(?:[。、,;；]|$)")
 # (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
 # so words that merely end in them (悪化, 尿素窒素) are no stems.
 _SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)$")
-# Items also reported for urine, CSF or effusions (尿中Ca, 尿TP, 尿沈渣WBC 10-19/HPF):
-# those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
-# The previous items (尿Cr) keep their earlier reading.
+# Items also reported for urine, CSF, effusions, stool or sputum (尿中Ca, 尿TP, 尿沈渣WBC
+# 10-19/HPF): those specimens and qualitative or ranged results (1+, 10-19) are not the
+# blood item. The previous items (尿Cr) keep their earlier reading.
 _SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "calcium", "magnesium"})
-# The specimen may also head the item: 尿検査：, 尿検査結果：, (尿), 【髄液】, 尿検査\n (folding
-# drops spaces and line breaks), so heading words, brackets and delimiters may follow it.
-_OTHER_SPECIMEN = re.compile(fold_surface(
-    r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:結果|所見|データ)?[)\]】>]?(?:にて|で|の|は)?[:・|=]*$"))
-_SPECIMEN_REACH = 16   # characters read before an item for its specimen heading
+_SPECIMEN_WORDS = r"尿中|尿|沈渣|髄液|胸水|腹水|便|喀痰"
 _QUALITATIVE_RESULT = re.compile(r"\+")
 # A number followed by a range mark and a digit is one end of a range (2〜4, 4.5から5.0),
 # not a single result of any item. The marks are folded forms: ～ and － fold to ~ and -.
@@ -500,15 +496,45 @@ def _next_reading(quote: str, at: int, stop: int, evidence, starts: list, ends: 
                  if _spaced(evidence, starts, ends, item.start())), stop)
 
 
+def _specimen_sections(quote: str, evidence, starts: list, ends: list,
+                       lines: list[int]) -> tuple[set, list, list]:
+    """Folded positions a specimen word is glued to, and the spans its headings name."""
+    glued, headings = set(), []
+    line_ends = {*lines, len(quote)}
+    for match in _SECTION_HEADING.finditer(quote):
+        end = match.end()
+        bare = match.span() == match.span("word")
+        spaced = _spaced(evidence, starts, ends, end)
+        if bare and not spaced and end not in line_ends:
+            glued.add(end)
+        if (match["bracket"] or end in line_ends or _HEADING_DELIMITER.search(match[0])
+                or (_HEADED_RESULT.match(quote, end) and (spaced or not bare))):
+            headings.append((match.start(), end, bool(match["specimen"])))
+        # Otherwise a statement (尿検査は異常なし) or a word (尿酸, 便秘) heads nothing.
+    blank = (at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2)
+    # A section ends at the next heading, sentence end, blank line or the end of the quote.
+    stops = sorted({*blank, *(m.start() for m in re.finditer("。", quote)),
+                    *(start for start, _, _ in headings), len(quote)})
+    sections = [(end, stops[bisect.bisect_right(stops, start)]) for start, end, specimen in headings if specimen]
+    return glued, [start for start, _ in sections], [stop for _, stop in sections]
+
+
+def _in_specimen_section(sections: tuple[set, list, list], at: int) -> bool:
+    """Whether a specimen word is glued to folded position ``at`` or one of its headings names it."""
+    glued, opened, closed = sections
+    section = bisect.bisect_right(opened, at) - 1
+    return at in glued or (section >= 0 and at < closed[section])
+
+
 def _other_reading(analyte: str | None, quote: str, match: re.Match,
-                   evidence: str, starts: list, lines: list[int]) -> bool:
+                   evidence: str, starts: list, lines: list[int], specimen_sections) -> bool:
     """A name match that belongs to a drug, another specimen or another sense of the spelling."""
     name = match.group("name")
     at = match.start("name")
-    # Bounded windows: a salt stem or a specimen word is a few characters long.
+    # Bounded window: a salt stem is a few characters long.
     if at < len(starts) and _part_of_drug_name(name, evidence[max(0, starts[at] - 16):starts[at]]):
         return True
-    if analyte in _SPECIMEN_SHARED_ITEMS and _OTHER_SPECIMEN.search(quote, max(0, at - _SPECIMEN_REACH), at):
+    if analyte in _SPECIMEN_SHARED_ITEMS and _in_specimen_section(specimen_sections, at):
         return True
     other_sense = _OTHER_SENSE_CLAUSE.get(analyte)
     return bool(other_sense and other_sense.search(_clause_at(quote, at, lines)))
@@ -524,18 +550,20 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 # else (塩化, 維持液, ロスバスタチン, 朝夕, 適宜, 分2, 1錠, 4→2) keeps it a candidate.
 # The words are folded once, like the quote they are matched on.
 _READING_UNIT = "|".join(re.escape(u) for u in sorted(_LAB_UNITS, key=len, reverse=True))
-_READING = (r"(?:" + _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
+_LAB_SPELLINGS = _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
+_READING = (r"(?:" + _LAB_SPELLINGS
             + r"|[ァ-ヺー]++|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
             + rf"(?:{_READING_UNIT})?")
 # The lab section headings of medical_document._HEADINGS (labs_vitals, course_and_labs),
 # repeated here so the validator's decisions do not import the OCR module; a test keeps
 # them equal.
 LAB_SECTION_HEADINGS = ("検査結果", "検査所見", "検査データ", "バイタルサイン", "身体所見", "症状経過及び検査結果")
-_LAB_HEADER = "|".join((
+_SECTION_HEADER = "|".join((
     *map(re.escape, sorted(LAB_SECTION_HEADINGS, key=len, reverse=True)),
     r"(?:血液|生化学?|電解質|定期|本日|今日|今回)?(?:採血|検査|測定)(?:結果|値|データ|所見)?",
-    r"電解質|生化学?|緊急値|本日|今日|今回",
+    r"電解質|生化学?",
 ))
+_LAB_HEADER = _SECTION_HEADER + r"|緊急値|本日|今日|今回"
 # Each word of a layout is read once and kept (an atomic group, repeated possessively):
 # a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
 # every split of a run of readings that ends in an unknown word. Alternatives that
@@ -550,6 +578,19 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*+"))
+# A specimen word glued to an item names that item (尿TP, 尿中Ca, 髄液TP). As a heading
+# (尿検査：, 【尿】, (尿), 尿検査\n, 尿 WBC: a heading word, a bracket, a delimiter, a space
+# or a line break follows the word, then a result or the line end) it names every result
+# of its section, across line breaks, up to a sentence end, a blank line or another
+# heading (血液検査, 【処方】, another specimen). 尿酸, 便秘 or 尿検査は異常なし head nothing.
+_HEADING_OPEN, _HEADING_CLOSE = r"[(\[【<]?", fold_surface(r"[)\]】>]?(?:にて|で|の|は)?[:・|=]*")
+_SECTION_HEADING = re.compile(
+    rf"(?P<specimen>{_HEADING_OPEN}(?P<word>{fold_surface(_SPECIMEN_WORDS)})"
+    rf"(?:検査)?(?:結果|所見|データ)?{_HEADING_CLOSE})"
+    rf"|{_HEADING_OPEN}(?:{fold_surface(_SECTION_HEADER)}){_HEADING_CLOSE}"
+    rf"|(?P<bracket>【(?![^【】]*(?:{fold_surface(_SPECIMEN_WORDS)}))[^【】]*】)")
+_HEADING_DELIMITER = re.compile(fold_surface(r"[:・|=)\]】>]"))
+_HEADED_RESULT = re.compile(fold_surface(f"{_LAB_SPELLINGS}|{_READING}"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
@@ -683,11 +724,13 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     ambiguous = False
     row_end = -1
     folded_value = fold_surface(raw_value)
+    specimen_sections = (_specimen_sections(quote, evidence, starts, ends, lines)
+                         if analyte in _SPECIMEN_SHARED_ITEMS else None)
     for match in re.finditer(pattern, quote):
         if len(readings) > 1:
             break
         if (_glued_to_a_word(quote, match.start("name"), evidence, starts, ends)
-                or _other_reading(analyte, quote, match, evidence, starts, lines)):
+                or _other_reading(analyte, quote, match, evidence, starts, lines, specimen_sections)):
             continue
         # Positions, not slices: each match costs only its own surroundings.
         if number is not None:

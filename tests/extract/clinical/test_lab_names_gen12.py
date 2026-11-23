@@ -864,6 +864,7 @@ def test_a_panel_line_is_read_up_to_the_layout_reach():
     assert _confirmation("カリウム", "4.0", "Cr 0.9 " * 60 + "カリウム 4.0") == "unverified"
     assert _confirmation("カリウム", "4.0", "カリウム 4.0 " + "Cr 0.9 " * 60) == "unverified"
 
+
 # The layout grammars read each reading in one way: a run of readings that ends in a
 # character no grammar accepts fails in bounded time, however long the run (the layout
 # reach is not what bounds it).
@@ -904,6 +905,69 @@ def test_the_layout_grammars_still_accept_their_readings(grammar, text):
     assert getattr(clinical_values, grammar).fullmatch(clinical_values.fold_surface(text))
 
 
+# A specimen heading names every result of its section, up to a sentence end, a blank
+# line or another heading; a line break between results of the section does not end it.
+_SPECIMEN_SECTIONS = (
+    "{s}検査：{item}",
+    "{s}検査\n{item}",
+    "{s}検査\npH 6.0\n{item}",
+    "{s}検査\npH 6.0\n比重 1.015\nRBC 2/μL\n{item}",
+    "【{s}検査】\npH 6.0\n{item}",
+    "【{s}】\npH 6.0\n比重 1.015\n{item}",
+    "{s}検査：pH 6.0、{item}",
+    "{s}：\n・pH 6.0\n・{item}",
+)
+_SECTION_ENDS = (
+    "{s}検査は異常なし。血液検査 {item}",
+    "{s}検査：pH 6.0。{item}",
+    "{s}検査\npH 6.0\n\n{item}",
+    "{s}検査\npH 6.0\n血液検査\n{item}",
+    "【{s}検査】\npH 6.0\n【血液検査】\n{item}",
+    "{s}検査：pH 6.0、血液検査 {item}",
+)
+_SPECIMEN_WORDS = ("尿", "髄液", "胸水", "腹水", "便", "喀痰")
+_SHARED_ITEMS = (("WBC", "5200", "/μL"), ("白血球", "5200", "/μL"), ("TP", "6.5", "g/dL"),
+                 ("Ca", "9.0", "mg/dL"), ("Mg", "2.0", "mg/dL"), ("T-Bil", "0.8", "mg/dL"))
+
+
+@pytest.mark.parametrize("specimen", _SPECIMEN_WORDS)
+@pytest.mark.parametrize("layout", _SPECIMEN_SECTIONS)
+@pytest.mark.parametrize("name,value,unit", _SHARED_ITEMS)
+def test_a_specimen_heading_names_every_result_of_its_section(specimen, layout, name, value, unit):
+    body = layout.format(s=specimen, item=f"{name} {value}{unit}")
+    lab = _validated(name, value, unit, body)
+    assert lab["normalized"]["confirmation"] == "unverified" and lab["value"] == value, body
+
+
+@pytest.mark.parametrize("specimen", _SPECIMEN_WORDS)
+@pytest.mark.parametrize("layout", _SECTION_ENDS)
+@pytest.mark.parametrize("name,value,unit", _SHARED_ITEMS)
+def test_a_sentence_end_a_blank_line_or_a_blood_heading_ends_the_specimen_section(specimen, layout, name,
+                                                                                   value, unit):
+    body = layout.format(s=specimen, item=f"{name} {value}{unit}")
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported", body
+
+
+# Items not shared with other specimens keep their earlier reading in every layout (尿Cr).
+@pytest.mark.parametrize("specimen", _SPECIMEN_WORDS)
+@pytest.mark.parametrize("layout", _SPECIMEN_SECTIONS + _SECTION_ENDS)
+def test_an_item_not_shared_with_other_specimens_keeps_its_reading(specimen, layout):
+    body = layout.format(s=specimen, item="Cr 0.9mg/dL")
+    assert _validated("Cr", "0.9", "mg/dL", body)["normalized"]["confirmation"] == "quote_supported", body
+
+
+# A specimen word inside another word, or a statement about the specimen, heads nothing.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("WBC", "5200", "/μL", "尿酸 7.0mg/dL\nWBC 5200/μL"),
+    ("Ca", "9.0", "mg/dL", "尿素窒素 15mg/dL\nCa 9.0mg/dL"),
+    ("WBC", "5200", "/μL", "便秘あり\nWBC 5200/μL"),
+    ("WBC", "5200", "/μL", "尿検査は異常なし、WBC 5200/μL"),
+    ("TP", "6.5", "g/dL", "尿量 1200mL\nTP 6.5g/dL"),
+])
+def test_a_specimen_word_that_heads_no_section_does_not_hide_the_blood_item(name, value, unit, body):
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported", body
+
+
 # A following Latin-labelled reading is not the unit of the reading before it.
 @pytest.mark.parametrize("name,value,unit,body", [
     *((n, v, None, f"{n} {v} {label}") for n, v in (("カリウム", "4.0"), ("ナトリウム", "140"), ("カルシウム", "9.0"))
@@ -926,3 +990,13 @@ def test_a_following_latin_labelled_reading_is_not_the_unit(name, value, unit, b
 @pytest.mark.parametrize("body", ["カリウム 4.0mEq/LCr 0.9", "カリウム 4.0Cr 0.9", "カリウム 4.0 錠Cr 0.9"])
 def test_a_unit_glued_to_another_word_keeps_the_reading_a_candidate(body):
     assert _confirmation("カリウム", "4.0", body) == "unverified"
+
+
+@pytest.mark.parametrize("body", [
+    "尿検査：WBC 300/μL\n" * 20000, "【尿" * 20000 + "WBC 300/μL", "尿 " * 20000 + "WBC 300/μL",
+])
+def test_specimen_sections_are_read_in_linear_time(body):
+    import time
+    began = time.perf_counter()
+    assert clinical_values.lab_candidate("WBC", "300", "/μL", body)["confirmation"] == "unverified"
+    assert time.perf_counter() - began < 10
