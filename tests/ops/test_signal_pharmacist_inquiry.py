@@ -65,6 +65,8 @@ def test_own_or_unattributed_thread_post_is_not_a_reply(store, reply):
     {"action": "キラナの減量", "meds": ["キラナ"]},
     {"action": "減量のご検討", "quote": "キラナを減量していただけますか", "meds": ["キラナ"]},
     {"action": "ラコールNF200mLを中止", "meds": ["ラコールNF"]},       # dose written right after the name
+    {"action": "ラコールNF200㎖を中止", "meds": ["ラコールNF"]},        # the same unit in another form
+    {"action": "ラコールNF200ｍＬを中止", "meds": ["ラコールNF"]},
     {"action": "降圧薬の中止", "quote": "薬剤師から降圧薬の中止をご相談します"},
     {"action": "薬局製剤の継続可否を確認"},
     {"action": "ビタミンB1 10mgへ減量", "meds": ["ビタミンB1"]},

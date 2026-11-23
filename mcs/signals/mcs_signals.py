@@ -26,6 +26,7 @@ import hashlib
 import itertools
 import json
 import re
+import unicodedata
 import sqlite3
 import time
 from datetime import datetime
@@ -517,7 +518,7 @@ def _names_medicine(text, name):
         after = rest[:1]
         latin = name[-1].isascii() and name[-1].isalnum() and after.isascii() and after.isalnum()
         if not after or not ((_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after))
-                             or (latin and not _DOSE_AFTER.match(rest))):
+                             or (latin and not _DOSE_AFTER.match(unicodedata.normalize("NFKC", rest[:16])))):
             return True
         start = text.find(name, start + 1)
     return False
