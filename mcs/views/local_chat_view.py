@@ -10,14 +10,14 @@ import threading
 from mcs_contract import project_url
 from mcs_queries import UNKNOWN_TIME, register_search_fold
 from mcs_util import search_fold
-from message_metadata import mentions_self
+from message_metadata import flags
 from notify_render import (PROCESSING_STATUS_LABELS, SUMMARY_EMPTY_LABELS, URGENCY_PLAIN, patient_heading,
                            progress_state, project_identity, summary_empty_state)
 from self_identity import is_self_message
 from snapshot_access import table_exists
 from stamp_contract import STAMP_EMOJI
 from stamp_format import self_stamps, stamp_counts, thread_stamp_line
-from stamp_read import reaction_actor_summary
+from stamp_read import reaction_actor_summaries
 from structured_view import URGENCY_REVIEW_LINE, URGENT_REQUEST_LINE, structured_summary
 from patient_context_view import SECTION_LABELS, observed_revisions
 from patient_context import extract_context
@@ -246,19 +246,13 @@ def _context_item(item, category):
     return result
 
 
-def _actors_not_fetched():
-    """reaction_actor_summary's reading of a post with no actor fetch recorded (or no actor tables)."""
-    return {"state": "not_fetched", "complete_at": None, "checked_at": None,
-            "counts": {}, "self_included": None, "actors": []}
-
-
 # summary_state when the rule cannot be evaluated (the settings it reads are unreadable)
 SUMMARY_UNKNOWN_LABEL = "要約 " + PROCESSING_STATUS_LABELS["unknown"]
 
 
 class _PageReads:
     """The per-post reads of one page done once for all its posts: senders, parents present, newest replies,
-    observed edits, actor-fetch records, attachment OCR states and the settings the summary state reads."""
+    observed edits, who pressed each stamp, attachment OCR states and the settings the summary state reads."""
 
     def __init__(self, view, project, rows):
         db = view.db
@@ -282,11 +276,10 @@ class _PageReads:
             "AND posted_at_ts IS NULL", [project, *roots])} if roots else set()
         self.revisions = (observed_revisions(db, project, message_ids=ids)
                           if ids and table_exists(db, "message_revisions") else {})
-        try:
-            self.actor_fetched = {r[0] for r in db.execute(
-                f"SELECT message_id FROM message_reaction_actor_fetch WHERE message_id IN ({marks})", ids)}
-        except sqlite3.OperationalError:     # tables absent on a pre-22-F snapshot
-            self.actor_fetched = set()
+        # who pressed each stamp on the posts the view did not already read (it reads one's own posts)
+        self.actors = reaction_actor_summaries(db, [row["message_id"] for row in rows
+                                                    if not row.get("reaction_actors")],
+                                               now=view.meta["generated_at"])
         self.files = {}
         for r in db.execute(f"SELECT attachment_id,message_id FROM attachments WHERE message_id IN ({marks}) "
                             "ORDER BY attachment_id", ids):
@@ -319,12 +312,11 @@ def _message(view, row, reads):
     own = row["is_self_sender"]
     metadata = {**row["message_metadata"], "own_post": own}
     # Who pressed each stamp, for every post as on the chat thread (one's own post counts others only).
-    actors = row.get("reaction_actors") or (reaction_actor_summary(db, mid, now=view.meta["generated_at"])
-                                            if mid in reads.actor_fetched else _actors_not_fetched())
+    actors = row.get("reaction_actors") or reads.actors[mid]
     result["stamp_line"] = (thread_stamp_line(metadata, actors)
                             if stamp_counts(metadata) != {} or metadata["last_error"] else "")
     result["stamps"] = _stamps(metadata, actors)
-    result["flags"] = _flags(metadata, view._identity()[0])
+    result["flags"] = flags(metadata, view._identity()[0])
     result["summary_state"] = "done" if result["summary_lines"] else _summary_state(db, mid, reads)
     result["urgency"] = _urgency(urgency)
     result["last_reply"] = None if row.get("parent_id") else _last_reply(view, row, reads)
@@ -384,19 +376,6 @@ def _stamps(metadata, actors):
                                   else None, "self": actor.get("self") is True}
                                  for actor in actors.get("actors") or []]
                        if type(complete_at) in (int, float) else []}}
-
-
-def _flags(metadata, self_id):
-    """@self, pin and bookmark: value true/false only when observed, otherwise null with the state."""
-    hit = mentions_self(metadata, self_id)
-    mention = ("observed" if hit is not None else
-               "self_unknown" if metadata["mentions_status"] == "observed" else metadata["mentions_status"])
-
-    def observed(value, status):
-        return {"value": value if status == "observed" else None, "state": status}
-    return {"mention_self": {"value": hit, "state": mention},
-            "pinned": observed(metadata["is_pinned"], metadata["pin_status"]),
-            "bookmarked": observed(metadata["is_bookmarked"], metadata["bookmark_status"])}
 
 
 def _urgency(details):
@@ -571,11 +550,11 @@ def registered(view, allowed, project):
                                      False if config_state == "missing" else None),
               "collection_reason": "config_missing" if config_state == "missing" else None,
               "config_state": config_state}
-    data = registered_data(view.db, "detail", project, None)
+    data = registered_data(view.db, "detail", project, None, unfetched_items=True)
     if data is None:
         return {"snapshot": view.meta, "state": "unavailable", **config, "datasets": []}
     datasets = []
-    for record in _with_unfetched_values(view, project, data["records"]):
+    for record in data["records"]:
         definition = record.get("definition") or {}
         lab = definition.get("lab_test_item") or {}
         rows = record.get("rows") or []
@@ -592,33 +571,6 @@ def registered(view, allowed, project):
                                               for row in rows[:REGISTERED_ROWS]]})
     return {"snapshot": view.meta, "state": "listed" if datasets else "not_linked", **config,
             "datasets": datasets}
-
-
-def _with_unfetched_values(view, project, records):
-    """The records plus, for each item of the validated observation-item list whose values have no stored
-    fetch attempt yet, its values record as read (未取得) with the item's definition, after the fetched ones."""
-    from project_metadata_view import get_project_metadata
-
-    fetched = {record.get("item_id") for record in records if record["dataset"] == "observation_values"}
-    added = []
-    for record in records:
-        if record["dataset"] != "observation_items":
-            continue
-        for row in record.get("rows") or []:
-            lab = row.get("lab_test_item") or {}
-            item_id = lab.get("id")
-            if type(item_id) is not int or item_id <= 0 or item_id in fetched:
-                continue
-            fetched.add(item_id)
-            values = get_project_metadata(view.db, project, "observation_values", item_id=item_id,
-                                          now=view.meta["generated_at"])
-            added.append({"dataset": "observation_values", "item_id": item_id, "state": values["state"],
-                          "reason": values.get("reason"), "last_complete_at": values.get("last_complete_at"),
-                          "attempted_at": values.get("attempted_at"), "historical": values.get("historical"),
-                          "rows": values["rows"],
-                          # no attempt carries a definition yet: the item list's own row names it
-                          "definition": values.get("definition") or row})
-    return [*records, *added]
 
 
 def _registered_row(dataset, row):
@@ -646,8 +598,6 @@ SKIPPED_KEYS = ("ocr_pending", "body_unavailable", "unclassified")
 def source_search(view, allowed, project, query, *, cursor=None):
     """Search the patient's stored posts and attachment OCR text with the chat cards' 🔎 projection,
     saying what was not searched (unscanned range, pending OCR, unavailable bodies, OCR disabled)."""
-    from mcs_util import load_config
-
     require_project(project, allowed)
     position = None
     if cursor:
@@ -658,8 +608,10 @@ def source_search(view, allowed, project, query, *, cursor=None):
     group = (project_identity(view.db, project) or {}).get("group") is True
     try:
         # A group room's MCS address is not derived from its ID, so its head line carries no link.
-        result = notify_views.patient_search_view(view.db, project, query, cfg=load_config(), cursor=position,
-                                                  keep_message_id=True, room_link=not group)
+        cfg = _settings()[0]
+        result = notify_views.patient_search_view(view.db, project, query, cfg=cfg or {}, cursor=position,
+                                                  keep_message_id=True, room_link=not group,
+                                                  settings_unreadable=cfg is None)
     except ValueError as exc:
         # parse_query's bad_query is a query that is not text, is too long, or has no search word left:
         # only the last (blank, punctuation, filters only) is an empty search.
@@ -669,16 +621,14 @@ def source_search(view, allowed, project, query, *, cursor=None):
             raise
         # Original sources of an archived or no-longer-permitted room are not read for search.
         return {"snapshot": view.meta, "state": "unavailable", "title": None, "head": [], "items": [], "notes": [],
-                "empty": "この患者はアーカイブ済みか閲覧権限がないため、原資料を検索していません。",
+                "empty": notify_views.SEARCH_SCOPE_UNAVAILABLE,
                 "range_complete": False, "next_cursor": None}
     next_cursor = result["next_cursor"]
-    skipped = result.get("skipped")
     return {"snapshot": view.meta, "state": "searched", "title": result["title"], "head": result["head"],
             "items": [{key: item[key] for key in ("text", "message_id", "source", "page")}
                       for item in result["items"]],
-            # this range's unsearched material by kind, for adding up across ranges; None until the shared
-            # search view reports it
-            "skipped": ({key: skipped.get(key) for key in SKIPPED_KEYS} if isinstance(skipped, dict) else None),
+            # this range's unsearched material by kind, for adding up across 「続きを検索」 ranges
+            "skipped": {key: result["skipped"][key] for key in SKIPPED_KEYS},
             "notes": result["notes"], "empty": result["empty"], "range_complete": result["range_complete"],
             "next_cursor": None if next_cursor is None else base64.urlsafe_b64encode(
                 json.dumps(next_cursor, separators=(",", ":")).encode()).decode()}

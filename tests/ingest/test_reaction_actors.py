@@ -554,13 +554,25 @@ def test_batch_summaries_equal_the_single_form(db):
     assert batch == {mid: reaction_actor_summary(db.db, mid, now=now + 1) for mid in ids}
     assert {mid: s["state"] for mid, s in batch.items()} == {
         1: "complete", 2: "stale", 3: "failed", 4: "failed", 5: "stale", 99: "not_fetched"}
+    # fixed expectations, not only agreement between the two forms
+    assert batch[1]["counts"] == {"医師": {"viewed": 1}, "": {"viewed": 1}} and batch[1]["self_included"] is True
+    assert batch[1]["actors"] == [
+        {"reaction_type": "viewed", "name": "合成 一郎", "profession": "医師", "organization": "合成クリニック",
+         "self": False},
+        {"reaction_type": "viewed", "name": None, "profession": None, "organization": None, "self": True}]
+    assert batch[1]["complete_at"] == now and batch[3]["actors"][0]["self"] is False
+    assert batch[4]["complete_at"] is None and batch[4]["actors"] == []
+    assert batch[99] == {"state": "not_fetched", "complete_at": None, "checked_at": None,
+                         "counts": {}, "self_included": None, "actors": []}
     assert stamp_read.reaction_actor_summaries(db.db, [], now=now) == {}
 
 
 def test_batch_summaries_match_on_a_database_without_actor_tables(tmp_path):
     conn = sqlite3.connect(str(tmp_path / "old.db"))
     try:
-        assert stamp_read.reaction_actor_summaries(conn, [1, 2]) == {
-            mid: reaction_actor_summary(conn, mid) for mid in (1, 2)}
+        unread = {"state": "not_fetched", "complete_at": None, "checked_at": None,
+                  "counts": {}, "self_included": None, "actors": []}
+        assert stamp_read.reaction_actor_summaries(conn, [1, 2]) == {1: unread, 2: unread}
+        assert reaction_actor_summary(conn, 1) == unread
     finally:
         conn.close()

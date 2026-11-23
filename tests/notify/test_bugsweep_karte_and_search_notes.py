@@ -18,7 +18,8 @@ def test_a_summary_of_the_previous_karte_is_not_shown_for_the_relinked_patient(l
     led.db.execute("UPDATE patients SET karte_id=200 WHERE project_id=1")
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "合成の旧カルテ記載" not in body
-    assert "連携サマリー（MCS）: 未取得" in body
+    # stored, but another karte's: not this patient's summary, and not 未取得 either
+    assert "連携サマリー（MCS）: 未確認" in body and "連携サマリー（MCS）: 未取得" not in body
 
 
 def test_a_category_search_counts_unanalysed_text_matches(led):

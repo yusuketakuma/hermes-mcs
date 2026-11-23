@@ -102,14 +102,14 @@ def patient_summary_text(db, project_id, *, cfg=None, now=None) -> tuple:
                 lines.append(f"■ 次回予定: {roll['next_planned']}")
             lines.extend(_request_reply_lines(db, project_id, roll))
     # one current-summary read on this connection serves both sections
-    summary = _karte_summary_from_artifact(db, project_id)
+    reading, summary = _karte_summary_reading(db, project_id)
     lines.extend(_patient_context_lines(db, project_id, roll, summary))
     lines.extend(_pharmacy_state_lines(db, project_id, roll, cfg=cfg))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
-    lines.append("■ " + _karte_summary_line(summary))
+    lines.append("■ " + (KARTE_SUMMARY_UNKNOWN_LINE if reading == "unknown" else _karte_summary_line(summary)))
     return title, "\n".join(lines)
 
 
@@ -268,7 +268,7 @@ REGISTERED_STATES = {"complete": "取得済み", "empty": "登録行なし", "un
 def _registered_clinical_lines(db, project_id) -> list[str]:
     """Private fetch-state summary, kept separate from reported chat facts."""
     from registered_data import registered_data
-    registered = registered_data(db, "detail", project_id, 8)
+    registered = registered_data(db, "detail", project_id, 8, unfetched_items=True)
     if registered is None or not registered["total"]:
         return []
     names, states = REGISTERED_NAMES, REGISTERED_STATES
@@ -343,31 +343,40 @@ def _request_reply_lines(db, project_id, roll) -> list:
     return lines
 
 
+# A stored 連携サマリー that cannot be read or belongs to another karte: stored, so not 未取得, but not this
+# patient's summary either (read_model reads it as "unknown" too).
+KARTE_SUMMARY_UNKNOWN_LINE = "連携サマリー（MCS）: 未確認"
+
+
 def _karte_summary_from_artifact(db, project_id) -> dict | None:
     """Newest karte_summary artifact in the rollup's block shape; None
     when the summary was never fetched or the newest one is unreadable —
     an older summary never stands in for it. A summary of another karte
     than the patient's current one is not this patient's (mcs_queries.karte_summary_bound)."""
+    return _karte_summary_reading(db, project_id)[1]
+
+
+def _karte_summary_reading(db, project_id) -> tuple[str, dict | None]:
+    """``("not_fetched", None)`` when no 連携サマリー is stored, ``("unknown", None)`` when the newest stored
+    one is unreadable or not bound to the patient's current karte, else ``("stored", block)``."""
     row = db.execute(
         "SELECT a.content,a.meta,p.karte_id FROM artifacts a "
         "LEFT JOIN patients p ON p.project_id=a.project_id WHERE a.kind='karte_summary' "
         "AND a.project_id=? ORDER BY a.artifact_id DESC LIMIT 1",
         (project_id,)).fetchone()
     if not row:
-        return None
+        return "not_fetched", None
     try:
         c = json.loads(row["content"])
     except (ValueError, TypeError, RecursionError):
-        return None
+        return "unknown", None
     try:
         meta = json.loads(row["meta"] or "{}")
     except (ValueError, TypeError, RecursionError):
         meta = None
-    if not isinstance(c, dict):
-        return None
-    if not karte_summary_bound(meta, row["karte_id"]):
-        return None
-    return karte_summary_block(c)
+    if not isinstance(c, dict) or not karte_summary_bound(meta, row["karte_id"]):
+        return "unknown", None
+    return "stored", karte_summary_block(c)
 
 
 def _karte_summary_line(ks) -> str:
@@ -386,10 +395,11 @@ def _karte_summary_line(ks) -> str:
 
 def karte_summary_status(db, project_id) -> dict:
     """The MCS 患者連携サマリー whole, for a reader with room for it: ``state`` not_fetched / failed
-    (never obtained, latest GET failed) / empty / present, the stored comment, its MCS update date and
-    updater profession, ``failed_at`` of a failed latest GET (the shown summary is then the last one
-    obtained) and the one-line wording the summary card uses."""
-    block = _karte_summary_from_artifact(db, project_id)
+    (never obtained, latest GET failed) / unknown (stored but unreadable or another karte's) / empty /
+    present, the stored comment, its MCS update date and updater profession, ``failed_at`` of a failed
+    latest GET (the shown summary is then the last one obtained) and the one-line wording the summary
+    card uses."""
+    reading, block = _karte_summary_reading(db, project_id)
     try:
         row = db.execute("SELECT karte_summary_failed_at FROM patients WHERE project_id=?",
                          (project_id,)).fetchone()
@@ -399,7 +409,9 @@ def karte_summary_status(db, project_id) -> dict:
 
     def text(value):
         return value if isinstance(value, str) and value else None
-    if not isinstance(block, dict):
+    if reading == "unknown":
+        state = "unknown"
+    elif not isinstance(block, dict):
         state = "failed" if failed_at is not None else "not_fetched"
     else:
         state = "empty" if block.get("empty") or not text(block.get("comment")) else "present"
@@ -408,7 +420,8 @@ def karte_summary_status(db, project_id) -> dict:
             "updated_at": text(block.get("updated_at")) if isinstance(block, dict) else None,
             "updater_profession": text(block.get("updater_profession")) if isinstance(block, dict) else None,
             "failed_at": failed_at,
-            "line": ("連携サマリー（MCS）: 取得失敗" if state == "failed" else _karte_summary_line(block))}
+            "line": ("連携サマリー（MCS）: 取得失敗" if state == "failed" else
+                     KARTE_SUMMARY_UNKNOWN_LINE if state == "unknown" else _karte_summary_line(block))}
 
 
 def _coverage_line(db, project_id) -> str:
@@ -716,9 +729,16 @@ SEARCH_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を検索していません
 SOURCE_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を表示していません。"
 
 
+# The settings that enable attachment OCR could not be read: whether OCR text exists is not known.
+OCR_SEARCH_SETTINGS_UNREADABLE = "設定を読み取れないため、添付OCRの文字記録を検索できるか確認できません。"
+
+
 def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False,
-                        room_link=True) -> dict:
+                        room_link=True, settings_unreadable=False) -> dict:
     """Search all terms across patient originals with resumable, source-bound pages.
+
+    ``settings_unreadable`` (a config.json that exists but cannot be read) searches the posts only and says
+    the OCR side is unknown, instead of reading as OCR disabled.
 
     ``keep_message_id`` adds the post to open (the post itself, or the post carrying the attachment),
     the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out.
@@ -760,7 +780,9 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
         notes.append(f"この範囲に本文未取得・確認不能の原資料が{result['unavailable']}件あります。")
     if result['unclassified']:
         notes.append(f"解析未完了のため分類を判定できない原資料が{result['unclassified']}件あります。")
-    if not result['ocr_available']:
+    if settings_unreadable:
+        notes.append(OCR_SEARCH_SETTINGS_UNREADABLE)
+    elif not result['ocr_available']:
         notes.append('添付OCRは設定で無効、または利用を確認できないため検索していません。')
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
