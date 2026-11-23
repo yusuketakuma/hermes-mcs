@@ -64,30 +64,30 @@ OPENAI_PRICE_VALID_UNTIL = openai_client.PRICE_VALID_UNTIL
 OPENAI_PRICE_SOURCES = openai_client.PRICE_SOURCES
 
 
-PROVIDERS = {"anthropic": MODEL, "openai": openai_client.MODEL}
+PROVIDERS = {name: module.MODEL for name, module in provider_registry.PROVIDER_MODULES.items()}
 
 
-if ({model for model, _ in anthropic_client.PRICE_SNAPSHOTS}
-        & {model for model, _ in openai_client.PRICE_SNAPSHOTS}):
+_SNAPSHOT_MODELS = [{model for model, _ in module.PRICE_SNAPSHOTS}
+                    for module in provider_registry.PROVIDER_MODULES.values()]
+if sum(map(len, _SNAPSHOT_MODELS)) != len(set().union(*_SNAPSHOT_MODELS)):
     # Stored receipts predate an explicit provider field; ambiguous models fail closed.
     raise RuntimeError("duplicate_cloud_price_definition")
 
 
-PRICE_DEFINITIONS = MappingProxyType({**anthropic_client.PRICE_SNAPSHOTS,
-                                      **openai_client.PRICE_SNAPSHOTS})
+PRICE_DEFINITIONS = MappingProxyType({key: definition for module in provider_registry.PROVIDER_MODULES.values()
+                                      for key, definition in module.PRICE_SNAPSHOTS.items()})
 
 
 _CURRENT_PRICE = object()
 
 
 def _configured_price_version(model):
-    if model == PROVIDERS["anthropic"]:
-        # Read at call time: a price rotation replaces the current Haiku version.
-        return anthropic_client.PRICE_VERSION
-    if model in anthropic_client.CURRENT_PRICE_VERSIONS:
-        return anthropic_client.CURRENT_PRICE_VERSIONS[model]
-    if model in openai_client.CURRENT_PRICE_VERSIONS:
-        return openai_client.CURRENT_PRICE_VERSIONS[model]
+    for name, module in provider_registry.PROVIDER_MODULES.items():
+        if model == PROVIDERS[name]:
+            # Read at call time: a rotation replaces the default model and its current version.
+            return module.PRICE_VERSION
+        if model in module.CURRENT_PRICE_VERSIONS:
+            return module.CURRENT_PRICE_VERSIONS[model]
     raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
 
 
@@ -120,7 +120,7 @@ def _price_definition(model, price_version=_CURRENT_PRICE, *, now=None):
     if not isinstance(price_version, str):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     definition = PRICE_DEFINITIONS.get((model, price_version))
-    if (definition is None or definition.get("provider") not in ("anthropic", "openai")
+    if (definition is None or definition.get("provider") not in provider_registry.PROVIDER_MODULES
             or definition.get("model") != model or definition.get("price_version") != price_version):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     return definition
@@ -131,7 +131,9 @@ _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "effort", "profile", "input_binding")
 
 
-PROFILE_MAX_TOKENS = (8192, 16384, 32768)
+# Each purpose's output limit; every profile and every OpenAI selection carries one of them.
+PURPOSE_MAX_TOKENS = MappingProxyType({"backlog": 8192, "patient_context": 16384, "quality_repair": 32768})
+PROFILE_MAX_TOKENS = tuple(PURPOSE_MAX_TOKENS.values())
 
 
 def profile_contract_valid(provider, model, effort, profile, max_tokens):
@@ -146,13 +148,7 @@ def profile_contract_valid(provider, model, effort, profile, max_tokens):
     if profile is not None:
         return ((model, effort) in module.VALID_MODEL_EFFORTS
                 and module.PROFILE_DEFINITIONS.get(profile) == (model, effort) and max_tokens in PROFILE_MAX_TOKENS)
-    if provider == "anthropic":
-        # The original Anthropic contract carries no effort; its model is checked by
-        # the caller against the price definition (rotations included). A model that
-        # only a profile may select (Sonnet) never stands without its profile.
-        profile_only = {selected for selected, _ in module.PROFILE_DEFINITIONS.values()} - {module.ORIGINAL_CONTRACT[0]}
-        return effort is None and model not in profile_only
-    return (model, effort) == module.ORIGINAL_CONTRACT
+    return module.original_contract_valid(model, effort)
 
 
 def _decimal(value):
@@ -619,10 +615,14 @@ def _reservation_evidence_batch_snapshot(db, ids):
     return result
 
 
-def _is_openai_model(model):
+def _priced_by(model, provider):
     return (isinstance(model, str)
-            and any(key[0] == model and definition["provider"] == "openai"
+            and any(key[0] == model and definition["provider"] == provider
                     for key, definition in PRICE_DEFINITIONS.items()))
+
+
+def _is_openai_model(model):
+    return _priced_by(model, "openai")
 
 
 def _confirmed_openai_quota(result, model):
@@ -644,9 +644,7 @@ def _confirmed_openai_rate_diagnostic(result, model):
 
 
 def _is_anthropic_model(model):
-    return (isinstance(model, str)
-            and any(key[0] == model and definition["provider"] == "anthropic"
-                    for key, definition in PRICE_DEFINITIONS.items()))
+    return _priced_by(model, "anthropic")
 
 
 def _confirmed_anthropic_spend_limit(result, model):

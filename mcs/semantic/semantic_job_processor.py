@@ -6,6 +6,7 @@ import semantic_audit
 import semantic_render
 import semantic_store
 import semantic_transport
+import provider_registry
 from functools import wraps
 import json
 from contextlib import ExitStack, nullcontext
@@ -1057,7 +1058,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         break
                     raise
                 if summary2 is not None and summary2.get("_input_oversize") is not True:
-                    if not empty_repair and repair_producer.get('providers') in (['openai'], ['anthropic']):
+                    if not empty_repair and repair_producer.get('providers') in [[name] for name in provider_registry.CLOUD_PROVIDERS]:
                         fact_kind = KIND_FACTS_V2 if fact_source == 'canonical' else KIND_FACTS
                         refs = {}
                         for key, kind in (('facts_id', fact_kind), ('assessment_id', KIND_ASSESS),

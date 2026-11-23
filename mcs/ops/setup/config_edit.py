@@ -96,12 +96,12 @@ def _split_changes(state, cfg, touched, selected, owners):
             key = dotted.split(".", 1)[1]
             value = cloud.get(key)
             if key == "profiles":
-                by_provider = {"openai": value}
+                by_provider = {provider_settings.LEGACY_PROFILES_PROVIDER: value}
             elif value is None:
                 before = provider_settings.compose(state["common"], state["providers"],
                     selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
                 by_provider = {name: None for name in before.get("cloud_llm", {}).get("provider_profiles", {})}
-            elif isinstance(value, dict) and not value.keys() - {"anthropic", "openai"}:
+            elif isinstance(value, dict) and not value.keys() - set(provider_settings.CLOUD_PROVIDERS):
                 by_provider = value
             else:
                 raise ValueError("provider_profiles_invalid")
@@ -139,13 +139,13 @@ def _split_changes(state, cfg, touched, selected, owners):
             value = cfg.get(section, {}).get(key)
             if value is not None:
                 provider = provider_settings._owner(value, owners)
-                if provider not in ("anthropic", "openai"):
+                if provider not in provider_settings.CLOUD_PROVIDERS:
                     raise ValueError("provider_model_invalid")
                 providers[provider]["model"] = split_providers[provider]["model"]
             elif not ({"cloud_llm.provider", "cloud_llm.provider_order"} & touched):
                 providers[selected].pop("model", None)
         elif section == "cloud_llm" and key == "provider_budgets":
-            for name in ("anthropic", "openai"):
+            for name in provider_settings.CLOUD_PROVIDERS:
                 if "budget" in split_providers[name]:
                     providers[name]["budget"] = split_providers[name]["budget"]
                 else:

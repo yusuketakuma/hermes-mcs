@@ -8,6 +8,7 @@ import patient_context_plan as plan
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
+import provider_registry
 from mcs_util import positive
 from mcs_queries import paused
 
@@ -186,7 +187,7 @@ def read(db, project_id, cfg):
     cloud = cfg.get('cloud_llm')
     # Auto/default resolution reads private keys; a display observation cannot resolve them.
     if (not isinstance(cloud, dict) or 'mode' not in cloud
-            or cloud.get('provider') not in ('anthropic', 'openai')):
+            or cloud.get('provider') not in provider_registry.CLOUD_PROVIDERS):
         return observation()
     try:
         deadline = state.time.monotonic() + READ_SECONDS + state.COMMIT_MARGIN
