@@ -3,7 +3,7 @@
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 class Element {
   constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; const names = new Set(); this.classList = {add: name => names.add(name), remove: name => names.delete(name), toggle: (name, on) => on ? names.add(name) : names.delete(name), contains: name => names.has(name)};}
-  append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
+  append(...nodes) {for (let node of nodes) {if (typeof node === "string") {const text = new Element("#text"); text.textContent = node; node = text;} if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
   get firstElementChild() {return this.children[0];}
@@ -21,6 +21,7 @@ const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promi
 vm.createContext(sandbox);
 const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");
 vm.runInContext(source, sandbox);
+const realApi = sandbox.api;
 function content(node) {return [node.textContent, ...node.children.map(content)].join("\n");}
 const section = vm.runInContext('contextSection({patient_context:[{text:"糖尿病",subject:"family",evidence:"母に糖尿病の既往あり",details:[]}]})', sandbox);
 assert.match(content(section), /対象: 家族/);
@@ -282,5 +283,77 @@ function checkTabRow() {
   strip.scrollLeft = 450; run("revealTab")(strip, tab); assert.equal(strip.scrollLeft, 360);
   run("state.sections = [['', 'タイムライン']]; state.panel = ''");
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); console.log("local chat DOM contracts passed");}
+async function checkDisplayGaps() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  // F1: a complete post with no text has no body; only an incomplete one is 未取得.
+  const body = row => run("postBody")(row).textContent;
+  assert.equal(body({body_state: "full", body_text: ""}), "本文なし");
+  assert.equal(body({body_state: "full", body_text: null}), "本文なし");
+  assert.equal(body({body_state: "snippet", body_text: ""}), "本文未取得");
+  assert.equal(body({body_state: "unknown", body_text: null}), "本文未取得");
+  assert.equal(body({body_state: "deleted", body_text: null}), "削除された投稿");
+  assert.equal(body({body_state: "snippet", body_text: "合成の一部"}), "合成の一部");
+  // F2: the attachment chip says what is missing and turns amber.
+  const files = groups => {const node = run("attachmentChip")(groups); return node && `${node.className}|${node.textContent}`;};
+  assert.equal(files([]), null);
+  assert.equal(files([{state: "downloaded", count: 2}, {state: "pruned", count: 1}]), "chip chip-muted|添付 3件");
+  assert.equal(files([{state: "downloaded", count: 1}, {state: "failed", count: 1}, {state: "pending", count: 2}]), "chip chip-warn|添付 4件（取得失敗 1・未取得 2）");
+  // F2: every attachment state, reason, size, OCR state, page and finding is shown.
+  const entry = file => content(run("attachmentEntry")(file));
+  const failed = entry({attachment_id: 1, name: "合成.pdf", state: "failed", bytes: 0, error: "download_failed", ocr: {state: "unavailable", page_count: 0}});
+  assert.match(failed, /ファイル: 取得失敗/); assert.match(failed, /理由: ダウンロードに失敗/); assert.match(failed, /原本がないため作成できません/);
+  assert.doesNotMatch(failed, /0 B/);
+  assert.match(entry({attachment_id: 2, state: "downloaded", bytes: 2048, error: "not_recorded", ocr: {state: "failed"}}), /文字記録: 作成に失敗[\s\S]*2 KB/);
+  assert.match(entry({attachment_id: 3, state: "downloaded", bytes: 10, ocr: {state: "unsupported"}}), /対応していない形式/);
+  assert.match(entry({attachment_id: 4, state: "failed", error: "something_new", ocr: {}}), /理由: エラー（something_new）[\s\S]*文字記録: 状態を確認できません|文字記録: 状態を確認できません[\s\S]*理由: エラー（something_new）/);
+  const rejected = run("attachmentEntry")({attachment_id: 5, state: "downloaded", bytes: 10, ocr: {state: "rejected_by_policy", original_project_url: "https://example.invalid/project/101"}});
+  const link = find(rejected, node => node.tagName === "a");
+  assert.equal(link.href, "https://example.invalid/project/101"); assert.equal(link.rel, "noreferrer noopener");
+  assert.match(content(rejected), /表の読み取りが不確かなため除外/);
+  const unsafe = run("attachmentEntry")({attachment_id: 6, state: "downloaded", ocr: {state: "rejected_by_policy", original_project_url: "file:///Users/synthetic/a.pdf"}});
+  assert.equal(find(unsafe, node => node.tagName === "a"), null, "never a link to a local file");
+  const read = run("attachmentEntry")({attachment_id: 7, state: "pruned", bytes: 3145728, ocr: {state: "complete", original_available: false,
+    pages: [{page: 1, text: "合成の1ページ目"}, {page: 2, text: ""}, {page: 3, text: null}],
+    medical: {sections: [{heading: "傷病名"}, {heading: "傷病名"}, {heading: null}], pump_candidates: [{page: 1, label: "持続量", raw_value: "1mL/h", status: "needs_review"}]}}});
+  const readText = content(read);
+  assert.match(readText, /3\.0 MB/); assert.match(readText, /保持期間を過ぎています/);
+  assert.match(readText, /1ページ[\s\S]*合成の1ページ目[\s\S]*2ページ[\s\S]*（文字なし）[\s\S]*3ページ[\s\S]*記録されていません/);
+  assert.match(readText, /文書の見出し: 傷病名\n/); assert.match(readText, /1ページ 持続量: 1mL\/h[\s\S]*要確認/);
+  // F3: physicians' 見ました is 未観測 (never 未読); unknown says so, with the reason in the detail.
+  const viewed = (value, detailed = false) => {const node = run("physicianChip")(value, detailed); return node && node.textContent;};
+  assert.equal(viewed(null), null);
+  assert.equal(viewed({state: "known", physicians: 2, viewed_observed: 1, not_observed: 1}), "医師 見ました未観測 1/2");
+  assert.equal(viewed({state: "known", physicians: 0, not_observed: 0}), null);
+  assert.equal(viewed({state: "unknown", reason: "care_team_not_current"}), "医師 見ました 確認できません");
+  assert.equal(viewed({state: "unknown", reason: "care_team_not_current"}, true), "医師 見ました 確認できません（ケアチーム情報が最新ではありません）");
+  const own = run("post")({message_id: 1, body_state: "full", body_complete: true, body_text: "合成", physician_viewed: {state: "known", physicians: 3, not_observed: 2}});
+  assert.match(content(own), /医師 見ました未観測 2\/3/); assert.doesNotMatch(content(own), /未読/);
+  // F3: the year appears when it is not the current one.
+  assert.match(run("postTime")(1700000000), /2023/);
+  assert.doesNotMatch(run("postTime")(Date.now() / 1000), new RegExp(String(new Date().getFullYear())));
+  // F3: browser errors are worded for the reader.
+  sandbox.api = realApi;
+  sandbox.fetch = async () => {throw new TypeError("Failed to fetch");};
+  await assert.rejects(run("api")("timeline"), /ローカルのサーバーに接続できませんでした/);
+  sandbox.fetch = async () => ({ok: true, json: async () => {throw new SyntaxError("Unexpected token <");}});
+  await assert.rejects(run("api")("timeline"), /応答を読み取れませんでした/);
+  // F3: snapshot age and warnings.
+  run("state.generation = null");
+  sandbox.fetch = async () => ({ok: true, json: async () => ({snapshot: {generation_id: "g", generated_at: Date.now() / 1000 - 600}, warnings: ["history_completeness_unverified", "synthetic_new_warning"], items: []})});
+  await run("api")("timeline");
+  assert.match(byId("snapshot-time").textContent, /スナップショット .* JST · 10分前/);
+  assert.match(byId("snapshot-note").textContent, /（10分前）時点[\s\S]*すべて取得できたかは確認できていません[\s\S]*synthetic_new_warning/);
+  sandbox.fetch = () => new Promise(() => {});
+  // F4: a context item opens the full record at its group, by keyboard or touch.
+  run("state.project = 101");
+  sandbox.api = async () => ({sections: [{label: "合成の分類", items: [{subject: "patient", text: "合成の長い記録", posted_at_ts: 1793491200}]}]});
+  await run("loadPatientContext(101)");
+  const panel = byId("patient-context"), brief = find(panel, node => node.className === "context-brief");
+  assert.equal(brief.tagName, "button");
+  brief.onclick();
+  const details = find(panel, node => node.className === "context-records");
+  assert.equal(details.open, true);
+  assert.match(content(document.activeElement), /合成の分類[\s\S]*合成の長い記録/);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

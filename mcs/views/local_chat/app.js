@@ -5,6 +5,8 @@ const subjectLabels = {patient: "本人", family: "家族", other: "他者", uns
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 // A date without the year when it falls in the current JST year: 11/18, otherwise 2025/11/18.
 const jstYear = ms => new Date(ms + 9 * 3600e3).getUTCFullYear();
+// Times carry the year only when it is not the current JST year.
+const postTime = ts => fmt(ts, {...(ts != null && jstYear(ts * 1000) !== jstYear(Date.now()) ? {year: "numeric"} : {}), month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
 const shortDate = ts => fmt(ts, jstYear(ts * 1000) === jstYear(Date.now()) ? {month: "numeric", day: "numeric"} : {year: "numeric", month: "numeric", day: "numeric"});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
 // Shared UI kit: every screen builds its chips, cards, key-value lists and tab strips from these.
@@ -78,15 +80,37 @@ function fail(error) {$("error").textContent = error.message || "表示できま
 async function api(kind, values = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) if (value != null && value !== "") params.set(key, value);
-  const reply = await fetch(`api/${kind}?${params}`, {cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer"});
-  const data = await reply.json();
+  // Browser errors (offline, a stopped server, a non-JSON reply) are worded for the reader, not passed through.
+  let reply, data;
+  try {reply = await fetch(`api/${kind}?${params}`, {cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer"});}
+  catch {throw new Error("ローカルのサーバーに接続できませんでした。サーバーが動いているか確かめて「更新」してください。");}
+  try {data = await reply.json();}
+  catch {throw new Error("サーバーの応答を読み取れませんでした。「更新」で読み直してください。");}
   if (!reply.ok) throw new Error(data.error === "cursor_scope_or_generation_changed" ? "スナップショットが更新されました。「更新」で読み直してください。" : "データを表示できません。公開スナップショットと閲覧範囲を確認してください。");
   if (!data.snapshot) return data;
   if (state.generation && data.snapshot.generation_id !== state.generation) throw new Error("スナップショットが更新されました。「更新」で読み直してください。");
-  state.generation = data.snapshot.generation_id;
-  $("snapshot-time").textContent = `スナップショット ${fmt(data.snapshot.generated_at)} JST`;
+  state.generation = data.snapshot.generation_id; state.snapshotAt = data.snapshot.generated_at;
+  if (Array.isArray(data.warnings)) state.snapshotWarnings = data.warnings;
+  snapshotNote();
   return data;
 }
+const warningLabels = {
+  history_completeness_unverified: "MCS の履歴をすべて取得できたかは確認できていません。",
+  snapshot_may_lag_live_state: "MCS の現在の状態より遅れている場合があります。",
+};
+function ageText(seconds) {
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  return minutes < 1 ? "1分以内" : minutes < 60 ? `${minutes}分前` : minutes < 48 * 60 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
+}
+// How old the data is: in the heading, and as a line under the posts with the snapshot's own warnings.
+function snapshotNote() {
+  if (state.snapshotAt == null) return;
+  const at = fmt(state.snapshotAt, {year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}), age = ageText(Date.now() / 1000 - state.snapshotAt);
+  $("snapshot-time").textContent = `スナップショット ${at} JST · ${age}`;
+  const warnings = (state.snapshotWarnings || []).map(code => warningLabels[code] || `スナップショットの注意事項があります（${code}）。`);
+  $("snapshot-note").textContent = [`表示は ${at} JST（${age}）時点のスナップショットです。`, ...warnings].join("");
+}
+globalThis.setInterval?.(snapshotNote, 60000);
 function patientList() {
   $("patients").replaceChildren();
   for (const patient of state.patients) {
@@ -151,20 +175,22 @@ async function loadPatientContext(project) {
     const groups = data.sections.filter(group => group.items.length);
     panel.replaceChildren(el("h2", "患者コンテキスト"));
     if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。", "context-empty")); return;}
-    const preview = el("div", null, "context-preview");
+    const preview = el("div", null, "context-preview"), details = el("details", null, "context-records"), sections = new Map();
     for (const group of groups.slice(0, 4)) {
-      const item = group.items[0], entry = el("div", null, "context-brief"), label = el("div", null, "context-label");
+      // Each item opens the full record below (keyboard and touch, not only the tooltip).
+      const item = group.items[0], entry = el("button", null, "context-brief"), label = el("span", null, "context-label");
+      entry.type = "button";
+      entry.onclick = () => {details.open = true; const target = sections.get(group); target.scrollIntoView({block: "nearest"}); target.focus({preventScroll: true});};
       const text = `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`, line = el("span", text, "context-text");
       line.title = text; label.append(el("b", group.label), el("small", item.posted_at_ts == null ? "日付未取得" : shortDate(item.posted_at_ts), "context-date"));
       entry.append(label, line);
       if (item.scope_note) entry.append(el("small", item.scope_note, "context-scope"));
       preview.append(entry);
     }
-    const details = el("details", null, "context-records");
     const total = groups.reduce((count, group) => count + group.items.length, 0);
     details.append(el("summary", `背景・根拠をすべて表示 · ${total}件`));
     for (const group of groups) {
-      const section = el("section"); section.append(el("h3", group.label));
+      const section = el("section"); section.tabIndex = -1; sections.set(group, section); section.append(el("h3", group.label));
       for (const item of group.items) {
         const record = contextSection({patient_context: [item]});
         record.firstElementChild.textContent = fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"});
@@ -184,8 +210,8 @@ function post(row, detailed = false) {
   const content = el("div", null, "post-content"), heading = el("div", null, "post-heading");
   heading.append(el("span", name, "sender"));
   if (row.profession || row.organization) heading.append(el("span", [row.profession, row.organization].filter(Boolean).join(" · "), "post-role"));
-  heading.append(el("time", fmt(row.posted_at_ts, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}), "timestamp"));
-  content.append(heading, el("p", row.body_state === "deleted" ? "削除された投稿" : row.body_text || "本文未取得", "post-body"));
+  heading.append(el("time", postTime(row.posted_at_ts), "timestamp"));
+  content.append(heading, postBody(row));
   if (row.summary_lines?.length) {const summary = el("details", null, "post-summary"); summary.append(el("summary", "記録の要約")); for (const line of row.summary_lines) summary.append(el("p", line)); content.append(summary);}
   // One footer row: the actions on the post, then its record states as chips (shown in the detail too).
   const footer = el("div", null, "post-footer");
@@ -193,18 +219,41 @@ function post(row, detailed = false) {
     const button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
     button.onclick = () => openDetail(row);
     footer.append(button);
-    const files = (row.attachments || []).reduce((sum, item) => sum + item.count, 0);
-    if (files) footer.append(chip(`添付 ${files}件`, "muted"));
+    const files = attachmentChip(row.attachments);
+    if (files) footer.append(files);
     if (row.parent_id) footer.append(chip("返信の検索結果", "info"));
   }
   if (row.stamp_line) footer.append(chip(row.stamp_line, stampIncomplete.test(row.stamp_line) ? "warn" : "muted"));
   if (!row.body_complete && row.body_state !== "deleted") footer.append(chip("本文は一部未取得です", "warn"));
   if (row.reply_count > row.stored_replies) footer.append(chip("未取得の返信があります", "warn"));
+  const viewed = physicianChip(row.physician_viewed, detailed);
+  if (viewed) footer.append(viewed);
   if (footer.children.length) content.append(footer);
   article.append(content); return article;
 }
 // Every non-complete wording of stamp_format.thread_stamp_line / actor_line (not actor names such as 氏名不明).
 const stampIncomplete = /^スタンプ 未取得|再取得失敗|押した人 (?:取得失敗|古い情報)|取得状態不明/;
+function postBody(row) {
+  // A complete post with no text (a file-only post) has no body; only an incomplete one is 未取得.
+  if (row.body_state === "deleted") return el("p", "削除された投稿", "post-body post-body-missing");
+  if (row.body_text) return el("p", row.body_text, "post-body");
+  return el("p", row.body_state === "full" ? "本文なし" : "本文未取得", "post-body post-body-missing");
+}
+function attachmentChip(groups = []) {
+  const count = state => groups.filter(item => state.includes(item.state)).reduce((sum, item) => sum + item.count, 0);
+  const total = count(groups.map(item => item.state)), failed = count(["failed"]), pending = count(["pending"]);
+  if (!total) return null;
+  const missing = [failed && `取得失敗 ${failed}`, pending && `未取得 ${pending}`].filter(Boolean);
+  return chip(`添付 ${total}件${missing.length ? `（${missing.join("・")}）` : ""}`, missing.length ? "warn" : "muted");
+}
+const viewedReasons = {care_team_not_current: "ケアチーム情報が最新ではありません", reactors_not_current: "スタンプを押した人の情報が最新ではありません", care_team_profession_unknown: "職種の分からない担当者がいます"};
+function physicianChip(viewed, detailed) {
+  // 医師の「見ました」は観測できたかどうかだけを示す（未観測は未読ではない）。
+  if (!viewed) return null;
+  if (viewed.state === "known") return viewed.physicians ? chip(`医師 見ました未観測 ${viewed.not_observed}/${viewed.physicians}`, viewed.not_observed ? "warn" : "muted") : null;
+  const reason = viewedReasons[viewed.reason];
+  return chip(`医師 見ました 確認できません${detailed && reason ? `（${reason}）` : ""}`, "muted");
+}
 function chronological(rows) {return rows.slice().sort((a,b) => (a.posted_at_ts ?? -Infinity) - (b.posted_at_ts ?? -Infinity) || a.message_id - b.message_id);}
 async function loadTimeline(more = false) {
   if (!state.project) return;
@@ -299,8 +348,7 @@ async function showMessageInfo(row, request, withContext = true) {
     ]);
     if (request !== state.detailRequest) return;
     const files = section(`添付 · 投稿 ${row.message_id}`);
-    const labels = {downloaded:"取得済み", pending:"未取得", failed:"取得失敗", pruned:"原本保持期間終了", unavailable:"利用不可", unprocessed:"未処理", complete:"処理済み", empty:"文字記録なし"};
-    function appendFiles(items) {for (const file of items) {const entry = el("details"); entry.append(el("summary", file.name || `添付 ${file.attachment_id}`), el("p", `取得: ${labels[file.state] || "状態を要確認"} · 文字記録: ${labels[file.ocr?.state] || "未取得"}`)); for (const page of file.ocr?.pages || []) entry.append(el("p", page.text || "")); files.append(entry);}}
+    const appendFiles = items => {for (const file of items) files.append(attachmentEntry(file));};
     appendFiles(data.items);
     let cursor = data.next_cursor;
     const more = el("button", "添付をさらに表示", "text-button"); more.hidden = !cursor;
@@ -316,6 +364,41 @@ async function showMessageInfo(row, request, withContext = true) {
     }
     $("message-info").replaceChildren(files, ...replyMeds, ...(withContext ? [contextSection(source.message)] : []));
   } catch (error) {if (request === state.detailRequest) fail(error);}
+}
+const fileStates = {downloaded: "取得済み", pending: "未取得", failed: "取得失敗", pruned: "原本保持期間終了"};
+const ocrStates = {complete: "作成済み", empty: "文字なし（読み取れる文字がありませんでした）", unprocessed: "未作成", failed: "作成に失敗", unsupported: "対応していない形式のため作成していません", unavailable: "原本がないため作成できません", rejected_by_policy: "表の読み取りが不確かなため除外しました"};
+const fileErrors = {download_failed: "ダウンロードに失敗", download_too_large: "サイズの上限を超えています", download_empty: "空のファイルでした", disk_full: "保存領域が不足しています", url_not_allowed: "許可されていない取得先です", deadline_exceeded: "時間内に終わりませんでした", network_error: "通信エラー", http_error: "MCS サーバーのエラー", session_expired: "ログインの期限切れ", no_token: "ログインしていません", forbidden: "閲覧が許可されていません", response_too_large: "応答が大きすぎます", db_write_failed: "保存に失敗"};
+function fileSize(bytes) {return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;}
+function attachmentEntry(file) {
+  // Every recorded attachment fact: file state and reason, size, OCR state, OCR pages and what was found in them.
+  const entry = el("details"), ocr = file.ocr || {}, stored = ["downloaded", "pruned"].includes(file.state);
+  entry.append(el("summary", file.name || `添付 ${file.attachment_id}`));
+  entry.open = !(ocr.pages || []).length;  // only long OCR text starts folded
+  const states = el("div", null, "file-states");
+  states.append(chip(`ファイル: ${fileStates[file.state] || "状態を確認できません"}`, ["failed", "pending"].includes(file.state) ? "warn" : "muted"),
+    chip(`文字記録: ${ocrStates[ocr.state] || "状態を確認できません"}`, ["failed", "rejected_by_policy", "unprocessed"].includes(ocr.state) ? "warn" : "muted"));
+  if (stored && file.bytes > 0) states.append(chip(fileSize(file.bytes), "muted"));
+  entry.append(states);
+  if (file.state !== "downloaded" && file.error && file.error !== "not_recorded") entry.append(el("p", `理由: ${fileErrors[file.error] || `エラー（${file.error}）`}`, "state-note"));
+  if (ocr.state === "rejected_by_policy" && /^https:\/\//.test(ocr.original_project_url || "")) {
+    const link = el("a", "MCS で原本を確認する", "text-button");
+    link.href = ocr.original_project_url; link.target = "_blank"; link.rel = "noreferrer noopener";
+    entry.append(link);
+  }
+  if (ocr.state === "complete" && ocr.original_available === false) entry.append(el("p", "原本ファイルは保持期間を過ぎています。文字記録だけが残っています。", "state-note"));
+  for (const page of ocr.pages || []) {
+    entry.append(el("h4", `${page.page}ページ`, "ocr-page"));
+    entry.append(el("p", page.text == null ? "このページの文字は記録されていません" : page.text || "（文字なし）", page.text ? "ocr-text" : page.text == null ? "state-note" : "ocr-empty"));
+  }
+  const medical = ocr.medical || {};
+  const headings = [...new Set((medical.sections || []).map(item => item.heading).filter(Boolean))];
+  if (headings.length) entry.append(el("p", `文書の見出し: ${headings.join("・")}`, "ocr-found"));
+  for (const item of medical.pump_candidates || []) {
+    const line = el("p", `${item.page}ページ ${item.label}: ${item.raw_value || "値なし"}`, "ocr-found");
+    if (item.status === "needs_review") line.append(" ", chip("要確認", "warn"));
+    entry.append(line);
+  }
+  return entry;
 }
 async function loadSections() {
   try {
