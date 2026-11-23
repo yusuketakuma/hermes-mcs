@@ -5,6 +5,7 @@ import semantic_audit
 import semantic_render
 import semantic_store
 import semantic_transport
+import provider_registry
 import itertools
 import json
 import hashlib
@@ -84,7 +85,7 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
             or proof.get("policy_fingerprint") != policy or proof.get("target_revision") != revision
             or proof.get("result_hash") != mcs_util.payload_hash(artifact["content"])
             or type(proof.get("complete")) is not bool or not isinstance(proof.get("providers"), list)
-            or any(not isinstance(p, str) or p not in ("local", "anthropic", "openai")
+            or any(not isinstance(p, str) or p not in provider_registry.INFERENCE_PROVIDERS
                    for p in proof["providers"])
             or len(set(proof["providers"])) != len(proof["providers"])
             or (proof["complete"] and not proof["providers"])):

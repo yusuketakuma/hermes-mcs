@@ -1093,7 +1093,8 @@ def _order_discord_file_groups(db, manifest, att_entries, groups, face_mids,
 
 
 def _provider_visibility(parts):
-    providers = ("anthropic", "openai", "jev", "local")
+    import processing_route
+    providers = processing_route.PROVIDERS
     if parts.get("provider_states_version") not in (3, 4):
         return providers
     headers = [item for item in parts.get("containers", [])

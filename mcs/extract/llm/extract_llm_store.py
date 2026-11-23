@@ -10,6 +10,7 @@ import time
 import inference_version as inference
 import cloud_policy
 import cloud_inference
+import provider_registry
 import extract_validation
 import extract_quality
 from extraction_provenance import (
@@ -379,7 +380,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                  if retaining_prior else r.get("_provider_evidence"))
         if (not isinstance(proof, dict) or type(proof.get("complete")) is not bool
                 or not isinstance(proof.get("providers"), list)
-                or any(name not in ("local", "anthropic", "openai") for name in proof["providers"])
+                or any(name not in provider_registry.INFERENCE_PROVIDERS for name in proof["providers"])
                 or (proof["complete"] and not proof["providers"])):
             proof = _provider_evidence()
         contract = ({key: meta.get(key) for key in ("backend", "model", "prompt")}
