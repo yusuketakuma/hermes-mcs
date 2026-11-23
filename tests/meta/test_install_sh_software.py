@@ -1,5 +1,7 @@
 """Synthetic install sh software contracts; shared helpers preserve isolated runtime state."""
 import os
+from pathlib import Path
+import re
 import shutil
 import subprocess
 import pytest
@@ -278,7 +280,9 @@ def test_tailscale_is_installed_only_for_a_mac_other_devices_reach(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     plain = _run(env, hermes_home)
     assert plain.returncode == 0, plain.stderr
-    assert not any("tailscale" in c for c in _calls(stub_root)) and "setup remote" not in plain.stdout
+    # Only real invocations count: the calls carry this test's own temp path, named "test_tailscale_…".
+    assert not [c for c in _calls(stub_root) if re.search(r"(^|\s)tailscale(-app)?(\s|$)", c)]
+    assert "setup remote" not in plain.stdout
 
     home, hermes_home, stub_root, env = _world(tmp_path / "remote")
     pre = _run(env, hermes_home, "--preflight", "--with-tailscale")
@@ -305,6 +309,16 @@ def test_an_installed_tailscale_is_kept_and_no_brew_needs_one(tmp_path):
     assert not any(c.startswith("brew install --cask tailscale") for c in _calls(stub_root))
     assert not any(c.startswith("tailscale ") for c in _calls(stub_root))  # serve waits for `mcs setup remote`
     tailscale.unlink()
+    # The app bundle counts by itself, wherever MCS_TAILSCALE_APP points (tests never see the host's own app).
+    home, hermes_home, stub_root, env = _world(tmp_path / "app")
+    app = Path(env["MCS_TAILSCALE_APP"]) / "Contents" / "MacOS" / "Tailscale"
+    app.parent.mkdir(parents=True)
+    app.write_text("#!/bin/sh\n")
+    app.chmod(0o755)
+    bundled = _run(env, hermes_home, "--with-tailscale")
+    assert bundled.returncode == 0, bundled.stderr
+    assert "Tailscale は導入済みです" in bundled.stdout
+    assert not any(c.startswith("brew install --cask tailscale") for c in _calls(stub_root))
     home, hermes_home, stub_root, env = _world(tmp_path / "nobrew")
     missing = _run(env, hermes_home, "--no-brew", "--with-tailscale")
     assert missing.returncode == 1 and "Tailscale" in missing.stderr

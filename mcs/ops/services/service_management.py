@@ -543,8 +543,9 @@ def desired_agents(subs, cfg, *, paths: ServicePaths) -> dict[str, str]:
         out[label] = contract.render_agent(Path(pdir, label + '.plist').read_text(encoding='utf-8'), subs)
     return out
 
-def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths) -> int:
-    """Write one rendered agent and converge its loaded state; 1 when it could not be loaded."""
+def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths, stale=False) -> int:
+    """Write one rendered agent and converge its loaded state; 1 when it could not be loaded.
+    `stale`: the loaded job is known to run other settings than `body`, so it reloads even when the plist matches."""
     dst = os.path.join(paths.agents_dir, label + '.plist')
     try:
         cur = Path(dst).read_text(encoding='utf-8')
@@ -556,7 +557,7 @@ def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths) ->
         if not dry:
             write_service_file(dst, body)
     loaded = True
-    if changed or not agent_loaded(label, paths=paths):
+    if changed or stale or not agent_loaded(label, paths=paths):
         loaded = agent_reconcile(label, dst, note, dry, paths=paths)
     else:
         note(f'常駐処理{label}: 読み込み済みです')
@@ -581,8 +582,30 @@ def sync_remote_access(subs, cfg, manifest, note, dry, *, paths: ServicePaths) -
         except OSError:
             pass
     settings = digest.hexdigest()[:16]
-    return _converge_agent(label, contract.render_agent(template, subs | {'REMOTE_ACCESS': settings}), manifest,
-                           note, dry, paths=paths)
+
+    def runs_other_settings():
+        loaded = loaded_remote_settings(paths=paths)
+        return loaded is not None and loaded != settings
+
+    # A reload handed to the waiter (the old job was still draining) leaves the plist current while the old job
+    # runs on: the loaded job's own settings, not the plist, decide whether this run reloads it again.
+    status = _converge_agent(label, contract.render_agent(template, subs | {'REMOTE_ACCESS': settings}), manifest,
+                             note, dry, paths=paths, stale=runs_other_settings())
+    if not dry and runs_other_settings():
+        note(f'  常駐処理{label}: 以前の設定の処理がまだ動いています。終了後の読み込み直しを待っています'
+             '（次の services でも確かめます）')
+        manifest['agents'][-1]['loaded'] = False
+    return status
+
+
+def loaded_remote_settings(*, paths: ServicePaths) -> str | None:
+    """The settings digest the loaded resident workspace started with; None when launchd does not say."""
+    listed = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{contract.REMOTE_ACCESS_LABEL}'],
+                                      timeout=10)
+    if listed.returncode != 0:
+        return None
+    found = re.search(r'^\s*MCS_REMOTE_ACCESS_SETTINGS => (\S+)\s*$', listed.stdout or '', re.M)
+    return found.group(1) if found else None
 
 def sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset(), *, paths: ServicePaths) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND

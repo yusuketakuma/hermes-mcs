@@ -519,7 +519,9 @@ def test_visits_are_validated_versioned_and_audited(db):
     for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
                         ({"visit_date": "2026-02-30"}, ["visit_date"]),
                         ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
-                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"])):
+                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"]),
+                        ({"kind": None}, ["kind"]), ({"kind": ["pharmacy.home_visit"]}, ["kind"]),
+                        ({"kind": {"pharmacy.home_visit": 1}}, ["kind"])):
         with pytest.raises(records.InvalidFields) as error:
             visits.create(db, REGISTRY, visit_values(row["patient_id"]) | bad, actor=me["staff_id"])
         assert error.value.fields == fields
@@ -532,12 +534,16 @@ def test_visits_are_validated_versioned_and_audited(db):
     assert done["status"] == "done" and done["version"] == 2 and done["staff_name"] == "合成 薬剤師"
     with pytest.raises(homecare_store.Conflict):
         visits.update(db, REGISTRY, early["visit_id"], {"note": "x"}, expected_version=1, actor=me["staff_id"])
+    # A kind whose module was since disabled stays valid while it is left unchanged.
+    kept = visits.update(db, homecare_modules.Registry([]), later["visit_id"], {"note": "合成"},
+                         expected_version=1, actor=me["staff_id"])
+    assert kept["kind"] == "pharmacy.home_visit"
     with pytest.raises(records.InvalidFields):
         visits.update(db, REGISTRY, early["visit_id"], {"patient_id": 2}, expected_version=2, actor=me["staff_id"])
     with pytest.raises(ValueError, match="actor_required"):
         visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=None)
     kinds = [r["kind"] for r in db.execute("SELECT kind FROM audit_events WHERE kind LIKE 'visit.%'")]
-    assert kinds == ["visit.create", "visit.create", "visit.update"]
+    assert kinds == ["visit.create", "visit.create", "visit.update", "visit.update"]
 
 
 def test_days_count_a_week_of_visits_by_status_in_one_read(db, monkeypatch):
@@ -767,7 +773,8 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     assert "秘密のメモ" in [row["caution_note"] for row in visits.for_day(db, "2026-11-24")]
     sent = " ".join(r.full_url + (r.data or b"").decode() for r in fake.sent)
     assert "合成 一郎" not in sent and "秘密のメモ" not in sent and str(one["patient_id"]) not in sent.split("q=")[0]
-    assert all(r.get_header("Authorization") in (None, "synthetic-key-0000") for r in fake.sent)
+    assert {(r.full_url.startswith(route.GEOCODE_URL), r.get_header("Authorization")) for r in fake.sent} == {
+        (True, None), (False, "synthetic-key-0000")}  # the key goes to openrouteservice only, never to GSI
     geocoded = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
     route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
