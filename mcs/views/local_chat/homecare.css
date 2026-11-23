@@ -117,6 +117,7 @@ a.tel { color: var(--accent-ink); font-weight: 550; white-space: nowrap; }
 .rx-line .hc-inline { margin-top: 0; }
 .rx-line input { flex: 1 1 8em; min-width: 0; }
 .rx-line input[name="days"] { flex: 0 1 5em; }
+.rx-line input.invalid { border-color: #c4554a; background: #fff6f5; }
 .rx-line > .hc-note { margin: 4px 0 0; font-size: var(--fs-xs); }
 .rx-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
 .rx-choices:empty { display: none; }
@@ -209,5 +210,5 @@ a.tel { color: var(--accent-ink); font-weight: 550; white-space: nowrap; }
   .week-day { flex: 0 0 74px; }
   .visit-card { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; padding: 10px 12px; }
   .visit-time:not(.visit-time-none) { font-size: var(--fs-xl); }
-  .day-nav input { flex: 1; width: auto; }
+  .day-nav input { flex: 1; width: auto; font-size: var(--fs-lg); }
 }
