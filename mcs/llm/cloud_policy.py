@@ -12,6 +12,7 @@ import sqlite3
 import time
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import NamedTuple
 import uuid
 
 import anthropic_client
@@ -315,11 +316,18 @@ def config_generation(cfg):
     return payload_hash(_cfg(cfg))
 
 
-def scope_generation(cfg):
+def scope_generation(cfg, pin=None):
     """The settings that decide whether a unit may use the cloud at all; caps,
-    rate and currency changes must not discard an in-flight paid result."""
+    rate and currency changes must not discard an in-flight paid result.
+
+    A unit pinned to a contract (:func:`route_contract`) carries that contract
+    in place of the provider choice (provider, provider_order, default model),
+    so reordering providers never changes its scope or its saved answers' binding."""
     c = _cfg(cfg)
-    return payload_hash({k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")})
+    if pin is None:
+        return payload_hash({k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")})
+    return payload_hash({**{k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids")},
+                         "contract": {name: dict(contract) for name, contract in pin.items()}})
 
 
 # The original contract's output limit, used when a selection carries none.
@@ -349,7 +357,7 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
     return resolve_selection(cfg, root, available_providers=available_providers)[:2]
 
 
-def resolve_selection(cfg, root=None, *, available_providers=None):
+def resolve_selection(cfg, root=None, *, available_providers=None, pinned=None):
     """:func:`select_settings` on this installation's keys and review record."""
     if available_providers is not None and (
             type(available_providers) is not tuple
@@ -360,10 +368,10 @@ def resolve_selection(cfg, root=None, *, available_providers=None):
         return (bool(provider_key(name, root)) if available_providers is None
                 else name in available_providers)
     import external_transfer
-    return select_settings(cfg, key_present, lambda: external_transfer.status(root))
+    return select_settings(cfg, key_present, lambda: external_transfer.status(root), pinned=pinned)
 
 
-def select_settings(cfg, key_present, transfer_status):
+def select_settings(cfg, key_present, transfer_status, *, pinned=None):
     """Pick the provider and mode from a key-presence check and the facility review.
 
     Returns ``(settings, errors, held)``. ``key_present(name)`` may read a key
@@ -376,7 +384,9 @@ def select_settings(cfg, key_present, transfer_status):
     keeps the key-only pick. Without a record (installations from before the
     review) the review allows every provider, so nothing changes there; an
     explicit ``off`` always stays off. A changed review can therefore change
-    the auto provider and the scope generation."""
+    the auto provider and the scope generation. ``pinned`` judges that
+    provider in place of the configured or automatic choice
+    (:func:`resolve_contract` decides whether the configuration offers it)."""
     import external_transfer
     c, errors = cloud_config(cfg)
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
@@ -394,7 +404,7 @@ def select_settings(cfg, key_present, transfer_status):
         return external_transfer.service_allowed(review[0], name)
     automatic = not explicit and not errors
     wanted = automatic or explicit and c["mode"] != "off"
-    provider = c["provider"]
+    provider = c["provider"] if pinned is None else pinned
     if provider == "auto":
         order = c["provider_order"]
         provider = None
@@ -498,6 +508,154 @@ def profile_for_settings(cfg, settings, *, route, purpose, provider=None):
 _ROUTE_PURPOSES = (("reextract", ("backlog", "quality_repair")),
                    ("semantic_backlog", ("backlog", "quality_repair")),
                    ("patient_context", ("patient_context", "quality_repair")))
+
+
+# A selection's fields that decide what its requests send and to whom; the price
+# table version is not one of them (a new table re-prices the same request).
+CONTRACT_FIELDS = ("provider", "model", "effort", "profile", "max_tokens")
+
+
+def selection_contract(selection):
+    """The contract fields of one selection."""
+    return {key: selection[key] for key in CONTRACT_FIELDS}
+
+
+def _contract_config(cfg, provider, root=None, *, wait=True):
+    """``cfg`` as the pinned ``provider`` reads it -> configuration, or None while unverified.
+
+    The runtime view of split provider settings carries only the automatically
+    selected provider's model and profiles, so a contract is always judged
+    against its own provider's validated settings, read here; sending and
+    ending an attempt therefore share one reading. A single config.json
+    already holds every provider's settings. The empty fallback of an
+    unreadable configuration and a view the loader synthesized after a
+    provider read failed (``provider_unavailable``) are never used."""
+    if not isinstance(cfg, dict) or not cfg or cfg.get("provider_unavailable"):
+        return None   # the unreadable-config fallback ({}) or a synthesized view
+    import mcs_util
+    path = os.path.join(root if root is not None else mcs_util.HOME, "config.json")
+    try:
+        if not mcs_util._provider_config_active(path):
+            return cfg
+    except mcs_util.ProviderSettingsUnreadable:
+        return None
+    return mcs_util.load_config_checked(path, provider=provider, wait=wait)
+
+
+def route_contract(cfg, selection, *, route, purpose, root=None):
+    """The contract a unit pins when it starts on ``selection``'s provider -> {purpose: contract}, or None.
+
+    Every purpose of the route (the selection's and its quality repair) takes
+    that provider's own current profile (:func:`_contract_config`), so the
+    unit and its repairs resume sending exactly what their paid answers
+    belong to; the caller sends under :func:`resolve_contract`'s selection."""
+    purposes = dict(_ROUTE_PURPOSES).get(route, ())
+    provider = selection.get("provider") if isinstance(selection, Mapping) else None
+    if purpose not in purposes or not isinstance(provider, str) or provider not in PROVIDERS:
+        return None
+    cfg = _contract_config(cfg, provider, root)
+    if cfg is None:
+        return None
+    settings, errors, _held = resolve_selection(cfg, root, pinned=provider)
+    if errors:
+        return None
+    pin = {}
+    for name in purposes:
+        chosen = profile_for_settings(cfg, settings, route=route, purpose=name, provider=provider)[0]
+        if chosen is None:
+            return None
+        pin[name] = selection_contract(chosen)
+    return pin
+
+
+class ContractState(NamedTuple):
+    """One pinned contract judged against the live configuration (:func:`resolve_contract`)."""
+    state: str                  # "usable", "waiting" or "gone"
+    reason: str | None
+    selection: Mapping | None   # the pinned provider's live profile for the purpose
+    settings: dict | None       # the pinned provider's settings
+    key: str | None             # the pinned provider's key
+
+
+def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None, wait=True):
+    """Whether a pinned contract may send now under ``cfg``, the facility review and the stop state.
+
+    ``pin`` comes from :func:`route_contract`. ``usable``: send under the
+    returned selection (the pinned provider's live profile, equal in every
+    contract field), that provider's settings and its key. ``waiting``: the
+    contract is still offered but nothing may send now -- the configuration,
+    the review record or the key file is unverified (unreadable, a synthesized
+    fallback view, or a review still pending), the mode is not ``on``, or
+    (with ``ledger``) the run window, a stop, an open circuit, an unverified
+    price or a spending cap holds it. ``gone``: a readable configuration,
+    review or key file no longer offers it (another provider is named, it
+    left ``provider_order``, the recorded review leaves it out, its key is
+    absent, or one of its profiles changed). Profiles are always the pinned
+    provider's own (:func:`_contract_config`). Which provider is preferred
+    decides nothing here: a contract never moves to another provider or model.
+    Without ``wait`` a provider-settings update in progress reads as
+    unverified (``waiting``) at once instead of being waited out."""
+    purposes = dict(_ROUTE_PURPOSES).get(route, ())
+    provider = None
+    if (purpose in purposes and isinstance(pin, Mapping) and set(pin) == set(purposes)
+            and all(isinstance(pin[name], Mapping) and set(pin[name]) == set(CONTRACT_FIELDS)
+                    for name in purposes)):
+        named = [pin[name]["provider"] for name in purposes]
+        # A malformed provider value (a list, an object, a number) is an invalid contract, never an error.
+        if all(isinstance(name, str) for name in named) and len(set(named)) == 1:
+            provider = named[0]
+    if provider not in PROVIDERS:
+        return ContractState("gone", "contract_invalid", None, None, None)
+    view = _contract_config(cfg, provider, root, wait=wait)
+    cfg = cfg if view is None else view
+    # The configuration's own errors, without choosing an unpinned provider: which
+    # provider ``auto`` would prefer now (and whether its model fits) is not this contract's.
+    _general, errors = cloud_config(cfg)
+    settings, pinned_errors, _held = resolve_selection(cfg, root, pinned=provider)
+    key = provider_key(provider, root)
+
+    def judged(state, reason, selection=None):
+        return ContractState(state, reason, selection, settings, key)
+    if view is None:
+        return judged("waiting", "config_unavailable")
+    if errors:
+        return judged("waiting", "config_unverified")
+    configured = cloud_config(cfg)[0]
+    if (configured["provider"] not in ("auto", provider)
+            or configured["provider"] == "auto" and provider not in configured["provider_order"]):
+        return judged("gone", "provider_not_offered")
+    # A missing cap only holds sending; every withdrawal below still ends the contract first.
+    cap_missing = bool(pinned_errors) and all(error == COST_LIMIT_REQUIRED for error in pinned_errors)
+    if pinned_errors and not cap_missing:
+        return judged("gone", "contract_invalid")
+    if not key:
+        absent = private_env_problem(provider_registry.PROVIDER_MODULES[provider].KEY_ENV, root) == "key_missing"
+        return judged("gone" if absent else "waiting", "key_missing" if absent else "key_unverified")
+    import external_transfer
+    review = external_transfer.status(root)
+    if not external_transfer.service_allowed(review, provider):
+        # Only a recorded review that leaves the provider out withdraws it.
+        withdrawn = review.get("state") == "acknowledged"
+        return judged("gone" if withdrawn else "waiting",
+                      "provider_not_approved" if withdrawn else "provider_review_unverified")
+    selection = None
+    for name in purposes:
+        chosen, problems = profile_for_settings(cfg, settings, route=route, purpose=name, provider=provider)
+        if problems or chosen is None or selection_contract(chosen) != dict(pin[name]):
+            return judged("gone", "contract_changed")
+        if name == purpose:
+            selection = chosen
+    if cap_missing:
+        return judged("waiting", "cost_limit_required", selection)
+    if settings["mode"] != "on":
+        return judged("waiting", "mode_off", selection)
+    if ledger is not None:
+        reason = (setting_block_reason(settings) or global_block_reason(ledger, model=selection["model"])
+                  or budget_block_reason(ledger, settings, max_tokens=selection_max_tokens(selection),
+                                         selection=selection))
+        if reason:
+            return judged("waiting", reason, selection)
+    return judged("usable", None, selection)
 
 
 def configured_models(cfg, settings):

@@ -85,7 +85,7 @@ python3 ci/mine_gates.py --check
 
 ## 構成
 
-- `mcs/`: `core/`（保存基盤）・`llm/`（共通推論）・`ingest/`・`extract/`・`patients/`・`medications/`・`signals/`・`semantic/`・`stamps/`・`notify/`・`views/`・`export/`・`ops/`。
+- `mcs/`: `core/`（保存基盤）・`llm/`（共通推論）・`ingest/`・`extract/`・`patients/`・`medications/`・`signals/`・`semantic/`・`stamps/`・`notify/`・`views/`・`export/`・`ops/`・`homecare/`（在宅ケアの記録。`core/` が共通機能、`pharmacy/` などが職種別モジュールでコアだけに依存、専用DB）。
   flat import を維持する。エントリポイントは `mcs/` を sys.path に追加して `_mcs_path` を import する（`.py` のある配下を任意の深さで登録）。
   `mcs/` 直下の import モジュールは `_mcs_path.py` だけ。登録対象のサブディレクトリ間で同名モジュールが重複すると停止する。直下の旧ファイルはこの重複検査の対象外なので、配備時に残さない。
 - 共通推論: `llm/providers/` はprovider固有の通信、`llm/transport/` は共通通信・再試行・ローカルturn lock、`llm/admission/` は共有枠・接続/回路状態を所有する。

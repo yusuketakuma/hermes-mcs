@@ -177,6 +177,13 @@ def _provider_recovery_ready(target=_PROVIDER_SETTINGS_ONLY) -> bool:
     return True
 
 
+def _rotate_homecare_copies() -> None:
+    """A recovered apply is a success too: trim the home-care pre-update
+    copies to the newest generations, as a completed apply does."""
+    import local_backup
+    local_backup.rotate_homecare_preupdate()
+
+
 def _complete_done_bookkeeping(state: dict) -> int:
     """Finish the parent's bookkeeping after the child journaled 'done'."""
     if not _provider_recovery_ready():
@@ -187,6 +194,7 @@ def _complete_done_bookkeeping(state: dict) -> int:
         _record_executed(state, cid, "applied")
     state["stages"] = []
     journal_store.save_state(STATE_PATH, state)
+    _rotate_homecare_copies()
     _remove_marker()
     _report("resumed_done", "completed bookkeeping after crash")
     _enqueue_notice("[MCS] 中断された更新の後処理を完了しました", notice_code="recovery_completed")
@@ -221,6 +229,8 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     if cid:
         _record_executed(state, cid, result)
     journal_store.save_state(STATE_PATH, state)
+    if result == "applied":
+        _rotate_homecare_copies()
     _remove_marker()
     _report("resumed", "post-merge completed after crash")
     _enqueue_notice(

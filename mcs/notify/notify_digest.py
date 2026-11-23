@@ -25,6 +25,7 @@ import _mcs_path  # noqa: F401,E402  CLI entry: registers every subdir
 
 import mcs_signals  # noqa: E402
 import self_identity
+import signal_policy  # noqa: E402
 import structured_view  # noqa: E402
 from mcs_queries import JST, coverage_gaps  # noqa: E402
 from message_observations import get_message_metadata  # noqa: E402
@@ -193,7 +194,7 @@ def _ago(seconds) -> str:
 def _observed(meta) -> str:
     return (f"観測 {datetime.fromtimestamp(meta['reactions_observed_at'], JST):%m-%d %H:%M}"
             if meta["reactions"] is not None else
-            "スタンプ取得不正" if meta["reactions_status"] == "invalid"
+            "スタンプ記録を読み取れません" if meta["reactions_status"] == "invalid"
             else "スタンプ未取得")
 
 
@@ -244,7 +245,7 @@ def _response_state(db, r, self_id, as_of) -> tuple:
     stamp_state = observed["self_reaction"]["state"]
     mine = (bool(observed["self_reaction"]["types"])
             if stamp_state == "observed" else None)
-    stamp = ("本人スタンプ" + ("取得不正" if meta["reactions_status"] == "invalid"
+    stamp = ("本人スタンプ" + ("記録を読み取れません" if meta["reactions_status"] == "invalid"
                               else "再取得失敗" if stamp_state == "failed"
                               else "未取得") if mine is None
              else "本人スタンプあり" if mine else "本人スタンプ観測なし")
@@ -505,6 +506,11 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         "・" + "・".join(f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())) + mark
         for mark, counts in by_class(by_type)])
 
+    # The detector's own horizon, so the heading never claims days it did not check.
+    ahead = signal_policy.resolved_thresholds(db)["expiry_ahead_days"]
+    section(f"処方期限の記録（{ahead}日以内・期限後）", _rx_period_lines(
+        latest if signals_on else {}, ok, room, archived, end.date(), ahead), fold=True)
+
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
     # an observed zero is omitted; unfetched stamps are counted in 取得状況
     section(f"MCS 本人スタンプ: {reacted}投稿", [
@@ -580,6 +586,31 @@ def build(db, cfg, since: float, until: float, flt=None, *,
 
 
 
+def _rx_period_lines(latest, ok, room, archived, today, ahead) -> list:
+    """Open period-expression signals per patient, by end date — the
+    week's dispensing plan at a glance; never a verified prescription."""
+    ends = []
+    for c in latest.values():
+        if not c or c["state"] != "open" or c["type"] not in ("rx_period_expiry", "rx_period_lapsed") \
+                or not ok(c["project_id"]):
+            continue
+        try:
+            end_d = datetime.strptime(str((c.get("evidence") or {}).get("end")), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (end_d - today).days <= ahead:
+            ends.append((c["project_id"] in archived, end_d, c["project_id"]))
+    ends = sorted(set(ends))
+    lines = [(f"・{end_d:%m/%d} {room(pid)}（"
+              + (f"あと{(end_d - today).days}日" if end_d >= today else f"{(today - end_d).days}日経過")
+              + "）", {pid}) for _, end_d, pid in ends[:MAX_LIST]]
+    if len(ends) > MAX_LIST:
+        lines.append(f"  他{len(ends) - MAX_LIST}件")
+    if lines:
+        lines.append("※ 抽出した期間表現の終了日です。処方の継続・切れは原記録で確認してください")
+    return lines
+
+
 def _nonzero(parts) -> str:
     shown = "・".join(f"{k} {n}" for k, n in parts if n)
     return f"（{shown}）" if shown else ""
@@ -587,7 +618,7 @@ def _nonzero(parts) -> str:
 
 def _stamp_gaps(unfetched, invalid) -> str:
     return "・".join(t for t, n in ((f"スタンプ未取得 {unfetched}投稿", unfetched),
-                                    (f"取得不正 {invalid}投稿", invalid)) if n)
+                                    (f"スタンプ記録を読み取れない {invalid}投稿", invalid)) if n)
 
 
 _JOB_JA = {"extract_claim": "抽出準備", "extract_qc": "抽出監査",

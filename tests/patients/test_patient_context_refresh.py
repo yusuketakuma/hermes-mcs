@@ -47,6 +47,9 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
     monkeypatch.setattr(context_refresh.local_llm, 'resolve', lambda cfg: ('http://invalid.test', 'synthetic'))
     monkeypatch.setattr(context_refresh.local_llm, 'admission_enabled', lambda: True)
+    # an enabled boundary needs its store: keep the broker and its lock file in the test's directory
+    monkeypatch.setenv('MCS_LLM_ADMISSION', str(tmp_path / 'llm_admission.db'))
+    monkeypatch.setattr(context_refresh.local_llm, '_BROKERS', {})
     monkeypatch.setattr(context_refresh.local_llm, 'chat', lambda *a, **k: pytest.fail('unstubbed chat'))
     calls = []
     def chat(_owner, text, **kwargs):

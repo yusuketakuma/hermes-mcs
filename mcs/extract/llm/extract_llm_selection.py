@@ -15,6 +15,7 @@ import extract_llm_local_rebuild as local_rebuild
 import inference_dependency_loss
 import mcs_util
 import patient_priority
+import semantic_qc
 import upgrade_scope
 from mcs_queries import (ELIGIBLE_MESSAGE, current_extract_pred,
                          current_v4_id, json_or_null)
@@ -28,6 +29,8 @@ from extract_llm_qc import (
     _ERROR_ROWS_SQL,
     _hold_sql,
     _human_flagged_sql,
+    _qc_cloud_followup_sql,
+    _qc_fixed_sql,
     _qc_flagged_sql,
     _retry_budget_sql,
     _thin_pending_sql,
@@ -239,6 +242,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
+             {f"({_qc_cloud_followup_sql()})" if cloud_followup else "NULL"} AS qc_cloud,
              ({_thin_pending_sql(db)}) AS thin_src,
              ({_human_flagged_sql()}) AS human_src,
              COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
@@ -258,6 +262,25 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
       ORDER BY {priority}m.posted_at_ts {order}, m.message_id {order}
       {'LIMIT ?' if bounded else ''}
     """
+
+
+def cloud_lane_sql(now: float) -> tuple[str, tuple]:
+    """The cloud re-extraction lane's filter over ``_selection_sql`` columns -> (sql, params).
+
+    Unpaid local-only work (QC, thin and human re-extracts, error retries,
+    automatic holds) is filtered before LIMIT so it cannot starve cloud
+    history. The one QC row the lane serves is the second attempt
+    (``qc_cloud``): a post inside the QC window whose newest audit still flags
+    the extraction its local feedback re-extract produced. Any other row that
+    already carries ``qc_fix`` stays out, so a settled QC row is never resent
+    as plain backlog."""
+    scope, params = semantic_qc.qc_scope_sql(now)
+    return (f"""
+        AND (CASE WHEN COALESCE(qc_cloud,0)<>0 THEN {scope}
+             ELSE COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0
+                  AND NOT EXISTS ({_qc_fixed_sql()}) END)
+        AND COALESCE(human_src,0)=0 AND attempts=0
+        AND NOT EXISTS ({_hold_sql()})""", params)
 
 
 def _validate_run_args(limit, budget_s) -> None:
@@ -667,18 +690,18 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             if owner is not None and prioritize_patients:
                 owner._cloud_priority_progress = None
             return [], 0
-        # Filter unpaid local-only work before LIMIT so it cannot starve cloud history.
-        adm_sql += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
-                    "AND COALESCE(human_src,0)=0 AND attempts=0 "
-                    f"AND NOT EXISTS ({_hold_sql()})")
-        adm_sql += ' AND ' + cloud_policy.history_scope_target_sql('m.message_id')
+        lane_sql, lane_params = cloud_lane_sql(time.time())
+        adm_sql += lane_sql + ' AND ' + cloud_policy.history_scope_target_sql('m.message_id')
+        adm_params.extend(lane_params)
         for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
             if cfg[key] is not None and (cfg[key] or not exclude):
                 adm_sql += " AND m.project_id " + ("NOT " if exclude else "") + "IN (SELECT value FROM json_each(?))"
                 adm_params.append(json.dumps(cfg[key]))
     # QC-flagged rows keep their current artifact but re-enter pending
-    # for exactly one feedback re-extract — a meta.qc_fix artifact
-    # (applied or declined) ends the loop. Thin artifacts re-pend once
+    # for exactly one local feedback re-extract — a meta.qc_fix artifact
+    # (applied or declined) ends the local loop; only the cloud lane's
+    # qc_cloud second attempt (cloud_lane_sql) follows it, and its
+    # attempt-2 marker ends the sequence. Thin artifacts re-pend once
     # under the same settle-or-replace contract (meta.thin_retried).
     # next_try (claim lease and error backoff) is written from
     # time.time(), so it is compared against the same Python clock —

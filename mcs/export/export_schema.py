@@ -75,7 +75,7 @@ SIGNAL_TYPES = (
     "comm_concentration", "rx_period_expiry", "rx_period_lapsed",
     "transition_reconciliation", "pharmacist_request_unanswered",
     "rx_request_visibility", "adherence_concern", "discharge_notice",
-    "symptom_after_med_change")
+    "symptom_after_med_change", "pharmacist_inquiry_unanswered")
 STAT_PRESETS = ("operational", "pharmacy", "extraction_audit")
 _SCOPE = {"since": finite_number, "until": finite_number,
           "as_of": finite_number, "project_id": _integer}

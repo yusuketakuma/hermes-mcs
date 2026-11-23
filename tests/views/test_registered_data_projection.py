@@ -195,3 +195,182 @@ def test_nonnull_definition_item_cannot_advance_current_generation(context_db, m
     assert isinstance(_value_row, dict)
     assert value["state"] == "complete" and value["definition_binding"] == "current"
     assert value["definition_source_artifact_id"] == pin and _value_row["scalar"] == 23
+
+
+def test_item_without_a_values_attempt_is_listed_as_not_fetched(context_db, monkeypatch):
+    import notify_views
+    store = context_db
+    _clinical(store, monkeypatch)
+    fetched = {"lab_test_item": {**DEFINITION["lab_test_item"], "id": 55}}
+    waiting = {"lab_test_item": {**DEFINITION["lab_test_item"], "id": 56, "name": "合成の未取得項目"}}
+    pin = _metadata(store, "observation_items", [fetched, waiting])
+    _metadata(store, "observation_values", [VALUE], item_id=55, definition=fetched, pin=pin)
+    detail = registered_data(store.db, "detail", 1, None, unfetched_items=True)
+    values = {r["item_id"]: r for r in detail["records"] if r["dataset"] == "observation_values"}
+    assert set(values) == {55, 56} and detail["total"] == len(detail["records"])
+    assert values[55]["state"] == "complete"
+    # not reached by the rotation yet: unknown/not_fetched with no rows, never an empty (no values) fact
+    assert (values[56]["state"], values[56]["reason"], values[56]["rows"]) == ("unknown", "not_fetched", [])
+    assert values[56]["definition"]["lab_test_item"]["name"] == "合成の未取得項目"
+    aggregate = registered_data(store.db, "aggregate", 1, None, unfetched_items=True)
+    unfetched = [r for r in aggregate["records"] if r["dataset"] == "observation_values" and r["state"] == "unknown"]
+    assert len(unfetched) == 1 and unfetched[0]["rows_total"] == 0 and unfetched[0]["fields"] == []
+    # the stored targets alone (what the rollup signature and read_model read) leave the item out
+    stored = registered_data(store.db, "detail", 1, None)
+    assert [r["item_id"] for r in stored["records"] if r["dataset"] == "observation_values"] == [55]
+    lines = "\n".join(notify_views._registered_clinical_lines(store.db, 1))
+    assert "・観測値: " in lines and "未取得・未確認 1項目" in lines
+
+
+def _lab(i, name):
+    return {"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": name}}
+
+
+EMPTY_ROW = {"observation_issued_at": "2026-10-01T09:00:00+09:00"}     # every measurement missing
+
+
+def _summary(store):
+    import notify_views
+    return notify_views._registered_clinical_lines(store.db, 1)
+
+
+def test_first_valued_row_reads_every_row():
+    from registered_data import first_valued_row
+    second = {"observation_issued_at": "x", "scalar": None, "max": 0}
+    assert first_valued_row([{"scalar": None}, second, {"scalar": 5}]) is second    # 0 is a value
+    assert first_valued_row([{"scalar": None, "left": None}]) is None and first_valued_row(None) is None
+
+
+def test_summary_unfetched_items_do_not_hide_the_stored_values(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    stored = _lab(99, "合成の取得済み項目")
+    pin = _metadata(store, "observation_items", [*(_lab(i, f"合成の未取得{i}") for i in range(1, 7)), stored])
+    _metadata(store, "observation_values", [VALUE], item_id=99, definition=stored, pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 1項目、未取得・未確認 6項目" in lines
+    assert any(line.startswith("  合成の取得済み項目: 23 ") for line in lines)
+    assert not any("抜粋外" in line for line in lines)
+
+
+def test_summary_attempted_empty_items_do_not_hide_a_valued_one(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 8)]
+    pin = _metadata(store, "observation_items", items)
+    for definition in items[:6]:     # attempted: three with no rows, three with only measurement-less rows
+        i = definition["lab_test_item"]["id"]
+        _metadata(store, "observation_values", [] if i <= 3 else [EMPTY_ROW], item_id=i,
+                  definition=definition, pin=pin)
+    _metadata(store, "observation_values", [VALUE], item_id=7, definition=items[6], pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 4項目、登録行なし 3項目" in lines
+    assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目7"]
+    assert not any("抜粋外" in line for line in lines)
+
+
+def test_summary_judges_an_item_by_all_its_rows(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 6)]
+    pin = _metadata(store, "observation_items", items)
+    # item 1: first row empty, second row valued -> shown with the valued row; item 5 likewise -> in the
+    # remainder; item 3 has only an empty row -> neither shown nor counted as having a value
+    rows = {1: [EMPTY_ROW, VALUE], 2: [VALUE], 3: [EMPTY_ROW], 4: [VALUE], 5: [EMPTY_ROW, VALUE]}
+    for definition in items:
+        i = definition["lab_test_item"]["id"]
+        _metadata(store, "observation_values", rows[i], item_id=i, definition=definition, pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 5項目" in lines
+    shown = [line for line in lines if ": 23 " in line]
+    assert [line.split(":")[0].strip() for line in shown] == ["合成項目1", "合成項目2", "合成項目4"]
+    assert all(VALUE["observation_issued_at"] in line for line in shown)
+    assert "  他1項目の観測値は抜粋外（原記録で確認）" in lines
+
+
+def test_summary_counts_every_valued_item_past_the_examples(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 10)]
+    pin = _metadata(store, "observation_items", items)
+    for definition in items:
+        _metadata(store, "observation_values", [VALUE], item_id=definition["lab_test_item"]["id"],
+                  definition=definition, pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 9項目" in lines
+    assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目1", "合成項目2", "合成項目3"]
+    assert "  他6項目の観測値は抜粋外（原記録で確認）" in lines
+    assert not any("取得状態は抜粋外" in line for line in lines)
+
+
+def test_patient_index_reads_every_target_as_the_single_target_read(context_db, monkeypatch):
+    from project_metadata_view import MetadataIndex
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 7)]
+    old_pin = _metadata(store, "observation_items", items[:5], at=50)
+    _metadata(store, "medication_periods", [], at=60)
+    _metadata(store, "medication_periods", [], complete=False, reason="fetch_error", at=70)  # failed after success
+    _metadata(store, "observation_values", [VALUE], item_id=1, definition=items[0], pin=old_pin, at=50)
+    pin = _metadata(store, "observation_items", items, at=100)
+    second = _metadata(store, "observation_values", [EMPTY_ROW, VALUE], item_id=2, definition=items[1], pin=pin)
+    _metadata(store, "observation_values", [VALUE], item_id=3, definition=items[2], pin=pin, at=40)
+    _metadata(store, "observation_values", [], item_id=3, complete=False, reason="fetch_error", at=90)
+    _metadata(store, "observation_values", [], item_id=4, complete=False, reason="fetch_error")   # never complete
+    _metadata(store, "observation_values", [VALUE], item_id=5, definition=items[4], at=10)       # legacy, unpinned
+    # rows no target may select: unreadable JSON, a bool/float alias of an item or karte, another patient's
+    # copies of item 2's current attempt whose identity only an alias would match (bool/float item or karte)
+    alias = {**_payload(store, second), "rows": normalize_rows("observation_values", [{"scalar": 99}])}
+    for raw in ("{not json", json.dumps({**alias, "item_id": True}), json.dumps({**alias, "item_id": 2.0}),
+                json.dumps({**alias, "entity_id": 10.0}), json.dumps({**alias, "dataset": 7})):
+        store.artifact_add(ARTIFACT_KIND, raw, project_id=1)
+    _metadata(store, "observation_values", [VALUE], pid=2, item_id=2, definition=items[1])
+    # Literal expectations, written from the fixture above (not computed by the code under test): per target
+    # (state, reason, attempted_at of the attempt chosen as newest, attempted_at of the complete attempt chosen,
+    # the scalars of the rows shown) at now=110 (fresh) and now=200_000 (every complete attempt past 86400 s).
+    # An alias row carries scalar 99 (and item 1's alias attempted_at 100), so choosing one changes a line.
+    not_fetched = ("unknown", "not_fetched", None, None, [])
+    expected = {
+        ("medication_periods", None): {110: ("failed", "fetch_error", 70, 60, []),      # failure after success
+                                       200_000: ("failed", "fetch_error", 70, 60, [])},
+        ("observation_items", None): {110: ("complete", None, 100, 100, [None] * 6),
+                                      200_000: ("stale", None, 100, 100, [None] * 6)},  # stale by age
+        # pinned to the replaced item list: stale by a changed definition, rows withheld
+        ("observation_values", 1): {110: ("stale", "definition_mapping_changed", 50, 50, []),
+                                    200_000: ("stale", "definition_mapping_changed", 50, 50, [])},
+        ("observation_values", 2): {110: ("complete", None, 100, 100, [None, 23]),       # success
+                                    200_000: ("stale", None, 100, 100, [None, 23])},
+        # failure after success: the older complete attempt's rows, the newer failed attempt's state
+        ("observation_values", 3): {110: ("failed", "fetch_error", 90, 40, [23]),
+                                    200_000: ("failed", "fetch_error", 90, 40, [23])},
+        ("observation_values", 4): {110: ("failed", "fetch_error", 100, None, []),       # never complete
+                                    200_000: ("failed", "fetch_error", 100, None, [])},
+        ("observation_values", 5): {110: ("complete", None, 10, 10, [23]),               # legacy, unpinned
+                                    200_000: ("stale", None, 10, 10, [23])},
+        ("observation_values", 6): {110: not_fetched, 200_000: not_fetched},             # listed, never attempted
+        ("observation_values", 7): {110: not_fetched, 200_000: not_fetched},             # unknown item
+        ("observation_values", 8): {110: not_fetched, 200_000: not_fetched},
+    }
+
+    def reading(result):
+        return (result["state"], result["reason"], result["attempted_at"], result["last_complete_at"],
+                [row.get("scalar") for row in result["rows"]])
+    for now in (110, 200_000):
+        index = MetadataIndex(store.db, 1)
+        for (dataset, item), by_now in expected.items():
+            single = get_project_metadata(store.db, 1, dataset, item_id=item, now=now)
+            assert reading(single) == by_now[now], (dataset, item, now)
+            assert get_project_metadata(store.db, 1, dataset, item_id=item, now=now, index=index) == single
+    assert get_project_metadata(store.db, 1, "observation_values", item_id=5, now=110)["definition_binding"] \
+        == "legacy_unpinned"
+    # the other patient's attempt is not this patient's, and its room (a group) has no karte association
+    assert reading(get_project_metadata(store.db, 2, "observation_values", item_id=2, now=110)) == (
+        "unknown", "association_unverified", None, None, [])
+    with pytest.raises(ValueError):
+        get_project_metadata(store.db, 1, "observation_items", now=110, index=MetadataIndex(store.db, 2))
+
+
+def test_registered_data_refuses_a_bounded_unfetched_listing(context_db, monkeypatch):
+    _clinical(context_db, monkeypatch)
+    with pytest.raises(ValueError, match="^registered_unfetched_items_limit$"):
+        registered_data(context_db.db, "detail", 1, 8, unfetched_items=True)

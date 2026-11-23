@@ -7,6 +7,7 @@ import re
 import shlex
 from html import escape as xml_escape
 
+from mcs_config import remote_access
 import mcs_runtime
 from backup_config import validate_backup_config
 import scheduled_jobs
@@ -30,6 +31,8 @@ STANDALONE_LABEL = "ai.mcs.standalone"
 STANDALONE_UNIT = "mcs-standalone.service"
 
 LINEWORKS_LABEL = "ai.mcs.lineworks"
+
+REMOTE_ACCESS_LABEL = "ai.mcs.local-chat"
 
 SDC_LABEL = "local.mcs-sdc"
 
@@ -65,6 +68,9 @@ def diagnosed_agent_labels(cfg: dict) -> list[str]:
     by the operator, so it stays out of desired_agent_labels (`services` renders
     those from deployment/launchagents)."""
     labels = desired_agent_labels(cfg)
+    # The resident patient workspace runs beside either runtime, only on a Mac `mcs setup remote` set up.
+    if remote_access(cfg):
+        labels.append(REMOTE_ACCESS_LABEL)
     ntf = cfg.get("notify")
     if not mcs_runtime.standalone(cfg) and isinstance(ntf, dict) and ntf.get("interactive") == "lineworks":
         labels.append(LINEWORKS_LABEL)
@@ -72,7 +78,7 @@ def diagnosed_agent_labels(cfg: dict) -> list[str]:
 
 def owns_agent(label: str) -> bool:
     """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
-    return label not in EXCLUDED_LABELS and (label.startswith(('local.mcs-', 'ai.mcs.extract-', CRON_LABEL_PREFIX)) or label == STANDALONE_LABEL)
+    return label not in EXCLUDED_LABELS and (label.startswith(('local.mcs-', 'ai.mcs.extract-', CRON_LABEL_PREFIX)) or label in (STANDALONE_LABEL, REMOTE_ACCESS_LABEL))
 
 def normalize_schedule(s: str) -> str | None:
     """Extract a comparable 5-field cron expr from a Schedule field —

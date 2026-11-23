@@ -434,3 +434,41 @@ def test_null_posted_at_counted_with_max_age(led):
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "notify_max_age_h": 48}, now=T)
     assert "新着 2件" in _text(led)
+
+
+def test_rx_period_block_lists_open_ends_by_date(led):
+    def period(key, pid, end, stype="rx_period_expiry", state="open"):
+        led.db.execute(
+            "INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) "
+            "VALUES('signal_v1',?,?,'test',?,0)",
+            (pid, json.dumps({"type": stype, "state": state, "project_id": pid, "note": "n",
+                              "evidence": {"message_id": 1, "end": end}}),
+             json.dumps({"key": key, "type": stype})))
+    for pid in (1, 2, 3, 4):
+        _patient(led, pid)
+    period("a", 1, "2026-10-04")
+    period("b", 2, "2026-09-29", stype="rx_period_lapsed")
+    period("c", 3, "2026-10-03", state="resolved")
+    period("d", 4, "2026-10-20")
+    led.db.commit()
+    notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}}, now=T)
+    text = _text(led)
+    # the heading and filter follow the detector's horizon (expiry_ahead_days, default 3)
+    block = text.split("■ 処方期限の記録（3日以内・期限後）\n", 1)[1].split("\n■", 1)[0]
+    assert block.splitlines()[:2] == ["・09/29 project 2（2日経過）", "・10/04 project 1（あと3日）"]
+    assert "原記録で確認" in block and "project 3" not in block and "project 4" not in block
+
+
+@pytest.mark.parametrize("signals_notify", [False, True])
+def test_rx_period_block_needs_signals_notify(led, signals_notify):
+    _patient(led, 1)
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) "
+        "VALUES('signal_v1',1,?,'test',?,0)",
+        (json.dumps({"type": "rx_period_expiry", "state": "open", "project_id": 1, "note": "n",
+                     "evidence": {"message_id": 1, "end": "2026-10-04"}}),
+         json.dumps({"key": "a", "type": "rx_period_expiry"})))
+    led.db.commit()
+    cfg = {**ON, "signals": {"notify": True}} if signals_notify else ON
+    notify_digest.maybe_enqueue(led, cfg, now=T)
+    assert ("処方期限の記録" in _text(led)) is signals_notify

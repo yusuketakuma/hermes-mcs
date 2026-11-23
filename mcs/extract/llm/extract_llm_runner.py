@@ -116,9 +116,20 @@ from extract_llm_source_contract import (
     _writer_current,
 )
 from extract_llm_store import (
+    _close_cloud_attempt,
+    _close_cloud_attempt_tx,
     _commit_extraction_atomic,
+    _end_withdrawn_cloud_attempts,
     _persist_chunks,
+    _record_cloud_attempt_tx,
 )
+
+# A paid request of a cloud re-extraction failed with a known outcome: the
+# post's single attempt is over. Other fallbacks (a cap or stop refusal before
+# the next request, a stopped owner, a changed source) leave it to resume.
+_CLOUD_ATTEMPT_ENDING = frozenset({
+    "cloud_validation_failed", "cloud_invalid_response", "cloud_incomplete_response",
+    "cloud_repair_invalid", "cloud_unit_failed"})
 
 def _run_batch_call(tups, target, deadline: float,
                     vital_policy: dict | None) -> tuple:
@@ -230,6 +241,14 @@ def _rebuild_meta(r, extra):
     if r.get("_local_rebuild") is None:
         return extra
     return {**(extra or {}), "local_rebuild": local_rebuild.tag(r["_local_rebuild"])}
+
+
+def _qc_fix(r, qc):
+    """The adopted qc_fix marker; an adopted cloud second attempt records attempt 2 (a missing attempt reads as 1)."""
+    marker = {"qc": qc["qc"], "applied": True}
+    if r.get("qc_cloud") and r.get("_cloud_mode") == "on":
+        marker["attempt"] = 2
+    return marker
 
 
 def _rebuild_guard(ledger, r):
@@ -399,6 +418,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
+    # A QC second attempt whose contract is gone for good ends here, whether
+    # or not any cloud worker can send; this only closes attempt records.
+    try:
+        _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock, deadline=deadline)
+    except (ValueError, RuntimeError, sqlite3.Error):
+        if ledger.db.in_transaction:
+            raise
     try:
         rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
                                                shard, oldest_first,
@@ -659,7 +685,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
                 cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
-                changed=lambda: _source_provably_changed(ledger, r)))
+                changed=lambda: _source_provably_changed(ledger, r),
+                # The QC second attempt sends only under its pinned contract and
+                # records each paid request with that request's reservation.
+                **({"pin": r.get("_cloud_pin"), "on_reserved_tx": lambda reserving, reservation, _artifact_id:
+                    _record_cloud_attempt_tx(reserving, r, reservation)} if r.get("qc_cloud") else {})))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -873,11 +903,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 key[1:]: d.get(key, 0) for key in ("_items_dropped", "_evidence_dropped")}}
         outcome = _commit_extraction_atomic(
             ledger, r, json.dumps(d, ensure_ascii=False), ctx, integrity,
-            {"qc": qc["qc"], "applied": True} if qc else None,
+            _qc_fix(r, qc) if qc else None,
             extra or None, used_keys,
             check_current=qc is None and not r["thin_src"] and not r["human_src"],
             expected_prior=r.get("_expected_prior"),
-            adoption_guard=r.get("_superseded_guard"))
+            adoption_guard=r.get("_superseded_guard"),
+            # An adopted or held cloud answer ends the body's one attempt with it.
+            before_replace_tx=((lambda: _close_cloud_attempt_tx(ledger.db, r))
+                               if r.get("_cloud_mode") == "on" else None))
         if outcome != "written":
             if outcome == "rejected":
                 r["_commit_hold"] = True
@@ -941,6 +974,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             at = r.get("_transport_at")
 
             def cloud_retry():
+                if (r.get("_defer_reason") == "cloud_fallback"
+                        and r.get("_fallback_code") in _CLOUD_ATTEMPT_ENDING):
+                    # The body's one cloud attempt is over. Nothing is
+                    # re-stored, so the current audit keeps pointing at the
+                    # extraction; an unfinished attempt resumes instead.
+                    with _settle_lock() as held:
+                        if held:
+                            _close_cloud_attempt(ledger, r)
                 # the paid cloud attempt failed and local produced nothing: the
                 # retry backoff keeps the next pass from re-sending the same body
                 with _settle_lock() as held:
@@ -1016,12 +1057,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # A QC-flagged row that failed its feedback re-
                     # extract keeps the audited artifact — re-mint it
                     # with qc_fix so the flag settles instead of
-                    # burning an LLM call every cycle.
+                    # burning an LLM call every cycle. The cloud second
+                    # attempt never re-stores (cloud_retry).
                     src = ledger.db.execute(
                         "SELECT content FROM artifacts WHERE artifact_id=?",
                         (qc["src"],)).fetchone()
                     prior = _prior_extract(ledger.db, r)
-                    if (src is not None and prior is not None and prior["artifact_id"] == qc["src"]
+                    if (not r.get("qc_cloud") and src is not None and prior is not None
+                            and prior["artifact_id"] == qc["src"]
                             and prior["content"] == src["content"]):
                         # these writes are never carried: a skipped one
                         # re-selects the row for another paid call, so

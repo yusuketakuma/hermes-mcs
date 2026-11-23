@@ -44,6 +44,8 @@ from extract_llm_provider import (
     _cloud_reextract,
 )
 from extract_llm_qc import (
+    _open_attempt_contracts,
+    _qc_attempt_notes_current,
     _qc_feedback,
     _prior_extract,
     _prior_identity,
@@ -69,6 +71,27 @@ from extract_llm_source_contract import (
 from extract_llm_store import (
     _commit_extraction_atomic,
 )
+
+
+def _qc_contract(ledger, cfg, r, selection):
+    """The contract a QC second attempt sends under -> (pin, live selection), or None to send nothing now.
+
+    The attempt pins its contract (cloud_policy.route_contract) with its
+    first paid request: an open attempt resumes only under that contract,
+    because its saved chunks, repairs and repeat guard belong to it. A
+    contract that is not usable now (capped, stopped, outside its window,
+    unverified, or gone) sends nothing; ending a gone one is the extraction
+    pass's job (_end_withdrawn_cloud_attempts), which runs with the cloud on
+    or off. Before that first request this pass's selection is pinned."""
+    started = _open_attempt_contracts(ledger.db, r)
+    pin = started[0] if started else cloud_policy.route_contract(
+        cfg, selection, route="reextract", purpose="backlog", root=HOME)
+    state = cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog",
+                                          root=HOME, ledger=ledger)
+    if state.state != "usable" or any(contract != pin for contract in started):
+        return None
+    return pin, state.selection
+
 
 def _prefilter_enabled() -> bool:
     """config.json extract.prefilter, else the legacy MCS_EXTRACT_PREFILTER, else on."""
@@ -359,6 +382,11 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             if selection is None:
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog", root=HOME)
+            if selection is not None and mode == "on" and r.get("qc_cloud"):
+                pinned = _qc_contract(ledger, cfg, r, selection)
+                selection = None if pinned is None else pinned[1]
+                if pinned is not None:
+                    r["_cloud_pin"] = pinned[0]
             if selection is None:
                 block("prepare_profile_unavailable")
                 continue
@@ -371,6 +399,11 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
+        if r.get("_cloud_pin") is not None and not _qc_attempt_notes_current(ledger.db, r, qc):
+            # A newer audit changed the notes its saved paid requests were sent with:
+            # nothing more is sent, and the extraction pass ends it (確認候補).
+            block("prepare_profile_unavailable")
+            continue
         hints = _rule_hints(r)
         prefilter_candidate = (prefilter and not cloud_only and qc is None
             and not r["thin_src"] and not r["human_src"] and rebuild_state is None

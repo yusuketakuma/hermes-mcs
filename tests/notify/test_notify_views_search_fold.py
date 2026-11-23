@@ -82,8 +82,8 @@ def test_loop_candidate_counts_only_current_revision(led):
                        "meta,created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                        (json.dumps({"origin": {"revision": revision}}), NOW))
         text = notify_views.patient_summary_text(led.db, 1)[1]
-        assert "集約の現行性を確認できません" in text and "Loop候補" not in text
-        return "Loop候補" in "\n".join(notify_views._request_reply_lines(led.db, 1, {"recent_requests": reqs}))
+        assert "集約の現行性を確認できません" in text and "未完了のやり取りの候補" not in text
+        return "未完了のやり取りの候補" in "\n".join(notify_views._request_reply_lines(led.db, 1, {"recent_requests": reqs}))
 
     assert mark("0" * 64) is False                     # stale generation
     assert mark(f"{101:064x}") is True                 # current content_hash

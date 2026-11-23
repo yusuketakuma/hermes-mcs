@@ -50,8 +50,10 @@ def parse_query(query):
             filters[key] = value
         elif search_fold(word):
             terms.append(search_fold(word))
-    if not terms or filters.get('after', UNKNOWN_TIME) >= filters.get('before', 2**63 - 1):
+    if not terms:
         raise ValueError('bad_query')
+    if filters.get('after', UNKNOWN_TIME) >= filters.get('before', 2**63 - 1):
+        raise ValueError('bad_search_filter')
     return terms, filters
 
 

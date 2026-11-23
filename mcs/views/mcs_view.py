@@ -18,11 +18,11 @@ import semantic_store
 import semantic_transport
 
 from ledger import LedgerReader
-from stamp_read import reaction_actor_summary
+from stamp_read import reaction_actor_summaries, reaction_actor_summary
 from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
-from mcs_queries import incomplete_reply_roots
+from mcs_queries import incomplete_reply_roots, karte_summary_bound
 import self_identity
 from self_identity import is_own_station_message
 from mcs_util import HOME, loads_dict, safe_error_code, search_fold, valid_text, valid_hash
@@ -49,6 +49,14 @@ REASONS = frozenset({
 
 def _reason(value):
     return value if value in REASONS else "not_recorded" if not value else "other_error"
+
+
+def _attachment_reason(value):
+    """An attachment fetch failure: the collector records an HTTP failure with its status (``http_404``)."""
+    if isinstance(value, str) and len(value) == 8 and value.startswith("http_") and value[5:].isascii() \
+            and value[5:].isdigit():
+        return value
+    return _reason(value)
 
 
 def _artifact_json(r):
@@ -108,7 +116,9 @@ class View:
                FROM patients p WHERE 1=1""",
             [], ("p.project_id",), ["link-hints"], limit, cursor)
 
-    def _page(self, sql, params, columns, scope, limit, cursor):
+    def _page(self, sql, params, columns, scope, limit, cursor, *, key_fields=None):
+        """One keyset page in descending ``columns`` order; ``key_fields`` names the row fields that hold
+        those column values (dropped from the rows) when they are not the message or ``_key`` columns."""
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
         binding = requests.payload_hash([self.meta["generation_id"], scope])
@@ -135,11 +145,13 @@ class View:
         next_cursor = None
         if more:
             last = rows[-1]
-            key = ([last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
+            key = ([last[field] for field in key_fields] if key_fields else
+                   [last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
                     last["message_id"]] if len(columns) == 2 else [last["_key"]])
             next_cursor = base64.urlsafe_b64encode(requests.canonical({"binding": binding, "key": key})).decode()
         for row in rows:
-            row.pop("_key", None)
+            for field in ("_key", *(key_fields or ())):
+                row.pop(field, None)
         return {"items": rows, "next_cursor": next_cursor}
 
     def _require_message(self, pid, mid):
@@ -168,16 +180,16 @@ class View:
                                              self_identity.own_sender_ids(self.db))
         return cached
 
-    def _evidence(self, row):
+    def _evidence(self, row, page=None):
+        """Decorate one message row; ``page`` is ``_page_counts`` of the rows it belongs to plus their
+        reaction_actor_summaries."""
         pid, mid = row["project_id"], row["message_id"]
         # Only return the known project URL, never an upstream signed URL or guessed deep link.
         if row.get("source_url") != project_url(pid):
             row["source_url"] = None
-        row["stored_replies"] = self.db.execute(
-            "SELECT count(*) FROM messages WHERE project_id=? AND parent_id=?", (pid, mid)).fetchone()[0]
-        row["attachments"] = [dict(r) for r in self.db.execute("""
-          SELECT state,count(*) AS count FROM attachments WHERE message_id=? GROUP BY state
-        """, (mid,))]
+        replies, files, actors = page or (*self._page_counts(pid, [mid]), None)
+        row["stored_replies"] = replies.get(mid, 0)
+        row["attachments"] = files.get(mid, [])
         row["body_complete"] = row["body_state"] == "full"
         sender_id = row.pop("sender_id", None)
         self_id, own = self._identity()
@@ -189,16 +201,30 @@ class View:
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
         row["patient_context"] = message_patient_context(self.db, row)
-        # 22-F: actor counts by profession × type for own posts only, no
-        # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
-        row["reaction_actors"] = (reaction_actor_summary(
-            self.db, mid, now=self.meta["generated_at"])
-            if row["is_self_sender"] else None)
+        # 22-F: who pressed each stamp on one's own posts (names since #22-D2, no actor IDs);
+        # 'stale'/'failed' are past sets
+        row["reaction_actors"] = (None if not row["is_self_sender"] else actors[mid] if actors is not None
+                                  else reaction_actor_summary(self.db, mid, now=self.meta["generated_at"]))
         # #24 x 22-F: care-team physicians whose 見ました is not observed
         row["physician_viewed"] = (physician_viewed_status(
             self.db, pid, mid, now=self.meta["generated_at"])
             if row["is_self_sender"] else None)
         return row
+
+    def _page_counts(self, pid, mids):
+        """({message_id: stored replies}, {message_id: [{state, count}] of its attachments}) for these posts."""
+        if not mids:
+            return {}, {}
+        marks = ",".join("?" * len(mids))
+        replies = dict(self.db.execute(
+            f"SELECT parent_id,count(*) FROM messages WHERE project_id=? AND parent_id IN ({marks}) "
+            "GROUP BY parent_id", [pid, *mids]).fetchall())
+        files = {}
+        for r in self.db.execute(f"SELECT message_id,state,count(*) AS count FROM attachments "
+                                 f"WHERE message_id IN ({marks}) GROUP BY message_id,state "
+                                 "ORDER BY message_id,state", mids):
+            files.setdefault(r["message_id"], []).append({"state": r["state"], "count": r["count"]})
+        return replies, files
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):
         params = [pid]
@@ -212,6 +238,15 @@ class View:
             self._require_message(pid, message_id)
             sql += " AND m.parent_id=?"
             params.append(message_id)
+        if kind == "senders":
+            # the poster's name only, with the same folding as search
+            terms = list(filter(None, map(search_fold, query.split()))) if isinstance(query, str) else []
+            if not terms or len(query) > 500:
+                raise ValueError("bad_query")
+            register_search_fold(self.db)
+            for term in terms:
+                sql += " AND instr(mcs_fold(m.sender_name),?)>0"
+                params.append(term)
         if kind == "search":
             if not isinstance(query, str) or not query.strip() or len(query) > 500:
                 raise ValueError("bad_query")
@@ -233,8 +268,14 @@ class View:
         page = self._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                           [kind, pid, query, message_id, since, until], limit, cursor)
         page["scope"] = "roots_only" if kind == "timeline" else "stored_messages"
+        counts = self._page_counts(pid, [row["message_id"] for row in page["items"]])
+        self_id = self._identity()[0]
+        # who pressed each stamp on one's own posts, read for the page at once
+        actors = reaction_actor_summaries(self.db, [
+            row["message_id"] for row in page["items"]
+            if is_self_sender(self.db, row.get("sender_id"), self_id=self_id)], now=self.meta["generated_at"])
         for row in page["items"]:
-            self._evidence(row)
+            self._evidence(row, (*counts, actors))
             if kind == "candidates":
                 row["candidates"] = requests.candidates(self.db, row)
         return page
@@ -337,8 +378,7 @@ class View:
         if not row:
             return None, None
         content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
-        if (content is None or meta is None or type(meta.get("karte_id")) is not int
-                or meta["karte_id"] != karte_id):
+        if content is None or not karte_summary_bound(meta, karte_id):
             return None, None
         at = meta.get("fetched_at")
         empty = content.get("empty")
@@ -366,13 +406,17 @@ class View:
             row["payload_valid"] = row["payload_hash"] is not None
         return {**page, "semantic_paused": paused(self.db, pid)}
 
-    def _qc(self, pid, mid, limit, cursor):
+    def _qc(self, pid, mid, limit, cursor, needs_confirmation=False):
         """extract_qc annotation view — Jev quality control over v2
         extractions. Verdicts are annotations only: they never modified
         the extraction they describe. Without --message-id: aggregate
         counts plus a paginated list of messages whose QC flagged at
-        least one item or could not run. With --message-id: the full
-        per-item verdicts for that message."""
+        least one item or could not run; each row reports the automatic
+        QC re-extractions behind its extraction and which automatic step
+        still applies (local re-extract pending, cloud re-extract pending,
+        or confirmation candidate; ``--needs-confirmation`` lists only the
+        candidates). With --message-id: the full per-item verdicts for that
+        message (``--needs-confirmation`` is rejected there)."""
         import extract_llm
         from mcs_queries import (JSON_OBJECT_SQL, current_qc_pred,
                                  json_or_null, qc_source_id)
@@ -409,6 +453,22 @@ class View:
                  f"THEN json_extract({content},'$.items') ELSE '[null]' END")
         base = ("FROM artifacts a JOIN messages m "
                 "ON m.message_id=a.message_id WHERE " + cur)
+        # The audited extraction (current_qc_pred pins it to the newest one).
+        audited = (f" LEFT JOIN artifacts s ON s.kind='{extract_llm.KIND}' AND s.message_id=a.message_id"
+                   f" AND s.artifact_id=json_extract({json_or_null('a.meta')},'$.source_artifact_id')")
+        attempts = extract_llm.qc_fix_attempt_sql("s.meta")
+        from_cloud = (f"EXISTS(SELECT 1 FROM json_each({json_or_null('s.meta')},"
+                      "'$.provider_provenance.providers') pp WHERE pp.value IS NOT 'local')")
+        flagged = f"(json_extract({content},'$.qc')='done' AND ({extract_llm.qc_actionable_sql('a')}))"
+        clouded = f"({from_cloud} OR {extract_llm.cloud_attempt_spent_sql('m', 's.artifact_id')})"
+        # Still flagged after the bounded automatic re-extractions: the local one
+        # and the post body's one cloud attempt (durable record, whatever its
+        # outcome), or the cloud already produced this extraction.
+        confirm = f"({flagged} AND ({attempts}=2 OR ({attempts}=1 AND {clouded})))"
+        followup = (f"CASE WHEN NOT {flagged} THEN NULL"
+                    f" WHEN {attempts}=0 THEN 'local_reextract_pending'"
+                    f" WHEN {attempts}=1 AND NOT {clouded} THEN 'cloud_reextract_pending'"
+                    f" WHEN {confirm} THEN 'needs_confirmation' END")
         summary = dict(self.db.execute(
             "SELECT COUNT(*) total,"
             " COALESCE(SUM(json_extract(a.content,'$.qc')='done'),0)"
@@ -449,9 +509,20 @@ class View:
           FROM sources
         """, (*scope_params, pid)).fetchone()
         summary.update(dict(scope_counts))
+        counts = self.db.execute(
+            f"SELECT followup, COUNT(*) FROM (SELECT {followup} AS followup FROM artifacts a"
+            " JOIN messages m ON m.message_id=a.message_id" + audited + " WHERE " + cur
+            + ") WHERE followup IS NOT NULL GROUP BY followup", (pid,)).fetchall()
+        summary["followup"] = {state: 0 for state in (
+            "local_reextract_pending", "cloud_reextract_pending", "needs_confirmation")}
+        summary["followup"].update({row[0]: row[1] for row in counts})
+        summary["needs_confirmation"] = summary["followup"]["needs_confirmation"]
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
-            "m.posted_at_ts,m.sender_name,a.content,a.created_at " + base +
+            f"m.posted_at_ts,m.sender_name,a.content,a.created_at,{attempts} AS qc_attempts,"
+            f"{confirm} AS needs_confirmation,{followup} AS followup_state FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id" + audited + " WHERE " + cur
+            + (" AND " + confirm if needs_confirmation else "") +
             f" AND (json_extract({content},'$.qc')='unevaluated'"
             f"  OR json_extract({content},'$.coverage.unchecked')>0"
             f"  OR EXISTS(SELECT 1 FROM json_each({items}) je"
@@ -460,8 +531,10 @@ class View:
             f"  OR (json_extract({content},'$.urgency.jev') IS NOT NULL"
             f"      AND json_extract({content},'$.urgency.jev')"
             f"          IS NOT json_extract({content},'$.urgency.extracted')))",
-            [pid], ["a.artifact_id"], ["qc", pid], limit, cursor)
+            [pid], ["a.artifact_id"], ["qc", pid] + (["needs_confirmation"] if needs_confirmation else []),
+            limit, cursor)
         for row in page["items"]:
+            row["needs_confirmation"] = bool(row["needs_confirmation"])
             content = loads_dict(row.pop("content") or "{}") or {}
             row["qc_state"] = content.get("qc")
             row["coverage"] = content.get("coverage")
@@ -493,6 +566,18 @@ class View:
             "pending": "対象内の現行抽出に対するQC未実施件数（キュー済みを含む）",
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
+            "qc_attempts": "抽出に記録された、抽出チェックの指摘を受けた自動の再抽出の回数"
+                           "（0=なし、1=ローカル1回、2=ローカル1回とクラウド1回の結果を採用。"
+                           "クラウドの再抽出が失敗・保留で終わった抽出は1のまま確認候補になる。読めない記録は null）",
+            "needs_confirmation": "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、"
+                                  "本文に裏付けが見つからない項目または緊急度の相違が残る抽出。"
+                                  "誤りと確定したものではない",
+            "followup_state": {
+                "local_reextract_pending": "ローカル再抽出待ち: 指摘を添えたローカルの再抽出をまだ行っていない抽出",
+                "cloud_reextract_pending": "クラウド再抽出待ち: ローカルの再抽出後も指摘が残り、この本文のクラウドの再抽出を"
+                                           "まだ終えていない抽出。再抽出の再開期間外・費用上限・停止・対象範囲外・"
+                                           "投稿日時が直近60日より前などの場合は送られない",
+                "needs_confirmation": "確認候補（needs_confirmation と同じ）"},
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
                                 "current=1 はまだ再抽出されていない報告。"
                                 "field=urgency は緊急度判定の誤り報告",
@@ -538,15 +623,20 @@ class View:
 
     def _attachments(self, project, message_id, limit, cursor):
         from attachment_ocr import view as ocr_view
+        from mcs_util import config_read_state
 
         self._require_message(project, message_id)
+        # The OCR exclusion policy is configuration: without it a policy-rejected file reads as failed. A
+        # config.json that cannot be read leaves every OCR state unknown (and no text that policy might exclude).
+        cfg, config_state = config_read_state()
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
         for item in result["items"]:
-            item["error"] = _reason(item["error"])
-            item["ocr"] = ocr_view(self.db, item["attachment_id"], project_id=project,
-                                   include_text=True)
+            item["error"] = _attachment_reason(item["error"])
+            item["ocr"] = ({"state": "unknown", "reason": "config_unreadable"} if config_state == "unreadable"
+                           else ocr_view(self.db, item["attachment_id"], project_id=project,
+                                         include_text=True, cfg=cfg))
         return result
 
     @semantic_transport.with_local_model_scope
@@ -818,7 +908,8 @@ class View:
              message_id=None, request_id=None, status=None, command_id=None,
              payload_hash=None, since=None, until=None, scope="aggregate",
              dataset=None, item_id=None, publication=False, unread_only=False,
-             include_chat=False, max_age_s=None, view=None, role=None):
+             include_chat=False, max_age_s=None, view=None, role=None,
+             needs_confirmation=False):
         projectless = ("status", "read_model", "cross_lists", "response_observations")
         if (project is not None and not requests.positive(project)) \
                 or (kind not in projectless and project is None):
@@ -827,6 +918,9 @@ class View:
                 or include_chat and (kind != "project_metadata"
                                      or dataset not in CLINICAL_DATASETS)):
             raise ValueError("bad_comparison_scope")
+        if (type(needs_confirmation) is not bool
+                or needs_confirmation and (kind != "qc" or message_id is not None)):
+            raise ValueError("bad_needs_confirmation")
         if kind == "response_observations":
             if type(publication) is not bool:
                 raise ValueError("bad_publication")
@@ -868,14 +962,14 @@ class View:
             return {"snapshot": self.meta, "warnings": WARNINGS,
                     **self._patient_context(project, view, since, query, role, cursor)}
         handlers = {
-            **dict.fromkeys(("search", "timeline", "thread", "candidates"),
+            **dict.fromkeys(("search", "senders", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
             "status": lambda: self._status(project, limit, cursor),
             "evidence": lambda: {"message": self._message(project, message_id)},
             "attachments": lambda: self._attachments(project, message_id, limit, cursor),
             "requests": lambda: self._requests(project, request_id, status, limit, cursor),
             "staff": lambda: self._staff(project, limit),
-            "qc": lambda: self._qc(project, message_id, limit, cursor),
+            "qc": lambda: self._qc(project, message_id, limit, cursor, needs_confirmation),
             "receipt": lambda: self._receipt(project, command_id, payload_hash),
             "semantic": lambda: self._semantic(project, message_id),
             "comparison": lambda: self._comparison(project, message_id),
@@ -1021,6 +1115,8 @@ def _parser():
             sub.add_argument("--message-id", type=int, required=True)
         if kind == "qc":
             sub.add_argument("--message-id", type=int)
+            sub.add_argument("--needs-confirmation", action="store_true",
+                             help="list only confirmation candidates")
         if kind == "receipt":
             sub.add_argument("--command-id", required=True)
             sub.add_argument("--payload-hash", required=True)

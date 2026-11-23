@@ -162,7 +162,7 @@ def alert_only_config(path: str = CONF_PATH) -> dict:
     return _paid_routes_closed(raw) if isinstance(raw, dict) else {}
 
 
-def _load_config(path, *, allow_provider_unavailable=False):
+def _load_config(path, *, allow_provider_unavailable=False, provider=None, wait=True):
     active = _provider_config_active(path)
     if active:
         try:
@@ -179,7 +179,7 @@ def _load_config(path, *, allow_provider_unavailable=False):
                     state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
                     break
                 except ValueError as error:
-                    if str(error) not in _TRANSIENT_PROVIDER_READ or attempt == 2:
+                    if str(error) not in _TRANSIENT_PROVIDER_READ or attempt == 2 or not wait:
                         raise
                     # A commit keeps readers closed for its whole write window:
                     # wait briefly and re-verify rather than fail on the blip.
@@ -192,7 +192,8 @@ def _load_config(path, *, allow_provider_unavailable=False):
             if cloud_policy.blocking_errors(errors):
                 raise ValueError("provider_settings_invalid")
             return provider_settings.execution_view(state["common"], state["providers"],
-                selected_provider=selected["provider"], model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+                selected_provider=selected["provider"] if provider is None else provider,
+                model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         except (OSError, ValueError, TypeError, RecursionError) as error:
             raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
     try:
@@ -203,14 +204,33 @@ def _load_config(path, *, allow_provider_unavailable=False):
     return raw if isinstance(raw, dict) else None
 
 
-def load_config_checked(path: str = CONF_PATH, *, missing_ok: bool = False) -> dict | None:
-    """Return validated composite settings, or None when a consistent read fails."""
+def load_config_checked(path: str = CONF_PATH, *, missing_ok: bool = False,
+                        provider: str | None = None, wait: bool = True) -> dict | None:
+    """Return validated composite settings, or None when a consistent read fails.
+
+    ``provider`` composes split provider settings for that cloud provider (its
+    own model and profiles) instead of the automatic choice; a single
+    config.json already holds every provider's settings and is returned as is.
+    Without ``wait`` a provider-settings update in progress reads as a failure
+    at once instead of being waited out."""
     try:
-        return _load_config(path)
+        return _load_config(path, provider=provider, wait=wait)
     except FileNotFoundError:
         return {} if missing_ok else None
     except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
         return None
+
+
+def config_read_state(path: str = CONF_PATH) -> tuple[dict, str]:
+    """The settings ``load_config`` reads, with whether they were "read", or are defaults
+    because the file is "missing" or "unreadable" (malformed, unreadable provider settings)."""
+    try:
+        config = _load_config(path, allow_provider_unavailable=True)
+    except FileNotFoundError:
+        return {}, "missing"
+    except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
+        return {}, "unreadable"
+    return (config, "read") if config is not None else ({}, "unreadable")
 
 
 def load_config(path: str = CONF_PATH) -> dict:

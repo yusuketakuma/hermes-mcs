@@ -343,6 +343,10 @@ REVIVE_COOLDOWN_S = 6 * 3600
 UPGRADE_KIND = "extract_upgrade_v1"
 
 
+# One stored-post cloud re-extraction per post body (content hash); never pruned.
+CLOUD_ATTEMPT_KIND = "extract_cloud_attempt_v1"
+
+
 _PREPARE_HOLD_S = 60  # a refused context waits without consuming an inference attempt
 
 

@@ -31,6 +31,8 @@ MAX_TABLE_ENTRIES = 10000
 FAILURE_RETRY_S = 86400
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
 EXCLUDED_STATES = frozenset({"unsupported", "rejected_by_policy"})
+# Every state view() can report: stored document states plus not-yet-run and policy rejection.
+VIEW_STATES = frozenset(_STATES | {"unprocessed", "rejected_by_policy"})
 
 # Optional packages are imported only in the separate, network-denied runtime.
 _BOOTSTRAP = f'MODELS = {MODELS!r}\nENGINE_VERSION = {ENGINE_VERSION!r}\n' + r'''

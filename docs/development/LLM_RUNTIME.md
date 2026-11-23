@@ -70,7 +70,31 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 ## Jevと評価の境界
 
 通常の意味チェック・監査は`semantic.mode`、認証、scope、日次予算等を満たした場合に呼び出します。
-`semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続ローカル再抽出は1回に制限します。
+`semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続再抽出はローカル1回に制限します。
+その結果の再監査でも指摘が残る投稿は、保存済み投稿の再抽出の再開期間中だけ、既存の`reextract`経路と
+その送信条件（費用上限・停止・施設の確認・scope・履歴範囲・`held_prior`・QCの60日範囲）でクラウド1回を加えます。
+上限はAPI要求1回ではなく本文（`content_hash`）1つにつき1回で、分割chunkと修正要求も同じ1回に含まれます。
+2回目は有料の要求（chunk・修正要求）ごとに、その送信予約と同じtransaction（`usage_reserver`の`on_reserved_tx`）で`extract_cloud_attempt_v1`（`state:"open"`、監査された抽出のid・source revision・契約・`reservation_id`を束縛）を記録し、その記録を含めて2回目の条件（`_qc_cloud_followup_sql`: 最新の監査が1回目の結果を指摘し続け、人の誤り報告がなく、本文が送信済みでない）・現在の本文hash・QCの60日範囲・契約の一致を満たさなければ予約ごと取り消します。
+保留（`held_prior`）・error retry等のレーンの他の条件はselectionとclaimの`cloud_lane_sql`だけが判定し、予約ごとには再判定しません（列は`_selection_sql`の計算列で、予約のtransactionへ持ち込むと選択の問い合わせ全体を繰り返すため）。
+最初の予約の前に上限等で止まった場合は記録が残らず、次の機会にはそのときの選択で始めます。
+採用・保留は抽出の書込みと同じtransactionで、送信後の既知の失敗（`cloud_validation_failed`等）は単独で`state:"closed"`を追記します（開いた記録がない2回目は閉じません）。
+上限・停止による送信前の拒否で止まった回は開いたまま残り、保存済みchunkを再利用して続きだけを送ります（送信済み・結果不明の要求は会計側の重複防止で再送しません）。
+契約は`cloud_policy.route_contract`（送信先と、`backlog`・`quality_repair`の各profileのmodel・effort・profile・max_tokens）で、再開・送信の可否は`cloud_policy.resolve_contract`だけが決めます。
+設定自体の誤りは`cloud_config`だけで判定し、`auto`がいま選ぶ送信先（とそのmodelの適合）では判定しません。どちらもprofileを契約の送信先自身の設定から読みます（`_contract_config`: 分割したprovider設定では実行時の設定が自動選択した送信先のprofileしか持たないため、`load_config_checked(provider=...)`でその送信先の検証済み設定を組み立てます。読めない・代替の設定は`waiting`）。
+`usable`ならその送信先のsettings・key・selectionを返し、`CloudInferenceUnit(pin=...)`はclient作成・送信前guard・`request_send_block_reason`・予約のすべてでそれを使い、`provider_order`の順位や予算による切替をしません（修正要求のchildも同じ契約の`quality_repair`で送ります）。
+pinしたunitのscope（`scope_generation(cfg, pin)`）は送信先の選択の代わりに契約を含むので、優先順位を変えても保存済み応答の束縛は変わりません。
+`waiting`（設定・施設の確認記録・鍵fileの読取り不能、読めない設定の代わりの`{}`や`provider_unavailable`の設定（`config_unavailable`）、確認待ちの記録、mode、送信先の誤りが費用上限の欠落（`cost_limit_required`）だけの設定（下記の`gone`に当たればそちらが優先）、prepareでは期間・停止・circuit・価格・上限）では送らずに開いたまま待ちます。
+各記録は監査の指摘内容の digest（`notes`、`_qc_notes_digest`）も束縛します。保存済みの有料応答は送ったpromptで証明され、promptは指摘内容を含むので、新しい監査が指摘内容を変えた回は送らず（prepareと予約時のhookが拒否）、抽出のpassが閉じて確認候補にします。同じ指摘内容の再監査では続行します。
+`gone`は読み取れた設定・確認記録・鍵fileが契約を提供しなくなったとき（別の送信先の明示、`provider_order`からの除外、記録した施設の確認からの除外、鍵の削除、profileの変更）で、prepareは送らず、抽出のpassごと（cloudのon/offやcloud workerの有無に関係なく）`_end_withdrawn_cloud_attempts`が回を閉じて確認候補にします（投稿がQCの60日範囲を出て選択が再開しなくなった回も同じく閉じます。検証できた設定`load_config_checked(wait=False)`でだけ判定し、読めない・更新中のpassでは待たずに閉じません。run lockを取った後、書込みtransactionの前に設定・確認記録・監査を読み直して判定し直し、各transactionの中ではまだ開いているかの確認と書込みだけを行います。見つけたときだけstale GCと同じ短い待ち時間でwrite lock・SQLiteの書込み待ち・SQLを区切り、取れなければ次のpassへ回します）（保存済みchunkと支払済み応答は契約に束縛されるため、別モデルでは再度支払うことになる）。
+pinしないunitの送信先の選択は従来どおりです。
+修正要求は開始（`started`）をcheckpointへ保存してから送り、再開した処理は`started`のchunkへ修正を送り直しません（`extract_llm_engine`）。
+修正の応答を保存した直後に中断した回は、その応答を採用せずchunkの最初の応答を`dispatch_unknown`（要確認）として確定し、修正は二重に支払いません。
+通常の再抽出も採用・保留・送信後の既知の失敗で`purpose:"backlog"`の閉じた記録を残します。記録は会計の保存期間（`CLOUD_USAGE_KEEP_S`）と無関係に削除されません。
+本文が同じ記録が1つでもあれば（開いた回は同じ抽出・同じrevisionのときだけ続行）、記録が`reservation_id`で指さない`reextract`送信予約（記録を残さない送信。予約した時点の本文がいまの本文だったもの、つまり本文をA→B→Aと戻した場合の以前のAの期間の予約を含む）とともに送信済みとみなします（`cloud_attempt_spent_sql`、claim時も`cloud_lane_sql`を再適用）。
+投稿者名等だけのsource更新は本文を変えないので再送しません。
+現在の世代で`qc_fix`を持つ投稿は通常の再抽出として送りません。人の報告と世代更新の再抽出は対象外です。
+`meta.qc_fix.attempt`は採用した2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
+送信後の失敗はローカルで再実行せず、抽出を書き直さないので現在の監査がその抽出を指したまま残り、`mcs view qc`の確認候補に出します。
 モデルは`jev-1.13.0`へ固定し、応答モデル不一致を拒否します。
 429/5xx/transportのretryはjobの残予算内、401/403はretryしません。
 

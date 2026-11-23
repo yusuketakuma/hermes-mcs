@@ -12,6 +12,7 @@ from ci.auto_merge import (
     _clear_stale_owner_label,
     _owner_label_state,
     GitHubAPI,
+    GitHubAPIError,
     RUNNER_INFRA_MESSAGES,
     _NoRedirect,
     _repo_path,
@@ -39,6 +40,7 @@ class StubAPI:
         self.list_queues = {}
         self.calls = []
         self.next_comment_id = 900
+        self.graphql_queries = {}
 
     def get(self, path):
         self.calls.append(("GET", path, None))
@@ -92,6 +94,13 @@ class StubAPI:
 
     def graphql(self, query, variables):
         self.calls.append(("GRAPHQL", query, deepcopy(variables)))
+        if query.startswith("query"):
+            answer = self.graphql_queries.get(variables["id"])
+            if isinstance(answer, Exception):
+                raise answer
+            if answer is None:
+                raise AssertionError(f"unexpected GraphQL query for {variables['id']}")
+            return deepcopy(answer)
         for value in self.get_data.values():
             if value.get("node_id") == variables["id"]:
                 value["auto_merge"] = None
@@ -330,6 +339,88 @@ def test_inherited_auto_merge_reservation_is_withdrawn_before_direct_merge():
     assert result == [1]
     assert api.get_data[_repo_path(REPO, "pulls/1")]["auto_merge"] is None
     assert any(call[0] == "GRAPHQL" and call[2] == {"id": "PR_1"} for call in api.calls)
+
+
+def _owner_reservation_fixture(api, *, enabled_at="2026-11-18T13:00:00Z", actor="owner", actor_type="User",
+                               typename="User", permission="admin", head=HEAD, reviews=None):
+    pr = make_pr()
+    pr["auto_merge"] = {"enabled_by": {"login": actor, "type": actor_type}, "merge_method": "merge"}
+    api.get_data[_repo_path(REPO, "pulls/1")] = pr
+    api.list_data[f"/repos/{REPO}/pulls?state=open&base={DEFAULT_BRANCH}"] = [pr]
+    api.graphql_queries["PR_1"] = {"data": {"node": {"headRefOid": head, "autoMergeRequest": {
+        "enabledAt": enabled_at, "enabledBy": {"__typename": typename, "login": actor}}}}}
+    api.list_data[_repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")] = [
+        {"id": 5, "head_sha": HEAD, "event": "pull_request", "created_at": "2026-11-18T12:00:00Z"}]
+    api.get_data[permission_route(actor)] = {"permission": permission, "user": {"login": actor}}
+    api.list_data[_repo_path(REPO, "pulls/1/reviews")] = [] if reviews is None else reviews
+    return pr
+
+
+def _disabled(api):
+    return [call[2]["id"] for call in api.calls if call[0] == "GRAPHQL" and call[1].startswith("mutation")]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"actor": "maintainer"}, {"reviews": [review(state="APPROVED")]}])
+def test_owner_reservation_made_after_the_current_head_push_is_kept(kwargs):
+    api = StubAPI()
+    _owner_reservation_fixture(api, **kwargs)
+    assert withdraw_inherited_reservations(api, REPO, DEFAULT_BRANCH) == []
+    assert _disabled(api) == []
+    assert api.get_data[_repo_path(REPO, "pulls/1")]["auto_merge"] is not None
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"enabled_at": "2026-11-18T11:00:00Z"},
+    {"enabled_at": "2026-11-18T12:00:00Z"},
+    {"enabled_at": None},
+    {"head": "b" * 40},
+    {"actor": "github-actions[bot]", "actor_type": "Bot", "typename": "Bot"},
+    {"actor": "dependabot[bot]", "actor_type": "Bot", "typename": "Bot"},
+    {"actor": "writer", "permission": "write"},
+    {"typename": "Bot"},
+    {"reviews": [review(state="CHANGES_REQUESTED")]},
+    {"reviews": [{"id": 1, "state": "SURPRISE"}]},
+])
+def test_other_reservations_are_withdrawn(kwargs):
+    api = StubAPI()
+    _owner_reservation_fixture(api, **kwargs)
+    assert withdraw_inherited_reservations(api, REPO, DEFAULT_BRANCH) == [1]
+    assert _disabled(api) == ["PR_1"]
+
+
+def test_owner_reservation_older_than_a_repeated_push_of_the_same_head_is_withdrawn():
+    api = StubAPI()
+    _owner_reservation_fixture(api)
+    api.list_data[_repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")].append(
+        {"id": 6, "head_sha": HEAD, "event": "pull_request", "created_at": "2026-11-18T13:30:00Z"})
+    assert withdraw_inherited_reservations(api, REPO, DEFAULT_BRANCH) == [1]
+
+
+@pytest.mark.parametrize("broken", ["graphql", "graphql-errors", "runs", "no-runs", "permission", "reviews",
+                                    "rest-actor"])
+def test_owner_reservation_is_withdrawn_when_any_input_is_unavailable(broken):
+    api = StubAPI()
+    pr = _owner_reservation_fixture(api)
+    runs = _repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")
+    if broken == "graphql":
+        api.graphql_queries["PR_1"] = GitHubAPIError("HTTP 502")
+    elif broken == "graphql-errors":
+        api.graphql_queries["PR_1"] = {"errors": [{"message": "boom"}]}
+    elif broken == "runs":
+        del api.list_data[runs]
+    elif broken == "no-runs":
+        api.list_data[runs] = []
+    elif broken == "permission":
+        # not the repository owner's login, and its permission lookup fails
+        pr["auto_merge"]["enabled_by"]["login"] = "other-admin"
+        api.graphql_queries["PR_1"]["data"]["node"]["autoMergeRequest"]["enabledBy"]["login"] = "other-admin"
+    elif broken == "reviews":
+        del api.list_data[_repo_path(REPO, "pulls/1/reviews")]
+    elif broken == "rest-actor":
+        pr["auto_merge"] = {"enabled_by": None}
+    api.get_data[_repo_path(REPO, "pulls/1")] = pr
+    assert withdraw_inherited_reservations(api, REPO, DEFAULT_BRANCH) == [1]
+    assert _disabled(api) == ["PR_1"]
 
 
 @pytest.mark.parametrize("automation", ["true", "false"])

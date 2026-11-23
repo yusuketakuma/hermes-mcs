@@ -560,6 +560,7 @@ def test_summary_karte_summary_line(led, ks, line):
     """The line reads the newest stored 連携サマリー, never the copy a
     rollup froze at its last rebuild."""
     _patient(led, 1)
+    led.db.execute("UPDATE patients SET karte_id=1 WHERE project_id=1")   # summaries bind to the linked karte
     stale = {"comment": "古い要約", "updated_at": "2026-09-01T00:00:00+09:00"}
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,content,model,meta,"
@@ -891,6 +892,7 @@ def test_summary_karte_summary_line_without_rollup_reads_artifact(led):
     """No patient_rollup yet (or one built before the fetch): the
     連携サマリー line still reflects the stored artifact."""
     _patient(led, 1)
+    led.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
     body = notify_views.patient_summary_text(led.db, 1)[1]
     assert "連携サマリー（MCS）: 未取得" in body
     led.karte_summary_store(1, 10, {

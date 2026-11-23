@@ -325,13 +325,12 @@ def _route_counts(db, cfg, settings, deadline):
         if errors or selection is None:
             raise ValueError("cloud_profile_unverified")
         scope, params = _source_scope(settings)
-        scope += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
-                  "AND COALESCE(human_src,0)=0 AND attempts=0 "
-                  f"AND NOT EXISTS ({extract._hold_sql()}) AND "
-                  + policy.history_scope_target_sql('m.message_id'))
+        now = time.time()
+        lane_sql, lane_params = extract.cloud_lane_sql(now)
+        scope += lane_sql + " AND " + policy.history_scope_target_sql('m.message_id')
+        params = (*params, *lane_params)
         query = extract._selection_sql(db, "DESC", scope, cloud_followup=True).replace(
             "m.body_text,", "length(m.body_text) AS body_length,")
-        now = time.time()
         rows = db.execute(query, (*params, None, None, None, now, now, READ_ROWS + 1))
         with policy.history_selection_check(db) as receipt_check:
             for count, row in enumerate(rows, 1):

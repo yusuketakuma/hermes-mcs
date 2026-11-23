@@ -191,18 +191,21 @@ def test_reinstall_keeps_recorded_yomitoku_selection(monkeypatch):
     assert applying['reinstall_done'] is True
 
 
-def test_manual_installer_reads_saved_ocr_selection(tmp_path):
+def test_manual_installer_reads_saved_added_software_selection(tmp_path):
     import sys
 
     config, legacy = tmp_path / 'config.json', tmp_path / 'data/install_options.json'
-    config.write_text('{"install_args":["--with-yomitoku"]}')
-    config.chmod(0o600)
     shell = (REPO / 'install.sh').read_text()
-    code = shell.split("<<'PYOCR'\n", 1)[1].split('\nPYOCR', 1)[0]
-    result = subprocess.run([sys.executable, '-I', '-', str(REPO / 'mcs'), str(config), str(legacy)],
-                            input=code, text=True, capture_output=True, check=True)
-    assert result.stdout.strip() == '1'
+    code = shell.split("<<'PYADDED'\n", 1)[1].split('\nPYADDED', 1)[0]
+    for saved, printed in ((['--with-yomitoku'], '1 0'), (['--with-tailscale'], '0 1'),
+                           (['--with-tailscale', '--with-yomitoku'], '1 1'), ([], '0 0')):
+        config.write_text(json.dumps({'install_args': saved}))
+        config.chmod(0o600)
+        result = subprocess.run([sys.executable, '-I', '-', str(REPO / 'mcs'), str(config), str(legacy)],
+                                input=code, text=True, capture_output=True, check=True)
+        assert result.stdout.strip() == printed
     assert 'if [ "$_ocr_previous" = 1 ] && [ "$WITH_YOMITOKU" -eq 0 ]; then' in shell
+    assert 'if [ "$_tailscale_previous" = 1 ] && [ "$WITH_TAILSCALE" -eq 0 ]; then' in shell
 
 
 def test_model_fetch_uses_exact_revision_and_rechecks_weight(monkeypatch, tmp_path):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List, fully verify and held-restore the local daily, pre-update and pre-reset ledger backups.
+"""List, fully verify and held-restore the local ledger backups and the home-care records copies.
 
 ``list`` reads names, stat and the verification marker only; ``--verify``
 adds a readonly integrity_check, foreign_key_check, schema contract and
@@ -8,10 +8,14 @@ private directory with the awaiting_consent hold before the database, exactly
 like the encrypted-bundle restore. Nothing here replaces or deletes the live
 ledger or any backup, starts services, or releases delivery: adoption is
 ``mcs_restore.py plan -> approve -> resume`` and delivery stays ``hold_all``.
+A home-care records copy (``homecare-*``) is checked for its own schema and
+placed as ``homecare.db`` in a NEW directory without a hold; adopting it is
+stopping the local chat screen and moving that file into ``data/`` by hand.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -24,12 +28,16 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 import backup_evidence  # noqa: E402
+from backup_names import backup_class  # noqa: E402
 import held_restore  # noqa: E402
 from llm_availability import disk_floor_mb  # noqa: E402
 import local_backup  # noqa: E402
 from mcs_util import file_sha256, has_sqlite_sidecars  # noqa: E402
 
-_NAME = re.compile(r"ledger-\d{8}\.db|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db")
+_NAME = re.compile(r"(?:ledger|homecare)-\d{8}\.db"
+                   r"|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db"
+                   r"|homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db")
+_HOMECARE = ("homecare_daily", "homecare_preupdate")
 
 
 def list_backups(*, verify: bool = False) -> list[dict]:
@@ -40,7 +48,8 @@ def list_backups(*, verify: bool = False) -> list[dict]:
         row = {"name": name, "kind": kind, "bytes": st.st_size, "modified_at": st.st_mtime,
                "marker": "verified" if verified else "unverified"}
         if verify:
-            row.update(_verify(Path(local_backup.BACKUP_DIR) / name))
+            check = _verify_homecare if kind in _HOMECARE else _verify
+            row.update(check(Path(local_backup.BACKUP_DIR) / name))
         rows.append(row)
     return rows
 
@@ -61,6 +70,35 @@ def _verify(path: Path) -> dict:
             "last_successful_run": inventory["last_successful_run"]}
 
 
+def _verify_homecare(path: Path) -> dict:
+    try:
+        if has_sqlite_sidecars(path):
+            raise backup_evidence.BackupError("backup_static_snapshot_required")
+        before = file_sha256(path)
+        migrations = _homecare_inventory(path)
+        if file_sha256(path) != before:
+            raise backup_evidence.BackupError("backup_source_changed")
+    except backup_evidence.BackupError as exc:
+        return {"check": backup_evidence.failure_code(exc)}
+    except (OSError, sqlite3.Error, ValueError):
+        return {"check": "backup_unreadable"}
+    return {"check": "ok", "sha256": before, "migrations": migrations}
+
+
+def _homecare_inventory(path: Path) -> dict[str, int]:
+    """Readonly integrity_check and foreign_key_check of a static home-care
+    copy; the applied migrations when it is one."""
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1",
+                                 uri=True)) as db:
+        if (db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]
+                or db.execute("PRAGMA foreign_key_check").fetchone() is not None):
+            raise backup_evidence.BackupError("backup_integrity_failed")
+        migrations = local_backup.homecare_migrations(db)
+    if migrations is None:
+        raise backup_evidence.BackupError("backup_homecare_schema_invalid")
+    return migrations
+
+
 def _source(name: str) -> Path:
     """Only a static backup the local rotation or updater wrote, by name."""
     if not isinstance(name, str) or _NAME.fullmatch(name) is None:
@@ -72,9 +110,11 @@ def _source(name: str) -> Path:
     return source
 
 
-def restore(name: str, *, destination: str) -> held_restore.Verification:
-    """Verify a frozen copy of one local backup, then publish it held into a NEW directory."""
+def restore(name: str, *, destination: str) -> dict:
+    """Verify a frozen copy of one local backup, then publish it into a NEW directory
+    (held for the ledger, plain ``homecare.db`` for the home-care records)."""
     source = _source(name)
+    homecare = backup_class(name) in _HOMECARE
     target, pinned = held_restore.new_destination(
         destination, outside=Path(local_backup.BACKUP_DIR).resolve())
     size = source.stat().st_size
@@ -82,11 +122,16 @@ def restore(name: str, *, destination: str) -> held_restore.Verification:
             2 * size / (1024 * 1024) + disk_floor_mb()):
         raise backup_evidence.BackupError("backup_restore_disk_low")
     with tempfile.TemporaryDirectory(prefix=".mcs-local-restore-", dir=target.parent) as work:
-        plain = Path(work) / "ledger.db"
+        plain = Path(work) / ("homecare.db" if homecare else "ledger.db")
         held_restore.copy_private(source, plain, size)
         source_sha256 = file_sha256(plain)
         if file_sha256(source) != source_sha256:
             raise backup_evidence.BackupError("backup_source_changed")
+        if homecare:
+            migrations = _homecare_inventory(plain)
+            held_restore.publish_new(target, pinned, plain, "homecare.db", source_sha256, size)
+            return {"v": 1, "sha256": source_sha256, "migrations": migrations,
+                    "database": str(target / "homecare.db")}
         inventory = backup_evidence.inventory_snapshot(plain)
         report = held_restore.report(source_sha256, source_sha256, inventory,
                                      restore_pending=True)

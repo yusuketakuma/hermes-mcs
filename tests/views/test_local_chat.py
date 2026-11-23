@@ -113,7 +113,7 @@ def test_deleted_post_hides_retained_body_and_attachment(snapshot):
 
 
 def test_shared_summary_and_stamp_projection(snapshot, monkeypatch):
-    monkeypatch.setattr(local_chat_view, "structured_lines", lambda db, mid, **kwargs: [f"合成要約 {mid}"])
+    monkeypatch.setattr(local_chat_view, "structured_summary", lambda db, mid, **kwargs: ([f"合成要約 {mid}"], None))
     result = chat.response(snapshot, {1}, "evidence", "project=1&message=1")["message"]
     assert result["summary_lines"] == ["合成要約 1"]
     assert result["stamp_line"] == "スタンプ 未取得"
@@ -146,19 +146,21 @@ def test_live_ledger_and_missing_snapshot_are_rejected(tmp_path):
     assert error.value.code == 2
 
 
-def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
+def test_reads_write_nothing_to_the_snapshot(snapshot, monkeypatch):
+    # The summary state, reply checks and OCR states read configuration as the chat cards do; nothing is written.
     import mcs_util
-    monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("must not load local configuration"))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
     path = Path(snapshot)
     before = hashlib.sha256(path.read_bytes()).digest()
-    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1"), ("attachments", "project=1&message=1")):
+    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1"),
+                        ("counts", "project=1"), ("attachments", "project=1&message=1")):
         chat.response(snapshot, {1}, kind, query)
     assert hashlib.sha256(path.read_bytes()).digest() == before
 
 
 def handler(path, headers=None):
     obj = chat.ChatHandler.__new__(chat.ChatHandler)
-    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1})
+    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1}, tailnet_host=None)
     obj.path = path
     obj.headers = Message()
     for name, value in (headers if headers is not None else [("Host", "127.0.0.1:8765")]):
@@ -201,6 +203,23 @@ def test_http_errors_do_not_echo_paths_queries_or_exception(monkeypatch):
     monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(ValueError("private")))
     obj.do_GET()
     assert result == [(400, b'{"error": "bad_request"}', "application/json")]
+
+
+@pytest.mark.parametrize("code", ["search_query_empty", "bad_search_filter", "search_cursor_invalid"])
+def test_http_passes_fixed_search_codes(monkeypatch, code):
+    obj, result = handler("/synthetic-capability/api/sources?project=1&q=")
+    monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(ValueError(code)))
+    obj.do_GET()
+    assert result == [(400, json.dumps({"error": code}).encode(), "application/json")]
+
+
+def test_http_unreadable_settings_are_unavailable_not_defaults(monkeypatch):
+    import mcs_util
+    obj, result = handler("/synthetic-capability/api/registered?project=1")
+    monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(
+        mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")))
+    obj.do_GET()
+    assert result == [(503, b'{"error":"config_unreadable"}', "application/json")]
 
 
 def test_headers_forbid_cache_external_resources_and_embedding():
@@ -387,3 +406,123 @@ def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path)
         assert chat.response(snapshot, {1}, "thread", "project=1&message=7")["items"] == []
     finally:
         store.close()
+
+
+def test_sections_list_every_card_view_except_slack_only_measurements():
+    keys = [item["key"] for item in chat.response("unused", {1}, "sections", "")["items"]]
+    assert keys[0] == "summary" and "previsit" in keys and "timeline" in keys and "signals" in keys
+    assert "measurements" not in keys and "meds" not in keys
+
+
+@pytest.mark.parametrize("section", [item["key"] for item in local_chat_view.sections()["items"]])
+def test_panel_reuses_card_views_scoped_and_readonly(snapshot, section):
+    before = hashlib.sha256(Path(snapshot).read_bytes()).digest()
+    data = chat.response(snapshot, {1}, "panel", f"project=1&section={section}")
+    assert data["section"] == section and data["panel"]["title"]
+    text = json.dumps(data, ensure_ascii=False)
+    assert "非対象" not in text and "合成疾患123" not in text
+    assert all(set(item) <= {"group", "text", "quotes", "source", "message_id"} for item in data["panel"]["items"])
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "panel", f"project=2&section={section}")
+    assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
+
+
+def test_panel_medication_view_is_bound_to_one_post_of_the_patient(snapshot):
+    data = chat.response(snapshot, {1}, "panel", "project=1&section=meds&message=1")
+    assert data["panel"]["title"].endswith("選択した投稿の薬剤")
+    for query in ("project=1&section=meds", "project=1&section=meds&message=123",
+                  "project=1&section=summary&message=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "panel", query)
+
+
+@pytest.mark.parametrize("route,query", [
+    ("panel", "project=1&section=unknown"), ("panel", "project=1&section=summary&page=-1"),
+    ("panel", "project=1&section=summary&page=x"), ("panel", "project=1&section=background&role=nope"),
+    ("panel", "project=1&section=summary&q=合成"), ("timeline", "project=1&section=summary"),
+    ("timeline", "project=1&page=1"), ("patients", "role=pharmacy")])
+def test_panel_arguments_are_strict(snapshot, route, query):
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, route, query)
+
+
+@pytest.mark.parametrize("last_run, errors, definite", [(None, [], False), (1.0, ["synthetic"], False), (1.0, [], True)])
+def test_empty_signal_list_is_definite_only_after_a_complete_readable_run(monkeypatch, last_run, errors, definite):
+    import mcs_signals
+    monkeypatch.setattr(mcs_signals, "current_open", lambda *_args, **_kw: {
+        "items": [], "pipeline_last_run_at": last_run, "truncated": False, "returned": 0, "total": 0, "errors": errors})
+    view = local_chat_view._signals(SimpleNamespace(db=None), 1)
+    assert (view["empty"] == "未解消のシグナルはありません。") is definite
+    assert definite or "見つかりませんでした" in view["empty"]
+
+
+def test_drug_search_reads_only_the_approved_dictionary(monkeypatch, tmp_path):
+    import drug_catalog
+    import mcs_util
+    from medications_testkit import _source_document
+
+    document = _source_document()
+    document["entries"][0]["products"] = [{"medicine": "900000001", "name": "架空製品錠5mg", "unit": "錠", "form_code": "1"}]
+    raw = json.dumps(document, ensure_ascii=False).encode()
+    (tmp_path / "catalog.json").write_bytes(raw)
+    (tmp_path / "catalog.json").chmod(0o600)
+    cfg = {"drug_map": {"path": str(tmp_path / "catalog.json"), "sha256": hashlib.sha256(raw).hexdigest()}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    data = chat.response("unused", {1}, "drugs", "q=架空製品")
+    assert data == {"status": "active", "items": [{"code": "900000001", "code_system": drug_catalog.CODE_SYSTEM,
+                                                   "name": "架空製品錠5mg", "generic_name": None, "unit": "錠"}]}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    assert chat.response("unused", {1}, "drugs", "q=架空") == {"status": "unconfigured", "items": []}
+    for query in ("q=", "q=架空&project=1", "q=架空&cursor=x"):
+        with pytest.raises(ValueError):
+            chat.response("unused", {1}, "drugs", query)
+
+
+def test_visit_brief_route_is_scoped_and_takes_the_last_visit_time(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    data = chat.response(snapshot, {1}, "brief", "project=1&since=1793458800")
+    assert data["since"] == 1793458800 and data["snapshot"]["generation_id"]
+    assert [section["key"] for section in data["sections"]][-1] == "signals"
+    assert chat.response(snapshot, {1}, "brief", "project=1")["since"] is None
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "brief", "project=2")
+    for query in ("project=1&since=nan", "project=1&since=-1", "project=1&since=1.5", "project=1&message=1",
+                  "project=1&q=x", "since=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "brief", query)
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, "timeline", "project=1&since=1")
+
+
+def test_context_panel_rows_keep_their_source_post_for_the_open_button(snapshot):
+    items = chat.response(snapshot, {1}, "panel", "project=1&section=background")["panel"]["items"]
+    assert 1 in {item["message_id"] for item in items}
+    import notify_views
+    view = mcs_view.View(snapshot)
+    try:
+        card = notify_views.patient_context_list(view.db, 1, "background", cfg={}, since=0,
+                                                 now=view.meta["generated_at"], first_view=True)
+    finally:
+        view.close()
+    assert all("message_id" not in item for item in card["items"])  # chat cards are unchanged
+
+
+def test_attachment_ocr_rows_open_the_post_that_carries_the_attachment(snapshot, monkeypatch):
+    import notify_views
+    rows = [{"text": "添付の記録", "message_id": 0, "parent_message_id": 7},
+            {"text": "出所のない記録"}]
+    monkeypatch.setattr(notify_views, "patient_context_list", lambda *a, **k: {"items": rows})
+    items = chat.response(snapshot, {1}, "panel", "project=1&section=background")["panel"]["items"]
+    assert [item["message_id"] for item in items] == [7, None]
+
+
+def test_visit_sheet_pages_count_from_the_same_last_visit(snapshot):
+    sheet = chat.response(snapshot, {1}, "panel", "project=1&section=changes&since=1700000000&page=0")["panel"]
+    assert any(line.startswith("前回の訪問: ") for line in sheet["head"]), sheet["head"]
+    plain = chat.response(snapshot, {1}, "panel", "project=1&section=changes")["panel"]
+    assert any(line.startswith("初回（直近7日）") for line in plain["head"]), plain["head"]
+    for query in ("project=1&section=summary&since=1", "project=1&section=signals&since=1",
+                  "project=1&section=changes&since=-1", "project=1&since=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "panel" if "section" in query else "timeline", query)

@@ -1,10 +1,12 @@
-"""Place a verified ledger copy into a NEW private directory under a consent hold.
+"""Place a verified database copy into a NEW private directory, the ledger under a consent hold.
 
 Shared by the encrypted-bundle restore (``mcs_backup restore``) and the local
 backup restore (``mcs_local_backup restore``). The awaiting_consent marker and
 ``restore.json`` are durable before ``ledger.db`` appears, and the database is
 linked exclusively: no existing ledger is ever replaced or removed. Adoption
-is ``mcs_restore plan -> approve -> resume``; delivery stays held.
+is ``mcs_restore plan -> approve -> resume``; delivery stays held. A home-care
+records copy (``mcs_local_backup restore``) is placed the same way without a
+hold, since nothing is delivered from it; adopting it is a manual file move.
 """
 from __future__ import annotations
 
@@ -75,6 +77,22 @@ def new_destination(destination: str, *, outside: Path) -> tuple[Path, os.stat_r
 def place(target: Path, pinned: os.stat_result, plain: Path, verification: Verification,
           limit: int) -> Verification:
     """Publish ``plain`` as ``target/ledger.db`` behind the consent hold."""
+    def hold():
+        notify_spool.mark_restored(
+            str(target), by="mcs_backup_restore", phase="awaiting_consent",
+            report_id=verification["sha256"])
+        atomic_write(str(target / "restore.json"),
+                     lambda stream: json.dump(verification, stream, sort_keys=True),
+                     mode=0o600)
+    publish_new(target, pinned, plain, "ledger.db", verification["plain_sha256"], limit,
+                before=hold)
+    return verification
+
+
+def publish_new(target: Path, pinned: os.stat_result, plain: Path, name: str,
+                plain_sha256: str, limit: int, *, before=None) -> None:
+    """Create the NEW ``target`` in its pinned private parent, run ``before``
+    (durable markers), then link a verified copy of ``plain`` as ``name``."""
     parent = target.parent
     backup_evidence.require_private_directory(parent)
     current = parent.stat()
@@ -84,28 +102,23 @@ def place(target: Path, pinned: os.stat_result, plain: Path, verification: Verif
     published = False
     staging = target / (".restore-" + os.urandom(16).hex())
     try:
-        notify_spool.mark_restored(
-            str(target), by="mcs_backup_restore", phase="awaiting_consent",
-            report_id=verification["sha256"])
-        atomic_write(str(target / "restore.json"),
-                     lambda stream: json.dump(verification, stream, sort_keys=True),
-                     mode=0o600)
+        if before is not None:
+            before()
         # Copy within the NEW destination filesystem, then link exclusively:
-        # neither os.replace nor a cross-device move can overwrite a ledger.
+        # neither os.replace nor a cross-device move can overwrite a database.
         copy_private(plain, staging, limit)
         with staging.open("rb") as stream:
             os.fsync(stream.fileno())
-        if file_sha256(staging) != verification["plain_sha256"]:
+        if file_sha256(staging) != plain_sha256:
             raise backup_evidence.BackupError("backup_restore_copy_mismatch")
-        os.link(staging, target / "ledger.db")
+        os.link(staging, target / name)
         published = True
         staging.unlink()
         fsync_dir(target)
-        return verification
     except (OSError, backup_evidence.BackupError):
-        # A concurrent ledger collision belongs to somebody else. Keep
-        # both it and the consent hold; never delete it as our cleanup.
-        if not published and os.path.lexists(target / "ledger.db"):
+        # A concurrent collision belongs to somebody else. Keep both it
+        # and any consent hold; never delete it as our cleanup.
+        if not published and os.path.lexists(target / name):
             staging.unlink(missing_ok=True)
         else:
             shutil.rmtree(target)

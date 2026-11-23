@@ -1,6 +1,7 @@
 """extract_qc: Jev quality control over extract_llm artifacts.
 
-Annotate-only audit of the fully-local extraction. The drain's existing
+Annotate-only audit of the current extraction, whichever lane produced it
+(local, or the cloud re-extraction of stored posts). The drain's existing
 guards (OFF mode, circuit, paused, project_ids, daily budget, usage
 reservation, mid-run config recheck) apply verbatim — the job never
 mutates the extraction artifact and never suppresses an item.

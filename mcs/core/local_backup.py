@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Local ledger backups: the verified daily rotation and pre-update rollback copies.
+"""Local backups of the ledger and the home-care records: verified daily rotations and pre-update copies.
 
 Every copy is a stepped sqlite ``.backup`` into a private staging file, a
 schema/quick_check, then an atomic publish into ``data/backups`` (0700).
+The home-care records database (``data/homecare.db``) is copied only when
+that file exists; it is never created here.
 Health reads only names, stat and the ``.ok`` marker; nothing here opens
 the live ledger for writing. Encrypted off-device bundles are ``mcs_backup``.
 """
@@ -20,6 +22,7 @@ from pathlib import Path
 from time import monotonic
 
 from backup_names import BACKUP_CLASSES, backup_class
+from homecare_store import FOUNDATION as HOMECARE_FOUNDATION, default_path as homecare_default_path
 from ledger import valid_mcs_db
 from llm_availability import disk_floor_mb
 from maintenance_errors import MaintenanceError
@@ -27,6 +30,7 @@ from mcs_util import HOME
 from safe_io import atomic_write, publish_tmp, read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
+HOMECARE_DB = str(homecare_default_path(HOME))
 BACKUP_KEEP = 3
 BACKUP_OVERDUE_S = 2 * 86400
 # an apply publishes its preupdate backup, then waits up to 20min for the
@@ -66,8 +70,35 @@ def _valid(path: str, deadline: float | None) -> bool:
     return valid_mcs_db(path, deadline=deadline)
 
 
+def homecare_migrations(db: sqlite3.Connection) -> dict[str, int] | None:
+    """Highest applied migration per module, or None unless the core foundation is recorded."""
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "schema_migrations" not in tables or db.execute(
+            "SELECT 1 FROM schema_migrations WHERE module='core' AND number=1 AND name=?",
+            (HOMECARE_FOUNDATION,)).fetchone() is None:
+        return None
+    return {module: number for module, number in db.execute(
+        "SELECT module, MAX(number) FROM schema_migrations GROUP BY module ORDER BY module")}
+
+
+def _valid_homecare(path: str, deadline: float | None) -> bool:
+    """A static home-care copy: quick_check ok and the core foundation migration recorded."""
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return False
+    try:
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro&immutable=1",
+                                     uri=True)) as db:
+            if deadline is not None:
+                db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
+            return (db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                    and homecare_migrations(db) is not None
+                    and (deadline is None or monotonic() < deadline))
+    except (OSError, sqlite3.DatabaseError):
+        return False
+
+
 def publish_backup(db_path: str, tmp: str, dest: str,
-                    deadline: float | None = None) -> None:
+                    deadline: float | None = None, *, valid=_valid) -> None:
     """Copy, verify and publish a backup while owning its staging file.
     The copy is stepped so ``deadline`` abandons it mid-way instead of
     running past the watchdog."""
@@ -103,7 +134,7 @@ def publish_backup(db_path: str, tmp: str, dest: str,
                            **({} if deadline is None else {'sleep': 0.0}))
                 connection_budget(dst)
                 dst.execute("PRAGMA journal_mode=DELETE")
-        if not _valid(tmp, deadline):
+        if not valid(tmp, deadline):
             if deadline is not None and monotonic() >= deadline:
                 raise MaintenanceError("backup_deadline_exceeded")
             raise MaintenanceError("backup_verify_failed")
@@ -139,34 +170,53 @@ def _write_ok_marker(dest: str) -> None:
 
 
 def daily_backup(db_path: str, *, deadline: float | None = None):
-    """One VERIFIED sqlite .backup per day — write to tmp, schema/quick_check,
-    then atomic publish. A present-but-broken file must never block a
-    fresh backup (Oracle B24). Returns "skipped_disk_low" without
-    writing when the volume lacks room for two ledger copies above the
-    disk floor — a backup must not be what fills the disk.
+    """One VERIFIED sqlite .backup of the ledger per day — write to tmp,
+    schema/quick_check, then atomic publish. A present-but-broken file must
+    never block a fresh backup (Oracle B24). Returns "skipped_disk_low"
+    without writing when the volume lacks room for two ledger copies above
+    the disk floor — a backup must not be what fills the disk.
 
     ``deadline`` (time.monotonic) is the caller's hard stop, e.g. the
     watchdog kill time. Returns "skipped_deadline" without writing when
     the time left cannot cover the ledger at BACKUP_RATE_BPS: a backup
     the watchdog kills every tick would never complete (M7)."""
+    outcome = _daily_copy(db_path, "ledger", _valid, deadline)
+    if outcome == "published":
+        prune_preupdate_backups()
+        return None
+    return outcome
+
+
+def daily_homecare_backup(*, deadline: float | None = None):
+    """The same verified daily copy of the home-care records database,
+    only when that file exists; returns daily_backup's skip reasons."""
+    if not os.path.isfile(HOMECARE_DB):
+        return None
+    outcome = _daily_copy(HOMECARE_DB, "homecare", _valid_homecare, deadline)
+    return None if outcome == "published" else outcome
+
+
+def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
+    """Publish today's ``<prefix>-YYYYMMDD.db`` and rotate to BACKUP_KEEP;
+    "published", a skip reason, or None when today's copy is already good."""
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
     stamp = time.strftime("%Y%m%d")
-    dest = os.path.join(BACKUP_DIR, f"ledger-{stamp}.db")
+    dest = os.path.join(BACKUP_DIR, f"{prefix}-{stamp}.db")
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
     # missing marker falls back to validation (B24)
     if _verified_unchanged(dest):
-        return
+        return None
     # checking today's file must leave room to replace it: a broken copy
     # whose check eats the whole budget would otherwise never be replaced
     check_by = None if deadline is None \
         else deadline - backup_time_needed_s(db_path) - BACKUP_CHECK_SLACK_S
-    if _valid(dest, check_by):
+    if valid(dest, check_by):
         # re-arm the fast path, or every later tick today re-runs the
         # full quick_check (a same-day backup made before the marker)
         _write_ok_marker(dest)
-        return
+        return None
     if deadline is not None and (
             deadline - monotonic() < backup_time_needed_s(db_path)):
         return "skipped_deadline"
@@ -174,22 +224,22 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
         return "skipped_disk_low"
     # private from creation; prune_leftovers sweeps a copy a hard kill strands
     fd, tmp = tempfile.mkstemp(
-        prefix=f"ledger-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+        prefix=f"{prefix}-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
-    publish_backup(db_path, tmp, dest, deadline=deadline)
+    publish_backup(db_path, tmp, dest, deadline=deadline, valid=valid)
     _write_ok_marker(dest)
-    files = _daily_backups()
+    files = _daily_backups("daily" if prefix == "ledger" else "homecare_daily", prefix)
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):
             with suppress(OSError):
                 os.unlink(path)
-    prune_preupdate_backups()
+    return "published"
 
 
-def _daily_backups() -> list[str]:
+def _daily_backups(kind: str = "daily", prefix: str = "ledger") -> list[str]:
     """Only owned daily files contribute to rotation and freshness."""
-    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db"))
-                  if backup_class(os.path.basename(path)) == "daily")
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, f"{prefix}-*.db"))
+                  if backup_class(os.path.basename(path)) == kind)
 
 
 def newest_backup_age_s() -> float | None:
@@ -308,6 +358,46 @@ def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
     """Verified .backup before an apply — distinct 'preupdate-' prefix
     so the daily ledger-* rotation can never evict a rollback point
     (B3). Returns the published path; an optional monotonic deadline bounds the copy."""
+    return _stamped_copy(db_path, "preupdate", _valid, deadline)
+
+
+def preupdate_homecare_backup(*, deadline: float | None = None) -> str | None:
+    """Verified copy of the home-care records before an apply, only when that
+    file exists. Returns the path or None; nothing is rotated here — the
+    attempt discards its own copy when it fails and rotates when it succeeds."""
+    if not os.path.isfile(HOMECARE_DB):
+        return None
+    return _stamped_copy(HOMECARE_DB, "homecare-preupdate", _valid_homecare, deadline)
+
+
+def _homecare_preupdate_backups() -> list[str]:
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "homecare-preupdate-*.db"))
+                  if backup_class(os.path.basename(path)) == "homecare_preupdate")
+
+
+def discard_homecare_preupdate(path: str | None) -> None:
+    """Remove the copy a failed apply attempt made, so it never takes the
+    place of a copy that predates a successful update."""
+    if path and os.path.abspath(path) in map(os.path.abspath, _homecare_preupdate_backups()):
+        with suppress(OSError):
+            os.unlink(path)
+
+
+def rotate_homecare_preupdate() -> None:
+    """After a successful apply, keep the newest BACKUP_KEEP home-care copies."""
+    for old in _homecare_preupdate_backups()[:-BACKUP_KEEP]:
+        with suppress(OSError):
+            os.unlink(old)
+
+
+def reset_backup(db_path: str) -> str:
+    """Verified copy before a patient-context reset; its prefix keeps it out of every automatic rotation."""
+    return _stamped_copy(db_path, "patient-context-reset", _valid, None)
+
+
+def _stamped_copy(db_path: str, prefix: str, valid, deadline: float | None) -> str:
+    """Publish one verified ``<prefix>-<time>-<random>.db``; the room and
+    deadline are checked before anything is written."""
     if deadline is not None:
         if type(deadline) not in (int, float) or not math.isfinite(deadline):
             raise MaintenanceError("backup_deadline_invalid")
@@ -319,28 +409,10 @@ def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
     if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < backup_need_mb(db_path):
         raise MaintenanceError("backup_disk_low")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    fd, tmp = tempfile.mkstemp(
-        prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+    fd, tmp = tempfile.mkstemp(prefix=f"{prefix}-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
     dest = tmp[:-4]
-    if deadline is None:
-        publish_backup(db_path, tmp, dest)
-    else:
-        publish_backup(db_path, tmp, dest, deadline=deadline)
-    return dest
-
-
-def reset_backup(db_path: str) -> str:
-    """Verified copy before a patient-context reset; its prefix keeps it out of every automatic rotation."""
-    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
-    os.chmod(BACKUP_DIR, 0o700)
-    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < backup_need_mb(db_path):
-        raise MaintenanceError("backup_disk_low")
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    fd, tmp = tempfile.mkstemp(prefix=f"patient-context-reset-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
-    os.close(fd)
-    dest = tmp[:-4]
-    publish_backup(db_path, tmp, dest)
+    publish_backup(db_path, tmp, dest, deadline=deadline, valid=valid)
     return dest
 
 
@@ -398,11 +470,11 @@ def staging_patterns() -> list[str]:
             for suffix in ("", "-journal", "-wal", "-shm")]
 
 
-_GENERATION_ORDER = ("daily", "preupdate", "patient_context_reset")
+_GENERATION_ORDER = ("daily", "preupdate", "patient_context_reset", "homecare_daily", "homecare_preupdate")
 
 
 def generations() -> list[tuple[str, str, os.stat_result]]:
-    """(name, kind, lstat) of the daily, pre-update and pre-reset backups,
+    """(name, kind, lstat) of the ledger's daily, pre-update and pre-reset backups and the home-care copies,
     in that kind order and newest name first within each. Names and stat only — no DB open."""
     found = []
     try:

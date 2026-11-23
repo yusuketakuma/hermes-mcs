@@ -9,7 +9,7 @@ Responsibility split:
 - ledger.py      : schema, migrations, writes, outbox, jobs table
 - job_ops.py     : cmd ingest, fetch_jobs drains, discovery, trickle
                    deep-import seeding, thread merge
-- local_backup.py: daily verified backup
+- local_backup.py: daily verified backups of the ledger and home-care records
 - maintenance.py : log rotation, pruning, snapshot publish, DB upkeep
 - extract*/rollup/notify_flush : derived-data + delivery stages
 
@@ -988,7 +988,7 @@ def _hard_deadline() -> float | None:
 
 
 def _housekeeping(result):
-    """Daily backup, attachment pruning and the daily
+    """Daily backups (ledger, then home-care records), attachment pruning and the daily
     database upkeep — each failure lands in errors without failing the
     run. Backup and upkeep start only when the watchdog leaves them time
     (M7); a skipped backup is recorded, not silently dropped."""
@@ -1004,6 +1004,14 @@ def _housekeeping(result):
         result["errors"].append(f"backup: {e}")
     except Exception as e:
         result["errors"].append(f"backup: {type(e).__name__}")
+    try:
+        skipped = local_backup.daily_homecare_backup(deadline=hard)
+        if skipped:
+            result["homecare_backup_skipped"] = skipped.removeprefix("skipped_")
+    except maintenance.MaintenanceError as e:
+        result["errors"].append(f"homecare_backup: {e}")
+    except Exception as e:
+        result["errors"].append(f"homecare_backup: {type(e).__name__}")
     try:
         upkeep = maintenance.db_maintenance(DB, deadline=hard)
         if upkeep:

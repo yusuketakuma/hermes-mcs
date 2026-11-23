@@ -1617,6 +1617,8 @@ def main(argv: list[str] | None = None) -> int:
     cloud_cli.add_parsers(sub)
     import config_edit
     config_edit.add_parsers(sub)
+    import remote_access_setup
+    remote_access_setup.add_parser(sub, cmd_services)
     args = ap.parse_args(argv)
     try:
         return args.fn(args)
