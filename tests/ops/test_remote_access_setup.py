@@ -213,7 +213,7 @@ def test_a_kept_route_file_is_checked_before_the_workspace_restarts(tailnet, tmp
     assert tailnet.run(port=9000) == 1 and tailnet.saved == [] and tailnet.services == 0
 
 
-def test_a_refused_port_change_returns_to_the_published_port(tailnet):
+def test_a_refused_port_change_returns_to_the_published_port(tailnet, capsys):
     tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
     tailnet.serve_rc = 1
     assert tailnet.run(port=9000) == 1
@@ -221,3 +221,6 @@ def test_a_refused_port_change_returns_to_the_published_port(tailnet):
     assert tailnet.saved[1] == {"remote_access.tailnet_host": HOST, "remote_access.port": 8770,
                                 "remote_access.route_settings": None}
     assert tailnet.services == 2
+    # Publishing 9000 by hand would point the tailnet at a port the workspace has left.
+    out = capsys.readouterr().out
+    assert "8770 番の公開に戻しました" in out and "tailscale serve" not in out

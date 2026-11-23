@@ -140,13 +140,18 @@ def command(args, *, services) -> int:
     # `serve` publishes to this tailnet only. `funnel` would publish to the internet and is never used.
     served = _run(cli, "serve", "--bg", f"http://127.0.0.1:{port}")
     if served is None or served.returncode != 0:
-        print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
-              f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")
+        restored = False
         if current.get("port") not in (None, port):
             # The published address still points at the old port: put the workspace back there.
             restore = {f"remote_access.{key}": current.get(key) for key in ("tailnet_host", "port", "route_settings")}
-            if _save(config_edit, restore) and services(args) == 0:
-                print(f"これまでの {current['port']} 番の公開に戻しました。")
+            restored = _save(config_edit, restore) and services(args) == 0
+        if restored:
+            # Publishing the new port by hand now would point the tailnet at a port nothing listens on.
+            print(f"tailnet への公開を {port} 番に変更できなかったため、これまでの {current['port']} 番の公開に戻しました。"
+                  "Tailscale の状態を確かめてから、mcs setup remote --port をもう一度実行してください。")
+        else:
+            print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
+                  f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")
         return 1
     if status == 0:
         print(f"遠隔接続を設定しました。同じ tailnet の端末から https://{host}/ を開いてください。")
