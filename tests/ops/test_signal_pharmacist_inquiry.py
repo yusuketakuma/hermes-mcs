@@ -95,6 +95,12 @@ def test_non_medication_requests_are_not_inquiries(store, kwargs):
     ("ABCODEを減量", "ABC", False),
     ("ロキソニンパップを中止", "ロキソニン", True),
     ("ロキソニンセンターへ連絡", "ロキソニン", False),
+    ("ロキソニンテープカットしてもよいですか", "ロキソニン", True),  # what follows the form is not judged
+    ("ロキソニンテープケースの持参", "ロキソニン", True),
+    ("ロキソプロフェンNaﾃｰﾌﾟの中止", "ロキソプロフェンNa", True),     # half-width form after a Latin end
+    ("ロキソニンテープ100mgを中止", "ロキソニン", True),
+    ("ゴウセイカプセルセットを中止", "ゴウセイカプセルセット", True),  # the full product name itself
+    ("ゴウセイカプセルセットを中止", "ゴウセイ", True),            # its head name with the form
 ])
 def test_names_medicine_accepts_known_dosage_forms(text, name, named):
     assert mcs_signals._names_medicine(text, name) is named
