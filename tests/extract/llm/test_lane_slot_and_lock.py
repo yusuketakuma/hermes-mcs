@@ -53,6 +53,14 @@ def _lock_stub(monkeypatch, tmp_path, blocked_after_call):
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: None)
+    # write-lock waits poll on a synthetic clock, so a held lock costs no
+    # wall time while each wait still ends after its bound
+    state["clock"] = 0.0
+    def sleep(seconds):
+        state["clock"] += seconds
+    monkeypatch.setattr(extract_llm_errors, "time", SimpleNamespace(
+        time=time.time, sleep=sleep,
+        monotonic=lambda: time.monotonic() + state["clock"]))
     return state
 
 
@@ -61,8 +69,23 @@ def _lock_stub(monkeypatch, tmp_path, blocked_after_call):
 def test_lock_lost_result_is_written_later_in_run(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="合成の本文です。" * 20)])
-    # the in-handler wait (60 tries) all fail; the end-of-run retry wins
-    _lock_stub(monkeypatch, tmp_path, blocked_after_call=60)
+    # the tick holds the lock past the in-handler 60 s wait (polled on a
+    # synthetic clock); the end-of-run retry wins once it is released
+    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
+    release = []
+    held = extract_llm.llm_extract
+    def extract(body, **kw):
+        release.append(extract_llm_errors.time.monotonic() + 60.5)
+        return held(body, **kw)
+    monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, "llm_extract", extract)
+    acquire = extract_llm.acquire_run_lock
+    def timed_acquire():
+        if release and extract_llm_errors.time.monotonic() < release[0]:
+            return None
+        return acquire()
+    monkeypatch.setattr(extract_llm_errors, "acquire_run_lock", timed_acquire)
+    assert state["blocked"] == 0
     res = extract_llm.run_pending(db, limit=10, budget_s=30,
                                   per_write_lock=True)
     assert res["lock_lost"] == 1 and res["done"] == 1
