@@ -7,7 +7,13 @@
     "常駐モードは 127.0.0.1 にだけ待ち受け、Host は tailnet の名前、書き込みの Origin は https://<名前>.ts.net だけを受け付けます。",
     "要求ごとに Tailscale-User-Login が1つだけあり、在籍中の職員のログインと一致する必要があります。未登録のログインには MCS の記録も台帳も返しません。",
     "職員が1人もいない間だけ、最初の登録を受け付け、その人のログインを結び付けて管理者にします。",
-    "訪問の種類ごとに、実施を記録できる資格をモジュールが決めます。薬局の訪問薬剤管理は、記録する人と訪問した職員の両方に薬剤師の資格が必要です。配薬のみは誰でも実施にできます。"
+    "訪問の種類ごとに、実施を記録できる資格をモジュールが決めます。薬局の訪問薬剤管理は、記録する人と訪問した職員の両方に薬剤師の資格が必要です。配薬のみは誰でも実施にできます。",
+    "スマホの幅では、左の一覧が上の見出しになり、患者や画面を開くと患者一覧をたたみます（「患者一覧」で開き直せます）。文字を大きくし、入力欄でスマホが拡大しないようにしました。投稿の詳細は全画面で開きます。"
   ],
-  "refs": ["mcs/ops/mcs_local_chat.py", "mcs/homecare/core/homecare_visits.py", "mcs/homecare/core/homecare_modules.py", "mcs/homecare/pharmacy/pharmacy_module.py"]
+  "refs": [
+    "mcs/ops/mcs_local_chat.py",
+    "mcs/homecare/core/homecare_visits.py",
+    "mcs/homecare/core/homecare_modules.py",
+    "mcs/homecare/pharmacy/pharmacy_module.py"
+  ]
 }
