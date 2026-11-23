@@ -20,9 +20,9 @@ Run with the hermes venv that has slack_sdk:
         scripts/diagnostics/notify_remote_verify.py [--emit] [--confirm-human]
 """
 import asyncio
-import getpass
 import json
 import os
+import pwd
 import sqlite3
 import sys
 import time
@@ -37,7 +37,7 @@ from adapters.slack.emoji_text import slack_emoji_pattern  # noqa: E402
 
 MAX_PARTS = 500
 HISTORY_LIMIT = 200
-ACTOR = getpass.getuser()
+ACTOR = pwd.getpwuid(os.getuid()).pw_name
 REASON = "remote-verified resend+replace of unknown notification parts"
 
 

@@ -15,6 +15,7 @@ on:
       - scripts/mcs
       - scripts/install_local.py
       - mcs/ops/**
+      - mcs_standalone/**
       - mcs/core/mcs_config.py
       - .github/workflows/fresh-install.yml
   schedule:
@@ -23,6 +24,10 @@ on:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail: a failed install is not hidden by tee
 
 concurrency:
   group: fresh-install-${{ github.ref }}
