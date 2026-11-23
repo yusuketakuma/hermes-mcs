@@ -162,7 +162,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
             return "deferred", None
     distinct = (selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
-    selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
+    selected_tokens = cloud_policy.selection_max_tokens(selection)
     if not spent and cloud_policy.budget_block_reason(
             ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
@@ -926,8 +926,9 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
         raise ValueError("patient_context_prompt_capacity")
     if provider is not None:
         selection = getattr(provider, "selection", None)
+        import cloud_policy
         selected_tokens = selection.get("max_tokens") if selection is not None else None
-        max_tokens = 1600 if selected_tokens is None else selected_tokens
+        max_tokens = cloud_policy.ORIGINAL_MAX_TOKENS if selected_tokens is None else selected_tokens
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens)
     else:
         if local_guard is not None:

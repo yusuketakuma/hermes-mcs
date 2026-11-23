@@ -421,7 +421,7 @@ def _calibration(db, since):
             "output_tokens_per_request": Decimal(output_tokens) / samples if samples else None}
 
 
-def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, model=policy.MODEL):
+def _costs(item, ratio, fx=None, *, output_limit=policy.ORIGINAL_MAX_TOKENS, output_per_request=None, model=policy.MODEL):
     definition = policy._price_definition(model)
     prices = definition["prices"]
     high_input = prices["reservation_input"] if definition["provider"] == "openai" else prices["long_input"]
@@ -710,7 +710,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     import extract_llm as extract
     for route, item in routes.items():
         _costs(item, ratio, settings["usd_jpy"], output_limit=(extract.MAX_TOKENS if route == "reextract"
-               else 8192 if route == "semantic_backlog" else 1600),
+               else 8192 if route == "semantic_backlog" else policy.ORIGINAL_MAX_TOKENS),
                output_per_request=output_mean, model=settings["model"])
     total_chars = sum(row["chars"] for row in counts.values())
     total_requests = sum(row["patients"] + row["scan_requests"] for row in counts.values())

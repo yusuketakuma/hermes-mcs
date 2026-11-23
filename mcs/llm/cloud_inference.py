@@ -600,7 +600,7 @@ def _context_local_request(ledger, cfg, prompt, *, project_id, message_id, unit_
             ledger=ledger, ordered=True)
         if selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
-        tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
+        tokens = cloud_policy.selection_max_tokens(selection)
         body = _client_class(selection).body(
             SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
         candidate = cloud_policy._request_identity(settings, body, route='patient_context',
@@ -653,7 +653,7 @@ def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_k
             cfg, route='reextract', purpose='backlog', root=HOME, ledger=ledger, ordered=True)
         if selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
-        tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
+        tokens = cloud_policy.selection_max_tokens(selection)
         from types import SimpleNamespace
         body = _client_class(selection).body(
             SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)

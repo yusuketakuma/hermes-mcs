@@ -322,6 +322,15 @@ def scope_generation(cfg):
     return payload_hash({k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")})
 
 
+# The original contract's output limit, used when a selection carries none.
+ORIGINAL_MAX_TOKENS = 1600
+
+
+def selection_max_tokens(selection):
+    """Return the selection's output limit, or the original contract's when it has none."""
+    return selection["max_tokens"] if selection["max_tokens"] is not None else ORIGINAL_MAX_TOKENS
+
+
 def api_key(root=None):
     """Read only this MCS installation's dotenv, never process or Hermes keys."""
     return private_env_value(anthropic_client.KEY_ENV, root)
@@ -433,7 +442,7 @@ def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=Fals
             continue
         if first is None:
             first = selection
-        limit = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
+        limit = selection_max_tokens(selection)
         reason = ledger is not None and (
             global_block_reason(ledger, model=selection["model"])
             or budget_block_reason(ledger, settings, max_tokens=limit, selection=selection))
@@ -1761,7 +1770,7 @@ def _selection_model(settings, selection, max_tokens):
     return model
 
 
-def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESERVATION_MARGIN, selection=None):
+def budget_block_reason(ledger, cfg, *, max_tokens=ORIGINAL_MAX_TOKENS, input_bound=INPUT_RESERVATION_MARGIN, selection=None):
     """Read the exact current JST reservation totals without spending or changing state.
     ``input_bound`` is the next request's reserved input (the margin alone for a
     pre-check without a request)."""
