@@ -42,16 +42,21 @@ def test_search_returns_official_codes_with_edition(tmp_path):
     assert drug_catalog.status(cfg) == "active"
 
 
-def test_alias_matches_are_not_capped_by_the_reference_search(tmp_path, monkeypatch):
-    import drug_map
-    cfg = _cfg(tmp_path, _with_products())
-    expected = drug_catalog.search(cfg, "架空")
-
-    def capped(self, query, *, limit=20):
-        raise AssertionError("the 200-item reference search must not bound the catalog")
-
-    monkeypatch.setattr(drug_map.DrugMap, "search", capped)
-    assert drug_catalog.search(cfg, "架空") == expected
+def test_alias_matches_beyond_the_reference_search_cap_are_returned(tmp_path):
+    document = _source_document()
+    document["entries"] = []
+    for n in range(205):
+        code = f"9{n:08d}"
+        # the last identity sorts after the old 200-item cap but its product name sorts first
+        name = "あ架空製品" if n == 204 else f"ん架空製品{n:03d}"
+        document["entries"].append({
+            "id": f"mhlw:medicine:{code}", "kind": "product", "display": name,
+            "aliases": [f"共通別名{n:03d}"], "codes": {"medicine": code}, "forms": [],
+            "source_codes": [{"medicine": code, "drug_price": f"DRG{n:09d}", "general_name": None}],
+            "products": [{"medicine": code, "name": name, "unit": "錠", "form_code": "1"}]})
+    cfg = _cfg(tmp_path, document)
+    items = drug_catalog.search(cfg, "共通別名", limit=200)
+    assert items[0]["name"] == "あ架空製品" and len(items) == 200
 
 
 def test_lookup_by_code_and_unknown(tmp_path):

@@ -64,14 +64,21 @@ def test_own_or_unattributed_thread_post_is_not_a_reply(store, reply):
 @pytest.mark.parametrize("kwargs", [
     {"action": "キラナの減量", "meds": ["キラナ"]},
     {"action": "減量のご検討", "quote": "キラナを減量していただけますか", "meds": ["キラナ"]},
+    {"action": "ラコールNF200mLを中止", "meds": ["ラコールNF"]},       # dose written right after the name
+    {"action": "降圧薬の中止", "quote": "薬剤師から降圧薬の中止をご相談します"},
 ])
 def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
     _inquiry(store.db, 1, **kwargs)
     assert len(_run(store.db)) == 1
 
 
-def test_medicine_name_inside_a_longer_word_is_not_an_inquiry(store):
-    _inquiry(store.db, 1, action="アセスメント日程の調整", meds=["アセス"])
+@pytest.mark.parametrize("kwargs", [
+    {"action": "アセスメント日程の調整", "meds": ["アセス"]},          # name inside a longer word
+    {"action": "ABCDE評価の共有", "meds": ["ABC"]},                     # Latin name inside a longer word
+    {"action": "候補日の選択", "quote": "薬剤師と調整した候補日から選んでください"},  # 薬 only in a job title
+])
+def test_non_medication_requests_are_not_inquiries(store, kwargs):
+    _inquiry(store.db, 1, **kwargs)
     assert _run(store.db) == []
 
 

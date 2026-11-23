@@ -500,17 +500,20 @@ PHYSICIAN_TARGETS = frozenset(("医師", "主治医", "主治医師", "担当医
 # in the request's summary or quote is required: 変更・中止・提案・照会 alone
 # also describe visit scheduling and other non-medication requests.
 INQUIRY_DRUG_WORDS = ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
+# job titles and places that contain 薬 without naming a medicine
+NON_DRUG_TERMS = ("薬剤師", "薬局", "薬剤部")
 _KATAKANA_TAIL = re.compile(r"[ァ-ヺー]")
 
 
 def _names_medicine(text, name):
     """The medicine name as a word of text: not the head of a longer
-    katakana or Latin word (「アセス」 is not in 「アセスメント」)."""
+    katakana or Latin word (「アセス」 is not in 「アセスメント」); a dose
+    written right after it (「ラコールNF200mL」) still names it."""
     start = text.find(name)
     while start >= 0:
         after = text[start + len(name):start + len(name) + 1]
         if not after or not ((_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after))
-                             or (name[-1].isascii() and name[-1].isalnum() and after.isascii() and after.isalnum())):
+                             or (name[-1].isascii() and name[-1].isalpha() and after.isascii() and after.isalpha())):
             return True
         start = text.find(name, start + 1)
     return False
@@ -528,7 +531,10 @@ def _med_names(raw):
 
 def _medication_inquiry(action, quote, med_names):
     text = "\n".join(t for t in (action, quote) if isinstance(t, str))
-    return (any(word in text for word in INQUIRY_DRUG_WORDS)
+    plain = text
+    for term in NON_DRUG_TERMS:
+        plain = plain.replace(term, "\n")
+    return (any(word in plain for word in INQUIRY_DRUG_WORDS)
             or any(_names_medicine(text, name) for name in med_names))
 
 
