@@ -1,7 +1,13 @@
 "use strict";
 // Home-care core screens (staff, patient register, care team, MCS links). Shares $, el, api, fail and state with app.js.
 // Occupation modules add their own screens; the core only reads their declared qualifications and roles from api/hc/meta.
-const hc = {enabled: false, csrf: "", actor: null, meta: {qualifications: {}, roles: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0};
+const hc = {enabled: false, routes: false, csrf: "", actor: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0,
+  // Occupation modules register their own patient sections and visit-sheet parts here (see pharmacy.js).
+  modules: {}};
+const VISIT_STATUS = {planned: "予定", done: "実施", cancelled: "中止"};
+const visitForm = () => [["visit_date", "訪問日（必須）", "date"], ["start_time", "開始時刻", "time"],
+  ["kind", "種類", "select", hc.meta.visit_kinds], ["staff_id", "訪問する職員", "staff"],
+  ["status", "状態", "select", VISIT_STATUS], ["note", "記録・申し送り", "textarea"]];
 const PATIENT_FORM = [
   ["name", "氏名（必須）"], ["kana", "フリガナ"], ["birth_date", "生年月日", "date"], ["postal_code", "郵便番号"],
   ["address", "住所"], ["residence", "施設・部屋"], ["phone", "本人電話", "tel"],
@@ -19,7 +25,9 @@ const HC_ERRORS = {version_conflict: "ほかの人が先に更新しました。
   already_assigned: "この職員はすでにこの役割の担当です。", admin_required: "この操作は管理者だけができます。",
   not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。",
   actor_required: "操作者を選んでください。", invalid_fields: "入力を確認してください。", not_found: "記録が見つかりません。",
-  project_not_allowed: "この MCS の患者は閲覧範囲の外です。"};
+  project_not_allowed: "この MCS の患者は閲覧範囲の外です。",
+  route_unavailable: "訪問ルートは設定されていません。", route_failed: "地図サービスからルートを受け取れませんでした。時間をおいてやり直してください。",
+  too_many_stops: "1日の訪問が多すぎてルートを作れません。職員ごとに分けてください。"};
 async function hcPost(op, body) {
   const reply = await fetch(`api/hc/${op}`, {method: "POST", cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
     headers: {"Content-Type": "application/json", "X-MCS-CSRF": hc.csrf}, body: JSON.stringify({...body, actor: hc.actor})});
@@ -41,7 +49,11 @@ function field([key, label, type, option], value, form) {
   const wrap = el("label", null, "hc-field"), id = `hc-${form}-${key}`;
   wrap.append(el("span", label));
   let input;
-  if (type === "select") {
+  if (type === "staff") {
+    input = el("select"); input.append(el("option", "未定")); input.firstChild.value = "";
+    for (const person of hc.staff.filter(s => s.active || s.staff_id === value)) {const node = el("option", person.name); node.value = String(person.staff_id); input.append(node);}
+    input.value = value == null ? "" : String(value);
+  } else if (type === "select") {
     input = el("select");
     for (const [choice, text] of Object.entries(option)) {const node = el("option", text); node.value = choice; input.append(node);}
     if (value != null) input.value = String(value);
@@ -56,11 +68,11 @@ function formValues(form, spec) {
   for (const [key, , type] of spec) {
     if (type === "qualifications") {values[key] = [...form.querySelectorAll('[name="qualification"]')].filter(box => box.checked).map(box => box.value); continue;}
     const input = form.querySelector(`[name="${key}"]`);
-    values[key] = type === "checkbox" ? input.checked : input.value;
+    values[key] = type === "checkbox" ? input.checked : type === "staff" ? (input.value ? Number(input.value) : null) : input.value;
   }
   return values;
 }
-function recordForm(kind, spec, record, onSaved) {
+function recordForm(kind, spec, record, onSaved, fixed = {}) {
   const form = el("form", null, "hc-form"), message = el("p", null, "state-note");
   for (const item of spec) form.append(field(item, record?.[item[0]], kind));
   const save = el("button", record ? "保存" : "登録", "button");
@@ -69,7 +81,7 @@ function recordForm(kind, spec, record, onSaved) {
     event.preventDefault(); save.disabled = true; message.textContent = "";
     for (const node of form.querySelectorAll(".invalid")) node.classList.remove("invalid");
     try {
-      const values = formValues(form, spec);
+      const values = {...formValues(form, spec), ...(record ? {} : fixed)};
       const data = record ? await hcPost(`${kind}.update`, {id: record[`${kind}_id`], values, expected_version: record.version})
                           : await hcPost(`${kind}.create`, {values});
       await onSaved(data.record);
@@ -151,7 +163,83 @@ async function showHcPatient(patientId) {
     if (hc.patient === patientId) mcsLink(link, patientId, fresh, refreshLink);
   };
   careTeam(team, patientId, data.team, refreshTeam); mcsLink(link, patientId, data, refreshLink);
-  hcMain("基本情報", recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, link);
+  const sheet = el("button", "訪問時の情報を開く", "button"); sheet.onclick = () => showSheet(patientId);
+  const visitBox = el("section", null, "detail-section"); patientVisits(visitBox, patientId);
+  const enabled = name => hc.meta.modules.some(module => module.name === name);
+  const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => {const box = el("section", null, "detail-section"); view.patient(box, patientId); return box;});
+  hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, visitBox, ...parts, link);
+}
+const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
+async function patientVisits(box, patientId) {
+  const reload = () => patientVisits(box, patientId);
+  const data = await api("hc/visits", {patient: patientId}).catch(error => {fail(error); return {items: []};});
+  if (hc.patient !== patientId) return;
+  box.replaceChildren(el("h3", "訪問"));
+  for (const visit of data.items) {
+    const row = el("details", null, "hc-row"); row.append(el("summary", visitLine(visit)));
+    if (visit.note) row.append(el("p", visit.note, "hc-note"));
+    row.append(recordForm("visit", visitForm(), visit, reload)); box.append(row);
+  }
+  if (!data.items.length) box.append(el("p", "訪問の記録はまだありません。"));
+  const add = el("details", null, "hc-row"); add.append(el("summary", "訪問を予定する"), recordForm("visit", visitForm(), null, reload, {patient_id: patientId}));
+  box.append(add);
+}
+async function showSheet(patientId) {
+  hc.patient = patientId; closeDetail();
+  const data = await api("hc/sheet", {patient: patientId});
+  if (hc.patient !== patientId) return;
+  const patient = data.patient, back = el("button", "台帳に戻る", "text-button"); back.onclick = () => showHcPatient(patientId);
+  $("patient-name").textContent = patient.name; $("patient-meta").textContent = "訪問時の情報";
+  const facts = el("section", null, "detail-section"); facts.append(el("h3", "連絡と訪問先"));
+  const contact = {patient: patient.phone, keyperson: `${patient.keyperson_name}（${patient.keyperson_relation}） ${patient.keyperson_phone}`}[patient.preferred_contact] ?? patient.contact_phone;
+  for (const [label, value] of [["住所", [patient.address, patient.residence].filter(Boolean).join(" ")], ["優先連絡先", contact], ["連絡のしやすい時間", patient.contact_note],
+                                ["訪問先へのアクセス", patient.access_note], ["注意事項", patient.caution_note]]) if (value) facts.append(el("p", `${label}: ${value}`));
+  const team = el("section", null, "detail-section"); team.append(el("h3", "ケアチーム"));
+  for (const member of data.team) team.append(el("p", `${hc.meta.roles[member.role]?.label || member.role}: ${member.staff_name}`));
+  if (!data.team.length) team.append(el("p", "担当者はまだいません。"));
+  const visitBox = el("section", null, "detail-section"); visitBox.append(el("h3", "訪問"));
+  for (const [label, rows] of [["次の予定", data.next_visits], ["最近の実施", data.recent_visits]]) {
+    visitBox.append(el("h4", label));
+    for (const visit of rows) {visitBox.append(el("p", visitLine(visit))); if (visit.note) visitBox.append(el("p", visit.note, "hc-note"));}
+    if (!rows.length) visitBox.append(el("p", "ありません。"));
+  }
+  const parts = Object.entries(data.modules).filter(([name]) => hc.modules[name]?.sheet).map(([name, part]) => {const box = el("section", null, "detail-section"); hc.modules[name].sheet(box, part); return box;});
+  const mcs = el("section", null, "detail-section"); mcs.append(el("h3", "MCS のやりとり"));
+  if (data.mcs.project_id) {const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id); mcs.append(open);}
+  else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
+  hcMain("訪問時の情報", back, facts, team, visitBox, ...parts, mcs);
+}
+async function showDay(date) {
+  hc.patient = null; closeDetail();
+  $("patient-name").textContent = "訪問予定"; $("patient-meta").textContent = date;
+  const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
+  picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
+  const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
+  const data = await api("hc/visits", {date}).catch(error => {fail(error); return {items: []};});
+  list.append(el("h3", "この日の訪問"));
+  for (const visit of data.items) {
+    const row = el("button", `${visit.start_time || "時刻未定"} · ${visit.patient_name} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`, "text-button");
+    row.onclick = () => showSheet(visit.patient_id); list.append(row);
+  }
+  if (!data.items.length) list.append(el("p", "この日の訪問はありません。"));
+  routeBox.append(el("h3", "訪問ルート"));
+  if (!hc.routes) routeBox.append(el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。"));
+  else {
+    const form = el("form", null, "hc-inline"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div");
+    form.append(staffPick, el("button", "ルートを作る（住所を地図サービスへ送ります）", "button"));
+    form.onsubmit = async event => {
+      event.preventDefault(); result.replaceChildren(el("p", "作成中…"));
+      try {
+        const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
+        result.replaceChildren();
+        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name}${stop.start_time ? `（予定 ${stop.start_time}）` : ""} · 出発から約${Math.round((stop.arrival_offset || 0) / 60)}分`)));
+        if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
+        if (plan.unlocated.length) result.append(el("p", `住所から場所が分からなかった訪問が${plan.unlocated.length}件あります。台帳の住所を確かめてください。`, "state-note"));
+      } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
+    };
+    routeBox.append(form, result);
+  }
+  hcMain("訪問予定", picker, list, routeBox);
 }
 function mcsLink(link, patientId, data, refresh) {
   const relink = async (op, project) => {try {await hcPost(op, {patient: patientId, project}); await loadHcPatients(); await refresh();} catch (error) {fail(error);}};
@@ -218,7 +306,10 @@ function setMode(mode) {
     return loadPatients();
   }
   const listed = loadHcPatients().catch(fail);
-  if (mode === "staff") {
+  if (mode === "day") {
+    const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+    showDay(today);
+  } else if (mode === "staff") {
     $("patient-name").textContent = "職員"; $("patient-meta").textContent = "操作者と担当薬剤師の名簿";
     showStaff();
   } else {
@@ -237,7 +328,7 @@ async function showLinkedPharmacyPatient(projectId) {
 async function initHomecare() {
   try {
     const session = await api("session");
-    hc.csrf = session.csrf; hc.enabled = session.homecare;
+    hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes;
     if (!hc.enabled) return;
     $("hc-tools").hidden = false;
     $("hc-actor").onchange = () => {hc.actor = $("hc-actor").value ? Number($("hc-actor").value) : null;};

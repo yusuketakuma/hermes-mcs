@@ -26,6 +26,7 @@ MAX_BODY = 64 * 1024
 FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "app.js": ("app.js", "text/javascript; charset=utf-8"),
          "homecare.js": ("homecare.js", "text/javascript; charset=utf-8"),
+         "pharmacy.js": ("pharmacy.js", "text/javascript; charset=utf-8"),
          "style.css": ("style.css", "text/css; charset=utf-8")}
 
 

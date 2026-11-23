@@ -8,12 +8,13 @@
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
   <script src="homecare.js" defer></script>
+  <script src="pharmacy.js" defer></script>
 </head>
 <body>
   <aside class="sidebar" aria-label="患者一覧">
     <a class="brand" href="./"><span class="brand-mark">H</span><span>Hermes <b>MCS</b><small>患者ワークスペース</small></span></a>
     <div class="local-badge"><span class="status-dot"></span> このMac内で表示 <span>LOCAL</span></div>
-    <div id="hc-tools" class="hc-tools" hidden><div id="hc-modes" class="hc-modes" role="group" aria-label="表示の切替"><button type="button" data-mode="mcs" class="selected">MCS</button><button type="button" data-mode="pharmacy">薬局の患者</button><button type="button" data-mode="staff">職員</button></div><label class="hc-actor"><span>操作者</span><select id="hc-actor"></select></label></div>
+    <div id="hc-tools" class="hc-tools" hidden><div id="hc-modes" class="hc-modes" role="group" aria-label="表示の切替"><button type="button" data-mode="mcs" class="selected">MCS</button><button type="button" data-mode="pharmacy">薬局の患者</button><button type="button" data-mode="day">訪問予定</button><button type="button" data-mode="staff">職員</button></div><label class="hc-actor"><span>操作者</span><select id="hc-actor"></select></label></div>
     <div class="sidebar-heading">患者 <span id="patient-count"></span></div>
     <form id="patient-form" role="search"><label class="sr-only" for="patient-search">患者名・IDで検索</label><input id="patient-search" placeholder="患者名・IDで検索" maxlength="200" autocomplete="off"><button class="sr-only">患者を検索</button></form>
     <nav id="patients" aria-label="患者チャンネル"></nav>

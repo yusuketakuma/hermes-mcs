@@ -366,6 +366,9 @@ def test_register_script_is_served_and_never_builds_html():
     assert "innerHTML" not in js and "localStorage" not in js and "sessionStorage" not in js
     assert '"X-MCS-CSRF"' in js and 'credentials: "omit"' in js
     assert "pharmacist" not in js, "the core screen must read occupation codes from api/hc/meta"
+    module_js = (chat.ASSETS / chat.FILES["pharmacy.js"][0]).read_text()
+    assert "innerHTML" not in module_js and "fetch(" not in module_js, "module screens post through the core's hcPost"
+    assert "pharmacy.js" in (chat.ASSETS / "index.html").read_text()
 
 
 def visit_values(patient_id, **values):

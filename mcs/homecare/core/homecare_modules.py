@@ -54,7 +54,8 @@ class Registry:
         self.modules = (CORE, *modules)
         self.qualifications = {code: label for module in self.modules for code, label in module.qualifications.items()}
         self.roles = {code: role for module in self.modules for code, role in module.roles.items()}
-        self.visit_kinds = {code: label for module in self.modules for code, label in module.visit_kinds.items()}
+        # Occupation kinds first so a new visit defaults to one; the core's catch-all comes last.
+        self.visit_kinds = {code: label for module in (*modules, CORE) for code, label in module.visit_kinds.items()}
         for role in self.roles.values():
             if not set(role.requires) <= set(self.qualifications):
                 raise ValueError("role requires an unknown qualification")
