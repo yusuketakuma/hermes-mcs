@@ -27,6 +27,7 @@ def test_background_summary_reads_updated_memo_without_waiting_for_rollup(tmp_pa
     led = _ledger(tmp_path)
     try:
         led.ensure_patient(1)
+        led.db.execute("UPDATE patients SET karte_id=100 WHERE project_id=1")  # summaries bind to the linked karte
         led.karte_summary_store(1, 100, {"comment": "方針：合成の旧方針。", "updated_at": "2026-10-05"})
         roll = rollup.build_rollup(led.db, 1)
         led.karte_summary_store(1, 100, {"comment": "方針：合成の訂正方針。", "updated_at": "2026-10-06"})
@@ -54,6 +55,7 @@ def test_unclassified_memo_is_not_reported_as_no_record(tmp_path):
     led = _ledger(tmp_path)
     try:
         led.ensure_patient(1)
+        led.db.execute("UPDATE patients SET karte_id=100 WHERE project_id=1")  # summaries bind to the linked karte
         comment = "合成疾患で療養中。歩行には介助を要します。"
         led.karte_summary_store(1, 100, {"comment": comment, "updated_at": "2026-10-08"})
         assert extract.extract_context(comment) == []

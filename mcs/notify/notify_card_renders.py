@@ -13,7 +13,7 @@ from mcs_util import loads_dict
 from notify_render import (
     ACTION_FIRST_LAYOUT,
     anchor_keys, card_content, content_fingerprint, masked_name, preview_privacy,
-    mmdd, project_display_name, own_post, presenter, reply_source)
+    UNKNOWN_DATE, mmdd, project_display_name, own_post, presenter, reply_source)
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
@@ -958,13 +958,13 @@ def _thread_name(db, card, cfg=None) -> str:
                        (card["root_message_id"],)).fetchone()
         if r:
             d = mmdd(r["posted_at"])
-    if (not d or "?" in d) and card["kind"] != "thread" \
+    if (not d or d == UNKNOWN_DATE) and card["kind"] != "thread" \
             and isinstance(card["created_at"], (int, float)):
         # signal cards have no root post: the day the card was made, in JST
         from datetime import datetime
         from mcs_queries import JST
         d = f"{datetime.fromtimestamp(card['created_at'], JST):%m-%d}"
-    title = f"💬 {name}" + (f" — {d}" if d and "?" not in d else "")
+    title = f"💬 {name}" + (f" — {d}" if d and d != UNKNOWN_DATE else "")
     return title if len(title) <= 100 else title[:99] + "…"
 
 

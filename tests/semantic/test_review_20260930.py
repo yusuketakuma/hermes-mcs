@@ -103,6 +103,7 @@ def test_summary_button_reads_newest_summary_over_rollup(tmp_path):
     db = _ledger(tmp_path)
     try:
         _patient(db)
+        db.db.execute("UPDATE patients SET karte_id=1 WHERE project_id=1")   # summaries bind to the linked karte
         db.karte_summary_store(1, 1, {"comment": "SYNTH-OLD", "updated_at": "2026-09-29T00:00:00+09:00"})
         rollup.rebuild(db, 1)
         db.karte_summary_store(1, 1, {"comment": "SYNTH-NEW", "updated_at": "2026-09-30T00:00:00+09:00"})

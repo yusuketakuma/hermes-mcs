@@ -98,3 +98,77 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
             out["state"] = ("stale" if changed or f[0] <= now - REACTION_ACTORS_TTL_S
                             else "complete")
     return out
+
+
+_BATCH = 500   # message ids per IN list, below SQLite's bound-parameter limit
+
+
+def _rows_in(db, sql, ids):
+    for start in range(0, len(ids), _BATCH):
+        chunk = ids[start:start + _BATCH]
+        yield from db.execute(sql.format(ids=",".join("?" * len(chunk))), chunk)
+
+
+def reaction_actor_summaries(db, message_ids, *, now=None) -> dict:
+    """``{message_id: reaction_actor_summary(db, message_id, now=now)}`` for many posts, reading the self ID,
+    the actor table's columns and each table once per batch (IN lists) instead of about four queries per post."""
+    from self_identity import self_sender_id
+    now = time.time() if now is None else now
+    ids = list(dict.fromkeys(message_ids))
+    out = {mid: {"state": "not_fetched", "complete_at": None, "checked_at": None,
+                 "counts": {}, "self_included": None, "actors": []} for mid in ids}
+    try:
+        fetches = {row[0]: row[1:] for row in _rows_in(
+            db, "SELECT message_id,complete_at,checked_at,last_error FROM message_reaction_actor_fetch "
+            "WHERE message_id IN ({ids})", ids)}
+    except sqlite3.OperationalError:     # tables absent on a pre-22-F db
+        return out
+    for mid, f in fetches.items():
+        out[mid].update(complete_at=f[0], checked_at=f[1])
+    complete = [mid for mid in ids if mid in fetches and fetches[mid][0] is not None]
+    changed, unread = {}, set()
+    if complete:
+        # The single form stops at a failed read and leaves state not_fetched; the batch keeps that per post.
+        try:
+            self_id = self_sender_id(db)
+            columns = {r[1] for r in db.execute("PRAGMA table_info(message_reaction_actors)")}
+            name_col = "actor_name" if "actor_name" in columns else "NULL"
+            org_col = "organization" if "organization" in columns else "NULL"
+            current = " AND removed_at IS NULL" if "removed_at" in columns else ""
+            for mid, actor, kind, prof, name, org in _rows_in(
+                    db, "SELECT message_id,actor_id,reaction_type,profession," + name_col + "," + org_col +
+                    " FROM message_reaction_actors WHERE message_id IN ({ids})" + current +
+                    " ORDER BY message_id,observed_at,actor_id", complete):
+                summary = out[mid]
+                by_kind = summary["counts"].setdefault(prof or "", {})
+                by_kind[kind] = by_kind.get(kind, 0) + 1
+                summary["actors"].append({"reaction_type": kind, "name": name,
+                                          "profession": prof, "organization": org,
+                                          "self": self_id is not None and actor == self_id})
+                if self_id is not None and actor == self_id:
+                    summary["self_included"] = True
+            if self_id is not None:
+                for mid in complete:
+                    if out[mid]["self_included"] is None:
+                        out[mid]["self_included"] = False
+        except sqlite3.OperationalError:
+            unread = set(complete)
+        try:
+            for mid, seen in () if unread else _rows_in(
+                    db, "SELECT message_id,json_extract(content,'$.reactions.observed_at') FROM ("
+                    "SELECT message_id,content,ROW_NUMBER() OVER (PARTITION BY message_id "
+                    "ORDER BY checked_at DESC,source='capture' DESC) AS newest FROM message_metadata "
+                    "WHERE message_id IN ({ids}) AND last_error IS NULL AND json_valid(content) "
+                    "AND json_type(content,'$.reactions.value')='array') WHERE newest=1", complete):
+                changed[mid] = seen is not None and seen > fetches[mid][0]
+        except sqlite3.OperationalError:
+            unread = set(complete)
+    for mid, f in fetches.items():
+        if mid in unread:
+            continue
+        if f[2] is not None:
+            out[mid]["state"] = "failed"
+        elif f[0] is not None:
+            out[mid]["state"] = ("stale" if changed.get(mid, False) or f[0] <= now - REACTION_ACTORS_TTL_S
+                                 else "complete")
+    return out

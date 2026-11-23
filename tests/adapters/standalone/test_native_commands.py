@@ -163,7 +163,7 @@ def test_every_read_route_and_project_boundary(route):
         denied = route.call({"op": "read", "kind": kind, "project_id": 2, **fields})
         assert not denied["ok"], (kind, denied)
     got = route.call({"op": "read", "kind": "evidence", "project_id": 1, "message_id": 1})
-    assert got["result"]["message"]["metadata_flags"][1] == "しおり: あり"
+    assert got["result"]["message"]["metadata_flags"][2] == "ブックマーク: あり"
     assert not route.call({"op": "status", "project_id": 1}, user="stranger")["ok"]
     assert not route.call({"op": "status", "project_id": 1, "actor": "forged"})["ok"]
 
