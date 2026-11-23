@@ -207,9 +207,9 @@ def mention_candidate(med, stored, active):
     return stored, known
 
 
-def matches(med, ref, *, name=None, identities=frozenset()):
+def matches(med, ref, *, names=(), identities=frozenset()):
     """An exact folded name, or a resolved candidate sharing one of the searched identities."""
-    if name is not None and drug_map.fold(name) == drug_map.fold(med["name"]):
+    if drug_map.fold(med["name"]) in {drug_map.fold(n) for n in names}:
         return True
     codes = {c["code"] for c in (ref or {}).get("cands", [])}
     return (ref or {}).get("status") == "resolved" and bool(set(identities) & codes)
@@ -271,7 +271,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         for i, med in enumerate(meds):
             ref, known_name = mention_candidate(
                 med, refs.get(i) if source[1] == "extract_llm" else None, active)
-            if name is not None and not (known_name and matches(med, ref, name=name, identities=query_codes)):
+            if name is not None and not (known_name and matches(med, ref, names=(name,), identities=query_codes)):
                 continue
             if ref is None and known_name and dictionary in ("derived", "pending"):
                 matching_pending += 1
