@@ -558,13 +558,15 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
     ``pin`` comes from :func:`route_contract`. ``usable``: send under the
     returned selection (the pinned provider's live profile, equal in every
     contract field), that provider's settings and its key. ``waiting``: the
-    contract is still offered but nothing may send now -- the configuration
-    is unverified or not ``on``, or (with ``ledger``) the run window, a stop,
-    an open circuit, an unverified price or a spending cap holds it. ``gone``:
-    the configuration, the review or the keys no longer offer it (another
-    provider is named, it left ``provider_order``, its key or approval is
-    gone, or one of its profiles changed). Which provider is preferred
-    decides nothing here: a contract never moves to another provider or model."""
+    contract is still offered but nothing may send now -- the configuration,
+    the review record or the key file is unverified (unreadable, or a review
+    still pending), the mode is not ``on``, or (with ``ledger``) the run
+    window, a stop, an open circuit, an unverified price or a spending cap
+    holds it. ``gone``: a readable configuration, review or key file no
+    longer offers it (another provider is named, it left ``provider_order``,
+    the recorded review leaves it out, its key is absent, or one of its
+    profiles changed). Which provider is preferred decides nothing here: a
+    contract never moves to another provider or model."""
     purposes = dict(_ROUTE_PURPOSES).get(route, ())
     provider = None
     if (purpose in purposes and isinstance(pin, Mapping) and set(pin) == set(purposes)
@@ -575,7 +577,7 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
     if provider not in PROVIDERS:
         return ContractState("gone", "contract_invalid", None, None, None)
     _general, errors = resolve_settings(cfg, root)
-    settings, pinned_errors, held = resolve_selection(cfg, root, pinned=provider)
+    settings, pinned_errors, _held = resolve_selection(cfg, root, pinned=provider)
     key = provider_key(provider, root)
 
     def judged(state, reason, selection=None):
@@ -589,9 +591,15 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
     if pinned_errors:
         return judged("gone", "contract_invalid")
     if not key:
-        return judged("gone", "key_missing")
-    if held == provider:
-        return judged("gone", "provider_not_approved")
+        absent = private_env_problem(provider_registry.PROVIDER_MODULES[provider].KEY_ENV, root) == "key_missing"
+        return judged("gone" if absent else "waiting", "key_missing" if absent else "key_unverified")
+    import external_transfer
+    review = external_transfer.status(root)
+    if not external_transfer.service_allowed(review, provider):
+        # Only a recorded review that leaves the provider out withdraws it.
+        withdrawn = review.get("state") == "acknowledged"
+        return judged("gone" if withdrawn else "waiting",
+                      "provider_not_approved" if withdrawn else "provider_review_unverified")
     selection = None
     for name in purposes:
         chosen, problems = profile_for_settings(cfg, settings, route=route, purpose=name, provider=provider)

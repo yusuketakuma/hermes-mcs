@@ -735,3 +735,125 @@ def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body
         assert is_spent(7) == 1, "an unreadable reservation counts"
     finally:
         db.close()
+
+
+def test_a_paid_repair_whose_answer_was_saved_before_an_interruption_is_never_sent_again(qc_window, monkeypatch):
+    """Through the real runner and engine: the repair's start is checkpointed before it is
+    dispatched, and a started repair is never dispatched again. A resumed attempt keeps
+    the chunk's first answer (completeness ``dispatch_unknown``, attention) and does not
+    adopt the repair answer that was paid and saved just before the interruption."""
+    from completeness_quality_testkit import OBSERVATIONS
+    ledger, cfg, _local_calls, cloud_calls, answers = qc_window
+    openai_calls = _echo_providers(qc_window, monkeypatch)
+    _revise(ledger, _message(body='本人に発熱と咳があります。本人の血圧120/80です。'), 'synthetic-vital-body')
+    _locally_fixed(ledger)
+    _flag_current(ledger)
+    _open_window(cfg)
+    answers['cloud'] = OBSERVATIONS   # leaves the blood pressure out: the chunk needs a quality repair
+    real_record = cloud_policy.record_result
+
+    def interrupted(ledger_, reservation, metadata, **kwargs):
+        value = real_record(ledger_, reservation, metadata, **kwargs)
+        if reservation['max_tokens'] == cloud_policy.PURPOSE_MAX_TOKENS['quality_repair']:
+            raise KeyboardInterrupt("synthetic interruption after the paid repair answer was saved")
+        return value
+    monkeypatch.setattr(cloud_policy, "record_result", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        _cloud_pass(ledger)
+    monkeypatch.setattr(cloud_policy, "record_result", real_record)
+    assert len(cloud_calls) == 2 and _reservations(ledger) == 2, "the chunk and its repair were paid"
+    assert ledger.artifacts('cloud_usage_result') and len(ledger.artifacts('cloud_usage_result')) == 2
+    with ledger.db:
+        ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    assert _attempts(ledger) == [('qc', 'open')]
+    assert _cloud_pass(ledger)['done'] == 1
+    assert len(cloud_calls) == 2 and _reservations(ledger) == 2 and not openai_calls, "nothing is sent again"
+    _current_row, meta = _current(ledger)
+    assert meta["qc_fix"]["attempt"] == 2
+    assert {entry["state"] for entry in meta["integrity"]["completeness"].values()} == {"dispatch_unknown"}
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def _review(state, services=()):
+    """A facility review record as external_transfer.status reports it."""
+    if state == "acknowledged":
+        return {"state": "acknowledged", "auto_enable": True, "acknowledged": {"services": list(services)}}
+    return dict(external_transfer.UNREADABLE) if state == "unreadable" else {"state": state, "auto_enable": False}
+
+
+def test_a_withdrawn_only_provider_ends_the_attempt_in_a_local_pass_without_sending(qc_window, monkeypatch):
+    import cloud_inference
+    ledger, cfg, local_calls, cloud_calls, _answers = qc_window
+    openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    # The recorded review now leaves out the only provider: no cloud worker can send any more.
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    assert cloud_inference.resolve_cloud_settings(cfg)["mode"] == "off"
+    cfg['cloud_llm']['mode'] = 'off'   # and no cloud pass runs at all
+    calls = len(local_calls)
+    report = _local_pass(ledger)
+    assert report['selected'] == 0 and len(local_calls) == calls
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')], "the local pass ends it (確認候補)"
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
+    cfg['cloud_llm']['mode'] = 'on'
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("not_required"))
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1, "an ended attempt never resumes"
+
+
+def test_a_busy_write_lock_defers_ending_a_withdrawn_attempt_without_delaying_the_pass(qc_window, monkeypatch):
+    import extract_llm_errors
+    import extract_llm_source_contract
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    cfg['cloud_llm']['mode'] = 'off'
+    clock = {'value': 100.0}
+    monkeypatch.setattr(time, 'monotonic', lambda: clock['value'])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.update(value=clock['value'] + seconds))
+    real_acquire = extract_llm_errors.acquire_run_lock
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', lambda: None)   # another writer holds it
+
+    def local_pass():
+        return worker.run_pending(ledger, limit=1, workers=1, budget_s=180, allow_cloud=False,
+                                  per_write_lock=True, write_wait_s=60)
+
+    local_pass()
+    assert clock['value'] <= 100 + extract_llm_source_contract._STALE_GC_BUDGET_S, "waited only the short budget"
+    assert _attempts(ledger) == [('qc', 'open')], "not closed without the lock; the next pass retries"
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', real_acquire)
+    local_pass()
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1
+
+
+@pytest.mark.parametrize("hold", ["unreadable", "pending", "stopped", "mode_off", "key_unreadable"])
+def test_a_temporary_stop_keeps_the_attempt_open_and_unsent(qc_window, monkeypatch, hold):
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    if hold in ("unreadable", "pending"):
+        monkeypatch.setattr(external_transfer, "status", lambda root=None: _review(hold))
+    elif hold == "stopped":
+        ledger.artifact_add("cloud_control", "stopped")
+    elif hold == "mode_off":
+        cfg['cloud_llm']['mode'] = 'off'
+    else:   # the key file cannot be read: not proof that the key was removed
+        monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: None)
+    _local_pass(ledger)
+    _cloud_pass(ledger)
+    assert _attempts(ledger) == [('qc', 'open')], "a stop that may be temporary keeps the attempt"
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
+
+
+def test_a_qc_attempt_without_a_paid_request_is_never_closed(qc_window):
+    import extract_llm_store
+    ledger, _cfg, _local_calls, _cloud_calls, _answers = qc_window
+    _locally_fixed(ledger)
+    _flag_current(ledger)
+    source, _meta = _current(ledger)
+    row = {"project_id": 1, "message_id": 1, "content_hash": _hash(ledger), "qc_cloud": source['artifact_id']}
+    assert extract_llm_store._close_cloud_attempt(ledger, row) is False
+    assert not ledger.artifacts(worker.CLOUD_ATTEMPT_KIND), "nothing was spent: the post stays eligible"
+    assert extract_llm_store._close_cloud_attempt(ledger, {**row, "qc_cloud": None}) is True
+    assert _attempts(ledger) == [('backlog', 'closed')], "a plain backlog attempt still closes"

@@ -29,7 +29,7 @@ import mcs_queries
 import mcs_util
 import extraction_context
 import semantic_qc
-from mcs_queries import (current_extract_pred)
+from mcs_queries import (current_extract_pred, json_or_null)
 from mcs_util import HOME, load_config, loads_dict
 
 from extract_llm_context import (
@@ -233,6 +233,41 @@ def _close_cloud_attempt(ledger, r) -> bool:
             return False
         _close_cloud_attempt_tx(ledger.db, r)
     return True
+
+
+def _cloud_attempt_withdrawn(cfg, started) -> bool:
+    """Whether a QC second attempt's pinned contract (``started``, one per paid request) is gone for good.
+
+    It is when its records disagree, or a readable configuration, review and
+    key file no longer offer it (cloud_policy.resolve_contract ``gone``); a
+    waiting or unverifiable contract is not."""
+    return bool(started) and (any(contract != started[0] for contract in started)
+                              or cloud_policy.resolve_contract(cfg, started[0], route="reextract",
+                                                               purpose="backlog", root=HOME).state == "gone")
+
+
+def _withdrawn_cloud_attempts(db, cfg) -> list:
+    """Rows (``_close_cloud_attempt`` shape) of open QC second attempts whose contract is gone for good.
+
+    Every extraction pass reads this, with the cloud on or off, and closes
+    what it returns under the write lock (extract_llm_runner), so an attempt
+    whose provider can no longer send still ends (確認候補) when no cloud
+    worker runs. It only reads; nothing here sends, reserves or writes."""
+    content = json_or_null("ca.content")
+    rows = db.execute(
+        f"""SELECT DISTINCT ca.project_id, ca.message_id, m.content_hash,
+                   json_extract({content},'$.source_artifact_id') FROM artifacts ca
+            JOIN messages m ON m.message_id=ca.message_id AND m.project_id=ca.project_id
+            WHERE ca.kind=? AND json_extract({content},'$.state')='open'
+              AND json_extract({content},'$.hash')=m.content_hash
+              AND json_extract({content},'$.revision')={source_revision_sql()}
+              AND NOT EXISTS (SELECT 1 FROM artifacts cc WHERE cc.kind=ca.kind AND cc.message_id=ca.message_id
+                    AND json_extract({json_or_null('cc.content')},'$.state')='closed'
+                    AND json_extract({json_or_null('cc.content')},'$.hash')=m.content_hash)""",
+        (CLOUD_ATTEMPT_KIND,)).fetchall()
+    found = ({"project_id": project_id, "message_id": message_id, "content_hash": content_hash, "qc_cloud": source}
+             for project_id, message_id, content_hash, source in rows if type(source) is int)
+    return [r for r in found if _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(db, r))]
 
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,

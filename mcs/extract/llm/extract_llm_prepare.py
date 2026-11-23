@@ -68,7 +68,6 @@ from extract_llm_source_contract import (
     _source_writable,
 )
 from extract_llm_store import (
-    _close_cloud_attempt,
     _commit_extraction_atomic,
 )
 
@@ -79,18 +78,18 @@ def _qc_contract(ledger, cfg, r, selection):
     The attempt pins its contract (cloud_policy.route_contract) with its
     first paid request: an open attempt resumes only under that contract,
     because its saved chunks, repairs and repeat guard belong to it. A
-    waiting contract (capped, stopped, outside its window) sends nothing and
-    stays open; one the configuration no longer offers ends the attempt
-    (closed, 確認候補). Before that first request this pass's selection is pinned."""
+    contract that is not usable now (capped, stopped, outside its window,
+    unverified, or gone) sends nothing; ending a gone one is the extraction
+    pass's job (_withdrawn_cloud_attempts), which runs with the cloud on
+    or off. Before that first request this pass's selection is pinned."""
     started = _open_attempt_contracts(ledger.db, r)
     pin = started[0] if started else cloud_policy.route_contract(
         cfg, selection, route="reextract", purpose="backlog", root=HOME)
     state = cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog",
                                           root=HOME, ledger=ledger)
-    if started and (state.state == "gone" or any(contract != pin for contract in started)):
-        _close_cloud_attempt(ledger, r)
+    if state.state != "usable" or any(contract != pin for contract in started):
         return None
-    return (pin, state.selection) if state.state == "usable" else None
+    return pin, state.selection
 
 
 def _prefilter_enabled() -> bool:

@@ -108,6 +108,7 @@ from extract_llm_source_contract import (
     _EXTRACT_LEASE_S,
     _MIN_CALL_S,
     _PREPARE_HOLD_S,
+    _STALE_GC_BUDGET_S,
     REVIVE_COOLDOWN_S,
     _WRITER_STATE,
     _owns_current_source,
@@ -121,6 +122,7 @@ from extract_llm_store import (
     _commit_extraction_atomic,
     _persist_chunks,
     _record_cloud_attempt_tx,
+    _withdrawn_cloud_attempts,
 )
 
 # A paid request of a cloud re-extraction failed with a known outcome: the
@@ -417,6 +419,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
+    # A QC second attempt whose contract is gone for good ends here, whether
+    # or not any cloud worker can send; this only closes attempt records. The
+    # write lock is taken only when one is found, re-read under it, and waited
+    # for no longer than the stale GC's, so a busy lock never delays selection.
+    try:
+        cfg = load_config()
+        if _withdrawn_cloud_attempts(ledger.db, cfg):
+            with lock(per_write_lock, deadline=min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)) as held:
+                if held and _writer_current():
+                    for r in _withdrawn_cloud_attempts(ledger.db, cfg):
+                        _close_cloud_attempt(ledger, r)
+    except (ValueError, RuntimeError, sqlite3.Error):
+        if ledger.db.in_transaction:
+            raise
     try:
         rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
                                                shard, oldest_first,
