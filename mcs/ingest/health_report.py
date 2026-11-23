@@ -2,6 +2,7 @@
 from __future__ import annotations
 import llm_availability
 
+import math
 import os
 import re
 import shutil
@@ -1407,6 +1408,13 @@ def build_health(db, result: dict, status: str,
                                  "reason": "observation_unavailable"}
     if result.get("deferred_stages"):
         run["deferred_stages"] = list(result["deferred_stages"])
+    # per-stage elapsed seconds of the latest tick (unlocked model windows
+    # included), readable alongside the run log
+    stages = result.get("stage_elapsed_s")
+    if isinstance(stages, dict):
+        run["stage_elapsed_s"] = {
+            name: value for name, value in stages.items()
+            if type(name) is str and type(value) in (int, float) and math.isfinite(value)}
     from collection_diagnostics import valid_stop
     stop = valid_stop(result.get("stop")) if status in ("failed", "session_expired") else None
     if stop is not None:
