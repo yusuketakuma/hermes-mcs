@@ -624,9 +624,9 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None, wait=T
     if (configured["provider"] not in ("auto", provider)
             or configured["provider"] == "auto" and provider not in configured["provider_order"]):
         return judged("gone", "provider_not_offered")
-    if pinned_errors and all(error == COST_LIMIT_REQUIRED for error in pinned_errors):
-        return judged("waiting", "cost_limit_required")   # a missing cap holds sending; it changes no contract
-    if pinned_errors:
+    # A missing cap only holds sending; every withdrawal below still ends the contract first.
+    cap_missing = bool(pinned_errors) and all(error == COST_LIMIT_REQUIRED for error in pinned_errors)
+    if pinned_errors and not cap_missing:
         return judged("gone", "contract_invalid")
     if not key:
         absent = private_env_problem(provider_registry.PROVIDER_MODULES[provider].KEY_ENV, root) == "key_missing"
@@ -645,6 +645,8 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None, wait=T
             return judged("gone", "contract_changed")
         if name == purpose:
             selection = chosen
+    if cap_missing:
+        return judged("waiting", "cost_limit_required", selection)
     if settings["mode"] != "on":
         return judged("waiting", "mode_off", selection)
     if ledger is not None:

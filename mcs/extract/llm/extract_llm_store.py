@@ -305,12 +305,15 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
     no settings or review read happens while SQLite's writer lock is held.
     Each attempt closes in its own short transaction (only a still-open check
     and the write) right after it is judged, so a pass that runs out of time
-    keeps the ones it closed and the next pass continues.
+    keeps the ones it closed and the next pass continues; judging also stops
+    at the pass deadline.
     Nothing here sends or reserves."""
     if ledger.db.in_transaction:
         return 0
+    def withdrawn(cfg, r):   # judging stops at the pass deadline, so selection is never delayed past it
+        return time.monotonic() < deadline and _cloud_attempt_withdrawn(ledger, cfg, r)
     cfg = load_config_checked(wait=False)
-    if cfg is None or not any(_cloud_attempt_withdrawn(ledger, cfg, r) for r in _open_cloud_attempts(ledger.db)):
+    if cfg is None or not any(withdrawn(cfg, r) for r in _open_cloud_attempts(ledger.db)):
         return 0
     close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
     closed = 0
@@ -321,7 +324,9 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
         for r in [] if cfg is None else _open_cloud_attempts(ledger.db):
             # judged again under the run lock, outside any write transaction, and closed at once,
             # so the budget is spent on writes as it goes rather than on judging every candidate first
-            if not _cloud_attempt_withdrawn(ledger, cfg, r):
+            if time.monotonic() >= close_by:
+                break
+            if not withdrawn(cfg, r):
                 continue
             try:
                 with _stale_gc_transaction(ledger.db, close_by):

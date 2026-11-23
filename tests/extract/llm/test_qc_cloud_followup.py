@@ -1289,3 +1289,21 @@ def test_a_provider_settings_update_in_progress_is_skipped_without_waiting(qc_wi
     lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
     assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 0
     assert _attempts(ledger) == [('qc', 'open')], "left for the next pass"
+
+
+def test_a_changed_contract_ends_even_while_the_spending_cap_is_missing(qc_window, monkeypatch):
+    ledger, cfg, _local_calls, _cloud_calls, _answers = qc_window
+    _capped_after_the_first_chunk(qc_window, monkeypatch)
+    pin = json.loads(ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['content'])['contract']
+    for key in ('mode', 'provider_budgets', 'reextract_backlog_until'):
+        cfg['cloud_llm'].pop(key, None)
+    cfg['cloud_llm'].update(daily_cost_limit_usd=None, monthly_cost_limit_usd=None, window_budget_usd=None)
+
+    def judged(contract):
+        state = cloud_policy.resolve_contract(cfg, contract, route="reextract", purpose="backlog",
+                                              root=worker.HOME, ledger=ledger)
+        return state.state, state.reason
+    assert judged(pin) == ("waiting", "cost_limit_required")
+    changed = {name: {**contract, "max_tokens": contract["max_tokens"] + 1} for name, contract in pin.items()}
+    assert judged(changed) == ("gone", "contract_changed"), "a withdrawal outranks the missing cap"
+
