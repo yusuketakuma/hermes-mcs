@@ -41,6 +41,12 @@ def patients(view, allowed, *, query="", cursor=None):
         sql, params, ["p.project_id"], ["local-chat-patients", scope, query], 60, cursor)}
 
 
+def patient_names(view, allowed):
+    """Every MCS room in the launch scope by name, for suggesting links to pharmacy patients."""
+    rows = view.db.execute("SELECT project_id,patient_name FROM patients ORDER BY project_id")
+    return [dict(row) for row in rows if allowed is None or row["project_id"] in allowed]
+
+
 def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None):
     require_project(project, allowed)
     if kind == "context":
@@ -172,11 +178,14 @@ def _signals(view, project):
                       "source": datetime.fromtimestamp(at, JST).strftime("%m/%d %H:%M 検出")
                       if isinstance(at, (int, float)) else "検出時刻未取得"})
     notes = []
+    # Without a completed run (or with unreadable states) an empty list is not proof that nothing is open.
+    unconfirmed = found["pipeline_last_run_at"] is None or bool(found["errors"])
     if found["pipeline_last_run_at"] is None:
-        notes.append("シグナルの判定はまだ実行されていません。")
+        notes.append("すべての種類の判定が終わったかを確認できません。表示は判定済みの分だけです。")
     if found["truncated"]:
         notes.append(f"新しい順に{found['returned']}件まで表示しています（全{found['total']}件）。")
     if found["errors"]:
         notes.append("一部のシグナルの状態を読み取れませんでした。")
     return {"title": "未解消のシグナル", "head": [], "items": items, "notes": notes,
-            "empty": "未解消のシグナルはありません。"}
+            "empty": "判定済みの範囲に未解消のシグナルは見つかりませんでした。" if unconfirmed
+            else "未解消のシグナルはありません。"}
