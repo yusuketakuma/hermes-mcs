@@ -106,5 +106,18 @@ async function checkPanel() {
   const summary = vm.runInContext("renderPanel", sandbox)({title:"まとめ", body:"■ 未完了タスク: なし\n履歴取得: 未完了"});
   assert.deepEqual(summary.children.slice(1).map(child => child.className), ["panel-group", "panel-line"]);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); console.log("local chat DOM contracts passed");}
+async function checkMedsOutOfOrder() {
+  // Two presses on one panel: the first answer arriving last must not replace the second.
+  vm.runInContext("state.project = 101", sandbox);
+  const answers = {};
+  sandbox.api = (kind, params) => new Promise(resolve => {answers[params.message] = resolve;});
+  const target = new Element("div"), request = vm.runInContext("state.detailRequest", sandbox);
+  const showMeds = vm.runInContext("showMeds", sandbox);
+  const first = showMeds(target, 1, request), second = showMeds(target, 2, request);
+  answers[2]({panel: {title: "返信の薬剤", items: []}}); await second;
+  answers[1]({panel: {title: "元の投稿の薬剤", items: []}}); await first;
+  assert.match(content(target), /返信の薬剤/);
+  assert.doesNotMatch(content(target), /元の投稿の薬剤/);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

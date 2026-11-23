@@ -474,3 +474,16 @@ def test_visit_brief_route_is_scoped_and_takes_the_last_visit_time(snapshot, mon
             chat.response(snapshot, {1}, "brief", query)
     with pytest.raises(ValueError):
         chat.response(snapshot, {1}, "timeline", "project=1&since=1")
+
+
+def test_context_panel_rows_keep_their_source_post_for_the_open_button(snapshot):
+    items = chat.response(snapshot, {1}, "panel", "project=1&section=background")["panel"]["items"]
+    assert 1 in {item["message_id"] for item in items}
+    import notify_views
+    view = mcs_view.View(snapshot)
+    try:
+        card = notify_views.patient_context_list(view.db, 1, "background", cfg={}, since=0,
+                                                 now=view.meta["generated_at"], first_view=True)
+    finally:
+        view.close()
+    assert all("message_id" not in item for item in card["items"])  # chat cards are unchanged

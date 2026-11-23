@@ -511,12 +511,16 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     assert len(listed["items"]) == 1 and listed["more"] is False
     first = homecare_api.read(db, "visits", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
     assert len(first["items"]) == 50 and first["more"] is True
-    whole = homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": "100"}, registry=REGISTRY,
-                              mcs_patients=scope)
-    assert len(whole["items"]) == 63 and whole["more"] is False
-    for limit in ("0", "1001", "x"):
+    rest = homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": "50"}, registry=REGISTRY,
+                             mcs_patients=scope)
+    # The next page carries on where the first stopped: no gap, no repeat, however long the history.
+    assert len(rest["items"]) == 13 and rest["more"] is False
+    assert {v["visit_id"] for v in first["items"]}.isdisjoint(v["visit_id"] for v in rest["items"])
+    assert homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": "5000"}, registry=REGISTRY,
+                             mcs_patients=scope) == {"items": [], "more": False}
+    for offset in ("-1", "x", "1.5"):
         with pytest.raises(ValueError, match="bad_request"):
-            homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": limit}, registry=REGISTRY,
+            homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": offset}, registry=REGISTRY,
                               mcs_patients=scope)
     for path in ("nursing/visits", "core/visits", "pharmacy/unknown"):
         with pytest.raises(ValueError, match="bad_request"):
@@ -537,9 +541,13 @@ class FakeServices:
         body = json.loads(request.data)
         depart = body["vehicles"][0]["time_window"][0]
         # Ten minutes between stops; a window that closes before the first possible arrival cannot be met.
+        # An early arrival waits for the window to open, as openrouteservice reports with waiting_time.
         jobs = [job for job in reversed(body["jobs"]) if job.get("time_windows", [[0, 10**6]])[0][1] >= depart + 600]
+        if not jobs:
+            return {"routes": [], "unassigned": [{"id": job["id"]} for job in body["jobs"]]}
         return {"routes": [{"steps": [{"type": "start"}] + [
-            {"type": "job", "id": job["id"], "arrival": depart + 600 * n, "duration": 300 * n}
+            {"type": "job", "id": job["id"], "arrival": depart + 600 * n, "duration": 300 * n,
+             "waiting_time": max(0, job.get("time_windows", [[0]])[0][0] - depart - 600 * n)}
             for n, job in enumerate(jobs, 1)] + [{"type": "end"}]}]}
 
 
@@ -567,7 +575,7 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
         route.plan(db, None, "2026-11-24", actor=me["staff_id"], fetch=fake)
     result = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     assert [stop["visit_id"] for stop in result["stops"]] == [ids[1], ids[0]]
-    assert [stop["arrival"] for stop in result["stops"]] == ["09:10", "09:20"]
+    assert [stop["arrival"] for stop in result["stops"]] == ["09:10", "09:45"]  # waits for the 10:00 window
     # No address, or an address matching places far apart, is never guessed; an 08:00 booking cannot be met.
     assert result["unlocated"] == [ids[2], ids[4]] and result["unscheduled"] == [ids[3]]
     optimised = json.loads([r for r in fake.sent if r.full_url == route.OPTIMIZE_URL][0].data)
@@ -581,6 +589,15 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
     assert len(again) - len(geocoded) == 2  # the origin and the still-ambiguous address; found places are reused
+    # A day whose every visit misses its window is a plan with no stops, not a failure.
+    late = FakeServices({**fake.places})
+    late_settings = tmp_path / "late.json"
+    late_settings.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1",
+                                         "depart_time": "12:00"}))
+    late_settings.chmod(0o600)
+    visits.update(db, REGISTRY, ids[1], {"start_time": "10:00"}, expected_version=1, actor=me["staff_id"])
+    nothing = route.plan(db, route.RouteSettings(late_settings), "2026-11-24", actor=me["staff_id"], fetch=late)
+    assert nothing["stops"] == [] and nothing["unscheduled"] == [ids[3], ids[0], ids[1]]
     failing = lambda request: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
     with pytest.raises(ValueError, match="route_failed"):
         route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=failing)

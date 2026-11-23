@@ -142,16 +142,21 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
             "Authorization": settings.key, "Content-Type": "application/json", "Accept": "application/json"})
         try:
             result = fetch(request)
-            steps = result["routes"][0]["steps"]
+            routes = result["routes"]
+            # A successful answer with no route means no visit could be placed; they all count as unscheduled.
+            steps = routes[0]["steps"] if routes else []
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             raise ValueError("route_failed") from None
         for step in steps:
             position = step.get("id") if step.get("type") == "job" else None
-            if type(position) is not int or not 1 <= position <= len(placed) or type(step.get("arrival")) is not int:
+            waiting = step.get("waiting_time", 0)
+            if type(position) is not int or not 1 <= position <= len(placed) or type(step.get("arrival")) is not int \
+                    or type(waiting) is not int or waiting < 0:
                 continue
             row = placed[position - 1]
+            # Arriving early means waiting for the booked window, so the shown time is when the visit can start.
             stops.append({"visit_id": row["visit_id"], "patient_name": row["patient_name"],
-                          "start_time": row["start_time"], "arrival": _clock(step["arrival"]),
+                          "start_time": row["start_time"], "arrival": _clock(step["arrival"] + waiting),
                           "travel_seconds": step.get("duration")})
         routed = {stop["visit_id"] for stop in stops}
         unscheduled = [row["visit_id"] for row in placed if row["visit_id"] not in routed]

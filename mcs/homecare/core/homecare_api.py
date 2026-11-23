@@ -29,7 +29,8 @@ def read(db, route, params, *, registry, mcs_patients):
         if params.get("date"):
             return {"items": visits.for_day(db, params["date"])}
         patient_id = _id(params.get("patient"))
-        return records.page(lambda limit: visits.for_patient(db, patient_id, limit=limit), params, size=50)
+        return records.page(lambda limit, offset: visits.for_patient(db, patient_id, limit=limit, offset=offset),
+                            params, size=50)
     if route == "sheet":
         return sheet(db, _id(params.get("patient")), registry=registry, mcs_patients=mcs_patients)
     if route == "meta":

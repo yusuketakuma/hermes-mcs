@@ -15,7 +15,7 @@ FOUNDATION = "0001_foundation.sql"
 
 
 def default_path(root) -> Path:
-    """Where a site keeps its ledger: ``<MCS_ROOT>/data/homecare.db``, the one place backups look for it."""
+    """Where a site keeps its ledger: ``<MCS_ROOT>/data/homecare.db``, the one place backups are to look for it."""
     return Path(root) / "data" / "homecare.db"
 
 

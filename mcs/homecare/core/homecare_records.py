@@ -107,15 +107,15 @@ def _clean_patient(values):
 
 
 def page(fetch, params, *, size):
-    """``{"items", "more"}`` for a newest-first history: ``params["limit"]`` grows by ``size`` as the screen asks
-    for older entries, up to 1000, so nothing stored is out of reach."""
-    limit = params.get("limit", size)
-    if isinstance(limit, str) and limit.isdigit():
-        limit = int(limit)
-    if type(limit) is not int or not 1 <= limit <= 1000:
+    """One page of a newest-first history as ``{"items", "more"}``; ``params["offset"]`` skips the entries the
+    screen already shows, so every stored entry stays in reach however long the history grows."""
+    offset = params.get("offset", 0)
+    if isinstance(offset, str) and offset.isdigit():
+        offset = int(offset)
+    if type(offset) is not int or not 0 <= offset <= 10**9:
         raise ValueError("bad_request")
-    rows = fetch(limit + 1)
-    return {"items": rows[:limit], "more": len(rows) > limit}
+    rows = fetch(size + 1, offset)
+    return {"items": rows[:size], "more": len(rows) > size}
 
 
 def record_id(value):

@@ -1035,19 +1035,21 @@ def _bare_quote(text: str, category) -> str:
 
 
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
-                         intervention_history=False, intervention_cursor=None, measurement=None):
+                         intervention_history=False, intervention_cursor=None, measurement=None,
+                         keep_message_id=False):
+    """``keep_message_id`` keeps each row's source post id for a reader that links rows to posts; chat cards drop it."""
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
     if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                      role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                     intervention_cursor=intervention_cursor)
+                                     intervention_cursor=intervention_cursor, keep_message_id=keep_message_id)
     # Coverage, source references and the final rendered labels share the same snapshot.
     db.execute("SAVEPOINT care_event_notification")
     try:
         result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                        role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                       intervention_cursor=intervention_cursor)
+                                       intervention_cursor=intervention_cursor, keep_message_id=keep_message_id)
     except BaseException:
         try:
             db.execute("RELEASE care_event_notification")
@@ -1097,7 +1099,7 @@ def _measurement_list(db, project_id, measurement):
 
 
 def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
-                          intervention_history=False, intervention_cursor=None):
+                          intervention_history=False, intervention_cursor=None, keep_message_id=False):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
     one post in one group share that line. Every row carries project_id so the
@@ -1433,7 +1435,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         if not care["coverage"].get("source_complete"):
             head.append("介入・経過：未取得・未解析などにより、確認できた範囲を表示")
     for row in rows:
-        row.pop("message_id", None)
+        if not keep_message_id:
+            row.pop("message_id", None)
         # text transports: the source rides at the end of the last quote line, not on a line of its own
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])

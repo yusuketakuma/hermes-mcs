@@ -165,7 +165,7 @@ def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
         # A local reader has no stored viewing checkpoint: changes compare against the first-view baseline.
         result = notify_views.patient_context_list(
             view.db, project, section, cfg=cfg, since=first_changes_baseline(now), now=now,
-            role=role, page=page, first_view=True)
+            role=role, page=page, first_view=True, keep_message_id=True)
     else:
         raise ValueError("unknown_view")
     items = [{key: item.get(key) for key in ("group", "text", "quotes", "source", "message_id")}

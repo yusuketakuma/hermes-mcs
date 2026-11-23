@@ -91,12 +91,12 @@ def update(db, registry, visit_id, values, *, expected_version, actor):
     return after
 
 
-def for_patient(db, patient_id, *, limit=50):
+def for_patient(db, patient_id, *, limit=50, offset=0):
     """A patient's visits, newest date first."""
     get(db, "patient", patient_id)
     return [dict(row) for row in db.execute(
-        _LISTED + "ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, v.visit_id DESC LIMIT ?",
-        (patient_id, limit))]
+        _LISTED + "ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, v.visit_id DESC "
+        "LIMIT ? OFFSET ?", (patient_id, limit, offset))]
 
 
 _LISTED = "SELECT v.*, s.name AS staff_name FROM visits v LEFT JOIN staff s USING(staff_id) WHERE v.patient_id=? "
