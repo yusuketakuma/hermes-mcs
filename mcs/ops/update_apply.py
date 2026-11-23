@@ -270,13 +270,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         interrupted = False
         terminal = False   # the journal's terminal save happened (bail or success)
 
-        homecare_copy = None   # this attempt's home-care copy, discarded if it fails
+        # This attempt's home-care copy. It becomes a real generation once the
+        # tree may change; an attempt that stops before that discards it.
+        homecare_copy = None
+        tree_may_change = False
 
         def bail(reason: str) -> int:
             nonlocal interrupted
-            if homecare_copy is not None:
-                import local_backup
-                local_backup.discard_homecare_preupdate(homecare_copy)
             try:
                 return _bail(reason)
             except BaseException as error:
@@ -621,8 +621,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return bail(str(e))
             # Restoring the home-care records stays manual. After a rollback the
             # older code refuses a database the new version migrated; this is its
-            # copy. A re-run that will exit as already applied must not rotate
-            # the copies that still predate the real update.
+            # copy, with its own room check. A re-run that will exit as already
+            # applied makes none, so it neither needs that room nor rotates the
+            # copies that still predate the real update.
             if _head_sha(**before_args) != sha and not (
                     command_id and state.get("executed", {}).get(command_id)):
                 try:
@@ -696,6 +697,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 provider_migration_needed = _provider_migration_needed()  # re-read under run.lock
             except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                 return bail("provider_settings_unverified")
+            tree_may_change = True
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),
@@ -775,6 +777,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _hold_after_interrupt(error)
             raise
         finally:
+            if homecare_copy is not None and not tree_may_change:
+                import local_backup
+                local_backup.discard_homecare_preupdate(homecare_copy)
             if quiesced and not consent_hold and not rollback_failed and (not interrupted or terminal):
                 _remove_marker()
             if borrowed is None:

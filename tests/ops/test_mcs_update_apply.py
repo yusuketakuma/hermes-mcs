@@ -747,6 +747,10 @@ def test_parent_tail_failure_after_child_done_never_rolls_back(updater, monkeypa
 
     monkeypatch.setattr(update_apply, "_run_post_merge", child_done_then_tail_failed)
     monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no rollback"))
+    import local_backup
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-applied")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate",
+                        lambda path: pytest.fail("the applied update keeps its home-care copy"))
     assert updater.apply("v1.1.0", target, "cid-done") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
     state = updater.journal_store.load_state(updater.STATE_PATH)
@@ -882,3 +886,27 @@ def test_a_failed_attempt_discards_its_home_care_copy_and_only_success_rotates(
     monkeypatch.setattr(update_apply, "_read_manifest_snapshot", snapshot)
     assert updater.apply("v1.2.0", sha, "cid-ok") == 0
     assert events[2:] == ["copy", "rotate"]
+
+
+def test_an_interrupt_before_any_change_discards_its_home_care_copy(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    import local_backup
+    discarded = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-1")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate", discarded.append)
+
+    def interrupted():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(update_apply, "_acquire_run_lock_wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.2.0", sha, "cid-interrupted")
+    assert discarded == ["copy-1"]

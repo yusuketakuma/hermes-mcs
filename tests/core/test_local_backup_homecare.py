@@ -129,15 +129,6 @@ def test_a_failed_attempt_discards_only_its_own_copy(world, monkeypatch):
     assert os.path.exists(kept) and not os.path.exists(failed) and homecare.exists()
 
 
-def test_preupdate_room_counts_the_home_care_copy(world, tmp_path):
-    homecare, _backups, _ = world
-    ledger = tmp_path / "ledger.db"
-    ledger.write_bytes(b"x" * 1024 * 1024)
-    without = local_backup.preupdate_need_mb(str(ledger))
-    homecare.write_bytes(b"y" * 3 * 1024 * 1024)
-    assert local_backup.preupdate_need_mb(str(ledger)) == pytest.approx(without + 6)
-
-
 def test_home_care_copies_are_not_ledger_restore_points():
     assert backup_names.backup_class("homecare-20261101.db") == "homecare_daily"
     assert backup_names.backup_class("homecare-20261101.db.ok") == "homecare_daily_ok"

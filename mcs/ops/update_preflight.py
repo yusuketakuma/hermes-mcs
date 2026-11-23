@@ -116,7 +116,7 @@ def precheck_local(cfg: dict, *, deadline=None) -> list[str]:
         # Preserve the updater's reserve as well as the backup's own guard.
         free = shutil.disk_usage(DATA).free
         legacy_need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
-        backup_need_mb = local_backup.preupdate_need_mb(LEDGER)
+        backup_need_mb = local_backup.backup_need_mb(LEDGER)
         if free < legacy_need or free / (1024 * 1024) < backup_need_mb:
             errors.append("insufficient_disk")
     # an owned idle watchdog whose explicit selection drifted is repaired by

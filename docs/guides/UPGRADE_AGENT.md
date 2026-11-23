@@ -296,6 +296,7 @@ release owner を使わない通常更新で、提供元別設定に未移行の
 | `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
 | `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` を確認しユーザーと対処 |
 | `insufficient_disk` | DBの2倍に、64MiBと設定された空き容量下限の大きい方を加えた空きが必要。下限の既定値は512MiB。原本と必要なバックアップを保護して容量を確保 |
+| `homecare_backup_disk_low` | 在宅記録の台帳（`data/homecare.db`）の更新前コピーの空きが足りない。台帳の2倍に空き容量下限を加えた空きが必要。原本と必要なバックアップを保護して容量を確保（変更はありません） |
 | `not_fast_forward: …` | checkout が移行先の祖先でない（ローカルコミットや新しすぎる版）。**【ユーザー確認】** |
 | `untracked_collision: …` | 未追跡ファイルが移行先の追跡ファイルと衝突。内容を示し **【ユーザー確認】** |
 | `schema_downgrade:…` | 移行先が古い。対象タグを見直す |

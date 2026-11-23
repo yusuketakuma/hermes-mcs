@@ -153,16 +153,6 @@ def backup_need_mb(db_path: str) -> float:
     return os.path.getsize(db_path) * 2 / (1024 * 1024) + disk_floor_mb()
 
 
-def preupdate_need_mb(db_path: str) -> float:
-    """Room an apply's pre-update copies need: the ledger's, then the
-    home-care records' (two copies of each file above the disk floor)."""
-    try:
-        homecare = os.path.getsize(HOMECARE_DB)
-    except FileNotFoundError:
-        homecare = 0
-    return backup_need_mb(db_path) + homecare * 2 / (1024 * 1024)
-
-
 def backup_time_needed_s(db_path: str) -> float:
     """Seconds a copy + verify of this ledger is budgeted to take."""
     try:
