@@ -21,7 +21,7 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 
 - 直した方がよい 3（日付の境目の全体停止）: `cloud_policy._circuit_on_pricing_error` が、試行開始時点で期限切れの料金表を回路を動かさない拒否として扱うため解消済みです。
 - 同 6（エラーの誤分類）: Anthropic の支出上限の 400 は `payment_required`、Retry-After の無い 429 は再試行しません（`anthropic_client.response_error`）。OpenAI の 429 は quota 系コードだけを止め、レート制限は従来どおり再試行します。
-- 同 7（重複）: 既定の出力上限 1600 を `cloud_policy.ORIGINAL_MAX_TOKENS` と `selection_max_tokens` に集めました。提供元名による分岐は `cloud_policy`・`cloud_inference` などに残っています（`provider_registry` の docstring もこの現状に合わせました）。
+- 同 7（重複）: 4a97288 では既定の出力上限 1600 が複数の呼出元に重複していました。PR #325 で `cloud_policy.ORIGINAL_MAX_TOKENS` と `selection_max_tokens` に集めます（再抽出は抽出側の `MAX_TOKENS` を使い続けます）。提供元名による分岐は `cloud_policy`・`cloud_inference` などに残っており、PR #325 で `provider_registry` の docstring をこの現状に合わせます。
 - 「文書とコードの食い違い」2: `cloud_send_admission.tightened` の docstring は、未送信として0円で精算する実装に合っています。
 - 「あるとよい」: `reserve_fn` は必須になり、Retry-After が残り時間を超えるときは待たずに失敗し、回路の行の model は提供元に依らない値（`jev` か空）になりました。テストの本番 endpoint 遮断（`tests/conftest.py`）は未確認です。
 

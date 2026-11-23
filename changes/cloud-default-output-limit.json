@@ -1,11 +1,14 @@
 {
   "category": "changed",
   "title": "クラウド送信の既定出力上限を1か所で管理",
-  "summary": "クラウド送信で出力上限の指定がないときの既定値（1600トークン）を共通の1か所で管理するように整理しました。送信内容・費用見積り・予算判定の結果は変わりません。",
+  "summary": "クラウド送信の内容・費用見積り・予算判定の結果は変わりません。出力上限の指定がないときの既定値（1600トークン）を共通の1か所で管理するよう内部を整理しました。",
   "upgrade": "追加操作は不要です。",
   "details": [
     "既定の出力上限を cloud_policy.ORIGINAL_MAX_TOKENS と selection_max_tokens に集め、推論・患者コンテキスト・cloud CLI から参照する。",
     "ローカルLLMの出力上限は変更しない。"
   ],
-  "refs": ["#325", "mcs/llm/cloud_policy.py"]
+  "refs": [
+    "#325",
+    "mcs/llm/cloud_policy.py"
+  ]
 }
