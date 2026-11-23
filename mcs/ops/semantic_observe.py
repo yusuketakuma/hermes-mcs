@@ -371,38 +371,50 @@ def _extract_recent(c, *, checkpoint=lambda: None) -> dict:
 def _jev_effect(c, days: int = 14, *, now=None) -> dict:
     """Count what Jev was asked and answered over the last `days` days.
 
-    Counts only stored records: requests per operation, primary proposition
-    verdicts, extraction-QC item verdicts and urgency pairs, and patient
-    context quality receipts. A count says what was recorded, not whether
-    the answer changed a downstream result."""
-    since = (time.time() if now is None else now) - days * 86400
+    Requests are counted only over the usage receipts' retention window
+    (``requests_window_days``), by the operation or job kind that reserved
+    them. Answers count each message's newest record in the window, so a
+    resumed assessment carrying earlier answers is not counted twice. A
+    count says what was recorded, not whether it changed a downstream result."""
+    from maintenance import USAGE_KEEP_S
+    now = time.time() if now is None else now
+    since = now - days * 86400
+    request_days = min(days, USAGE_KEEP_S // 86400)
 
-    def counts(sql, params=()):
-        return {str(key): n for key, n in c.execute(sql, (since, *params)).fetchall()}
+    def counts(sql, start=since):
+        return {str(key): n for key, n in c.execute(sql, (start,)).fetchall()}
 
+    def latest(kind, where="1"):
+        # each message's newest record, counted when it falls in the window
+        return ("SELECT content FROM (SELECT content, created_at, ROW_NUMBER() OVER"
+                " (PARTITION BY message_id ORDER BY artifact_id DESC) AS rn FROM artifacts"
+                f" WHERE kind='{kind}' AND {where}) WHERE rn=1 AND created_at>=? AND json_valid(content)")
+
+    assess = latest("semantic_assess",  # medication-detail rows carry a fact_id
+                    "json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.fact_id') IS NULL")
+    qc = latest("extract_qc")
     return {
         "window_days": days,
+        "requests_window_days": request_days,
         "requests_by_operation": counts(
-            "SELECT COALESCE(json_extract(meta,'$.operation'),'semantic_drain'),"
-            " SUM(json_extract(meta,'$.jev_requests')) FROM artifacts"
-            " WHERE kind='semantic_usage' AND created_at>=? AND json_valid(meta)"
-            " GROUP BY 1"),
+            "SELECT COALESCE(json_extract(u.meta,'$.operation'), j.kind, 'unknown'),"
+            " SUM(json_extract(u.meta,'$.jev_requests')) FROM artifacts u"
+            " LEFT JOIN fetch_jobs j ON j.job_id=json_extract(u.meta,'$.job_id')"
+            " WHERE u.kind='semantic_usage' AND u.created_at>=? AND json_valid(u.meta)"
+            " GROUP BY 1", now - request_days * 86400),
         "primary_verdicts": counts(
-            "SELECT json_extract(v.value,'$.verdict'), COUNT(*) FROM artifacts a,"
+            "SELECT json_extract(v.value,'$.verdict'), COUNT(*) FROM (" + assess + ") a,"
             " json_each(json_extract(a.content,'$.verdicts')) v"
-            " WHERE a.kind='semantic_assess' AND a.created_at>=? AND json_valid(a.content)"
-            " AND json_type(a.content,'$.verdicts')='object' GROUP BY 1"),
+            " WHERE json_type(a.content,'$.verdicts')='object' GROUP BY 1"),
         "extract_qc_items": counts(
-            "SELECT json_extract(i.value,'$.verdict'), COUNT(*) FROM artifacts a,"
+            "SELECT json_extract(i.value,'$.verdict'), COUNT(*) FROM (" + qc + ") a,"
             " json_each(json_extract(a.content,'$.items')) i"
-            " WHERE a.kind='extract_qc' AND a.created_at>=? AND json_valid(a.content)"
-            " AND json_type(a.content,'$.items')='array' GROUP BY 1"),
+            " WHERE json_type(a.content,'$.items')='array' GROUP BY 1"),
         # "extracted>jev" pairs: a differing pair is where Jev's urgency disagreed.
         "extract_qc_urgency": counts(
-            "SELECT COALESCE(json_extract(content,'$.urgency.extracted'),'unknown') || '>'"
-            " || COALESCE(json_extract(content,'$.urgency.jev'),'unknown'), COUNT(*)"
-            " FROM artifacts WHERE kind='extract_qc' AND created_at>=? AND json_valid(content)"
-            " GROUP BY 1"),
+            "SELECT COALESCE(json_extract(a.content,'$.urgency.extracted'),'unknown') || '>'"
+            " || COALESCE(json_extract(a.content,'$.urgency.jev'),'unknown'), COUNT(*)"
+            " FROM (" + qc + ") a GROUP BY 1"),
         "patient_quality": counts(
             "SELECT kind, COUNT(*) FROM artifacts WHERE kind LIKE 'patient_context_%quality%'"
             " AND created_at>=? GROUP BY kind"),
@@ -459,7 +471,8 @@ def main() -> int:
           f"legacy extraction predicate pending: {snap['extract_llm_left']} "
           "(admission/lease/retry not evaluated)")
     effect = snap["jev_effect"]
-    print(f"jev last {effect['window_days']}d: requests={effect['requests_by_operation'] or 'none'} | "
+    print(f"jev last {effect['window_days']}d (requests: last {effect['requests_window_days']}d): "
+          f"requests={effect['requests_by_operation'] or 'none'} | "
           f"primary={effect['primary_verdicts'] or 'none'} | "
           f"extract_qc items={effect['extract_qc_items'] or 'none'} "
           f"urgency(extracted>jev)={effect['extract_qc_urgency'] or 'none'} | "
