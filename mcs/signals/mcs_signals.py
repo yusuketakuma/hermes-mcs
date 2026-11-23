@@ -507,7 +507,9 @@ NON_DRUG_TERMS = ("薬剤師", "薬局", "薬剤部")
 _KATAKANA_TAIL = re.compile(r"[ァ-ヺー]")
 # a dose written right after a Latin-ending name: 200mL, 2.5mg, 10単位
 _DOSE_AFTER = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mL|ml|g|μg|mcg|IU|%|単位|錠|包|本|枚|滴|cc)", re.I)
-# a known dosage form right after the name: ロキソニンテープ
+# a known dosage form right after the name: ロキソニンテープ. Whatever follows
+# the form (テープケース, テープカット) is not judged: a request to a physician
+# naming a medicine with its form is about that medicine, as 錠 alone counts.
 _FORM_AFTER = re.compile(rf"(?:{MED_FORMS})", re.I)
 
 
