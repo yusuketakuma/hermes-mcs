@@ -592,8 +592,9 @@ def test_source_search_returns_each_range_s_unsearched_counts(snapshot, monkeypa
     import mcs_util
     import notify_views
     monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    # no settings: OCR is off, attachments are not examined, so the OCR count is null, never 0
     assert chat.response(snapshot, {2}, "sources", "project=2&q=合成")["skipped"] == {
-        "ocr_pending": 0, "body_unavailable": 0, "unclassified": 0}
+        "ocr_pending": None, "body_unavailable": 0, "unclassified": 0}
     real = notify_views.patient_search_view
     monkeypatch.setattr(notify_views, "patient_search_view", lambda *a, **k: {
         **real(*a, **k), "skipped": {"ocr_pending": 2, "body_unavailable": 1, "unclassified": 0, "other": 9}})

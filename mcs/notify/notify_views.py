@@ -794,8 +794,8 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
             # this range's unsearched counts, for a reader that adds them up across 「続きを検索」 ranges;
-            # attachments left unexamined because the settings are unreadable have no count (None), not 0
-            "skipped": {"ocr_pending": None if settings_unreadable else result['pending'],
+            # attachments left unexamined (OCR off, or the settings unreadable) have no count (None), not 0
+            "skipped": {"ocr_pending": result['pending'] if result['ocr_available'] else None,
                         "body_unavailable": result['unavailable'],
                         "unclassified": result['unclassified']},
             # no match says what was searched: an unsearched, unfetched or unanalysed source is not no record

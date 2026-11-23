@@ -118,7 +118,8 @@ def test_search_returns_each_ranges_unsearched_counts(led, monkeypatch):
     original = patient_search.search
 
     def counted(*args, **kwargs):
-        return {**original(*args, **kwargs), "pending": 2, "unavailable": 3, "unclassified": 1}
+        return {**original(*args, **kwargs), "pending": 2, "unavailable": 3, "unclassified": 1,
+                "ocr_available": True}
     monkeypatch.setattr(patient_search, "search", counted)
     assert _search(led)["skipped"] == {"ocr_pending": 2, "body_unavailable": 3, "unclassified": 1}
 
@@ -131,7 +132,8 @@ def test_search_counts_unsearched_sources_from_the_stored_posts(led):
     led.db.execute("UPDATE messages SET body_state='snippet',body_text=NULL WHERE message_id IN (102,103)")
     led.db.commit()
     result = _search(led)
-    assert result["skipped"] == {"ocr_pending": 0, "body_unavailable": 2, "unclassified": 0}
+    # OCR is off in these settings: attachments were not examined, so no OCR count
+    assert result["skipped"] == {"ocr_pending": None, "body_unavailable": 2, "unclassified": 0}
     assert any("本文未取得・確認不能の原資料が2件" in note for note in result["notes"])
 
 
@@ -145,5 +147,8 @@ def test_unreadable_settings_leave_the_ocr_side_unknown(led):
     # attachments were not examined: no OCR count, and the chat text never states a 0 for it
     assert view["skipped"] == {"ocr_pending": None, "body_unavailable": 0, "unclassified": 0}
     assert not any("OCR未完了" in line for line in notes + view["head"])
-    readable = notify_views.patient_search_view(led.db, 1, "本文")
-    assert readable["skipped"]["ocr_pending"] == 0     # a readable setting keeps its observed count
+    # OCR off in settings: attachments are not examined either, so no count; the note says why
+    off = notify_views.patient_search_view(led.db, 1, "本文")
+    assert off["skipped"]["ocr_pending"] is None and any("設定で無効" in note for note in off["notes"])
+    enabled = notify_views.patient_search_view(led.db, 1, "本文", cfg={"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}})
+    assert enabled["skipped"]["ocr_pending"] == 0     # examined: the observed count, 0 included
