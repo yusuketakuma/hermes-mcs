@@ -520,7 +520,7 @@ def selection_contract(selection):
     return {key: selection[key] for key in CONTRACT_FIELDS}
 
 
-def _contract_config(cfg, provider, root=None):
+def _contract_config(cfg, provider, root=None, *, wait=True):
     """``cfg`` as the pinned ``provider`` reads it -> configuration, or None while unverified.
 
     The runtime view of split provider settings carries only the automatically
@@ -539,7 +539,7 @@ def _contract_config(cfg, provider, root=None):
             return cfg
     except mcs_util.ProviderSettingsUnreadable:
         return None
-    return mcs_util.load_config_checked(path, provider=provider)
+    return mcs_util.load_config_checked(path, provider=provider, wait=wait)
 
 
 def route_contract(cfg, selection, *, route, purpose, root=None):
@@ -577,7 +577,7 @@ class ContractState(NamedTuple):
     key: str | None             # the pinned provider's key
 
 
-def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
+def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None, wait=True):
     """Whether a pinned contract may send now under ``cfg``, the facility review and the stop state.
 
     ``pin`` comes from :func:`route_contract`. ``usable``: send under the
@@ -592,7 +592,9 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
     left ``provider_order``, the recorded review leaves it out, its key is
     absent, or one of its profiles changed). Profiles are always the pinned
     provider's own (:func:`_contract_config`). Which provider is preferred
-    decides nothing here: a contract never moves to another provider or model."""
+    decides nothing here: a contract never moves to another provider or model.
+    Without ``wait`` a provider-settings update in progress reads as
+    unverified (``waiting``) at once instead of being waited out."""
     purposes = dict(_ROUTE_PURPOSES).get(route, ())
     provider = None
     if (purpose in purposes and isinstance(pin, Mapping) and set(pin) == set(purposes)
@@ -604,9 +606,11 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
             provider = named[0]
     if provider not in PROVIDERS:
         return ContractState("gone", "contract_invalid", None, None, None)
-    view = _contract_config(cfg, provider, root)
+    view = _contract_config(cfg, provider, root, wait=wait)
     cfg = cfg if view is None else view
-    _general, errors = resolve_settings(cfg, root)
+    # The configuration's own errors, without choosing an unpinned provider: which
+    # provider ``auto`` would prefer now (and whether its model fits) is not this contract's.
+    _general, errors = cloud_config(cfg)
     settings, pinned_errors, _held = resolve_selection(cfg, root, pinned=provider)
     key = provider_key(provider, root)
 

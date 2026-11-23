@@ -45,6 +45,7 @@ from extract_llm_provider import (
 )
 from extract_llm_qc import (
     _open_attempt_contracts,
+    _qc_attempt_notes_current,
     _qc_feedback,
     _prior_extract,
     _prior_identity,
@@ -398,6 +399,11 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
+        if r.get("_cloud_pin") is not None and not _qc_attempt_notes_current(ledger.db, r, qc):
+            # A newer audit changed the notes its saved paid requests were sent with:
+            # nothing more is sent, and the extraction pass ends it (確認候補).
+            block("prepare_profile_unavailable")
+            continue
         hints = _rule_hints(r)
         prefilter_candidate = (prefilter and not cloud_only and qc is None
             and not r["thin_src"] and not r["human_src"] and rebuild_state is None

@@ -15,6 +15,7 @@ import pytest
 import cloud_policy
 import extract_llm as worker
 import external_transfer
+import mcs_util
 import semantic_qc
 from cloud_policy import block_reason as real_block_reason
 from extract_testkit import _hash, _message, _qc_artifact
@@ -909,7 +910,7 @@ def _split_window(qc_window, monkeypatch, tmp_path, raw_update):
                             window_budget_usd=100, daily_request_budget=1, **raw_update)
 
     monkeypatch.setattr(extract_llm_store, "load_config_checked",
-                        lambda: mcs_util.load_config_checked(str(root / "config.json")))
+                        lambda **kw: mcs_util.load_config_checked(str(root / "config.json"), **kw))
 
     def apply():
         _write_split(root, raw)
@@ -1032,7 +1033,7 @@ def test_a_pass_without_verified_settings_never_ends_the_attempt_and_recovery_re
         def recover():
             cfg.clear()
             cfg.update(good)
-            monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda: cfg)
+            monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda **_kw: cfg)
     else:
         # Split settings whose provider file no longer matches its authority: a synthesized, closed view.
         monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
@@ -1049,7 +1050,7 @@ def test_a_pass_without_verified_settings_never_ends_the_attempt_and_recovery_re
     calls = len(sent_before)
     cfg.clear()
     cfg.update(served)
-    monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda: mcs_util.load_config_checked(str(path)))
+    monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda **kw: mcs_util.load_config_checked(str(path), **kw))
     _local_pass(ledger)
     _cloud_pass(ledger)
     assert _attempts(ledger) == [('qc', 'open')], "unverified settings never judge a contract gone"
@@ -1128,7 +1129,149 @@ def test_the_close_re_check_reads_only_its_own_post(qc_window, monkeypatch):
         return real(db, r)
 
     monkeypatch.setattr(extract_llm_store, "_open_cloud_attempts", spy)
+    reads_in_tx = []
+
+    def watched(name, real_read):
+        def read(*args, **kwargs):
+            reads_in_tx.extend([name] if ledger.db.in_transaction else [])
+            return real_read(*args, **kwargs)
+        return read
+    for module, name in ((external_transfer, "status"), (extract_llm_store, "load_config_checked"),
+                         (cloud_policy, "provider_key"), (mcs_util, "load_config_checked")):
+        monkeypatch.setattr(module, name, watched(name, getattr(module, name)))
     lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
     assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 1
     assert in_tx and all(r is not None for r in in_tx), "no whole-history scan inside the write transaction"
+    assert not reads_in_tx, "no settings, key or review read while the SQLite writer lock is held"
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def _reaudit(ledger, items):
+    """Jev audits the same current extraction again with ``items`` -> its artifact id."""
+    current, _meta = _current(ledger)
+    return _qc_artifact(ledger, 1, current["artifact_id"], _hash(ledger), {**FLAG, "items": items})
+
+
+def test_a_newer_audit_with_other_notes_ends_the_attempt_without_a_new_request(qc_window, monkeypatch):
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    before = _current(ledger)[0]
+    _reaudit(ledger, [{**FLAG["items"][0], "item": {"text": "完全合成の別の幻の症状"}}])
+    _local_pass(ledger)
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')], "ends as 確認候補; its saved request cannot be proven"
+    assert _cloud_pass(ledger)['done'] == 0
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1, "the saved chunk is never paid again"
+    assert _current(ledger)[0]['artifact_id'] == before['artifact_id']
+
+
+def test_a_re_audit_with_the_same_notes_resumes_the_attempt(qc_window, monkeypatch):
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    _reaudit(ledger, FLAG["items"])
+    assert _cloud_pass(ledger)['done'] == 1
+    sent = [_sent_text(call) for call in cloud_calls]
+    assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def test_a_reservation_whose_audit_notes_changed_is_refused(qc_window, monkeypatch):
+    import extract_llm_store
+    ledger, _cfg, _local_calls, _cloud_calls, _answers = qc_window
+    _capped_after_the_first_chunk(qc_window, monkeypatch)
+    r = dict(extract_llm_store._open_cloud_attempts(ledger.db)[0])
+    r.update(_cloud_pin=extract_llm_store._open_attempt_contracts(ledger.db, r)[0],
+             _qc_notes=_open_notes(ledger, r)[0])
+    import cloud_client
+
+    def record():
+        ledger.db.execute("BEGIN IMMEDIATE")
+        try:
+            return extract_llm_store._record_cloud_attempt_tx(ledger, r, {"reservation_id": "b" * 32})
+        finally:
+            ledger.db.rollback()
+    assert record() == 1, "under the notes it started with, the next request is recorded"
+    _reaudit(ledger, [{**FLAG["items"][0], "item": {"text": "完全合成の別の幻の症状"}}])
+    with pytest.raises(cloud_client.CloudError) as refused:
+        record()
+    assert refused.value.detail == "cloud_attempt_unavailable"
+
+
+def _open_notes(ledger, r):
+    import extract_llm_qc
+    return extract_llm_qc._open_attempt_values(ledger.db, r, "$.notes")
+
+
+def test_an_explicit_model_of_the_pinned_provider_stays_usable_when_auto_would_prefer_another(qc_window, monkeypatch):
+    import openai_client
+    ledger, cfg, *_rest = qc_window
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-key")
+    review = {"value": _review("acknowledged", ["openai"])}
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: review["value"])
+    _open_window(cfg)
+    _both_providers(cfg)
+    cfg['cloud_llm']['model'] = openai_client.MODEL   # explicit, and OpenAI's
+    pin = cloud_policy.route_contract(cfg, {"provider": "openai"}, route="reextract", purpose="backlog")
+    assert pin is not None and pin["backlog"]["provider"] == "openai"
+    assert cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog").state == "usable"
+    review["value"] = _review("acknowledged", ["anthropic", "openai"])   # an approved Anthropic key appears
+    assert "config: cloud_llm_model_invalid" in cloud_policy.resolve_settings(cfg)[1], "auto now picks Anthropic"
+    state = cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog")
+    assert (state.state, state.selection["provider"]) == ("usable", "openai")
+
+
+def test_attempt_records_with_a_broken_hash_or_binding_count_as_spent(tmp_path):
+    import extract_llm_qc
+    from extract_testkit import _ledger
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(body='完全合成の記録です。')])
+        db.save_messages([dataclasses.replace(_message(body='完全合成の記録です。'),
+                                              sender_name='synthetic-renamed-sender')])
+        with db.db:   # revision 1, so a JSON true would compare equal to it
+            db.db.execute("DELETE FROM message_revisions WHERE message_id=1 AND seq > 1")
+        spent = f"SELECT {worker.cloud_attempt_spent_sql('m', '?')} FROM messages m WHERE m.message_id=1"
+        revision = db.db.execute(f"SELECT {worker.source_revision_sql()} FROM messages m").fetchone()[0]
+        assert revision == 1
+
+        def only(content):
+            with db.db:
+                db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+                db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                              " VALUES(?,1,1,?,'',' {}',?)", (worker.CLOUD_ATTEMPT_KIND, json.dumps(content), time.time()))
+            return db.db.execute(spent, (1,)).fetchone()[0]
+        assert only({"state": "closed"}) == 1, "a record without a hash is unreadable: spent"
+        assert only({"hash": 5, "state": "closed"}) == 1
+        assert only({"hash": "0" * 64, "state": "closed"}) == 0, "a readable hash of another body never counts"
+        assert only({"hash": _hash(db), "purpose": "qc", "state": "open",
+                     "source_artifact_id": 1, "revision": 1}) == 0, "the open attempt itself resumes"
+        for binding in ({"source_artifact_id": True, "revision": 1}, {"source_artifact_id": 1, "revision": True},
+                        {"source_artifact_id": 1, "revision": "1"}):
+            record = {"hash": _hash(db), "purpose": "qc", "state": "open", **binding}
+            assert only(record) == 1, f"a non-integer binding never resumes: {binding}"
+            r = {"project_id": 1, "message_id": 1, "content_hash": _hash(db), "qc_cloud": 1}
+            assert extract_llm_qc._open_attempt_values(db.db, r, "$.state") == []
+    finally:
+        db.close()
+
+
+def test_a_provider_settings_update_in_progress_is_skipped_without_waiting(qc_window, monkeypatch, tmp_path):
+    import functools
+    import extract_llm_errors
+    import extract_llm_store
+    import provider_settings
+    ledger, _cfg, _local_calls, _cloud_calls, _answers = qc_window
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    openai_calls, _raw, _apply = _split_window(qc_window, monkeypatch, tmp_path,
+                                               {"provider_profiles": {"openai": {"backlog": "sol-medium"}}})
+    assert _cloud_pass(ledger)['done'] == 0 and len(openai_calls) == 1
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", []))   # withdrawn
+
+    def mid_update(*_args, **_kwargs):
+        raise ValueError("provider_settings_pending")
+    monkeypatch.setattr(provider_settings, "read", mid_update)
+    monkeypatch.setattr(mcs_util.time, "sleep", lambda _s: pytest.fail("the close step waited for settings"))
+    lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
+    assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 0
+    assert _attempts(ledger) == [('qc', 'open')], "left for the next pass"

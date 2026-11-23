@@ -162,7 +162,7 @@ def alert_only_config(path: str = CONF_PATH) -> dict:
     return _paid_routes_closed(raw) if isinstance(raw, dict) else {}
 
 
-def _load_config(path, *, allow_provider_unavailable=False, provider=None):
+def _load_config(path, *, allow_provider_unavailable=False, provider=None, wait=True):
     active = _provider_config_active(path)
     if active:
         try:
@@ -179,7 +179,7 @@ def _load_config(path, *, allow_provider_unavailable=False, provider=None):
                     state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
                     break
                 except ValueError as error:
-                    if str(error) not in _TRANSIENT_PROVIDER_READ or attempt == 2:
+                    if str(error) not in _TRANSIENT_PROVIDER_READ or attempt == 2 or not wait:
                         raise
                     # A commit keeps readers closed for its whole write window:
                     # wait briefly and re-verify rather than fail on the blip.
@@ -205,14 +205,16 @@ def _load_config(path, *, allow_provider_unavailable=False, provider=None):
 
 
 def load_config_checked(path: str = CONF_PATH, *, missing_ok: bool = False,
-                        provider: str | None = None) -> dict | None:
+                        provider: str | None = None, wait: bool = True) -> dict | None:
     """Return validated composite settings, or None when a consistent read fails.
 
     ``provider`` composes split provider settings for that cloud provider (its
     own model and profiles) instead of the automatic choice; a single
-    config.json already holds every provider's settings and is returned as is."""
+    config.json already holds every provider's settings and is returned as is.
+    Without ``wait`` a provider-settings update in progress reads as a failure
+    at once instead of being waited out."""
     try:
-        return _load_config(path, provider=provider)
+        return _load_config(path, provider=provider, wait=wait)
     except FileNotFoundError:
         return {} if missing_ok else None
     except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):

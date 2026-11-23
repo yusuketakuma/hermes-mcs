@@ -74,7 +74,11 @@ from extract_llm_qc import (
     _commit_rejected,
     _current,
     _open_attempt_contracts,
+    _qc_attempt_notes_current,
+    _qc_attempt_superseded,
     _qc_cloud_followup_sql,
+    _qc_feedback,
+    _qc_notes_digest,
     _prior_extract,
     _prior_matches,
     _protected_prior_current,
@@ -194,21 +198,23 @@ def _record_cloud_attempt_tx(ledger, r, reservation) -> int:
     """Record a paid request of the row's QC second attempt in its reservation transaction -> rows written.
 
     The first one opens the attempt. Each record binds the request to the
-    flagged extraction, the source revision and the pinned contract
-    (``_cloud_pin``), so only that unfinished attempt resumes
-    (cloud_attempt_spent_sql) and only under that contract. A post that no
-    longer qualifies or left the QC window, or a contract other than the
-    attempt's, refuses the reservation: nothing is sent or recorded."""
-    db, pin = ledger.db, r.get("_cloud_pin")
+    flagged extraction, the source revision, the pinned contract
+    (``_cloud_pin``) and the audit notes its prompt carries (``_qc_notes``),
+    so only that unfinished attempt resumes (cloud_attempt_spent_sql) and
+    only under that contract and those notes. A post that no longer
+    qualifies or left the QC window, a contract other than the attempt's, or
+    notes a newer audit changed refuse the reservation: nothing is sent or
+    recorded."""
+    db, pin, notes = ledger.db, r.get("_cloud_pin"), r.get("_qc_notes")
     refused = cloud_client.CloudError("budget_exceeded", "cloud_attempt_unavailable")
     if (not db.in_transaction or type(r.get("qc_cloud")) is not int or not isinstance(pin, dict)
-            or not isinstance(reservation.get("reservation_id"), str)):
+            or not isinstance(notes, str) or not isinstance(reservation.get("reservation_id"), str)):
         raise refused
     before = db.total_changes
     revision = db.execute(f"SELECT {source_revision_sql()} FROM messages m WHERE m.message_id=?",
                           (r["message_id"],)).fetchone()
     _add_cloud_attempt_tx(db, r, "open", source_artifact_id=r["qc_cloud"],
-                          revision=revision[0] if revision else None, contract=pin,
+                          revision=revision[0] if revision else None, contract=pin, notes=notes,
                           reservation_id=reservation["reservation_id"])
     # With this record written, the lane's own predicate (QC window included) must still admit the post.
     scope, scope_params = semantic_qc.qc_scope_sql(time.time())
@@ -216,7 +222,9 @@ def _record_cloud_attempt_tx(ledger, r, reservation) -> int:
         f"SELECT ({_qc_cloud_followup_sql()}) FROM messages m "
         f"WHERE m.message_id=? AND m.project_id=? AND m.content_hash=? AND {scope}",
         (r["message_id"], r["project_id"], r["content_hash"], *scope_params)).fetchone()
-    if row is None or row[0] != r["qc_cloud"] or any(started != pin for started in _open_attempt_contracts(db, r)):
+    current = _qc_feedback(ledger, r["qc_cloud"])   # the newest audit's notes, read in this transaction
+    if (row is None or row[0] != r["qc_cloud"] or any(started != pin for started in _open_attempt_contracts(db, r))
+            or _qc_notes_digest(current) != notes or not _qc_attempt_notes_current(db, {**r}, current)):
         raise refused
     return db.total_changes - before
 
@@ -241,15 +249,18 @@ def _close_cloud_attempt(ledger, r) -> bool:
     return True
 
 
-def _cloud_attempt_withdrawn(cfg, started) -> bool:
-    """Whether a QC second attempt's pinned contract (``started``, one per paid request) is gone for good.
+def _cloud_attempt_withdrawn(ledger, cfg, r) -> bool:
+    """Whether the row's open QC second attempt has ended for good; it reads settings but never waits for them.
 
-    It is when its records disagree, or a readable configuration, review and
-    key file no longer offer it (cloud_policy.resolve_contract ``gone``); a
-    waiting or unverifiable contract is not."""
+    It has when its records disagree, a readable configuration, review and
+    key file no longer offer its pinned contract (cloud_policy.resolve_contract
+    ``gone``), or a newer audit changed the notes it started under
+    (``_qc_attempt_superseded``); a waiting or unverifiable contract has not."""
+    started = _open_attempt_contracts(ledger.db, r)
     return bool(started) and (any(contract != started[0] for contract in started)
-                              or cloud_policy.resolve_contract(cfg, started[0], route="reextract",
-                                                               purpose="backlog", root=HOME).state == "gone")
+                              or _qc_attempt_superseded(ledger, r)
+                              or cloud_policy.resolve_contract(cfg, started[0], route="reextract", purpose="backlog",
+                                                               root=HOME, wait=False).state == "gone")
 
 
 def _open_cloud_attempts(db, r=None) -> list:
@@ -266,6 +277,8 @@ def _open_cloud_attempts(db, r=None) -> list:
             JOIN messages m ON m.message_id=ca.message_id AND m.project_id=ca.project_id
             WHERE ca.kind=?{narrow} AND json_extract({content},'$.state')='open'
               AND json_extract({content},'$.hash')=m.content_hash
+              AND json_type({content},'$.source_artifact_id')='integer'
+              AND json_type({content},'$.revision')='integer'
               AND json_extract({content},'$.revision')={source_revision_sql()}
               AND NOT EXISTS (SELECT 1 FROM artifacts cc WHERE cc.kind=ca.kind AND cc.message_id=ca.message_id
                     AND json_extract({json_or_null('cc.content')},'$.state')='closed'
@@ -276,40 +289,42 @@ def _open_cloud_attempts(db, r=None) -> list:
 
 
 def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadline) -> int:
-    """Close each open QC second attempt whose contract is gone for good -> attempts closed.
+    """Close each open QC second attempt that has ended for good -> attempts closed.
 
     Every extraction pass runs this, with the cloud on or off, so an attempt
     whose provider can no longer send still ends (確認候補) when no cloud
-    worker runs. Contracts are judged only under verified settings
-    (``load_config_checked``): a pass without them closes nothing. The write
-    lock is taken only when one is found, and the lock, the SQLite writer
-    wait and the SQL are bounded like the stale GC's, so a busy database
-    never delays selection; the next pass retries. Once the lock is held the
-    settings and review are read again, so a provider re-approved while
-    waiting keeps its attempt; each attempt then closes in its own short
-    transaction, so a pass that runs out of time keeps the ones it closed.
+    worker runs. Contracts are judged only under verified settings read
+    without waiting (``load_config_checked``): a pass whose settings are
+    unavailable or mid-update closes nothing and the next pass retries. The
+    write lock is taken only when one is found, and the lock, the SQLite
+    writer wait and the SQL are bounded like the stale GC's, so a busy
+    database never delays selection. Once the run lock is held the settings,
+    review and audits are read and every candidate judged again, before any
+    write transaction: extraction writers are serialized by that lock, so a
+    provider re-approved while waiting keeps its attempt, and no settings or
+    review read happens while SQLite's writer lock is held. Each attempt then
+    closes in its own short transaction (only a still-open check and the
+    write), so a pass that runs out of time keeps the ones it closed.
     Nothing here sends or reserves."""
-    candidates = [] if ledger.db.in_transaction else _open_cloud_attempts(ledger.db)
-    cfg = load_config_checked() if candidates else None
-    if cfg is None:
+    if ledger.db.in_transaction:
         return 0
-    withdrawn = [r for r in candidates if _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(ledger.db, r))]
-    if not withdrawn:
+
+    def judged():
+        cfg = load_config_checked(wait=False)
+        return [] if cfg is None else [r for r in _open_cloud_attempts(ledger.db)
+                                       if _cloud_attempt_withdrawn(ledger, cfg, r)]
+    if not _open_cloud_attempts(ledger.db) or not judged():
         return 0
     close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
     closed = 0
     with lock(per_write_lock, deadline=close_by) as held:
         if not held or not _writer_current():
             return 0
-        cfg = load_config_checked()   # judged again under the lock
-        if cfg is None:
-            return 0
-        for r in withdrawn:
+        for r in judged():   # judged again under the run lock, outside any write transaction
             try:
                 with _stale_gc_transaction(ledger.db, close_by):
                     # this post only, so the re-check stays small however long the history
-                    ended = (r in _open_cloud_attempts(ledger.db, r)
-                             and _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(ledger.db, r)))
+                    ended = r in _open_cloud_attempts(ledger.db, r)
                     if ended:
                         _close_cloud_attempt_tx(ledger.db, r)
             except _StaleGCDeadline:

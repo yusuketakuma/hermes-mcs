@@ -43,7 +43,7 @@ def routed(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_store, 'load_config_checked', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config_checked', lambda **_kwargs: worker.load_config())
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
