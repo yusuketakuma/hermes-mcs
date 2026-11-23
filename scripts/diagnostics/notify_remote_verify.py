@@ -37,7 +37,6 @@ from adapters.slack.emoji_text import slack_emoji_pattern  # noqa: E402
 
 MAX_PARTS = 500
 HISTORY_LIMIT = 200
-ACTOR = pwd.getpwuid(os.getuid()).pw_name
 REASON = "remote-verified resend+replace of unknown notification parts"
 
 
@@ -263,7 +262,7 @@ def main():
                 part, verdict, remote_id, attest=attest)
             if remote:
                 plan["remote_id"] = remote
-            req = {**plan, "command_id": str(uuid.uuid4()), "actor": ACTOR,
+            req = {**plan, "command_id": str(uuid.uuid4()), "actor": pwd.getpwuid(os.getuid()).pw_name,
                    "reason": REASON, "result": result, "evidence": evidence}
             if attest:
                 req["human_confirmed"] = True
