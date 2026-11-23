@@ -87,8 +87,8 @@ def _verify_homecare(path: Path) -> dict:
 def _homecare_inventory(path: Path) -> dict[str, int]:
     """Readonly integrity_check and foreign_key_check of a static home-care
     copy; the applied migrations when it is one."""
-    uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
-    with closing(sqlite3.connect(uri, uri=True)) as db:
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1",
+                                 uri=True)) as db:
         if (db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]
                 or db.execute("PRAGMA foreign_key_check").fetchone() is not None):
             raise backup_evidence.BackupError("backup_integrity_failed")
