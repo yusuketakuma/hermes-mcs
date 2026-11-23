@@ -23,11 +23,12 @@ def test_retired_or_current_pin_is_accepted(pin):
     assert out["model"] == jev.JEV_MODEL
 
 
-def test_other_pin_is_rejected():
+@pytest.mark.parametrize("pin", ["synthetic-other", [], {}, None, 1])
+def test_other_pin_is_rejected(pin):
     with pytest.raises(ValueError, match="provider_model_invalid"):
-        provider_settings.split_legacy({"semantic": {"model": "synthetic-other"}}, OWNERS,
+        provider_settings.split_legacy({"semantic": {"model": pin}}, OWNERS,
                                        jev_model=jev.JEV_MODEL)
-    out, errors = semantic_config({"semantic": {"model": "synthetic-other"}})
+    out, errors = semantic_config({"semantic": {"model": pin}})
     assert "config: semantic_model_invalid" in errors and out["mode"] == "off"
 
 

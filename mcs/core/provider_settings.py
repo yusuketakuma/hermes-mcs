@@ -61,7 +61,8 @@ JEV_RETIRED_PINS = frozenset({"jev-1.13.0"})
 
 def jev_model_pin_ok(pin, jev_model) -> bool:
     """Whether a stored Jev ``model`` names the fixed ``jev_model`` (or an id an earlier release fixed)."""
-    return isinstance(jev_model, str) and (pin == jev_model or pin in JEV_RETIRED_PINS)
+    return (isinstance(pin, str) and isinstance(jev_model, str)
+            and (pin == jev_model or pin in JEV_RETIRED_PINS))
 
 
 def _jev_values(value, jev_model):
