@@ -5,7 +5,6 @@ import json
 import re
 import sqlite3
 
-import clinical_urgency
 from mcs_contract import project_url
 from mcs_queries import UNKNOWN_TIME, register_search_fold
 from mcs_util import search_fold
@@ -16,7 +15,7 @@ from snapshot_access import table_exists
 from stamp_contract import STAMP_EMOJI
 from stamp_format import self_stamps, stamp_counts, thread_stamp_line
 from stamp_read import reaction_actor_summary
-from structured_view import structured_lines, urgency_qc_suffix
+from structured_view import URGENCY_REVIEW_LINE, URGENT_REQUEST_LINE, structured_summary
 from patient_context_view import SECTION_LABELS, observed_revisions
 from patient_context import extract_context
 import notify_views
@@ -66,7 +65,7 @@ def patients(view, allowed, *, query="", cursor=None):
            f"FROM ({sql})) WHERE 1=1")
     page = view._page(sql, params, ["_activity", "_key"], ["local-chat-patients-by-activity", scope, query],
                       60, cursor, key_fields=("_activity", "_key"))
-    signals = _signal_counts(view.db)
+    signals = _signal_counts(view)
     page["items"] = [_patient(view.db, row, signals) for row in page["items"]]
     return {"snapshot": view.meta, **page}
 
@@ -84,7 +83,6 @@ def _patient(db, row, signals):
         phase = None if capture is None else capture["capture_phase"]
     except ValueError:
         phase = "unknown"
-    counts, confirmed = signals
     result.update(
         heading=patient_heading(db, pid), project_type=_text(row["project_type"], 32),
         is_group=identity["group"], group_name=identity["group_name"] or None,
@@ -95,8 +93,7 @@ def _patient(db, row, signals):
         if code == "other" else notify_views.fetch_reason_ja(code),
         last_complete_fetch=row["last_complete_fetch"] if type(row["last_complete_fetch"]) in (int, float) else None,
         initial_import=phase,
-        open_signals={"count": None if counts is None else counts.get(pid, 0),
-                      "state": "failed" if counts is None else "confirmed" if confirmed else "partial"})
+        open_signals=_open_signals(signals, pid))
     return result
 
 
@@ -104,17 +101,39 @@ def _text(value, cap):
     return value.strip() if isinstance(value, str) and value.strip() and len(value) <= cap else None
 
 
-def _signal_counts(db, project_id=None):
-    """({project_id: open signals}, every detector finished and every state readable), or (None, False)."""
+# The open-signal counts of the latest snapshot generation read: the signal history is read once per published
+# snapshot, not on every patient page or heading.
+_SIGNALS = {}
+
+
+def _signal_counts(view):
+    """``({project_id: open signals}, reason)`` of this snapshot, reason None when every detector finished a
+    run and every stored state is readable, else "unreadable" or "pending"; ``(None, None)`` when unreadable."""
     import mcs_signals
+    key = view.meta["generation_id"]
+    cached = _SIGNALS.get(key)
+    if cached is not None:
+        return cached
     try:
-        found = mcs_signals.current_open(db, project_id=project_id, limit=2**31)
+        found = mcs_signals.current_open(view.db, limit=2**31)
     except (sqlite3.Error, ValueError, TypeError, KeyError):
-        return None, False
+        return None, None      # not kept: a later request may read it
     counts = {}
     for signal in found["items"]:
         counts[signal["project_id"]] = counts.get(signal["project_id"], 0) + 1
-    return counts, found["pipeline_last_run_at"] is not None and not found["errors"]
+    cached = (counts, "unreadable" if found["errors"] else "pending" if found["pipeline_last_run_at"] is None
+              else None)
+    _SIGNALS.clear()
+    _SIGNALS[key] = cached
+    return cached
+
+
+def _open_signals(signals, project):
+    """One patient's open-signal count: confirmed only after a complete readable run of every detector."""
+    counts, reason = signals
+    if counts is None:
+        return {"count": None, "state": "failed", "reason": None}
+    return {"count": counts.get(project, 0), "state": "partial" if reason else "confirmed", "reason": reason}
 
 
 def patient_names(view, allowed):
@@ -212,8 +231,8 @@ def _message(view, row):
         "SELECT 1 FROM messages WHERE project_id=? AND message_id=?",
         (row["project_id"], row["parent_id"])).fetchone() is not None
     result["body_text"] = None if deleted else row.get("body_text")
-    result["summary_lines"] = structured_lines(db, mid, drug_candidates=False,
-                                                plain=True, request_first=True)
+    result["summary_lines"], urgency = structured_summary(db, mid, drug_candidates=False,
+                                                          plain=True, request_first=True)
     sender = db.execute("SELECT profession,organization FROM messages WHERE message_id=?",
                         (mid,)).fetchone()
     result.update(profession=sender[0], organization=sender[1],
@@ -227,7 +246,7 @@ def _message(view, row):
     result["stamps"] = _stamps(metadata, actors)
     result["flags"] = _flags(metadata, view._identity()[0])
     result["summary_state"] = "done" if result["summary_lines"] else summary_empty_state(db, mid, None)
-    result["urgency"] = _urgency(db, mid)
+    result["urgency"] = _urgency(urgency)
     result["last_reply"] = None if row.get("parent_id") else _last_reply(view, row)
     revision = (observed_revisions(db, row["project_id"], message_id=mid).get(mid)
                 if table_exists(db, "message_revisions") else None)
@@ -274,13 +293,10 @@ def _flags(metadata, self_id):
             "bookmarked": observed(metadata["is_bookmarked"], metadata["bookmark_status"])}
 
 
-URGENT_REQUEST = "急ぎの確認依頼（本人の緊急状態とは別）"
-URGENCY_REVIEW = "緊急度: 要確認（対象人物・時点の根拠を確認）"
-
-
-def _urgency(db, mid):
-    """The urgency the post's summary shows, as fields: the same reading structured_lines words."""
-    details = clinical_urgency.message_urgency_details(db, mid)
+def _urgency(details):
+    """The urgency the post's summary words (structured_summary's reading), as fields."""
+    if details is None:
+        return None
     level = {"llm": "high", "rule": "flag"}.get(details["source"])
     review = ("urgent_request" if details["kind"] == "request" else
               "subject_unconfirmed" if details["held"] else None)
@@ -288,9 +304,9 @@ def _urgency(db, mid):
         return None
     return {"level": level, "label": URGENCY_PLAIN.get(details["source"]),
             "reasons": list(details["reasons"]) if level else [],
-            "qc_note": urgency_qc_suffix(db, mid) if level == "high" else "",
-            "review": review, "review_label": {"urgent_request": URGENT_REQUEST,
-                                               "subject_unconfirmed": URGENCY_REVIEW}.get(review)}
+            "qc_note": details["qc_note"] if level == "high" else "",
+            "review": review, "review_label": {"urgent_request": URGENT_REQUEST_LINE,
+                                               "subject_unconfirmed": URGENCY_REVIEW_LINE}.get(review)}
 
 
 def _last_reply(view, row):
@@ -381,21 +397,26 @@ def _signals(view, project):
 
 def counts(view, allowed, project):
     """Heading counts of one patient: open signals and request replies, each with whether it is confirmed."""
+    from mcs_util import load_config
     import patient_context_view as pcv
 
     require_project(project, allowed)
-    found, confirmed = _signal_counts(view.db, project)
-    signals = {"count": None if found is None else found.get(project, 0),
-               "state": "failed" if found is None else "confirmed" if confirmed else "partial"}
     try:
         talk = pcv.replies(view.db, project)
     except (sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
         replies = {"requests": None, "not_found": None, "unknown": None, "state": "failed"}
     else:
         waiting = pcv._open_requests(talk)
+        # While analysis is unfinished a request may not be recognised yet: the counts are a lower bound,
+        # as the 連絡・返答の確認 card says.
+        try:
+            pending = notify_views.analysis_incomplete(pcv.evidence(view.db, project, cfg=load_config()))
+        except (sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
+            pending = True
         replies = {"requests": len(talk["items"]), "not_found": len(waiting["unanswered"]),
-                   "unknown": len(waiting["reply_unknown"]), "state": "observed"}
-    return {"snapshot": view.meta, "open_signals": signals, "replies": replies}
+                   "unknown": len(waiting["reply_unknown"]), "state": "partial" if pending else "observed"}
+    return {"snapshot": view.meta, "open_signals": _open_signals(_signal_counts(view), project),
+            "replies": replies}
 
 
 # Rows shown per registered dataset; rows_total says how many the record holds.
@@ -405,15 +426,18 @@ REGISTERED_ROWS = 200
 def registered(view, allowed, project):
     """MCS registered clinical data (medication periods, observation items and values), a record kept
     apart from chat: every dataset with its acquisition state; the care team is not included."""
-    from mcs_util import load_config
+    from mcs_util import config_read_state
     from project_metadata_contract import REFERENCE_FIELDS
     from registered_data import registered_data
 
     require_project(project, allowed)
-    enabled = load_config().get("clinical_metadata") is True
+    # Defaults stand in for a missing or unreadable config.json; they say nothing of the setting.
+    cfg, config_state = config_read_state()
+    config = {"collection_enabled": cfg.get("clinical_metadata") is True if config_state == "read" else None,
+              "config_state": config_state}
     data = registered_data(view.db, "detail", project, None)
     if data is None:
-        return {"snapshot": view.meta, "state": "unavailable", "collection_enabled": enabled, "datasets": []}
+        return {"snapshot": view.meta, "state": "unavailable", **config, "datasets": []}
     datasets = []
     for record in data["records"]:
         definition = record.get("definition") or {}
@@ -430,8 +454,8 @@ def registered(view, allowed, project):
                      if record["dataset"] == "observation_values" else None),
             "rows_total": len(rows), "rows": [_registered_row(record["dataset"], row)
                                               for row in rows[:REGISTERED_ROWS]]})
-    return {"snapshot": view.meta, "state": "listed" if datasets else "not_linked",
-            "collection_enabled": enabled, "datasets": datasets}
+    return {"snapshot": view.meta, "state": "listed" if datasets else "not_linked", **config,
+            "datasets": datasets}
 
 
 def _registered_row(dataset, row):
@@ -461,10 +485,15 @@ def source_search(view, allowed, project, query, *, cursor=None):
             position = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
         except (ValueError, UnicodeError, binascii.Error, RecursionError):
             raise ValueError("search_cursor_invalid") from None
+    group = (project_identity(view.db, project) or {}).get("group") is True
     try:
+        # A group room's MCS address is not derived from its ID, so its head line carries no link.
         result = notify_views.patient_search_view(view.db, project, query, cfg=load_config(), cursor=position,
-                                                  keep_message_id=True)
+                                                  keep_message_id=True, room_link=not group)
     except ValueError as exc:
+        if str(exc) == "bad_query":
+            # only filters, punctuation or spaces: nothing to search for
+            raise ValueError("search_query_empty") from None
         if str(exc) != "patient_scope_unavailable":
             raise
         # Original sources of an archived or no-longer-permitted room are not read for search.
