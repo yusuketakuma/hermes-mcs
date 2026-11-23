@@ -71,7 +71,6 @@ def test_own_or_unattributed_thread_post_is_not_a_reply(store, reply):
     {"action": "薬局製剤の継続可否を確認"},
     {"action": "ビタミンB1 10mgへ減量", "meds": ["ビタミンB1"]},
     {"action": "ロキソニンテープの中止", "meds": ["ロキソニン"]},        # a dosage form right after the name
-    {"action": "ABCOD錠の減量", "meds": ["ABC"]},
 ])
 def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
     _inquiry(store.db, 1, **kwargs)
@@ -89,6 +88,16 @@ def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
 def test_non_medication_requests_are_not_inquiries(store, kwargs):
     _inquiry(store.db, 1, **kwargs)
     assert _run(store.db) == []
+
+
+@pytest.mark.parametrize("text, name, named", [
+    ("ABCOD錠を減量", "ABC", True),           # a dosage form after a Latin-ending name
+    ("ABCODEを減量", "ABC", False),
+    ("ロキソニンパップを中止", "ロキソニン", True),
+    ("ロキソニンセンターへ連絡", "ロキソニン", False),
+])
+def test_names_medicine_accepts_known_dosage_forms(text, name, named):
+    assert mcs_signals._names_medicine(text, name) is named
 
 
 def _sender(db, mid, sender_id):
