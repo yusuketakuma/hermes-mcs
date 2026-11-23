@@ -499,10 +499,12 @@ PHYSICIAN_TARGETS = frozenset(("医師", "主治医", "主治医師", "担当医
 # A medication word, or the name of a medicine extracted from the same post,
 # in the request's summary or quote is required: 変更・中止・提案・照会 alone
 # also describe visit scheduling and other non-medication requests.
-INQUIRY_DRUG_WORDS = ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
+INQUIRY_DRUG_WORDS = ("処方", "薬", "製剤", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
 # job titles and places that contain 薬 without naming a medicine
 NON_DRUG_TERMS = ("薬剤師", "薬局", "薬剤部")
 _KATAKANA_TAIL = re.compile(r"[ァ-ヺー]")
+# a dose written right after a Latin-ending name: 200mL, 2.5mg, 10単位
+_DOSE_AFTER = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mL|ml|g|μg|mcg|IU|%|単位|錠|包|本|枚|滴|cc)", re.I)
 
 
 def _names_medicine(text, name):
@@ -511,9 +513,11 @@ def _names_medicine(text, name):
     written right after it (「ラコールNF200mL」) still names it."""
     start = text.find(name)
     while start >= 0:
-        after = text[start + len(name):start + len(name) + 1]
+        rest = text[start + len(name):]
+        after = rest[:1]
+        latin = name[-1].isascii() and name[-1].isalnum() and after.isascii() and after.isalnum()
         if not after or not ((_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after))
-                             or (name[-1].isascii() and name[-1].isalpha() and after.isascii() and after.isalpha())):
+                             or (latin and not _DOSE_AFTER.match(rest))):
             return True
         start = text.find(name, start + 1)
     return False
