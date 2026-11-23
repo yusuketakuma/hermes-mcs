@@ -33,7 +33,7 @@ def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, mon
         contract = cloud_inference.cloud_provider_contract(selection=selection)
         reservation = {'reservation_id': rid, 'model': selection['model'], 'route': 'semantic_backlog',
                        'project_id': 1, 'message_id': 1, 'effort': 'high', 'profile': 'sol-high',
-                       'price_version': openai_client.SOL_PRICE_VERSION}
+                       'max_tokens': 32768, 'price_version': openai_client.SOL_PRICE_VERSION}
         ledger.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
                             meta={'reservation_id': rid})
         monkeypatch.setattr(cloud_policy, 'reservation_evidence',

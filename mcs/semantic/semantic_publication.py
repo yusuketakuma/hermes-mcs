@@ -29,6 +29,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY, is_current, current_
 import semantic_facts
 import semantic_store
 import semantic_transport
+import provider_registry
 
 import hashlib
 import json
@@ -221,7 +222,7 @@ def _projection_provenance(db, pid, mid, fp, policy, member, doc, content, *, se
                         and proof.get("source_fingerprint") == fp and proof.get("policy_fingerprint") == policy
                         and proof.get("target_revision") == member["revision"]
                         and type(proof.get("complete")) is bool and isinstance(proof.get("providers"), list)
-                        and all(isinstance(p, str) and p in ("local", "anthropic", "openai")
+                        and all(isinstance(p, str) and p in provider_registry.INFERENCE_PROVIDERS
                                 for p in proof["providers"])
                         and len(set(proof["providers"])) == len(proof["providers"])
                         and (not proof["complete"] or bool(proof["providers"]))):

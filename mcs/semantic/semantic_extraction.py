@@ -16,6 +16,7 @@ import mcs_util
 import extraction_provenance
 import semantic_llm
 import semantic_transport
+import provider_registry
 
 import copy
 from contextlib import closing
@@ -239,18 +240,12 @@ def _provider_from_reservation(row, prepared, reservation):
             return provider if ("effort" not in reservation
                                 and actual == cloud_policy.PROVIDERS[provider]) else None
         import cloud_inference
-        import openai_client
         effort, profile = reservation.get("effort"), reservation.get("profile")
         definition = cloud_policy.PRICE_DEFINITIONS.get((actual, reservation.get("price_version")))
         if definition is None or definition["provider"] != provider:
             return None
-        if provider == "openai":
-            if (actual, effort) not in openai_client.VALID_MODEL_EFFORTS:
-                return None
-            if profile is not None and openai_client.PROFILE_DEFINITIONS.get(profile) != (actual, effort):
-                return None
-        elif not cloud_policy.profile_contract_valid(provider, actual, effort, profile,
-                                                     reservation.get("max_tokens")):
+        if not cloud_policy.profile_contract_valid(provider, actual, effort, profile,
+                                                   reservation.get("max_tokens")):
             return None
         selection = {"provider": provider, "model": actual, "effort": effort}
         return provider if contract == cloud_inference.cloud_provider_contract(selection=selection) else None
@@ -463,7 +458,7 @@ def _adopt_cached_chunk(cached, index, content, meta, provider, expected_provide
                 import cloud_inference
                 actual_contract = cloud_inference.cloud_provider_contract(selection={
                     'provider': provider, 'model': meta.get('actual_model'),
-                    'effort': 'low' if provider == 'openai' else None})
+                    'effort': provider_registry.original_effort(provider)})
             if expected_contract is not None and actual_contract != expected_contract:
                 return
         cached[index] = {"facts": content["facts"],
@@ -481,7 +476,7 @@ def _adopt_cached_chunk(cached, index, content, meta, provider, expected_provide
                     import cloud_inference
                     contract = cloud_inference.cloud_provider_contract(selection={
                         'provider': provider, 'model': meta.get('actual_model'),
-                        'effort': 'low' if provider == 'openai' else None})
+                        'effort': provider_registry.original_effort(provider)})
                 cached[index]['producer_contract'] = contract
                 cached[index]['reservation_id'] = meta['provider_provenance']['reservation_id']
     except (KeyError, TypeError, ValueError, RecursionError):
@@ -667,11 +662,11 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         "actual_model": semantic_transport.inference_model(),
         "inference_requests": semantic_transport.inference_requests(),
     }
-    if provider in ("anthropic", "openai"):
+    if provider in provider_registry.CLOUD_PROVIDERS:
         contract = semantic_transport.inference_contract()
         if contract is not None:
             meta["actual_contract"] = contract
-    if provider in ("local", "anthropic", "openai"):
+    if provider in provider_registry.INFERENCE_PROVIDERS:
         requests = meta["inference_requests"]
         rid = requests[-1] if provider != "local" and requests else None
         result_hash = mcs_util.payload_hash(content)
@@ -1139,7 +1134,7 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                 or proof.get("target_revision") != member.get("revision")
                 or type(proof.get("complete")) is not bool
                 or not isinstance(proof.get("providers"), list)
-                or any(not isinstance(p, str) or p not in ("local", "anthropic", "openai")
+                or any(not isinstance(p, str) or p not in provider_registry.INFERENCE_PROVIDERS
                        for p in proof["providers"])
                 or len(set(proof["providers"])) != len(proof["providers"])
                 or proof["complete"] and len(proof["providers"]) != 1):
