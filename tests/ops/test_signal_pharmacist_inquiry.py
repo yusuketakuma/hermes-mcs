@@ -70,6 +70,8 @@ def test_own_or_unattributed_thread_post_is_not_a_reply(store, reply):
     {"action": "降圧薬の中止", "quote": "薬剤師から降圧薬の中止をご相談します"},
     {"action": "薬局製剤の継続可否を確認"},
     {"action": "ビタミンB1 10mgへ減量", "meds": ["ビタミンB1"]},
+    {"action": "ロキソニンテープの中止", "meds": ["ロキソニン"]},        # a dosage form right after the name
+    {"action": "ABCOD錠の減量", "meds": ["ABC"]},
 ])
 def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
     _inquiry(store.db, 1, **kwargs)
@@ -82,6 +84,7 @@ def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
     {"action": "候補日の選択", "quote": "薬剤師と調整した候補日から選んでください"},  # 薬 only in a job title
     {"action": "薬局との訪問日の調整"},                                  # 薬 only in a place
     {"action": "ビタミンB12の再検査", "meds": ["ビタミンB1"]},           # a digit continuing the name
+    {"action": "ロキソニンセンターへの連絡", "meds": ["ロキソニン"]},    # katakana that is not a dosage form
 ])
 def test_non_medication_requests_are_not_inquiries(store, kwargs):
     _inquiry(store.db, 1, **kwargs)
@@ -102,6 +105,13 @@ def test_own_follow_up_or_unrelated_post_is_not_a_reply(store, reply):
     _inquiry(store.db, 1)
     _msg(store.db, 2, pid=1, ts=NOW - 4 * DAY, chash="h2", **reply)
     store.db.commit()
+    assert len(_run(store.db)) == 1
+
+
+@pytest.mark.parametrize("to", ["医師", "主治医", "主治医師", "担当医", "担当医師", "往診医", "往診医師",
+                                "訪問医師", "在宅医師", "Dr."])
+def test_physician_spellings_are_inquiry_targets(store, to):
+    _inquiry(store.db, 1, to=to)
     assert len(_run(store.db)) == 1
 
 
