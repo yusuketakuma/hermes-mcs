@@ -866,7 +866,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
             return False
         _record_dispatch_outcome(ledger, ev, res, outcome)
     except Exception:
-        _dispatch_failed(ledger, ev, res)
+        _dispatch_raised(ledger, ev, res)
     return True
 
 
@@ -897,11 +897,21 @@ def _record_dispatch_outcome(ledger, ev, res, outcome):
 
 
 def _dispatch_committed(ledger, ev) -> bool:
-    """A grouped dispatch that raised after its commit already moved this
-    row (reseat, suppress, accept); a pre-commit failure left it as due."""
+    """A dispatch that raised after its commit already moved this row
+    (reseat, suppress, accept); a pre-commit failure left it as due."""
     row = ledger.db.execute("SELECT state,next_try,attempts,progress FROM notify_outbox "
                             "WHERE event_id=?", (ev["event_id"],)).fetchone()
     return row is None or any(row[key] != ev[key] for key in ("state", "next_try", "attempts", "progress"))
+
+
+def _dispatch_raised(ledger, ev, res):
+    """A dispatch raised: only a pre-commit failure counts as an attempt.
+    After the commit the committed state stands and spool.recover
+    republishes its unpublished spec_json."""
+    if _dispatch_committed(ledger, ev):
+        res["publish_failed"] = res.get("publish_failed", 0) + 1
+    else:
+        _dispatch_failed(ledger, ev, res)
 
 
 def _dispatch_failed(ledger, ev, res):
@@ -1352,12 +1362,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         except Exception as error:
             outcomes = [error] * len(pending)
         for event, outcome in zip(pending, outcomes, strict=True):
-            if isinstance(outcome, Exception) and _dispatch_committed(ledger, event):
-                # publication failed after the commit: the committed state stands
-                # and spool.recover republishes its unpublished spec_json
-                res["publish_failed"] = res.get("publish_failed", 0) + 1
-            elif isinstance(outcome, Exception):
-                _dispatch_failed(ledger, event, res)
+            if isinstance(outcome, Exception):
+                _dispatch_raised(ledger, event, res)
             elif outcome.get("deadline"):
                 res["skipped"] += 1
             elif outcome.get("restore_pending"):
