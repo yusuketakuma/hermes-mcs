@@ -57,7 +57,7 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 起動のきっかけは、CI（`ci`）と `PR review signal` の完了（`workflow_run`）、`ci.yml` からの `workflow_dispatch`、PR の作成・更新・ラベル・下書き解除（`pull_request_target`）、Issue への `担当:` ラベル付与（`issues`）、15分おきの定期実行（`schedule`）です。
 どの job も main 側の定義と `ci/` だけを使い、PR のコードは checkout も実行もしません。
 
-- `gate`: `merge-gate` の判定と公開、自動マージ予約の引き継ぎ整理、古くなったブランチ起動 CI の取り消しを行います。`issues`・`schedule` では動きません。`workflow_dispatch` は既定ブランチの定義からの起動だけを受け付けます。
+- `gate`: `merge-gate` の判定と公開、人が付けた自動マージ予約の整理、`AUTO_MERGE_ENABLED` が `true` のときの直接マージ、古くなったブランチ起動 CI の取り消しを行います。`issues`・`schedule` では動きません。`workflow_dispatch` は既定ブランチの定義からの起動だけを受け付けます。
 - `full-ci`: 開いた PR に `full-ci` ラベルが付いたとき、そのブランチで full mode の CI を `workflow_dispatch` で起動します（`ci.yml` はラベルのイベントでは起動しないため）。fork のブランチは起動できないので、ラベルを付けてから PR を開き直すか push し直します。
 - `lock`: `担当:` ラベルが付いたとき、担当が1件だけであることと、付けたのが所有者か Dots（`DOTS_ACTOR`）であることを確かめ、条件を外れたラベルを外して理由をコメントします。
 - `ready`: `gate` のあとに、開いた PR の現在の head へ `merge-ready` を出します。定期実行（15分おき）では開いた PR をすべて調べます（下記「`merge-ready`」）。
@@ -80,20 +80,28 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 - `hermes_plugin/`・`adapters/`・`lineworks_adapter/`・`mcs_standalone/`・`deployment/`
 - テストファイルの削除・改名、skip・xfail の追加、テスト関数の純減
 
-PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` を書けます。そのため `.github/` を含む PR は必ず人がマージし、
-自動マージの予約は push のたびに外します。`merge-gate` が緑でも、`.github/` を含む PR は差分を見て判断してください。
-自動マージの予約は、判定した head のコミットに結び付けます（`--match-head-commit`）。判定後に push された head には引き継ぎません。
+PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` を書けます。そのため `merge-gate` が緑でも、`.github/` を含む PR は差分を見て判断してください。
 
-`gate` job は動くたびに、既定ブランチ向けの開いた PR の自動マージ予約（GitHub の Enable auto-merge）を調べ、次をすべて満たす予約だけを残して、ほかは外します（`ci/auto_merge.py` の `withdraw_inherited_reservations`）。
+自動マージは2つに分けて扱います。
 
-- 予約したのが人（ボット・App ではない）で、リポジトリの所有者か admin であること（「オーナー承認」ラベルと同じ確認）。
-- 予約した時刻が、現在の head が push された時刻より後であること。push の時刻は「オーナー承認」ラベルと同じく、その head の CI（`ci.yml`）の実行から求めます。
-  予約時刻は GraphQL の `autoMergeRequest.enabledAt` で読み、そのとき GitHub が返す head が現在の head と一致することも確かめます。
-- その PR に、取り下げられていない Request changes のレビューが残っていないこと。
+- コントローラー自身のマージ: GitHub の自動マージ予約は作りません。`AUTOMATION_ENABLED` と `AUTO_MERGE_ENABLED` がともに `true` のときだけ、条件がそろった PR を、現在の head のコミットを指定して直接マージします（条件は下の「自動マージ」。`ci/auto_merge.py` の `merge_pr`）。判定後に push された head は、指定が合わないのでマージされません。
+- 人が GitHub の画面で付けた予約（Enable auto-merge）: `gate` job が動くたびに、既定ブランチ向けの開いた PR の予約を調べ、次をすべて満たす予約だけを残して、ほかは外します（`ci/auto_merge.py` の `withdraw_inherited_reservations`）。
+  fork の PR も調べます。外す処理は `AUTOMATION_ENABLED` が `true` でなくても動きます。
 
-ボット（`github-actions[bot]`・Dependabot など）の予約、admin でない人の予約、push より前の予約は、これまでどおり外します。
+  - 予約したのが人（ボット・App ではない）で、リポジトリの所有者か admin であること（「オーナー承認」ラベルと同じ確認）。
+  - 予約した時刻が、現在の head が push された時刻より後であること。push の時刻は「オーナー承認」ラベルと同じく、その head の CI（`ci.yml`）の実行から求めます。
+    予約時刻は GraphQL の `autoMergeRequest.enabledAt` で読み、そのとき GitHub が返す head が現在の head と一致することも確かめます。
+  - その PR に、取り下げられていない Request changes のレビューが残っていないこと。
+
+ボット（`github-actions[bot]`・Dependabot など）の予約、admin でない人の予約、push より前の予約は外します。
 API の失敗や欠けた値で判断できないときも外します。残した予約は、GitHub が必須チェックと branch protection の通過を待ってマージします。
-`merge-gate` が main-protect の必須チェックでない間は、残した所有者の予約は `merge-gate` の不合格を待たずにマージされ得ます（所有者が自分でマージする場合と同じ扱いです）。
+
+残した所有者の予約について、次のことを前提にしてください。
+
+- `.github/`・`ci/`・`CLAUDE.md` などの「要人間承認」の PR にも、fork の PR にも同じ規則で効きます。パスや PR の種類では外しません。所有者自身がマージを決めたものとして扱い、所有者が手でマージするのと同じ扱いです。
+- マージされる時点は、GitHub がリポジトリの必須チェックの通過を確かめたときです。`merge-gate` が main-protect の必須チェックでない間は、`merge-gate` の不合格を待たずにマージされ得ます。
+- この規則は、所有者本人の操作と、所有者の認証情報で呼んだ API（AI エージェントが所有者のトークンで予約を付けた場合など）を見分けられません。AI エージェントは、自動マージの予約を付けないでください。
+- push の時刻は、その head の最新の `pull_request` の CI 実行で近似します。同じコミットで別の PR を開く、PR を閉じて開き直すなどで CI が再実行されると、すでに付いている予約は「push より前」とみなされて外されます（安全側に倒れます）。外れたら、新しい実行のあとに付け直します。
 
 ## レビューの判定と `merge-ready`
 
@@ -142,7 +150,7 @@ CI（`ci`）と `PR review signal` の完了（`workflow_run`）、および手�
 - `merge-gate` と `merge-ready` は、`github-actions[bot]` が書いたものだけを読みます。同じ名前の status は write 権限があれば誰でも書けるためです。
 - 停止スイッチが切れている間は、AI ブランチの PR は `merge-gate` が不合格なので `merge-ready` も `success` になりません。人のブランチの PR はそのまま判定します。
 PR 側のイベント（`pull_request`・`pull_request_review`・`pull_request_target`）では動かさず、PR のコードは checkout も実行もしません。
-`merge-ready` はマージしません。`gh pr merge --auto` の対象（Dependabot のコミット固定と AI の文書だけの変更）は変えていません。
+`merge-ready` はマージしません。マージするのは、Dots・所有者の操作と、`AUTO_MERGE_ENABLED` が `true` のときのコントローラーの直接マージ（下記「自動マージ」）です。
 
 ### クラウドの Claude のレビュー（`agent-review.yml`）
 
@@ -246,7 +254,7 @@ PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が 
   この依頼は `merge-gate` を出すだけで、CI が失敗しても試行回数は数えず、自動修正も起動しません。判定は check runs を自分で読みますが、どの CI 試行の失敗かを1つに決められないためです。
   既定ブランチ（`refs/heads/<既定ブランチ>`）以外から起動された判定は動きません。
   Actions event policy で `agent-control.yml` の起動イベントを絞っている場合は、`workflow_dispatch` も許可します。許可が無いと、この判定は起動時に失敗します。
-  起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
+  起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。人が付けた自動マージの予約は、所有者のものも含めて取り込みの前に外し、付け直しません（古い head への予約を新しい head に引き継がないためです）。自動マージの予約を使うときは、新しい head に人が付け直します。
   衝突、または `.github/workflows/` の変更（GITHUB_TOKEN では書けません）で取り込めない PR には、手で取り込む手順を1件だけコメントし、以降はそのコメントを書き換えます。
   fork の PR は対象外です。
 
@@ -299,11 +307,15 @@ gh pr list --repo $R --search "is:open auto-merge:enabled" --json number --jq '.
 
 ## 自動マージ（既定で無効）
 
-`AUTO_MERGE_ENABLED` が `true` のとき、ゲートが合格で、要人間承認の理由がなく、main の最新を取り込み済みの PR のうち、
-次の2種類だけに自動マージを予約します。
+`AUTOMATION_ENABLED` と `AUTO_MERGE_ENABLED` がともに `true` のとき、`gate` job は、次の条件がすべてそろった PR を、GitHub の自動マージ予約を使わずに直接マージします（`ci/auto_merge.py` の `merge_pr`）。
 
-- AI ブランチの、`docs/` 配下（`docs/specs/` を除く）の Markdown・画像だけの変更
-- Dependabot による、ワークフローの `uses:` のコミット固定だけを差し替える変更
+- このリポジトリ内のブランチから既定ブランチへ向けた、下書きでない PR であること（fork の PR は対象外）。
+- 現在の head に人の承認があること。作者以外で write 以上の権限を持つ人の Approve か、有効な「オーナー承認」ラベルです。取り下げられていない Request changes があれば対象外です。
+- 必須の CI ジョブと `merge-gate` が、現在の head で成功していること。
+- GitHub の判定が clean であること（main の最新を取り込み済みで、branch protection を満たしている）。
+
+マージは merge commit で、現在の head を指定して行います（head が変わっていればしません）。マージ後は `main-sync` を起動します。
+この直接マージは、パスや PR の種類では絞りません（`merge-ready` の判定とは別の経路です）。
 
 有効にする前に、次の8項目を完全合成の Issue・PR で確かめます。実データ・実機は使いません。
 
@@ -315,7 +327,7 @@ gh pr list --repo $R --search "is:open auto-merge:enabled" --json number --jq '.
 | 古いコミットの成功後に追加 push | 古い成功を流用しない |
 | 外部 Issue に不正な操作指示 | AI が起動しない |
 | 利用枠・上限への到達 | 保留になり、有料経路へ切り替わらない |
-| 個別には成功するが組合せで失敗する PR | main の最新を取り込むまで予約されない |
+| 個別には成功するが組合せで失敗する PR | main の最新を取り込むまでマージされない |
 | 停止後に遅れて届いた完了 | マージされない |
 
 「マージ済み」は「提供済み」ではありません。実機への反映が要る変更は、マージ後も `要実機作業`・`要再起動` の Issue を開いたままにし、
@@ -338,7 +350,7 @@ gh secret set OPENAI_API_KEY --repo $R
 
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。
 - `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
-- 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
+- Settings → General の Allow auto-merge は、所有者が GitHub の画面で自動マージの予約を付けるときだけオンにします。コントローラーの直接マージには要りません。
 - Actions event policy（14520）で起動イベントを絞っている場合は、`schedule`（`agent-review-fix.yml` と `agent-control.yml` の `merge-ready`）と
   `issue_comment`（`agent-review.yml` の `/claude-review`）を許可します（`workflow_dispatch` は許可済み）。許可が無いと、これらは起動しません。
   `agent-review.yml` の自動の起動には `workflow_run` も要ります（`agent-control.yml` がすでに使っています）。
@@ -363,7 +375,7 @@ gh variable set REVIEW_ACTORS --body "<Dotsのログイン>,claude[bot]" --repo 
 gh variable set DOTS_ACTOR --body "<Dotsのログイン>" --repo $R
 ```
 
-- `merge-ready` と Dots のマージには、Allow auto-merge は要りません。
+- `merge-ready`・Dots のマージ・コントローラーの直接マージには、Allow auto-merge は要りません。
 
 公開リポジトリでは、2026年12月2日から `pull_request_target` の起動に Actions event policy での明示的な許可が必要です。[GitHub の告知](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2/)
 
