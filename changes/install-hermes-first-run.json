@@ -2,9 +2,9 @@
   "category": "fixed",
   "title": "Hermes 経由の新規導入が、Hermes の初回起動に時間がかかって必ず止まる問題を修正",
   "summary": "新しい Mac に Hermes 経由で導入すると、Hermes の最初のコマンドが同梱スキルの準備などで1分以上かかり、導入の安全確認（30秒以内に Hermes の定期実行一覧を確かめる）が間に合わず「初回導入の安全性を確認できません」で止まっていました。導入の段階2で Hermes の初回準備を時間制限なしで済ませてから確認するようにしました。",
-  "upgrade": "追加操作は不要です。導入済みの環境では Hermes の準備が済んでいるため、この確認は数秒で終わります。初めての導入では段階2が数分長くなることがあります。",
+  "upgrade": "追加操作は不要です。この準備は初回導入のときだけ行い、導入済みの環境の再導入・更新では行いません。初めての導入では段階2が数分長くなることがあります。",
   "details": [
-    "deployment/install/runtime.sh: Hermes 用 Python 環境の確認後に `hermes cron list --all` を一度実行し、初回準備を終わらせる。失敗しても注意を表示して続行し、安全確認は従来どおり後段で行う。",
+    "deployment/install/runtime.sh: 初回導入のときだけ、Hermes 用 Python 環境の確認後に `hermes cron list --all` を一度実行し、初回準備を終わらせる。失敗しても注意を表示して続行し、安全確認は従来どおり後段で行う。",
     "install.sh の INSTALL_RUNTIME_SHA256 を runtime.sh の内容に合わせて更新した。"
   ],
   "refs": ["deployment/install/runtime.sh", "install.sh", ".github/workflows/fresh-install.yml"]
