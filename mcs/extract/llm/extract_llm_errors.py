@@ -41,6 +41,7 @@ from extract_llm_qc import (
 )
 from extract_llm_selection import (
     _selection_sql,
+    cloud_lane_sql,
 )
 from extract_llm_source_contract import (
     EXTRACT_VERSION,
@@ -338,10 +339,14 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> f
             return None
         if isinstance(r, dict) and r.get('_cloud_mode') in ('on', 'shadow'):
             now = time.time()
+            followup = bool(r.get('_required_cloud_contract'))
+            # The cloud lane's own filter is re-read here, so the claim admits
+            # exactly what selection would admit now (QC window, settled QC rows).
+            lane_sql, lane_params = cloud_lane_sql(now) if followup else ('', ())
             current = ledger.db.execute(
-                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?',
-                               cloud_followup=bool(r.get('_required_cloud_contract'))),
-                (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
+                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?' + lane_sql,
+                               cloud_followup=followup),
+                (KIND, EXTRACT_VERSION, r['message_id'], *lane_params, None, 1, 0, now,
                  KIND, EXTRACT_VERSION, now, 1)).fetchone()
             if (r.get('_required_cloud_contract') and cloud_completion_any(ledger.db, r)[0] is not None):
                 ledger.db.commit()

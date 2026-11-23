@@ -356,18 +356,35 @@ def test_qc_view_marks_confirmation_candidates_after_both_automatic_attempts(tmp
         _qc(db, 3, {"qc": "done", "items": [], "urgency": {"extracted": "routine", "jev": "high"}})
         _qc(db, 4, {"qc": "done", "items": [{"section": "meds", "index": 0, "item": {"name": "A"},
                                              "verdict": "UNDETERMINED"}]})
+        db.save_messages([_message(5), _message(6)])
+        for mid in (5, 6):
+            _v2(db, mid)
+            _qc(db, mid, _NO_MATCH)
+        _mark_fixed(db, 5, {"qc": 1, "applied": True})       # local fix, then a plain cloud send of this source
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                          " VALUES('cloud_usage_reserve',1,5,'{}','m',?,?)",
+                          (json.dumps({"route": "reextract"}), time.time() + 1))
         view = _view(db, tmp_path)
         try:
             out = view.read("qc", project=1)
             only = view.read("qc", project=1, needs_confirmation=True)
             with pytest.raises(ValueError, match="bad_needs_confirmation"):
                 view.read("status", needs_confirmation=True)
+            with pytest.raises(ValueError, match="bad_needs_confirmation"):
+                view.read("qc", project=1, message_id=1, needs_confirmation=True)
         finally:
             view.close()
-        rows = {i["message_id"]: (i["qc_attempts"], i["needs_confirmation"]) for i in out["items"]}
-        assert rows == {1: (2, True), 2: (1, False), 3: (1, True), 4: (2, False)}
-        assert [i["message_id"] for i in only["items"]] == [3, 1]
-        assert out["summary"]["needs_confirmation"] == only["summary"]["needs_confirmation"] == 2
+        rows = {i["message_id"]: (i["qc_attempts"], i["needs_confirmation"], i["followup_state"])
+                for i in out["items"]}
+        assert rows == {1: (2, True, "needs_confirmation"), 2: (1, False, "cloud_reextract_pending"),
+                        3: (1, True, "needs_confirmation"), 4: (2, False, None),
+                        5: (1, True, "needs_confirmation"), 6: (0, False, "local_reextract_pending")}
+        assert [i["message_id"] for i in only["items"]] == [5, 3, 1]
+        assert out["summary"]["needs_confirmation"] == only["summary"]["needs_confirmation"] == 3
+        assert out["summary"]["followup"] == {"local_reextract_pending": 1, "cloud_reextract_pending": 1,
+                                              "needs_confirmation": 3}
+        assert out["legend"]["followup_state"]["cloud_reextract_pending"].startswith("クラウド再抽出待ち")
         assert out["legend"]["needs_confirmation"] == (
             "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、本文に裏付けが見つからない項目"
             "または緊急度の相違が残る抽出。誤りと確定したものではない")

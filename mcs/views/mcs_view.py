@@ -372,9 +372,11 @@ class View:
         the extraction they describe. Without --message-id: aggregate
         counts plus a paginated list of messages whose QC flagged at
         least one item or could not run; each row reports the automatic
-        QC re-extractions behind its extraction and whether it is a
-        confirmation candidate (``--needs-confirmation`` lists only those).
-        With --message-id: the full per-item verdicts for that message."""
+        QC re-extractions behind its extraction and which automatic step
+        still applies (local re-extract pending, cloud re-extract pending,
+        or confirmation candidate; ``--needs-confirmation`` lists only the
+        candidates). With --message-id: the full per-item verdicts for that
+        message (``--needs-confirmation`` is rejected there)."""
         import extract_llm
         from mcs_queries import (JSON_OBJECT_SQL, current_qc_pred,
                                  json_or_null, qc_source_id)
@@ -417,10 +419,15 @@ class View:
         attempts = extract_llm.qc_fix_attempt_sql("s.meta")
         from_cloud = (f"EXISTS(SELECT 1 FROM json_each({json_or_null('s.meta')},"
                       "'$.provider_provenance.providers') pp WHERE pp.value IS NOT 'local')")
+        flagged = f"(json_extract({content},'$.qc')='done' AND ({extract_llm.qc_actionable_sql('a')}))"
+        clouded = f"({from_cloud} OR {extract_llm.cloud_reextract_reserved_sql('m')})"
         # Still flagged after the bounded automatic re-extractions: the local one
-        # and the cloud one, or a retained result that already came from the cloud.
-        confirm = (f"(json_extract({content},'$.qc')='done' AND ({extract_llm.qc_actionable_sql('a')})"
-                   f" AND ({attempts}=2 OR ({attempts}=1 AND {from_cloud})))")
+        # and the cloud one, or the cloud already re-extracted this source.
+        confirm = f"({flagged} AND ({attempts}=2 OR ({attempts}=1 AND {clouded})))"
+        followup = (f"CASE WHEN NOT {flagged} THEN NULL"
+                    f" WHEN {attempts}=0 THEN 'local_reextract_pending'"
+                    f" WHEN {attempts}=1 AND NOT {clouded} THEN 'cloud_reextract_pending'"
+                    f" WHEN {confirm} THEN 'needs_confirmation' END")
         summary = dict(self.db.execute(
             "SELECT COUNT(*) total,"
             " COALESCE(SUM(json_extract(a.content,'$.qc')='done'),0)"
@@ -461,13 +468,18 @@ class View:
           FROM sources
         """, (*scope_params, pid)).fetchone()
         summary.update(dict(scope_counts))
-        summary["needs_confirmation"] = self.db.execute(
-            "SELECT COUNT(*) FROM artifacts a JOIN messages m ON m.message_id=a.message_id"
-            + audited + " WHERE " + cur + " AND " + confirm, (pid,)).fetchone()[0]
+        counts = self.db.execute(
+            f"SELECT followup, COUNT(*) FROM (SELECT {followup} AS followup FROM artifacts a"
+            " JOIN messages m ON m.message_id=a.message_id" + audited + " WHERE " + cur
+            + ") WHERE followup IS NOT NULL GROUP BY followup", (pid,)).fetchall()
+        summary["followup"] = {state: 0 for state in (
+            "local_reextract_pending", "cloud_reextract_pending", "needs_confirmation")}
+        summary["followup"].update({row[0]: row[1] for row in counts})
+        summary["needs_confirmation"] = summary["followup"]["needs_confirmation"]
         page = self._page(
             "SELECT a.artifact_id AS _key,a.artifact_id,a.message_id,"
             f"m.posted_at_ts,m.sender_name,a.content,a.created_at,{attempts} AS qc_attempts,"
-            f"{confirm} AS needs_confirmation FROM artifacts a JOIN messages m "
+            f"{confirm} AS needs_confirmation,{followup} AS followup_state FROM artifacts a JOIN messages m "
             "ON m.message_id=a.message_id" + audited + " WHERE " + cur
             + (" AND " + confirm if needs_confirmation else "") +
             f" AND (json_extract({content},'$.qc')='unevaluated'"
@@ -518,6 +530,12 @@ class View:
             "needs_confirmation": "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、"
                                   "本文に裏付けが見つからない項目または緊急度の相違が残る抽出。"
                                   "誤りと確定したものではない",
+            "followup_state": {
+                "local_reextract_pending": "ローカル再抽出待ち: 指摘を添えたローカルの再抽出をまだ行っていない抽出",
+                "cloud_reextract_pending": "クラウド再抽出待ち: ローカルの再抽出後も指摘が残り、クラウドの再抽出を"
+                                           "まだ行っていない抽出。再抽出の再開期間外・費用上限・停止・対象範囲外・"
+                                           "投稿日時が直近60日より前などの場合は送られない",
+                "needs_confirmation": "確認候補（needs_confirmation と同じ）"},
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"
                                 "current=1 はまだ再抽出されていない報告。"
                                 "field=urgency は緊急度判定の誤り報告",
@@ -853,7 +871,8 @@ class View:
                 or include_chat and (kind != "project_metadata"
                                      or dataset not in CLINICAL_DATASETS)):
             raise ValueError("bad_comparison_scope")
-        if type(needs_confirmation) is not bool or needs_confirmation and kind != "qc":
+        if (type(needs_confirmation) is not bool
+                or needs_confirmation and (kind != "qc" or message_id is not None)):
             raise ValueError("bad_needs_confirmation")
         if kind == "response_observations":
             if type(publication) is not bool:

@@ -73,6 +73,8 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 `semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続再抽出はローカル1回に制限します。
 その結果の再監査でも指摘が残る投稿は、保存済み投稿の再抽出の再開期間中だけ、既存の`reextract`経路と
 その送信条件（費用上限・停止・施設の確認・scope・履歴範囲・`held_prior`・QCの60日範囲）でクラウド1回を加えます。
+現在のsourceに`reextract`の送信予約（`cloud_usage_reserve`）が既にあれば、保留・不採用の結果や通常の再抽出を含めて送信済みとみなし再送しません（`cloud_reextract_reserved_sql`、claim時も`cloud_lane_sql`を再適用）。
+現在の世代で`qc_fix`を持つ投稿は通常の再抽出として送りません。人の報告と世代更新の再抽出は対象外です。
 `meta.qc_fix.attempt`は2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
 送信後の失敗はローカルで再実行せず`applied:false, attempt:2`で確定し、残った指摘は`mcs view qc`の確認候補に出します。
 モデルは`jev-1.13.0`へ固定し、応答モデル不一致を拒否します。

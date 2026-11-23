@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import semantic_store
 import inference_version as inference
 import cloud_backlog
+import cloud_usage_accounting
 import extract_quality
 from extraction_provenance import (
     provider_strict_dict as _provider_strict_dict,
@@ -389,18 +390,38 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id", *, version: int 
         ORDER BY q.artifact_id DESC LIMIT 1"""
 
 
+def cloud_reextract_reserved_sql(msg: str = "m") -> str:
+    """Whether a stored-post cloud re-extraction was already reserved for the message's current source.
+
+    The paid-request reservations are the durable record of a cloud attempt:
+    they outlive a held or rejected answer and every replaced extraction. The
+    current source starts at the message's newest recorded revision (else its
+    first sighting), so only a changed source can earn another attempt. A
+    reservation whose route cannot be read counts as one."""
+    return f"""EXISTS (SELECT 1 FROM artifacts cr
+        WHERE cr.kind='{cloud_usage_accounting.KINDS[0]}' AND cr.message_id={msg}.message_id
+          AND (cr.project_id IS NULL OR cr.project_id={msg}.project_id)
+          AND COALESCE(json_extract({json_or_null('cr.meta')},'$.route'),'reextract')='reextract'
+          AND cr.created_at >= COALESCE((SELECT rv.observed_at FROM message_revisions rv
+                WHERE rv.message_id={msg}.message_id ORDER BY rv.seq DESC LIMIT 1),
+              {msg}.first_seen, 0))"""
+
+
 def _qc_cloud_followup_sql(val: str = "qf.artifact_id") -> str:
     """Scalar subquery: the current extraction its newest audit still flags after one local QC re-extract.
 
     The cloud lane gives such a row its single second attempt: the flagged
     source (``_qc_flagged_sql``, which pins the newest current extraction and
-    its newest current audit) must carry ``qc_fix`` from the first attempt and
-    no human report may be pending on it. A source not yet re-audited is not
+    its newest current audit) must carry ``qc_fix`` from the first attempt, no
+    human report may be pending on it, and no cloud re-extraction (plain
+    backlog or an earlier second attempt, whatever its outcome) may already be
+    reserved for the current source. A source not yet re-audited is not
     flagged, and an attempt-2 marker ends the sequence."""
     return f"""SELECT {val} FROM artifacts qf
         WHERE qf.artifact_id=({_qc_flagged_sql()})
           AND {qc_fix_attempt_sql('qf.meta')}=1
-          AND NOT EXISTS ({_human_flagged_sql(val="1")})"""
+          AND NOT EXISTS ({_human_flagged_sql(val="1")})
+          AND NOT {cloud_reextract_reserved_sql()}"""
 
 
 def _qc_feedback(ledger, src_artifact_id):

@@ -328,6 +328,7 @@ from extract_llm_qc import (
     qc_fix_attempt_sql as qc_fix_attempt_sql,
     _qc_fixed_sql as _qc_fixed_sql,
     _qc_cloud_followup_sql as _qc_cloud_followup_sql,
+    cloud_reextract_reserved_sql as cloud_reextract_reserved_sql,
     _qc_feedback as _qc_feedback,
     _qc_notes as _qc_notes,
     _compact_qc_feedback as _compact_qc_feedback,
