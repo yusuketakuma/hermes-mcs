@@ -14,6 +14,11 @@ _NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 FOUNDATION = "0001_foundation.sql"
 
 
+def default_path(root) -> Path:
+    """Where a site keeps its ledger: ``<MCS_ROOT>/data/homecare.db``, the one place backups look for it."""
+    return Path(root) / "data" / "homecare.db"
+
+
 class Conflict(ValueError):
     """The record changed since the client read it; the client keeps its input and reloads."""
 

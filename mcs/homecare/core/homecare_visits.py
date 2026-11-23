@@ -12,8 +12,9 @@ STATUSES = ("planned", "done", "cancelled")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
-def _clean(db, registry, values, held_kind=None):
-    """``held_kind`` keeps a disabled module's visit kind on an existing visit from being refused."""
+def _clean(db, registry, values, held_kind=None, held_staff=None):
+    """``held_kind`` and ``held_staff`` keep an existing visit's disabled kind or since-retired staff member
+    from being refused when they are left unchanged; a new choice must be enabled and active."""
     bad = [key for key in values if key not in FIELDS]
     row = {"note": text_field(values, bad, "note", 500)}
     for field in ("patient_id", "staff_id"):
@@ -39,7 +40,8 @@ def _clean(db, registry, values, held_kind=None):
                                               (row["patient_id"],)).fetchone() is None:
         bad.append("patient_id")
     if "staff_id" not in bad and row["staff_id"] is not None and db.execute(
-            "SELECT 1 FROM staff WHERE staff_id=? AND active=1", (row["staff_id"],)).fetchone() is None:
+            "SELECT 1 FROM staff WHERE staff_id=? AND (active=1 OR staff_id=?)",
+            (row["staff_id"], held_staff)).fetchone() is None:
         bad.append("staff_id")
     if bad:
         raise InvalidFields(bad)
@@ -77,7 +79,8 @@ def update(db, registry, visit_id, values, *, expected_version, actor):
         before = visit(db, visit_id)
         if before["version"] != expected_version:
             raise Conflict("version_conflict")
-        row = _clean(db, registry, {field: before[field] for field in FIELDS} | values, before["kind"])
+        row = _clean(db, registry, {field: before[field] for field in FIELDS} | values, before["kind"],
+                     before["staff_id"])
         db.execute(f"UPDATE visits SET {','.join(f'{field}=?' for field in row)},version=version+1,updated_at=? "
                    "WHERE visit_id=? AND version=?", (*row.values(), time.time(), visit_id, expected_version))
         after = visit(db, visit_id)
@@ -89,9 +92,25 @@ def for_patient(db, patient_id, *, limit=50):
     """A patient's visits, newest date first."""
     get(db, "patient", patient_id)
     return [dict(row) for row in db.execute(
-        "SELECT v.*, s.name AS staff_name FROM visits v LEFT JOIN staff s USING(staff_id) WHERE v.patient_id=? "
-        "ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, v.visit_id DESC LIMIT ?",
+        _LISTED + "ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, v.visit_id DESC LIMIT ?",
         (patient_id, limit))]
+
+
+_LISTED = "SELECT v.*, s.name AS staff_name FROM visits v LEFT JOIN staff s USING(staff_id) WHERE v.patient_id=? "
+
+
+def upcoming(db, patient_id, today, *, limit=3):
+    """The next planned visits from ``today`` on, soonest first; an overdue plan is not a next visit."""
+    return [dict(row) for row in db.execute(
+        _LISTED + "AND v.status='planned' AND v.visit_date>=? "
+        "ORDER BY v.visit_date, v.start_time IS NULL, v.start_time, v.visit_id LIMIT ?", (patient_id, today, limit))]
+
+
+def done(db, patient_id, *, limit=3):
+    """The latest visits that took place, newest first."""
+    return [dict(row) for row in db.execute(
+        _LISTED + "AND v.status='done' ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, "
+        "v.visit_id DESC LIMIT ?", (patient_id, limit))]
 
 
 def for_day(db, visit_date):

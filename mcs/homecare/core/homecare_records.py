@@ -106,6 +106,18 @@ def _clean_patient(values):
     return row
 
 
+def page(fetch, params, *, size):
+    """``{"items", "more"}`` for a newest-first history: ``params["limit"]`` grows by ``size`` as the screen asks
+    for older entries, up to 1000, so nothing stored is out of reach."""
+    limit = params.get("limit", size)
+    if isinstance(limit, str) and limit.isdigit():
+        limit = int(limit)
+    if type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError("bad_request")
+    rows = fetch(limit + 1)
+    return {"items": rows[:limit], "more": len(rows) > limit}
+
+
 def record_id(value):
     """A positive integer id from JSON or a query string; anything else is a bad request."""
     if isinstance(value, str) and value.isdigit():

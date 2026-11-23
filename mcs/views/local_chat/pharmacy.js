@@ -63,16 +63,18 @@ function rxSummary(rx) {
   return box;
 }
 hc.modules.pharmacy = {
-  async patient(box, patientId) {
-    const reload = () => hc.modules.pharmacy.patient(box, patientId);
-    const data = await api("hc/pharmacy/prescriptions", {patient: patientId}).catch(error => {fail(error); return {items: []};});
+  async patient(box, patientId, limit = 20) {
+    const reload = () => hc.modules.pharmacy.patient(box, patientId, limit);
+    const data = await api("hc/pharmacy/prescriptions", {patient: patientId, limit}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
     if (hc.patient !== patientId) return;
     box.replaceChildren(el("h3", "処方"));
+    if (!data) {box.append(el("p", "処方の記録を読み込めませんでした。", "state-note")); return;}
     for (const rx of data.items) {
       const row = el("details", null, "hc-row"); row.append(el("summary", `${rx.issued_on} · ${rx.lines.map(line => line.drug_name).join("、")}`));
       row.append(rxSummary(rx), rxForm(patientId, rx, reload)); box.append(row);
     }
     if (!data.items.length) box.append(el("p", "処方の記録はまだありません。"));
+    if (data.more) box.append(olderButton("以前の処方を表示", () => hc.modules.pharmacy.patient(box, patientId, limit + 20)));
     const add = el("details", null, "hc-row"); add.append(el("summary", "処方を登録する"), rxForm(patientId, null, reload)); box.append(add);
   },
   sheet(box, part) {

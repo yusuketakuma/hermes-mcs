@@ -13,7 +13,7 @@
 | [stamp_format.py](../../mcs/stamps/stamp_format.py) | 件数・本人分・押下者名・観測時刻の整形 | 渡された値だけを整形する |
 | [stamp_write.py](../../mcs/stamps/stamp_write.py) | フォーム、操作受付、送信前照合、試行記録、結果照合・通知 | 受付はコマンドreceiptと同じトランザクション。API操作は受付commit後、呼出元がrun.lockを保持した状態で行う |
 
-投稿メタデータ全般のデコードと読取りは、[message_observations.py](../../mcs/core/message_observations.py)が所有します。本文の正規化は[mcs_payload.py](../../mcs/ingest/mcs_payload.py)、実際のHTTP通信は[MCSAdapter](../../mcs/ingest/mcs_adapter.py)の責務です。通知・シグナル・表示側は各正本を直接使い、表示モジュールを取得や書込みの入口にしません。
+投稿メタデータ全般のデコードと読取りは、[message_observations.py](../../mcs/core/ledger/message_observations.py)が所有します。本文の正規化は[mcs_payload.py](../../mcs/ingest/mcs_payload.py)、実際のHTTP通信は[MCSAdapter](../../mcs/ingest/mcs_adapter.py)の責務です。通知・シグナル・表示側は各正本を直接使い、表示モジュールを取得や書込みの入口にしません。
 
 ## 種別と観測の意味
 

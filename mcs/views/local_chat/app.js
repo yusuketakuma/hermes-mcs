@@ -278,11 +278,14 @@ async function loadPanel() {
   } catch (error) {if (request === state.mainRequest) {$("panel-view").replaceChildren(el("p", "表示できませんでした。", "empty")); fail(error);}}
 }
 async function showMeds(target, message, request, page = 0) {
+  // Only the latest press for this panel may draw, whichever response arrives last.
+  const token = target.medsToken = (target.medsToken || 0) + 1;
+  const current = () => request === state.detailRequest && token === target.medsToken;
   target.replaceChildren(el("p", "薬剤を読込中…", "empty"));
   try {
     const data = await api("panel", {project: state.project, section: "meds", message, page});
-    if (request === state.detailRequest) target.replaceChildren(renderPanel(data.panel, next => showMeds(target, message, request, next)));
-  } catch (error) {if (request === state.detailRequest) {target.replaceChildren(); fail(error);}}
+    if (current()) target.replaceChildren(renderPanel(data.panel, next => showMeds(target, message, request, next)));
+  } catch (error) {if (current()) {target.replaceChildren(); fail(error);}}
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch || loadPatients)();};
 $("more-patients").onclick = () => loadPatients(true);

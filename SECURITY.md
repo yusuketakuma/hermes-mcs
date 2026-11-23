@@ -31,7 +31,7 @@
     proxy は常に無効（`mcs/ingest/mcs_download.py`）
   - 在宅ケアの訪問ルート（任意。`mcs_local_chat.py --route-settings` で所有者だけが読める設定ファイルを指定したときだけ）。
     操作者が「ルートを作る」を押したときに、患者の住所の文字列を国土地理院の住所検索（`https://msearch.gsi.go.jp`）へ、
-    出発地と訪問先の緯度・経度を openrouteservice（`https://api.openrouteservice.org`）へ送る。氏名・ID・電話・注意事項・メモは送らない。
+    出発地と訪問先の緯度・経度、時刻を決めた訪問の時刻の幅を openrouteservice（`https://api.openrouteservice.org`）へ送る。訪問は要求ごとの通し番号で区別し、氏名・台帳の ID・電話・注意事項・メモは送らない。
     宛先はこの2 host に固定し、proxy 無効・redirect 拒否（`mcs/homecare/core/homecare_route.py`）。所有者の判断（2026-11-23）による例外
 - MCSスタンプの追加・変更・取消は、操作者1人とMCSアカウントを明示した場合だけ既定で有効（`stamps.enabled=false`で無効）。操作できるのはその操作者だけで、カードのスタンプ列の1回押し（理由は自動記録）またはフォームの確認画面を通して依頼する。
   保存済みの承認・投稿の版・患者範囲を照合し、同じセッションの本人IDを再取得してから送る。

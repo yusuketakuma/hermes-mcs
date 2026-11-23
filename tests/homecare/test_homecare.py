@@ -175,6 +175,23 @@ def test_update_checks_version_merges_fields_and_audits(db):
     assert records.get(db, "patient", row["patient_id"])["caution_note"] == "合成の注意"
 
 
+def test_a_handover_seen_on_an_old_screen_is_refused_even_when_the_same_person_holds_the_role_again(db):
+    me = first_staff(db)
+    other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
+    third = staff(db, me["staff_id"], name="合成 薬剤師三", codes=("pharmacy.pharmacist",))
+    row, role = patient(db, me["staff_id"]), "pharmacy.primary_pharmacist"
+    first = team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[],
+                        actor=me["staff_id"])
+    second = team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=[first],
+                         actor=me["staff_id"])
+    again = team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[second],
+                        actor=me["staff_id"])
+    with pytest.raises(homecare_store.Conflict, match="team_changed"):  # the old screen still shows the first A
+        team.assign(db, REGISTRY, row["patient_id"], third["staff_id"], role, expected_assignments=[first],
+                    actor=me["staff_id"])
+    assert [member["assignment_id"] for member in team.current(db, row["patient_id"])] == [again]
+
+
 @pytest.mark.parametrize("change", [{"active": False}, {"admin": False}])
 def test_staff_cannot_lock_themselves_out_and_logins_are_unique(db, change):
     me = first_staff(db, tailscale_login="one@example.invalid")
@@ -193,17 +210,18 @@ def test_care_team_roles_need_the_declared_qualification_and_hand_over(db):
     row = patient(db, me["staff_id"])
     role = "pharmacy.primary_pharmacist"
     with pytest.raises(ValueError, match="not_qualified"):
-        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="role_not_allowed"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", expected_holders=[],
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", expected_assignments=[],
                     actor=me["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(homecare_store.Conflict, match="already_assigned"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(homecare_store.Conflict, match="team_changed"):
         # The client still shows the role as empty, so it must not silently end the current holder.
-        team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[], actor=clerk["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[me["staff_id"]],
+        team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=[], actor=clerk["staff_id"])
+    mine = [member["assignment_id"] for member in team.current(db, row["patient_id"])]
+    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=mine,
                 actor=clerk["staff_id"])
     assert [member["staff_id"] for member in team.current(db, row["patient_id"])] == [other["staff_id"]]
     ended = db.execute("SELECT ended_by FROM care_team WHERE staff_id=?", (me["staff_id"],)).fetchone()
@@ -220,7 +238,7 @@ def test_staff_holding_a_role_must_hand_it_over_before_leaving_or_losing_its_qua
     other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
     row = patient(db, me["staff_id"])
     team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], "pharmacy.primary_pharmacist",
-                expected_holders=[], actor=me["staff_id"])
+                expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="still_assigned"):
         records.update(db, "staff", other["staff_id"], change, expected_version=1, actor=me["staff_id"],
                        registry=REGISTRY)
@@ -295,7 +313,7 @@ def test_api_scopes_links_and_returns_browser_safe_errors(db):
     homecare_api.write(db, "link", {"patient": row["patient_id"], "project": 11, "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     homecare_api.write(db, "team.assign", {"patient": row["patient_id"], "staff": me["staff_id"],
-                                           "role": "pharmacy.primary_pharmacist", "holders": [],
+                                           "role": "pharmacy.primary_pharmacist", "assignments": [],
                                            "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     assert homecare_api.read(db, "linked", {"project": "11"}, registry=REGISTRY,
@@ -420,6 +438,24 @@ def test_visits_are_validated_versioned_and_audited(db):
     assert kinds == ["visit.create", "visit.create", "visit.update"]
 
 
+def test_a_done_visit_by_staff_who_since_left_can_still_be_corrected(db):
+    me = first_staff(db)
+    left = staff(db, me["staff_id"], name="合成 退職者")
+    row = patient(db, me["staff_id"])
+    made = visits.create(db, REGISTRY, visit_values(row["patient_id"], staff_id=left["staff_id"], status="done"),
+                         actor=me["staff_id"])
+    records.update(db, "staff", left["staff_id"], {"active": False}, expected_version=1, actor=me["staff_id"],
+                   registry=REGISTRY)
+    fixed = visits.update(db, REGISTRY, made["visit_id"], {"note": "合成の訂正"}, expected_version=1,
+                          actor=me["staff_id"])
+    assert fixed["staff_id"] == left["staff_id"] and fixed["note"] == "合成の訂正"
+    other = visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])
+    with pytest.raises(records.InvalidFields) as error:  # a new choice of staff must still be active
+        visits.update(db, REGISTRY, other["visit_id"], {"staff_id": left["staff_id"]}, expected_version=1,
+                      actor=me["staff_id"])
+    assert error.value.fields == ["staff_id"]
+
+
 def test_prescriptions_keep_lines_in_order_with_an_optional_master_code(db):
     me = first_staff(db)
     row = patient(db, me["staff_id"])
@@ -451,12 +487,18 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     write = lambda op, body: homecare_api.write(db, op, {"actor": me["staff_id"], **body}, registry=REGISTRY,  # noqa: E731
                                                 allowed=None, mcs_patients=scope)
     write("visit.create", {"values": visit_values(row["patient_id"], visit_date="2026-11-30")})
+    write("visit.create", {"values": visit_values(row["patient_id"], visit_date="2026-11-10")})  # overdue plan
+    for day in range(1, 61):  # many later plans must not push the latest done visit out of the sheet
+        write("visit.create", {"values": visit_values(row["patient_id"], visit_date=f"2027-{1 + day // 28:02d}-"
+                                                                            f"{1 + day % 28:02d}")})
     done = write("visit.create", {"values": visit_values(row["patient_id"], visit_date="2026-11-01",
                                                          staff_id=me["staff_id"], status="done")})
     write("pharmacy/prescription.create", {"values": {"patient_id": row["patient_id"], "issued_on": "2026-11-20",
                                                       "lines": [{"drug_name": "合成錠A"}]}})
-    sheet = homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
-    assert [item["visit_date"] for item in sheet["next_visits"]] == ["2026-11-30"]
+    assert homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY,
+                             mcs_patients=scope)["patient"]["patient_id"] == row["patient_id"]
+    sheet = homecare_api.sheet(db, row["patient_id"], registry=REGISTRY, mcs_patients=scope, today="2026-11-20")
+    assert [item["visit_date"] for item in sheet["next_visits"]] == ["2026-11-30", "2027-01-02", "2027-01-03"]
     assert sheet["recent_visits"][0]["visit_id"] == done["record"]["visit_id"]
     assert sheet["modules"]["pharmacy"]["prescriptions"][0]["lines"][0]["drug_name"] == "合成錠A"
     assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子"}
@@ -465,7 +507,16 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     assert outside["mcs"] == {"project_id": None, "patient_name": None}
     listed = homecare_api.read(db, "pharmacy/prescriptions", {"patient": str(row["patient_id"])},
                                registry=REGISTRY, mcs_patients=scope)
-    assert len(listed["items"]) == 1
+    assert len(listed["items"]) == 1 and listed["more"] is False
+    first = homecare_api.read(db, "visits", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
+    assert len(first["items"]) == 50 and first["more"] is True
+    whole = homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": "100"}, registry=REGISTRY,
+                              mcs_patients=scope)
+    assert len(whole["items"]) == 63 and whole["more"] is False
+    for limit in ("0", "1001", "x"):
+        with pytest.raises(ValueError, match="bad_request"):
+            homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": limit}, registry=REGISTRY,
+                              mcs_patients=scope)
     for path in ("nursing/visits", "core/visits", "pharmacy/unknown"):
         with pytest.raises(ValueError, match="bad_request"):
             homecare_api.read(db, path, {"patient": "1"}, registry=REGISTRY, mcs_patients=scope)
@@ -481,17 +532,21 @@ class FakeServices:
         self.sent.append(request)
         if request.full_url.startswith(route.GEOCODE_URL):
             address = parse_qs(urlsplit(request.full_url).query)["q"][0]
-            return [{"geometry": {"coordinates": self.places[address]}}] if address in self.places else []
-        jobs = json.loads(request.data)["jobs"]
+            return [{"geometry": {"coordinates": point}} for point in self.places.get(address, [])]
+        body = json.loads(request.data)
+        depart = body["vehicles"][0]["time_window"][0]
+        # Ten minutes between stops; a window that closes before the first possible arrival cannot be met.
+        jobs = [job for job in reversed(body["jobs"]) if job.get("time_windows", [[0, 10**6]])[0][1] >= depart + 600]
         return {"routes": [{"steps": [{"type": "start"}] + [
-            {"type": "job", "id": job["id"], "arrival": 600 * n, "duration": 300 * n}
-            for n, job in enumerate(reversed(jobs), 1)] + [{"type": "end"}]}]}
+            {"type": "job", "id": job["id"], "arrival": depart + 600 * n, "duration": 300 * n}
+            for n, job in enumerate(jobs, 1)] + [{"type": "end"}]}]}
 
 
 def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(db, tmp_path):
     me = first_staff(db)
     settings_path = tmp_path / "route.json"
-    settings_path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
+    settings_path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1",
+                                         "depart_time": "09:00"}))
     settings_path.chmod(0o644)
     with pytest.raises(SystemExit, match="chmod 600"):
         route.RouteSettings(settings_path)
@@ -500,20 +555,31 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     one = patient(db, me["staff_id"], name="合成 一郎", address="合成市2-2", caution_note="秘密のメモ")
     two = patient(db, me["staff_id"], name="合成 二郎", address="合成市3-3")
     none = patient(db, me["staff_id"], name="合成 三郎")
-    ids = [visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])["visit_id"]
-           for row in (one, two, none)]
-    fake = FakeServices({"合成市1-1": [139.7, 35.6], "合成市2-2": [139.71, 35.61], "合成市3-3": [139.72, 35.62]})
+    early = patient(db, me["staff_id"], name="合成 四郎", address="合成市4-4")
+    vague = patient(db, me["staff_id"], name="合成 五郎", address="合成区")
+    ids = [visits.create(db, REGISTRY, visit_values(row["patient_id"], **extra), actor=me["staff_id"])["visit_id"]
+           for row, extra in ((one, {"start_time": "10:00"}), (two, {}), (none, {}), (early, {"start_time": "08:00"}),
+                              (vague, {}))]
+    fake = FakeServices({"合成市1-1": [[139.7, 35.6]], "合成市2-2": [[139.71, 35.61]], "合成市3-3": [[139.72, 35.62]],
+                         "合成市4-4": [[139.73, 35.63]], "合成区": [[139.74, 35.64], [135.5, 34.7]]})
     with pytest.raises(ValueError, match="route_unavailable"):
         route.plan(db, None, "2026-11-24", actor=me["staff_id"], fetch=fake)
     result = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
-    assert [stop["visit_id"] for stop in result["stops"]] == [ids[1], ids[0]] and result["unlocated"] == [ids[2]]
+    assert [stop["visit_id"] for stop in result["stops"]] == [ids[1], ids[0]]
+    assert [stop["arrival"] for stop in result["stops"]] == ["09:10", "09:20"]
+    # No address, or an address matching places far apart, is never guessed; an 08:00 booking cannot be met.
+    assert result["unlocated"] == [ids[2], ids[4]] and result["unscheduled"] == [ids[3]]
+    optimised = json.loads([r for r in fake.sent if r.full_url == route.OPTIMIZE_URL][0].data)
+    assert [job["id"] for job in optimised["jobs"]] == [1, 2, 3]  # positions, not ledger visit IDs
+    assert [job.get("time_windows") for job in optimised["jobs"]] == [  # the day's order: 08:00, 10:00, untimed
+        [[7 * 3600 + 45 * 60, 8 * 3600 + 15 * 60]], [[9 * 3600 + 45 * 60, 10 * 3600 + 15 * 60]], None]
     sent = " ".join(r.full_url + (r.data or b"").decode() for r in fake.sent)
     assert "合成 一郎" not in sent and "秘密のメモ" not in sent and str(one["patient_id"]) not in sent.split("q=")[0]
     assert all(r.get_header("Authorization") in (None, "synthetic-key-0000") for r in fake.sent)
     geocoded = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
     route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
-    assert len(again) - len(geocoded) == 1  # only the origin; patient locations are reused
+    assert len(again) - len(geocoded) == 2  # the origin and the still-ambiguous address; found places are reused
     failing = lambda request: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
     with pytest.raises(ValueError, match="route_failed"):
         route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=failing)
