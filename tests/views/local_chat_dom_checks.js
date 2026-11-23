@@ -2,7 +2,7 @@
 // Dependency-free DOM contract checks, run by the Python test when Node is available.
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 class Element {
-  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}};}
+  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}, toggle(){}};}
   append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
@@ -12,7 +12,7 @@ class Element {
   setAttribute() {}
 }
 const nodes = new Map();
-const document = {getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
+const document = {body: new Element("body"), getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
 const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promise(() => {})};
 vm.createContext(sandbox);
 const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");

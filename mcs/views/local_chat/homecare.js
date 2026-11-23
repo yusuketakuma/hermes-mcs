@@ -117,6 +117,8 @@ async function loadStaff() {
 // Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing.
 function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
 function hcMain(title, ...nodes) {
+  // On a phone the patient list folds away once a screen opens; 患者一覧 brings it back.
+  document.body.classList.add("picked");
   ++state.mainRequest;
   $("panel-view").hidden = false;
   for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
@@ -347,6 +349,7 @@ async function openMcs(projectId) {
   if (patient) selectPatient(patient);
 }
 function setMode(mode) {
+  document.body.classList.remove("picked");
   hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
   for (const button of document.querySelectorAll("#hc-modes button")) button.classList.toggle("selected", button.dataset.mode === mode);
   for (const id of ["patient-context", "read-only", "detail"]) $(id).hidden = mode !== "mcs";
