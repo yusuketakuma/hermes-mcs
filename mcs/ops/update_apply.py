@@ -270,8 +270,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         interrupted = False
         terminal = False   # the journal's terminal save happened (bail or success)
 
+        homecare_copy = None   # this attempt's home-care copy, discarded if it fails
+
         def bail(reason: str) -> int:
             nonlocal interrupted
+            if homecare_copy is not None:
+                import local_backup
+                local_backup.discard_homecare_preupdate(homecare_copy)
             try:
                 return _bail(reason)
             except BaseException as error:
@@ -621,7 +626,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if _head_sha(**before_args) != sha and not (
                     command_id and state.get("executed", {}).get(command_id)):
                 try:
-                    local_backup.preupdate_homecare_backup(**before_args)
+                    homecare_copy = local_backup.preupdate_homecare_backup(**before_args)
                 except local_backup.MaintenanceError as e:
                     return bail(f"homecare_{e}")
             snap = _read_manifest_snapshot(**before_args)
@@ -747,6 +752,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
 
             state = _apply_record_success(tag, command_id)
             terminal = True
+            if homecare_copy is not None:
+                local_backup.rotate_homecare_preupdate()
             quiesced = False
             # gateway restart is fire-and-forget AFTER applied is durable —
             # a synchronous restart would deadlock when this updater is a

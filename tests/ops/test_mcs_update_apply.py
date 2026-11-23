@@ -847,3 +847,38 @@ def test_home_care_copy_is_made_only_when_the_update_really_applies(
     assert updater.apply("v1.2.0", sha, "cid-again") == 0
     assert updater.apply("v1.2.0", sha, "cid-first") == 0
     assert copies == [True]
+
+
+def test_a_failed_attempt_discards_its_home_care_copy_and_only_success_rotates(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    """Failed attempts must not take the places of the copies made before
+    successful updates: a failure removes its own copy, a success rotates."""
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    import local_backup
+    events = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup",
+                        lambda **_k: events.append("copy") or f"copy-{len(events)}")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate",
+                        lambda path: events.append(("discard", path)))
+    monkeypatch.setattr(local_backup, "rotate_homecare_preupdate",
+                        lambda: events.append("rotate"))
+    snapshot = update_apply._read_manifest_snapshot
+
+    def broken(**_k):
+        raise RuntimeError("synthetic failure after the copies")
+    monkeypatch.setattr(update_apply, "_read_manifest_snapshot", broken)
+    assert updater.apply("v1.2.0", sha, "cid-failed") != 0
+    assert events == ["copy", ("discard", "copy-1")]
+    monkeypatch.setattr(update_apply, "_read_manifest_snapshot", snapshot)
+    assert updater.apply("v1.2.0", sha, "cid-ok") == 0
+    assert events[2:] == ["copy", "rotate"]

@@ -6,11 +6,12 @@
   "details": [
     "日次の台帳コピーは収集の定期処理の後片付けで原本 DB のあとに作り、失敗は homecare_backup として記録する。",
     "台帳の検査は quick_check／integrity_check・foreign_key_check と、台帳の基盤 migration の記録で行う。",
-    "台帳の世代は原本 DB の復元点・配送記録の保持期間の計算に数えない。"
+    "台帳の世代は原本 DB の復元点・配送記録の保持期間の計算に数えない。",
+    "更新前の台帳コピーは成功した適用のあとにだけ新しい3つへ整理し、失敗した試行は自分のコピーを消す。更新前の容量確認に台帳のコピー分を含める。"
   ],
   "refs": [
     "mcs/core/local_backup.py",
-    "mcs/core/backup_names.py",
+    "mcs/core/records/backup_names.py",
     "mcs/ops/mcs_local_backup.py",
     "mcs/ops/backup/held_restore.py",
     "mcs/ops/update_apply.py",
