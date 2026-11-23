@@ -113,7 +113,7 @@ def test_deleted_post_hides_retained_body_and_attachment(snapshot):
 
 
 def test_shared_summary_and_stamp_projection(snapshot, monkeypatch):
-    monkeypatch.setattr(local_chat_view, "structured_lines", lambda db, mid, **kwargs: [f"合成要約 {mid}"])
+    monkeypatch.setattr(local_chat_view, "structured_summary", lambda db, mid, **kwargs: ([f"合成要約 {mid}"], None))
     result = chat.response(snapshot, {1}, "evidence", "project=1&message=1")["message"]
     assert result["summary_lines"] == ["合成要約 1"]
     assert result["stamp_line"] == "スタンプ 未取得"
@@ -146,7 +146,7 @@ def test_live_ledger_and_missing_snapshot_are_rejected(tmp_path):
     assert error.value.code == 2
 
 
-def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
+def test_reads_write_nothing_and_only_attachments_load_configuration(snapshot, monkeypatch):
     import mcs_util
     monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("must not load local configuration"))
     path = Path(snapshot)
@@ -204,6 +204,23 @@ def test_http_errors_do_not_echo_paths_queries_or_exception(monkeypatch):
     monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(ValueError("private")))
     obj.do_GET()
     assert result == [(400, b'{"error": "bad_request"}', "application/json")]
+
+
+@pytest.mark.parametrize("code", ["search_query_empty", "bad_search_filter", "search_cursor_invalid"])
+def test_http_passes_fixed_search_codes(monkeypatch, code):
+    obj, result = handler("/synthetic-capability/api/sources?project=1&q=")
+    monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(ValueError(code)))
+    obj.do_GET()
+    assert result == [(400, json.dumps({"error": code}).encode(), "application/json")]
+
+
+def test_http_unreadable_settings_are_unavailable_not_defaults(monkeypatch):
+    import mcs_util
+    obj, result = handler("/synthetic-capability/api/registered?project=1")
+    monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(
+        mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")))
+    obj.do_GET()
+    assert result == [(503, b'{"error":"config_unreadable"}', "application/json")]
 
 
 def test_headers_forbid_cache_external_resources_and_embedding():

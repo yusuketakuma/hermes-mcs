@@ -712,11 +712,13 @@ def _question_term(query):
     return term, latest
 
 
-def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False) -> dict:
+def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False,
+                        room_link=True) -> dict:
     """Search all terms across patient originals with resumable, source-bound pages.
 
     ``keep_message_id`` adds the post to open (the post itself, or the post carrying the attachment),
-    the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out."""
+    the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out.
+    ``room_link=False`` leaves the patient's MCS room address out of the head line."""
     import patient_search
     patient_search.parse_query(query)
     question = _question_term(query)
@@ -737,7 +739,7 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
                               f"{inline_text(row['profession'], 20) or '職種不明'}: "
                               f"{_snippet(row['body_text'], terms[0], width=160)}"})
     count = f"表示{len(items)}件（続きあり）" if result['next_cursor'] else f"{len(items)}件"
-    head = [f"{count}（取得済み原資料・新しい投稿順）— MCS: {project_url(project_id)}"]
+    head = [f"{count}（取得済み原資料・新しい投稿順）" + (f"— MCS: {project_url(project_id)}" if room_link else "")]
     if question and question[0]:
         head.insert(0, f"「{inline_text(question[0], 40)}」を含む原資料を検索しました"
                     + ("（新しい投稿から順に確認）" if question[1] else ""))
@@ -1086,6 +1088,12 @@ def _stamp_time(at, now) -> str:
     return at.strftime(("%m/%d" if at.year == year else "%Y/%m/%d") + " %H:%M")
 
 
+def analysis_incomplete(ev) -> bool:
+    """Whether the patient's analysis is unfinished, so an empty or small patient-context view is a lower bound."""
+    inference = ev["coverage"].get("inference") or {}
+    return bool(inference) and not inference.get("complete")
+
+
 def context_status_lines(db, project_id, ev, *, now=None, history=True) -> list[str]:
     """How complete a patient-context reading is: reflection time, history acquisition (``history``),
     analysis and source coverage — the status lines every patient-context view ends with."""
@@ -1096,7 +1104,7 @@ def context_status_lines(db, project_id, ev, *, now=None, history=True) -> list[
     if history:
         status.append(_coverage_line(db, project_id))
     inference = ev["coverage"].get("inference") or {}
-    if inference and not inference.get("complete"):
+    if analysis_incomplete(ev):
         sources = inference.get("sources") or {}
         status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
                       f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
@@ -1543,7 +1551,6 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
                        if row["quotes"] else tail)
-    inference = ev["coverage"].get("inference") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     document_coverage = view.get("document_coverage")
     if document_coverage is not None:
@@ -1591,7 +1598,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                       else "介入の記載の有無は確認できません"
                       if intervention_history
                       else "解析が完了していないため、該当する記録の有無は未確認です"
-                      if inference and not inference.get("complete") else "この範囲で該当する記録は見つかりません"),
+                      if analysis_incomplete(ev) else "この範囲で該当する記録は見つかりません"),
             "page": page, "pages": pages,
             **({"intervention_next_cursor": view["interventions"]["next_cursor"]}
                if section == "previsit" and intervention_history else {})}

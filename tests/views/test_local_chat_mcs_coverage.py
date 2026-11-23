@@ -17,6 +17,13 @@ FRESH = time.time()   # who-pressed lists expire; this one is read right after i
 SUMMARY = "合成の連携サマリー本文。" * 12   # longer than the 80 characters of the summary-card line
 
 
+@pytest.fixture(autouse=True)
+def _no_cached_signals():
+    local_chat_view._SIGNALS.clear()
+    yield
+    local_chat_view._SIGNALS.clear()
+
+
 def _attempt(dataset, *, complete, rows=(), reason=None, status=None):
     return json.dumps({"contract": "project-metadata/1", "dataset": dataset, "scope": "karte", "entity_id": 501,
                        "item_id": None, "complete": complete, "attempted_at": time.time(), "reason": reason,
@@ -106,57 +113,104 @@ def test_patient_list_orders_by_activity_and_carries_identity_and_freshness(snap
     assert one["last_complete_fetch"] == NOW and three["last_complete_fetch"] is None
     assert (one["initial_import"], three["initial_import"], four["initial_import"]) == (None, "capturing", "unknown")
     # No finished detector run: the count is what was judged, never a confirmed total.
-    assert one["open_signals"] == {"count": 1, "state": "partial"}
-    assert two["open_signals"] == {"count": 0, "state": "partial"}
+    assert one["open_signals"] == {"count": 1, "state": "partial", "reason": "pending"}
+    assert two["open_signals"] == {"count": 0, "state": "partial", "reason": "pending"}
     text = json.dumps(items, ensure_ascii=False)
     assert "is_unread" not in text and "karte_id" not in text and "Not a code" not in text
 
 
-def test_patient_list_pages_by_activity_without_gaps(snapshot):
-    seen, cursor = [], None
+def test_patient_list_pages_by_activity_without_gaps(tmp_path):
+    # 150 rooms over three pages of 60: runs of equal latest times, rooms with no post and rooms whose only
+    # post has no time, interleaved by ID so every page boundary falls inside a tie.
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    latest = {pid: (None if pid % 7 == 0 else 3000 - (pid // 10) * 10) for pid in range(1, 151)}
+    try:
+        with store.db:
+            store.db.executemany("INSERT INTO patients(project_id,patient_name) VALUES(?,?)",
+                                 [(pid, f"合成 患者{pid}") for pid in latest])
+            rows = [(pid * 10, pid, ts) for pid, ts in latest.items() if ts is not None or pid % 14 == 0]
+            rows += [(pid * 10 + 1, pid, ts - 500) for pid, ts in latest.items() if ts is not None]
+            store.db.executemany("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,body_state,"
+                                 "content_hash) VALUES(?,?,?,'合成','full',printf('%064x',?))",
+                                 [(*row, row[0]) for row in rows])
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    seen, pages, cursor = [], 0, None
     view = mcs_view.View(snapshot)
     try:
         while True:
-            page = view._page(*_patients_query(view), cursor, key_fields=("_activity", "_key"))
-            seen += [row["project_id"] for row in page["items"]]
-            cursor = page["next_cursor"]
+            page = local_chat_view.patients(view, None, cursor=cursor)
+            assert len(page["items"]) <= 60
+            seen += [item["project_id"] for item in page["items"]]
+            pages, cursor = pages + 1, page["next_cursor"]
             if not cursor:
                 break
     finally:
         view.close()
-    assert seen == [2, 1, 4, 3]
-
-
-def _patients_query(view):
-    sql = ("SELECT * FROM (SELECT project_id,COALESCE((SELECT max(posted_at_ts) FROM messages m "
-           "WHERE m.project_id=p.project_id),-9223372036854775808) AS _activity,project_id AS _key "
-           "FROM patients p) WHERE 1=1")
-    return sql, [], ["_activity", "_key"], ["synthetic-activity"], 1
+    dated = sorted((pid for pid, ts in latest.items() if ts is not None), key=lambda pid: (-latest[pid], -pid))
+    undated = sorted((pid for pid, ts in latest.items() if ts is None), reverse=True)
+    assert pages == 3 and seen == dated + undated      # no gap, no repeat, undated last by ID
 
 
 def test_signal_counts_are_confirmed_only_after_a_complete_readable_run(snapshot, monkeypatch):
     import mcs_signals
     found = {"items": [{"project_id": 1}], "total": 1, "pipeline_last_run_at": 1.0, "errors": []}
-    monkeypatch.setattr(mcs_signals, "current_open", lambda *a, **k: found)
-    assert chat.response(snapshot, None, "counts", "project=1")["open_signals"] == {"count": 1, "state": "confirmed"}
+    calls = []
+
+    def current_open(*a, **k):
+        calls.append(1)
+        if isinstance(found, Exception):
+            raise found
+        return found
+    monkeypatch.setattr(mcs_signals, "current_open", current_open)
+
+    def both(reason_state):
+        local_chat_view._SIGNALS.clear()
+        counts = chat.response(snapshot, None, "counts", "project=1")["open_signals"]
+        listed = next(i for i in chat.response(snapshot, None, "patients", "")["items"] if i["project_id"] == 1)
+        assert counts == listed["open_signals"] == reason_state
+    both({"count": 1, "state": "confirmed", "reason": None})
     found["errors"] = ["signal_state_corrupt"]
-    assert chat.response(snapshot, None, "counts", "project=1")["open_signals"]["state"] == "partial"
-    monkeypatch.setattr(mcs_signals, "current_open", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
-    assert chat.response(snapshot, None, "counts", "project=1")["open_signals"] == {"count": None, "state": "failed"}
-    assert chat.response(snapshot, None, "patients", "")["items"][0]["open_signals"] == {"count": None,
-                                                                                         "state": "failed"}
+    both({"count": 1, "state": "partial", "reason": "unreadable"})
+    found.update(errors=[], pipeline_last_run_at=None)
+    both({"count": 1, "state": "partial", "reason": "pending"})
+    found = ValueError("x")
+    both({"count": None, "state": "failed", "reason": None})
+
+
+def test_signal_map_is_read_once_per_snapshot_generation(snapshot, monkeypatch):
+    import mcs_signals
+    calls = []
+    monkeypatch.setattr(mcs_signals, "current_open", lambda *a, **k: calls.append(1) or {
+        "items": [], "total": 0, "pipeline_last_run_at": 1.0, "errors": []})
+    chat.response(snapshot, None, "patients", "")
+    chat.response(snapshot, None, "counts", "project=1")
+    chat.response(snapshot, None, "counts", "project=2")
+    assert len(calls) == 1
+    local_chat_view._SIGNALS["other-generation"] = local_chat_view._SIGNALS.popitem()[1]
+    chat.response(snapshot, None, "counts", "project=1")     # a new generation reads again
+    assert len(calls) == 2
 
 
 def test_reply_counts_and_their_failed_state(snapshot, monkeypatch):
-    data = chat.response(snapshot, {1}, "counts", "project=1")
-    assert data["replies"]["state"] == "observed" and data["replies"]["requests"] == 0
+    import notify_views
     import patient_context_view
+    data = chat.response(snapshot, {1}, "counts", "project=1")
+    # The fixture's analysis is unfinished (message 20 failed): the counts are a lower bound.
+    assert data["replies"]["state"] == "partial" and data["replies"]["requests"] == 0
+    seen = []
+    monkeypatch.setattr(notify_views, "analysis_incomplete", lambda ev: seen.append(ev["coverage"]) or False)
     monkeypatch.setattr(patient_context_view, "replies", lambda *a: {"items": [
         {"reply_state": None, "unverified": False, "reply_evaluation": None},
         {"reply_state": None, "unverified": False, "reply_evaluation": "unavailable"},
         {"reply_state": "ack", "unverified": False, "reply_evaluation": None}]})
     assert chat.response(snapshot, {1}, "counts", "project=1")["replies"] == {
         "requests": 3, "not_found": 1, "unknown": 1, "state": "observed"}
+    assert seen and all("inference" in coverage for coverage in seen)   # the context card's own reading
+    monkeypatch.setattr(patient_context_view, "evidence", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
+    assert chat.response(snapshot, {1}, "counts", "project=1")["replies"]["state"] == "partial"
     monkeypatch.setattr(patient_context_view, "replies", lambda *a: (_ for _ in ()).throw(KeyError("x")))
     assert chat.response(snapshot, {1}, "counts", "project=1")["replies"]["state"] == "failed"
     for query in ("project=2", "project=1&q=x", "project=1&message=10"):
@@ -229,25 +283,38 @@ def test_summary_empty_state_is_the_chat_card_reading():
 
 
 @pytest.mark.parametrize("details,expected", [
-    ({"source": None, "kind": "clinical", "held": False, "reasons": []}, None),
-    ({"source": "llm", "kind": "clinical", "held": False, "reasons": ["合成の急変"]},
-     {"level": "high", "label": "🚨 緊急度高", "reasons": ["合成の急変"], "qc_note": "",
+    (None, None),
+    ({"source": None, "kind": "clinical", "held": False, "reasons": [], "qc_note": ""}, None),
+    ({"source": "llm", "kind": "clinical", "held": False, "reasons": ["合成の急変"], "qc_note": "（監査では通常判定）"},
+     {"level": "high", "label": "🚨 緊急度高", "reasons": ["合成の急変"], "qc_note": "（監査では通常判定）",
       "review": None, "review_label": None}),
-    ({"source": "rule", "kind": "clinical", "held": True, "reasons": ["合成の搬送"]},
+    ({"source": "rule", "kind": "clinical", "held": True, "reasons": ["合成の搬送"], "qc_note": ""},
      {"level": "flag", "label": "🚨", "reasons": ["合成の搬送"], "qc_note": "", "review": "subject_unconfirmed",
       "review_label": "緊急度: 要確認（対象人物・時点の根拠を確認）"}),
-    ({"source": None, "kind": "clinical", "held": True, "reasons": []},
+    ({"source": None, "kind": "clinical", "held": True, "reasons": [], "qc_note": ""},
      {"level": None, "label": None, "reasons": [], "qc_note": "", "review": "subject_unconfirmed",
       "review_label": "緊急度: 要確認（対象人物・時点の根拠を確認）"}),
-    ({"source": None, "kind": "request", "held": False, "reasons": ["至急ご連絡ください"]},
+    ({"source": None, "kind": "request", "held": False, "reasons": ["至急ご連絡ください"], "qc_note": ""},
      {"level": None, "label": None, "reasons": [], "qc_note": "", "review": "urgent_request",
       "review_label": "急ぎの確認依頼（本人の緊急状態とは別）"}),
 ])
-def test_urgency_fields_follow_the_summary_reading(monkeypatch, details, expected):
-    import clinical_urgency
-    monkeypatch.setattr(clinical_urgency, "message_urgency_details", lambda db, mid: details)
-    monkeypatch.setattr(local_chat_view, "urgency_qc_suffix", lambda db, mid: "")
-    assert local_chat_view._urgency(None, 1) == expected
+def test_urgency_fields_follow_the_summary_reading(details, expected):
+    assert local_chat_view._urgency(details) == expected
+
+
+def test_summary_lines_and_urgency_come_from_one_reading(snapshot, monkeypatch):
+    import structured_view
+    calls = []
+    details = {"source": "rule", "kind": "clinical", "held": False, "reasons": ["合成の搬送"], "qc_note": ""}
+    monkeypatch.setattr(local_chat_view, "structured_summary",
+                        lambda db, mid, **k: calls.append((mid, k)) or (["合成要約"], details))
+    message = _message(snapshot, 30, project=2)
+    assert calls == [(30, {"drug_candidates": False, "plain": True, "request_first": True})]
+    assert message["summary_lines"] == ["合成要約"] and message["urgency"] == local_chat_view._urgency(details)
+    assert not hasattr(local_chat_view, "message_urgency_details")
+    # the chat card's wording, one definition
+    assert local_chat_view.URGENT_REQUEST_LINE is structured_view.URGENT_REQUEST_LINE
+    assert local_chat_view.URGENCY_REVIEW_LINE is structured_view.URGENCY_REVIEW_LINE
 
 
 def test_context_carries_status_karte_summary_and_allergies_first(snapshot, monkeypatch):
@@ -276,10 +343,10 @@ def test_context_carries_status_karte_summary_and_allergies_first(snapshot, monk
 
 def test_registered_data_states_rows_without_mcs_ids(snapshot, monkeypatch):
     import mcs_util
-    monkeypatch.setattr(mcs_util, "load_config", lambda: {"clinical_metadata": True})
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: ({"clinical_metadata": True}, "read"))
     before = hashlib.sha256(Path(snapshot).read_bytes()).digest()
     data = chat.response(snapshot, {1, 3}, "registered", "project=1")
-    assert data["state"] == "listed" and data["collection_enabled"] is True
+    assert data["state"] == "listed" and data["collection_enabled"] is True and data["config_state"] == "read"
     by = {d["dataset"]: d for d in data["datasets"]}
     meds = by["medication_periods"]
     assert (meds["state"], meds["state_label"], meds["label"]) == ("complete", "取得済み", "薬剤登録")
@@ -288,8 +355,13 @@ def test_registered_data_states_rows_without_mcs_ids(snapshot, monkeypatch):
     assert "9001" not in json.dumps(data)
     group = chat.response(snapshot, {1, 3}, "registered", "project=3")
     assert group["state"] == "not_linked" and group["datasets"] == []
-    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: ({}, "read"))
     assert chat.response(snapshot, {1}, "registered", "project=1")["collection_enabled"] is False
+    # Defaults standing in for a missing or unreadable file say nothing about the setting.
+    for state in ("missing", "unreadable"):
+        monkeypatch.setattr(mcs_util, "config_read_state", lambda state=state: ({}, state))
+        data = chat.response(snapshot, {1}, "registered", "project=1")
+        assert (data["collection_enabled"], data["config_state"]) == (None, state)
     assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
     with pytest.raises(ValueError, match="project_not_allowed"):
         chat.response(snapshot, {1}, "registered", "project=2")
@@ -312,14 +384,20 @@ def test_source_search_says_what_was_not_searched_and_pages(snapshot, monkeypatc
     second = chat.response(snapshot, {2}, "sources", "project=2&q=合成記録&cursor=" + first["next_cursor"])
     assert {i["message_id"] for i in first["items"] + second["items"]} == {30, 31}
     for query, code in (("project=2&q=合成記録&cursor=bm90IGpzb24", "search_cursor_invalid"),
-                        ("project=2&q=合成 資料:不明", "bad_search_filter"), ("project=2&q=", "bad_query")):
-        with pytest.raises(ValueError, match=code):
+                        ("project=2&q=合成 資料:不明", "bad_search_filter"),
+                        ("project=2&q=合成 after:2026-11-02 before:2026-11-01", "bad_search_filter"),
+                        ("project=2&q=", "search_query_empty"), ("project=2&q=after:2026-11-01", "search_query_empty")):
+        with pytest.raises(ValueError, match=f"^{code}$"):
             chat.response(snapshot, {2}, "sources", query)
     with pytest.raises(ValueError, match="project_not_allowed"):
         chat.response(snapshot, {1}, "sources", "project=2&q=合成")
     # A room without read permission is not searched, and says so instead of reading as no match.
     forbidden = chat.response(snapshot, {1}, "sources", "project=1&q=合成記録")
     assert forbidden["state"] == "unavailable" and forbidden["items"] == [] and "検索していません" in forbidden["empty"]
+    # A group room has no medical-record page: its heading carries no MCS link.
+    assert any("MCS: " in line for line in data["head"])
+    group = chat.response(snapshot, {3}, "sources", "project=3&q=合成")
+    assert group["state"] == "searched" and group["head"] and "MCS" not in "".join(group["head"]) and "/projects/" not in json.dumps(group)
 
 
 def test_policy_rejected_attachment_reaches_the_workspace(snapshot, monkeypatch):
@@ -345,3 +423,15 @@ def test_policy_rejected_attachment_reaches_the_workspace(snapshot, monkeypatch)
 def test_policy_needs_the_configuration_to_reject():
     import attachment_ocr
     assert attachment_ocr.rejection_policy(None) is None
+
+
+def test_configuration_state_tells_missing_and_unreadable_from_read(tmp_path):
+    from mcs_util import config_read_state
+    path = tmp_path / "config.json"
+    assert config_read_state(str(path)) == ({}, "missing")
+    path.write_text("{", encoding="utf-8")
+    assert config_read_state(str(path)) == ({}, "unreadable")
+    path.write_text('{"clinical_metadata": true, "clinical_metadata": false}', encoding="utf-8")
+    assert config_read_state(str(path)) == ({}, "unreadable")
+    path.write_text('{"clinical_metadata": true}', encoding="utf-8")
+    assert config_read_state(str(path)) == ({"clinical_metadata": True}, "read")

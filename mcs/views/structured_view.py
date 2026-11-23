@@ -644,6 +644,11 @@ def _request_lines(llm: dict, v1: dict, *, multiline: bool = False) -> list[str]
     return lines
 
 
+URGENT_REQUEST_LINE = "急ぎの確認依頼（本人の緊急状態とは別）"
+URGENCY_REVIEW_LINE = "緊急度: 要確認（対象人物・時点の根拠を確認）"
+URGENCY_REVIEW_RAISED_LINE = "緊急度: 要確認（対象人物・時点の根拠を確認。元の判定は高）"
+
+
 def structured_lines(db, mid: int, *, drug_candidates: bool = True,
                      plain: bool = False, request_first: bool = False) -> list[str]:
     """Compact structured summary from extract_v1 + the current fact
@@ -651,11 +656,19 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     when nothing usable exists (caller falls back to raw only).
     ``request_first`` (plain only) is the layout-6 card order: 📌 依頼 and
     薬剤 read before the summary."""
+    return structured_summary(db, mid, drug_candidates=drug_candidates, plain=plain,
+                              request_first=request_first)[0]
+
+
+def structured_summary(db, mid: int, *, drug_candidates: bool = True, plain: bool = False,
+                       request_first: bool = False) -> tuple[list[str], dict | None]:
+    """``(structured_lines, urgency)``: the summary lines and the urgency reading they word
+    (clinical_urgency.message_urgency_details plus ``qc_note``), or None when nothing usable exists."""
     v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
     selected = mcs_queries.current_message_facts(db, mid)
     llm = selected or {}
     if not v1 and not llm:
-        return []
+        return [], None
     source, joined = (None, False) if db is None else _source_row(db, mid)
     # without a patients table the urgency read keeps its own source query (and its error)
     details = clinical_urgency.message_urgency_details(
@@ -666,19 +679,19 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     ext = (mcs_queries.current_message_extract(db, "extract_llm", mid) or {}) \
         if urgency or llm else {}
     suffix = ""
+    details = {**details, "qc_note": urgency_qc_suffix(db, mid) if urgency == "llm" else ""}
     if urgency == "llm":
         # quote only the patient-scoped reason; raw evidence[0] may be a family member's
         if details["reasons"]:
             suffix = f" — 根拠:「{details['reasons'][0]}」"  # uncut: the tail may negate or qualify
-        suffix += urgency_qc_suffix(db, mid)
+        suffix += details["qc_note"]
     head = _head_ranked(selected, v1, urgency, suffix)
     lines: list[str] = [line for _, line in head]
     if details["held"]:
-        lines.append("急ぎの確認依頼（本人の緊急状態とは別）" if details["kind"] == "request" else
-                     "緊急度: 要確認（対象人物・時点の根拠を確認）" if plain else
-                     "緊急度: 要確認（対象人物・時点の根拠を確認。元の判定は高）")
+        lines.append(URGENT_REQUEST_LINE if details["kind"] == "request" else
+                     URGENCY_REVIEW_LINE if plain else URGENCY_REVIEW_RAISED_LINE)
     elif details["kind"] == "request":
-        lines.append("急ぎの確認依頼（本人の緊急状態とは別）")
+        lines.append(URGENT_REQUEST_LINE)
     context = (None, None, "patient") if db is None else _source_context_row(source)
     body, patient_name, default = context
     # Public source-less views cannot prove a measurement. Direct helpers and
@@ -721,7 +734,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
             lines = [REQUEST_MARK + line if at >= len(head) and line.startswith("依頼:") else line
                      for at, line in enumerate(lines)]
         lines = [line for _, line in sorted(zip(ranks, lines), key=lambda pair: pair[0])]
-    return lines
+    return lines, details
 
 
 # 緊急度 → 概要・要点 → 依頼 → 薬剤 → 臨床所見（バイタル・検査・症状） → 予定 → 区分

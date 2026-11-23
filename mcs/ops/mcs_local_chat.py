@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
+from mcs_util import ProviderSettingsUnreadable
 from mcs_view import View
 import local_chat_view
 import homecare_api
@@ -262,8 +263,12 @@ class ChatHandler(BaseHTTPRequestHandler):
                 code = str(exc)
                 # Only fixed, non-clinical codes reach the browser.
                 code = code if code in {"cursor_scope_or_generation_changed", "project_not_allowed",
-                                        "bad_search_filter", "search_cursor_invalid"} else "bad_request"
+                                        "bad_search_filter", "search_cursor_invalid",
+                                        "search_query_empty"} else "bad_request"
                 self._json(400, {"error": code})
+            except ProviderSettingsUnreadable:
+                # The settings file exists but cannot be read: not the same as "not configured".
+                self._send(503, b'{"error":"config_unreadable"}', "application/json")
             except (OSError, sqlite3.Error):
                 self._send(503, b'{"error":"snapshot_unavailable"}', "application/json")
             else:
