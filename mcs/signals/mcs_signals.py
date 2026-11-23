@@ -26,6 +26,7 @@ import hashlib
 import itertools
 import json
 import re
+import unicodedata
 import sqlite3
 import time
 from datetime import datetime
@@ -491,26 +492,61 @@ def _rx_request_visibility(db, now, th, sig_cfg):
                     "（薬局側の準備・照合の機会としての記録上の言及です）"}
 
 
-# requests.to spellings meaning 'addressed to a physician' for the
-# pharmacist's own inquiries; 医 covers 医師・主治医・医院・クリニックの医師.
-PHYSICIAN_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%医%' "
-                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%先生%' "
-                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%ドクター%' "
-                        f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%Dr%'")
-# A medication word, or the name of a medicine extracted from the same post
-# (「インスリンの減量」), is required: 変更・中止・提案・照会 alone also
-# describe visit scheduling and other non-medication requests.
-INQUIRY_ACTION_SQL = " OR ".join(
-    f"json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%{word}%'"
-    for word in ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
-) + (f" OR EXISTS (SELECT 1 FROM json_each({json_or_null('a.content')},'$.meds') md "
-     "WHERE md.type='object' AND length(json_extract(md.value,'$.name'))>0 "
-     f"AND instr(json_extract({JSON_OBJECT_SQL},'$.action'),json_extract(md.value,'$.name'))>0)")
+# requests.to values meaning 'addressed to a physician' (the extractor's
+# enum is 医師; free spellings like 主治医・往診医 also occur). Whole values,
+# not substrings: 医療事務 or a therapist called 先生 is not a physician.
+PHYSICIAN_TARGETS = frozenset(("医師", "主治医", "主治医師", "担当医", "往診医", "訪問医", "在宅医",
+                               "ドクター", "Dr", "Dr."))
+# A medication word, or the name of a medicine extracted from the same post,
+# in the request's summary or quote is required: 変更・中止・提案・照会 alone
+# also describe visit scheduling and other non-medication requests.
+INQUIRY_DRUG_WORDS = ("処方", "薬", "製剤", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
+# job titles and places that contain 薬 without naming a medicine
+NON_DRUG_TERMS = ("薬剤師", "薬局", "薬剤部")
+_KATAKANA_TAIL = re.compile(r"[ァ-ヺー]")
+# a dose written right after a Latin-ending name: 200mL, 2.5mg, 10単位
+_DOSE_AFTER = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mL|ml|g|μg|mcg|IU|%|単位|錠|包|本|枚|滴|cc)", re.I)
+
+
+def _names_medicine(text, name):
+    """The medicine name as a word of text: not the head of a longer
+    katakana or Latin word (「アセス」 is not in 「アセスメント」); a dose
+    written right after it (「ラコールNF200mL」) still names it."""
+    start = text.find(name)
+    while start >= 0:
+        rest = text[start + len(name):]
+        after = rest[:1]
+        latin = name[-1].isascii() and name[-1].isalnum() and after.isascii() and after.isalnum()
+        if not after or not ((_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after))
+                             or (latin and not _DOSE_AFTER.match(unicodedata.normalize("NFKC", rest[:16])))):
+            return True
+        start = text.find(name, start + 1)
+    return False
+
+
+def _med_names(raw):
+    """Medicine names of the stored meds array (JSON TEXT); [] when unreadable."""
+    try:
+        meds = json.loads(raw) if raw is not None else []
+    except (TypeError, ValueError, RecursionError):
+        return []
+    return [m["name"].strip() for m in meds if isinstance(m, dict)
+            and isinstance(m.get("name"), str) and m["name"].strip()] if isinstance(meds, list) else []
+
+
+def _medication_inquiry(action, quote, med_names):
+    text = "\n".join(t for t in (action, quote) if isinstance(t, str))
+    plain = text
+    for term in NON_DRUG_TERMS:
+        plain = plain.replace(term, "\n")
+    return (any(word in plain for word in INQUIRY_DRUG_WORDS)
+            or any(_names_medicine(text, name) for name in med_names))
 
 
 def _inquiry_replied(db, pid, mid, ts, orgs):
     """A later post by a physician anywhere in the room (own organization
-    included), or by someone outside the own organizations in the same thread."""
+    included), or in the same thread by another sender of a known
+    organization outside the own ones."""
     other = "".join(f" AND {_member_sql('reply.organization')}=0" for _ in orgs)
     return db.execute(
         "SELECT 1 FROM messages reply, messages m WHERE m.message_id=? "
@@ -518,7 +554,9 @@ def _inquiry_replied(db, pid, mid, ts, orgs):
         "AND reply.body_state IS NOT 'deleted' "
         # one profession element, so 歯科医師 is not a physician
         f"AND ({_member_sql('reply.profession')}>0 "
-        "OR (reply.parent_id=COALESCE(m.parent_id,m.message_id)" + other + ")) LIMIT 1",
+        "OR (reply.parent_id=COALESCE(m.parent_id,m.message_id) "
+        "AND reply.sender_id IS NOT m.sender_id "
+        "AND TRIM(COALESCE(reply.organization,''))<>''" + other + ")) LIMIT 1",
         (mid, pid, ts, "医師", *orgs)).fetchone() is not None
 
 
@@ -536,7 +574,10 @@ def _pharmacist_inquiry(db, now, th, sig_cfg):
     # streamed: one statement consumed before any other read
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
-                   json_extract({JSON_OBJECT_SQL},'$.action') AS act
+                   json_extract({JSON_OBJECT_SQL},'$.to') AS target,
+                   json_extract({JSON_OBJECT_SQL},'$.action') AS act,
+                   json_extract({JSON_OBJECT_SQL},'$.evidence') AS quote,
+                   json_extract({json_or_null('a.content')},'$.meds') AS meds
             FROM artifacts a
             JOIN messages m ON m.message_id=a.message_id
             JOIN patients p ON p.project_id=m.project_id
@@ -551,14 +592,15 @@ def _pharmacist_inquiry(db, now, th, sig_cfg):
               AND {ITEM_CONFIRMED_SQL}
               AND {REQ_ACTIONABLE_SQL}
               AND NOT ({PHARM_TARGET_SQL})
-              AND ({PHYSICIAN_TARGET_SQL})
-              AND ({INQUIRY_ACTION_SQL})
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S,
          now - th["request_response_days"] * DAY_S, *orgs))
     groups = {}
-    for pid, mid, ts, act in rows:
-        groups.setdefault((pid, mid, ts), []).append(act)
+    for pid, mid, ts, target, act, quote, meds in rows:
+        if not isinstance(target, str) or target.strip() not in PHYSICIAN_TARGETS:
+            continue
+        if _medication_inquiry(act, quote, _med_names(meds)):
+            groups.setdefault((pid, mid, ts), []).append(act)
     for (pid, mid, ts), acts in groups.items():
         acts = [a for a in acts if isinstance(a, str) and a]
         if not acts or _inquiry_replied(db, pid, mid, ts, orgs):

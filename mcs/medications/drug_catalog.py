@@ -63,9 +63,8 @@ def search(cfg, query, *, limit=20) -> list[dict]:
     dictionary, _ = _dictionary(cfg)
     if dictionary is None:
         return []
-    found = dictionary.search(query, limit=200)
-    ids = {item["id"] for item in found["items"]}
     needle = drug_map.fold(query)
+    ids = set(dictionary.matching(needle)[0])
     products = {}
     for entry in dictionary.entries.values():
         hit = entry.id in ids

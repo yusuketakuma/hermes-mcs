@@ -15,11 +15,11 @@ store = ledger_fixture(name="store")
 
 
 def _inquiry(db, mid, *, pid=1, to="主治医", action="処方変更の提案", org="合成薬局", age=5, parent=None,
-             meds=()):
+             meds=(), quote=None):
     _msg(db, mid, pid=pid, ts=NOW - age * DAY, chash=f"h{mid}", body="合成の照会です。",
          prof="薬剤師", org=org, parent=parent)
     db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES('extract_llm',?,?,?)",
-               (mid, json.dumps({"requests": [{"to": to, "action": action}],
+               (mid, json.dumps({"requests": [{"to": to, "action": action, "evidence": quote}],
                                  "meds": [{"name": name} for name in meds]}),
                 json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}"})))
     db.commit()
@@ -45,13 +45,52 @@ def test_own_inquiry_without_reply_is_a_candidate(store):
 def test_later_reply_suppresses(store, reply):
     _inquiry(store.db, 1)
     _msg(store.db, 2, pid=1, ts=NOW - 4 * DAY, chash="h2", **reply)
-    store.db.commit()
+    _sender(store.db, 2, 2)
     assert _run(store.db) == []
 
 
-def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store):
-    _inquiry(store.db, 1, action="キラナの減量", meds=["キラナ"])
+@pytest.mark.parametrize("reply", [
+    {"prof": "看護師", "org": "合成訪看", "parent": 1, "sender": 1},   # the inquirer's own post under another org
+    {"prof": "看護師", "org": "", "parent": 1, "sender": 2},          # organization unknown
+])
+def test_own_or_unattributed_thread_post_is_not_a_reply(store, reply):
+    _inquiry(store.db, 1)
+    sender = reply.pop("sender")
+    _msg(store.db, 2, pid=1, ts=NOW - 4 * DAY, chash="h2", **reply)
+    _sender(store.db, 2, sender)
     assert len(_run(store.db)) == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"action": "キラナの減量", "meds": ["キラナ"]},
+    {"action": "減量のご検討", "quote": "キラナを減量していただけますか", "meds": ["キラナ"]},
+    {"action": "ラコールNF200mLを中止", "meds": ["ラコールNF"]},       # dose written right after the name
+    {"action": "ラコールNF200㎖を中止", "meds": ["ラコールNF"]},        # the same unit in another form
+    {"action": "ラコールNF200ｍＬを中止", "meds": ["ラコールNF"]},
+    {"action": "降圧薬の中止", "quote": "薬剤師から降圧薬の中止をご相談します"},
+    {"action": "薬局製剤の継続可否を確認"},
+    {"action": "ビタミンB1 10mgへ減量", "meds": ["ビタミンB1"]},
+])
+def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store, kwargs):
+    _inquiry(store.db, 1, **kwargs)
+    assert len(_run(store.db)) == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"action": "アセスメント日程の調整", "meds": ["アセス"]},          # name inside a longer word
+    {"action": "ABCDE評価の共有", "meds": ["ABC"]},                     # Latin name inside a longer word
+    {"action": "候補日の選択", "quote": "薬剤師と調整した候補日から選んでください"},  # 薬 only in a job title
+    {"action": "薬局との訪問日の調整"},                                  # 薬 only in a place
+    {"action": "ビタミンB12の再検査", "meds": ["ビタミンB1"]},           # a digit continuing the name
+])
+def test_non_medication_requests_are_not_inquiries(store, kwargs):
+    _inquiry(store.db, 1, **kwargs)
+    assert _run(store.db) == []
+
+
+def _sender(db, mid, sender_id):
+    db.execute("UPDATE messages SET sender_id=? WHERE message_id=?", (sender_id, mid))
+    db.commit()
 
 
 @pytest.mark.parametrize("reply", [
@@ -67,7 +106,7 @@ def test_own_follow_up_or_unrelated_post_is_not_a_reply(store, reply):
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"org": "他の薬局"}, {"to": "薬剤師"}, {"to": "ケアマネ"},
+    {"org": "他の薬局"}, {"to": "薬剤師"}, {"to": "ケアマネ"}, {"to": "医療事務"}, {"to": "先生"},
     {"action": "訪問日の調整"}, {"action": "訪問日の変更"}, {"action": "次回訪問の提案"},
     {"age": 1}, {"age": 200},
 ])
