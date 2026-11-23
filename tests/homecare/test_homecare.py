@@ -368,10 +368,10 @@ def test_api_scopes_links_and_returns_browser_safe_errors(db):
             homecare_api.read(db, "patient", {"patient": bad}, registry=REGISTRY, mcs_patients=scope)
 
 
-def post(server, body, headers=None):
+def post(server, body, headers=None, op="staff.create"):
     obj = chat.ChatHandler.__new__(chat.ChatHandler)
     obj.server = server
-    obj.path = "/synthetic-capability/api/hc/staff.create"
+    obj.path = "/synthetic-capability/api/hc/" + op
     obj.headers = Message()
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
     for name, value in (headers if headers is not None else without(None, length=len(data))):
@@ -796,10 +796,11 @@ def test_an_existing_ledger_moves_to_resident_mode_after_its_administrator_adds_
     assert resident_request(server, "GET", "/", login="admin@example.invalid") == (403, chat.UNREGISTERED)
     assert resident_request(server, "POST", "/api/hc/staff.create", BODY, login="admin@example.invalid")[0] == 403
     # Recovery: back in ordinary mode the administrator adds their own login, then resident mode admits them.
-    server.tailnet_host = None
-    records.update(db, "staff", me["staff_id"], {"tailscale_login": "admin@example.invalid"}, expected_version=1,
-                   actor=me["staff_id"], registry=REGISTRY)
     db.close()
+    server.tailnet_host = None
+    status, data, _mime = post(server, {"id": me["staff_id"], "expected_version": 1, "actor": me["staff_id"],
+                                        "values": {"tailscale_login": "admin@example.invalid"}}, op="staff.update")
+    assert status == 200 and json.loads(data)["record"]["tailscale_login"] == "admin@example.invalid"
     server.tailnet_host = TAILNET
     assert resident_request(server, "GET", "/", login="admin@example.invalid")[0] == 200
     session = json.loads(resident_request(server, "GET", "/api/session", login="admin@example.invalid")[1])
