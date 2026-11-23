@@ -1029,6 +1029,13 @@ def test_specimen_sections_are_read_in_linear_time(body):
     # Blood headings outside the specimen section's words end it.
     "尿検査\npH 6.0\nCBC\nWBC 5200/μL", "尿検査：pH 6.0\n定期採血の結果 WBC 5200/μL", "尿検査\npH 6.0\n末梢血\nWBC 5200/μL",
     "尿検査\npH 6.0\n血液一般：WBC 5200/μL", "尿検査：pH 6.0\n静脈血 WBC 5200/μL", "尿検査\npH 6.0\n血液データ：\nWBC 5200/μL",
+    # A description (性状, 所見, 検体) with a count is a nursing note, not a lab section.
+    "便の性状：泥状 3回\nWBC 5200/μL", "便性状：普通 1回\nBT 36.5\nWBC 5200/μL", "尿の性状：淡黄色 6回\nWBC 5200/μL",
+    "便所見：普通便 1回\nWBC 5200/μL", "便検体：提出 2本\nWBC 5200/μL", "尿検査：蛋白(1+)\n本日の採血 WBC 5200/μL",
+    "尿検査：蛋白(1+)\n※採血 WBC 5200/μL", "便は普通 1回\nWBC 5200/μL",
+    # A bare specimen noun after a description ends a sentence, not a heading.
+    "食事良好、便\nWBC 5200/μL", "多量の便\nBT 36.5\nWBC 5200/μL CRP 0.3mg/dL", "泥状の便\nWBC 5200/μL",
+    "夜間に尿\nBT 36.5\nWBC 5200/μL", "白色の喀痰\nWBC 5200/μL", "エコーで腹水\nBT 36.5\nWBC 5200/μL",
     # A heading in the middle of a line names the rest of that line only.
     "発熱あり、尿検査：蛋白(1+)\nWBC 5200/μL",
 ])
@@ -1099,6 +1106,14 @@ def test_a_note_after_a_specimen_word_is_not_read_as_a_result():
     "導尿検体：WBC 30/μL", "尿 WBC 30/μL\n白血球 30/μL",
     # A space sets the heading apart from the word before it (再検 is no 検尿).
     "再検 尿検査\nWBC 30/μL", "再検 尿：WBC 30/μL",
+    # A heading with its suffix is one wherever it starts, glued to the word before it.
+    "本日尿検査 WBC 30/μL", "本日尿検査\nWBC 30/μL\n蛋白(1+)", "入院時尿検査：WBC 30/μL", "11月20日尿検査\nWBC 30/μL",
+    "外来尿検査結果：WBC 30/μL", "本日髄液検査\nWBC 30/μL", "術前尿定性：WBC 30/μL", "クリニック尿所見：WBC 30/μL",
+    # A bare specimen word heads the lines below when it stands alone on its line.
+    "11/20 尿\nWBC 30/μL", "本日の尿\nWBC 30/μL", "・尿\nWBC 30/μL", "【尿】\nWBC 30/μL",
+    "結果：尿\nWBC 30/μL", "病院より 尿\nWBC 30/μL", "【結果】尿\nWBC 30/μL", "A.尿\nWBC 30/μL", "他院の尿\nWBC 30/μL",
+    "本日尿 WBC 30/μL",
+    "尿定性：蛋白(1+)\nWBC 30/μL",
 ])
 def test_a_prefixed_or_compound_specimen_heading_heads_its_section(body):
     assert _validated("WBC" if "WBC" in body.split("\n")[-1] else "白血球", "30", "/μL",

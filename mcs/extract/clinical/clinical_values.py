@@ -531,21 +531,29 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
         line_start, line_end = _line_span(quote, start, lines)
         end = min(end, line_end)   # folding joins a delimiter to the next line's bullet (尿：\n・pH)
         first = bool(_LINE_BULLETS.fullmatch(quote, line_start, start))
-        if not (first or quote[start] in "([【<" or _word_starts(quote, start, evidence, starts, ends)):
-            continue   # the end of another word (排尿, 血尿, 軟便)
+        suffix = (match["suffix"] or "").removeprefix("中").removeprefix("沈渣")
+        # A bare word (尿, 便) must start a word: 排尿, 血尿, 軟便 head nothing. A suffixed
+        # heading (尿検査, 尿所見) or a bracket is one wherever it starts (本日尿検査).
+        bare = bool(match["word"]) and not suffix and quote[start] not in "([【<"
+        if bare and not (_BARE_HEADING_LINE.fullmatch(quote, line_start, start) or quote[start - 1] == ":"
+                         or _spaced(evidence, starts, ends, start)
+                         or _DATE_BEFORE.search(quote, max(line_start, start - 12), start)):
+            continue   # 排尿, 血尿, 軟便, 多量の便, 夜間に尿, 食事良好、便
+        if match["blood"] and not (first or _word_starts(quote, start, evidence, starts, ends)):
+            continue
         spaced = _spaced(evidence, starts, ends, end)
-        closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] \
-            or match["suffix"] not in (None, "", "中", "沈渣")
+        closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] or suffix
         if match["word"] and not (closed or spaced or end in line_ends) and _LAB_NAME.match(quote, end):
             glued.add(end)   # 尿TP, 尿中Ca
             continue
         if end in line_ends:
-            heading = True   # a heading that ends its line (11/20 尿検査, 本日の尿検査)
+            # A heading line (11/20 尿検査); a bare word only stands alone (11/20 尿, not 多量の便).
+            heading = True
         elif match["particle"]:
             heading = bool(_LAB_NAME.match(quote, end))   # 尿検査で白血球, not 尿検査は異常なし
         else:
-            bare = match["word"] and match["suffix"] in (None, "") and not match[0].startswith(("(", "[", "【", "<"))
-            result = (_LAB_RESULT if bare else _SECTION_RESULT).match(quote, end, line_end)
+            # After a bare word or a description (尿：, 便の性状：) only a lab item is a result.
+            result = (_LAB_RESULT if bare or suffix in _DESCRIPTIONS else _SECTION_RESULT).match(quote, end, line_end)
             # The item word is one source word: folding joins 淡黄色 白血球 30 into one.
             heading = bool((closed or spaced) and result and not any(
                 _spaced(evidence, starts, ends, pos) for pos in range(end + 1, result.end(1))))
@@ -628,16 +636,20 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*+"))
-# A specimen word (尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) with one closed suffix (検査, 検査の結果, 定性,
-# 一般, 生化学, 穿刺, の性状, 中, 沈渣 ...) glued to an item names that item only (尿TP, 尿中Ca).
-# As a heading it starts a word (at a line start, after a bullet, a bracket, a delimiter or
-# a space) and is followed by the line end (when it starts its line), a delimiter, a bracket
-# or a space and then a result, or a particle and a lab name (尿検査で白血球). It names every
-# result of its section, across line breaks and sentence ends, up to a blood heading
-# (血液検査, 採血, 血算, 血清, 生化学), another specimen heading, or a blank line that follows a
-# result of the section. A heading in the middle of a line names the rest of its line only.
-# Words (排尿, 血尿, 尿酸, 便秘), statements (尿検査は異常なし) and other notes (尿：淡黄色,
-# 再検査, 本日測定, 【看護師より】) head nothing and end nothing.
+# A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
+# that item only (尿TP, 尿中Ca). With a closed suffix (検査, 検査の結果, 定性, 一般, 生化学,
+# 穿刺, 所見, の性状, データ, 検体 ...) or a bracket it is a heading wherever it starts, even
+# glued to the word before it (本日尿検査); a bare word (尿, 便) must start a word (after a
+# space, a mark, a digit or a particle: 本日の尿, not 排尿, 血尿, 軟便). A heading ends its line
+# (a bare word then stands alone on it, after a bullet, a date or 本日/入院時: 11/20 尿, not
+# 多量の便), or is followed by a delimiter, a bracket or a space and a result, or by a particle
+# and a lab name (尿検査で白血球). After a bare word or a description (の性状, 所見, 検体, データ)
+# only a lab item with its value is a result: 尿：淡黄色 6回, 便の性状：泥状 3回 head nothing.
+# A section names every result, across line breaks and sentence ends, up to a blood heading
+# (血液検査, 採血, 血算, CBC, 末梢血, 血清, 生化学), another specimen heading, or a blank line
+# that follows a result of the section; a heading in the middle of a line that a result follows
+# names the rest of its line only. Statements (尿検査は異常なし) and other notes (再検査,
+# 本日測定, 【看護師より】) head nothing and end nothing.
 _SPECIMEN_WORDS = ("カテ尿|導尿|採尿|自然尿|新鮮尿|部分尿|スポット尿|随時尿|早朝尿|中間尿|蓄尿|検尿|検便"
                    "|尿|沈渣|髄液|胸水|腹水|便|喀痰")
 _SPECIMEN_SUFFIX = ("(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査"
@@ -650,6 +662,16 @@ _SECTION_HEADING = re.compile(
     rf"|(?P<blood>{fold_surface(_BLOOD_HEADING)}))"
     rf"(?:\([^()]{{0,16}}\))?(?P<close>[)\]】>]?)(?P<desu>{fold_surface('(?:です|でした)。?')})?"
     rf"(?P<particle>{fold_surface('にて|では|で|の|は')})?(?P<delimiter>[:・|=、,;]*)")
+_DESCRIPTIONS = frozenset(fold_surface(d) for d in ("の性状", "性状", "所見", "データ", "結果", "の結果", "検体"))
+# A date or a time word glued before a bare specimen word names when it was taken (本日尿,
+# 11/20 尿, 外来で尿); other words before it describe it (多量の便, 夜間に尿, トイレで便).
+_WHEN = (r"(?:(?:[0-9]{2,4}[/.年-])?[0-9]{1,2}[/.月][0-9]{1,2}日?"
+         r"|本日|今日|昨日|今朝|今回|前回|先週|先月|入院時|外来|来院時|受診時|初診時|訪問時|退院時|術前|定期|至急|追加"
+         r"|午前|午後|当院|他院|前医|当日|翌日|同日)")
+_DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は)?$"))
+# Only marks, digits, brackets and a bracketed tag may stand before a bare specimen word on
+# its line (・尿, ①尿, A.尿, 【結果】尿).
+_BARE_HEADING_LINE = re.compile(r"(?:【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z、,])*")
 _LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
 _LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
 # A result: an item word followed by a number or a qualitative mark (pH 6.0, 比重 1.015, 蛋白(1+)).
