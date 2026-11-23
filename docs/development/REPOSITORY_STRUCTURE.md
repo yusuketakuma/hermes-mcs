@@ -6,13 +6,13 @@
 
 ## 実行コードの所有先
 
-`mcs/core/` は役割ごとのフォルダに分けます。`ledger/` は台帳の読み書きの補助（取込・参照・観測・患者文脈artifact・初回取込状態など）、`runtime/` は実行時の補助（worker回収・host時刻・healthの判定方針）、`records/` は監査・外部送信審査・backup名・保守エラーの記録、`inference/` は推論版と依存喪失の記録です。導入済みの更新処理・復旧スクリプトがパスや直接importで使うファイル（`ledger.py`・`mcs_util.py`・`mcs_runtime.py`・`runtime_entry.py`・`writer_lock.py`・`quarantine_bootstrap.py` など）は、旧版のupdaterとの互換のため `mcs/core/` 直下に残します。import はflat（`_mcs_path`）なので、`mcs/` 内の移動でimport文は変わりません。
+`mcs/core/` は役割ごとのフォルダに分けます。`ledger/` は台帳の読み書きの補助（取込・意味解析の原典管理・投稿メタデータ・添付の後続通知・登録データ検証・snapshot参照）、`runtime/` は実行時の補助（worker回収・host時刻・healthの判定方針）、`records/` は監査・外部送信審査・backup名・保守エラーの記録です。次のファイルは `mcs/core/` 直下に残します。導入済みの更新処理・復旧スクリプトがパスや直接importで使うもの（`ledger.py`・`mcs_util.py`・`mcs_runtime.py`・`runtime_entry.py`・`writer_lock.py`・`quarantine_bootstrap.py` など）と、`semantic_candidate._MODULES` の候補指紋に含まれるもの（`mcs_queries`・`inference_version` など）です。候補指紋は関数のファイルパスを含むので、移すと承認済みの候補が一致しなくなります。import はflat（`_mcs_path`）なので、`mcs/` 内の移動でimport文は変わりません。
 
 | 所有先 | 責務・主要入口 | 状態と副作用 |
 |---|---|---|
 | `mcs/core/` | `ledger`の台帳writerと`ledger_capture`・`ledger_semantic_sources`の2つのMixin、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
-| `mcs/core/ledger/mcs_queries.py`・`message_observations` | 原文・artifactの現行性、表示装飾前の患者文脈、`patient_context_sources`の原典集合、保存済み観測の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
-| `mcs/core/ledger/patient_context_artifacts.py` | 患者文脈の原CHUNK・採用済み修復候補の選択、参照・範囲・part・元費用証拠の共通検証 | 表示と依存喪失の記録が同じ保存集合を読む。呼出元のconnectionとtransactionを借用し、Jev判定・認可・公開・通信を行わない |
+| `mcs/core/mcs_queries.py`・`message_observations` | 原文・artifactの現行性、表示装飾前の患者文脈、`patient_context_sources`の原典集合、保存済み観測の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
+| `mcs/core/patient_context_artifacts.py` | 患者文脈の原CHUNK・採用済み修復候補の選択、参照・範囲・part・元費用証拠の共通検証 | 表示と依存喪失の記録が同じ保存集合を読む。呼出元のconnectionとtransactionを借用し、Jev判定・認可・公開・通信を行わない |
 | `mcs/core/writer_lock.py`・`safe_io` | writerの取得・コード/更新世代の照合、安全なファイル公開とFD所有権移管 | 取得したFDは呼出元が保持・解放する。借用接続をclose/commitせず、ファイル公開は既存の同期・置換順序を守る |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/ledger/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |

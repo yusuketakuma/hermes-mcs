@@ -1,13 +1,14 @@
 {
   "category": "changed",
   "title": "mcs/core/ の補助モジュールを役割別のフォルダへ移動",
-  "summary": "利用者から見える動作・設定・既定値・通知・既読化・承認条件は変わりません。開発者向けに、mcs/core/ 直下の補助モジュール19個を ledger/・runtime/・records/・inference/ の4フォルダへ移しました。import 名は変わりません。",
-  "upgrade": "追加操作は不要です。通常の更新で旧パスのファイルは取り除かれます。手で mcs/core/ 直下へ旧ファイルを置き直すと、同名モジュールの重複検査で起動が止まるため置き直さないでください。",
+  "summary": "利用者から見える動作・設定・既定値・通知・既読化・承認条件は変わりません。開発者向けに、mcs/core/ 直下の補助モジュール13個を ledger/・runtime/・records/ の3フォルダへ移しました。import 名は変わりません。",
+  "upgrade": "追加操作は不要です。通常の更新で旧パスのファイルは取り除かれます。承認済みの意味解析候補の指紋は変わりません。手で mcs/core/ 直下へ旧ファイルを置き直すと、同名モジュールの重複検査で起動が止まるため置き直さないでください。",
   "details": [
-    "ledger/: ledger_capture・ledger_semantic_sources・mcs_queries・message_observations・initial_import_state・attachment_followups・patient_context_artifacts・project_metadata_contract・self_identity・snapshot_access。",
-    "runtime/: worker_process・host_clock・health_policy。records/: access_log・external_transfer・backup_names・maintenance_errors。inference/: inference_dependency_loss・inference_version。",
+    "ledger/: ledger_capture・ledger_semantic_sources・message_observations・attachment_followups・project_metadata_contract・snapshot_access。",
+    "runtime/: worker_process・host_clock・health_policy。records/: access_log・external_transfer・backup_names・maintenance_errors。",
     "更新処理・復旧スクリプトがパスや直接importで使うファイル（ledger・mcs_util・mcs_runtime・runtime_entry・writer_lock・quarantine_bootstrap など）は移していない。",
+    "意味解析候補の指紋（semantic_candidate の対象モジュール）は関数のファイルパスを含むため、mcs_queries・inference_version・inference_dependency_loss・patient_context_artifacts・initial_import_state・self_identity は移していない。",
     "deployment/sdc-release-owner.json を再生成した。"
   ],
-  "refs": ["mcs/core/ledger/", "mcs/core/runtime/", "mcs/core/records/", "mcs/core/inference/", "deployment/sdc-release-owner.json"]
+  "refs": ["mcs/core/ledger/", "mcs/core/runtime/", "mcs/core/records/", "deployment/sdc-release-owner.json"]
 }
