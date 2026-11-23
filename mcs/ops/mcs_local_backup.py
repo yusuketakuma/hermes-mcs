@@ -35,7 +35,8 @@ import local_backup  # noqa: E402
 from mcs_util import file_sha256, has_sqlite_sidecars  # noqa: E402
 
 _NAME = re.compile(r"(?:ledger|homecare)-\d{8}\.db"
-                   r"|(?:preupdate|patient-context-reset|homecare-preupdate)-[0-9A-Za-z_-]+\.db")
+                   r"|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db"
+                   r"|homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db")
 _HOMECARE = ("homecare_daily", "homecare_preupdate")
 
 

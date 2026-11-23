@@ -822,3 +822,28 @@ def test_apply_says_when_it_ran_recovery_or_did_not_start(updater, monkeypatch, 
     monkeypatch.setattr(update_apply, "recover_interrupted", lambda: 0)
     assert updater.apply("v1.1.0", sha, "cid-delegated") == 0
     assert "中断した更新の復旧を先に行います" in capsys.readouterr().out
+
+
+def test_home_care_copy_is_made_only_when_the_update_really_applies(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    """A re-run that exits as already applied must not rotate away the
+    home-care copies that predate the real update."""
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    import local_backup
+    copies = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup",
+                        lambda **_k: copies.append(True))
+    assert updater.apply("v1.2.0", sha, "cid-first") == 0
+    assert updater.apply("v1.2.0", sha, "cid-again") == 0
+    assert updater.apply("v1.2.0", sha, "cid-first") == 0
+    assert copies == [True]

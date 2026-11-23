@@ -24,7 +24,8 @@ _BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
                           # copies of the home-care records database (homecare.db)
                           ("homecare_daily", re.compile(r"homecare-\d{8}\.db")),
                           ("homecare_daily_ok", re.compile(r"homecare-\d{8}\.db\.ok")),
-                          ("homecare_preupdate", re.compile(r"homecare-preupdate-.*\.db")),
+                          # only the generated <time>-<random> form: a hand-named copy stays manual
+                          ("homecare_preupdate", re.compile(r"homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db")),
                           ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
 
 # Settled journal rows are kept back to the oldest restorable backup, but

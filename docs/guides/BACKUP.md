@@ -87,7 +87,8 @@ schema の照合を行い、`check`・`sha256`・`schema`・`last_successful_run
 
 受け付けるのは `ledger-YYYYMMDD.db`・`preupdate-*.db`・`patient-context-reset-*.db` と、[台帳の世代](#homecare-restore)の名前だけです。symlink・SQLite の
 sidecar 付き・壊れたファイルは拒否します。親ディレクトリ内の一時コピーで SHA-256 と完全検査を
-行ってから、同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します。
+行ってから、原本 DB の世代は同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します
+（台帳の世代はマーカーを置きません。[台帳を戻す](#homecare-restore)を参照）。
 稼働中の `data/ledger.db` と backup は置換・削除しません。サービスの停止・起動もしません。
 
 日次 backup の時点から後の投稿・タスク・操作履歴・配送記録は戻した DB にありません。
@@ -96,12 +97,12 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 承認は配置先の絶対パスに束縛され、承認後に移したディレクトリは再び保留になります。
 稼働中のデータディレクトリと入れ替える場合は、**承認の前に**最終の場所へ移します。
 
-1. 常駐サービスを人が止める。
+1. 常駐サービスを人が止める。在宅記録の台帳を使っているときは、`--homecare-db` 付きのチャット表示も止める。
 2. `$MCS_ROOT/data` を別名（例 `data.before-restore`）へ移す。手元の `backups/` もそこに残る。
 3. `NEW_DATA_DIR` を `$MCS_ROOT/data` へ移す（同じファイルシステム内の改名にするため、
    `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。在宅記録の台帳を使っているときは、
-   `data.before-restore/homecare.db` も新しい `data/` へ移す（台帳は原本 DB と別のファイルで、
-   原本 DB を戻しても台帳は戻りません）。
+   `data.before-restore/homecare.db` と、あれば `homecare.db-wal`・`homecare.db-shm` も一緒に新しい `data/` へ移す
+   （台帳は原本 DB と別のファイルで、原本 DB を戻しても台帳は戻りません。`-wal` には確定済みの入力が残っていることがあります）。
 4. 結果の `sha256` を `BUNDLE_SHA`、`$MCS_ROOT/data` を `DEST` として、
    [同意・稼働再開の境界](#consent)の `mcs_restore.py plan → approve → resume` を行う。
 
@@ -130,8 +131,10 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 （古い版の世代は、開いたときに今の版へ進みます）。更新を戻したときは、その更新の前の
 `homecare-preupdate-*.db` を使います。
 
-日次 backup が2日以上更新されていないと、健康状態は `backup_local_overdue` で要確認になります
-（収集の制限時間による見送りは従来どおり `backup_deferred_deadline`）。
+原本 DB の日次 backup が2日以上更新されていないと、健康状態は `backup_local_overdue` で要確認になります
+（収集の制限時間による見送りは従来どおり `backup_deferred_deadline`）。台帳の日次 backup はこの判定に含みません。
+台帳のコピーの失敗は収集の実行記録のエラー（`homecare_backup: …`）、見送りは `homecare_backup_skipped` に残るので、
+`list` で台帳の世代の日付も確かめます。
 
 <a id="policy"></a>
 ## 2. オーナーが先に決めるもの

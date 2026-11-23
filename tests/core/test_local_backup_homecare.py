@@ -102,6 +102,18 @@ def test_preupdate_copies_keep_the_newest_three(world, monkeypatch):
     assert {backup_names.backup_class(n) for n in kept} == {"homecare_preupdate"}
 
 
+def test_a_hand_named_preupdate_copy_is_never_rotated(world, monkeypatch):
+    homecare, backups, _ = world
+    _records(homecare, "合成").close()
+    backups.mkdir(mode=0o700)
+    hand = backups / "homecare-preupdate-1.2.2.db"
+    hand.write_bytes(b"synthetic hand copy")
+    for second in range(4):
+        monkeypatch.setattr(local_backup.time, "strftime", lambda _f, s=second: f"20261101-00000{s}")
+        local_backup.preupdate_homecare_backup()
+    assert hand.exists() and backup_names.backup_class(hand.name) == "manual"
+
+
 def test_home_care_copies_are_not_ledger_restore_points():
     assert backup_names.backup_class("homecare-20261101.db") == "homecare_daily"
     assert backup_names.backup_class("homecare-20261101.db.ok") == "homecare_daily_ok"
