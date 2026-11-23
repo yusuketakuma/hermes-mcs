@@ -48,3 +48,10 @@ def test_unknown_patient_is_refused(snapshot):
             patient_brief.visit_brief(view, 99, cfg={})
     finally:
         view.close()
+
+
+def test_signals_without_a_completed_run_do_not_claim_none(snapshot):
+    signals = _brief(snapshot)["signals"]
+    assert signals["items"] == []
+    assert signals["empty"] == "判定済みの範囲に未解消のシグナルは見つかりませんでした。"
+    assert any("判定済みの分だけ" in note for note in signals["notes"])

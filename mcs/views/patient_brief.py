@@ -44,14 +44,18 @@ def open_signals(db, project_id, *, limit=50) -> dict:
                       "source": datetime.fromtimestamp(at, JST).strftime("%m/%d %H:%M 検出")
                       if isinstance(at, (int, float)) else "検出時刻未取得"})
     notes = []
+    # Without a completed run (or with unreadable states) an empty list is not proof that nothing is open.
+    unconfirmed = found["pipeline_last_run_at"] is None or bool(found["errors"])
     if found["pipeline_last_run_at"] is None:
-        notes.append("シグナルの判定はまだ実行されていません。")
+        notes.append("すべての種類の判定が終わったかを確認できません。表示は判定済みの分だけです。")
     if found["truncated"]:
         notes.append(f"新しい順に{found['returned']}件まで表示しています（全{found['total']}件）。")
     if found["errors"]:
         notes.append("一部のシグナルの状態を読み取れませんでした。")
     return {"key": "signals", "label": "未解消のシグナル", "title": "未解消のシグナル", "head": [],
-            "items": items, "notes": notes, "empty": "未解消のシグナルはありません。"}
+            "items": items, "notes": notes,
+            "empty": "判定済みの範囲に未解消のシグナルは見つかりませんでした。" if unconfirmed
+            else "未解消のシグナルはありません。"}
 
 
 def visit_brief(view, project_id, *, cfg, since=None, role="", sections=VISIT_SECTIONS) -> dict:
