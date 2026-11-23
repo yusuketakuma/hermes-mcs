@@ -68,7 +68,7 @@ def test_a_failed_daily_attempt_keeps_the_previous_verified_backup(backups, monk
     db = tmp_path / "ledger.db"
     db.write_bytes(b"synthetic")
     monkeypatch.setattr(local_backup, "_valid", lambda *_: False)
-    def broken(_db, tmp, _dest, deadline=None):
+    def broken(_db, tmp, _dest, deadline=None, **_kw):
         os.unlink(tmp)
         raise maintenance.MaintenanceError("backup_verify_failed")
     monkeypatch.setattr(local_backup, "publish_backup", broken)

@@ -26,16 +26,21 @@ def test_backup_bytes_are_classified_by_their_owner(backups, tmp_path):
     (backups / "ledger-20260102.db.tmp-wal").write_bytes(b"s" * 3)
     (backups / "hand-copy.db").write_bytes(b"m" * 7)
     (backups / "patient-context-reset-20261115-120000-ab12.db").write_bytes(b"r" * 4)
+    (backups / "homecare-20260101.db").write_bytes(b"h" * 6)
+    (backups / "homecare-20260101.db.ok").write_bytes(b"o" * 1)
+    (backups / "homecare-preupdate-20260101-000000-ab12.db").write_bytes(b"u" * 8)
     (backups / "subdir").mkdir()
     outside = tmp_path / "outside.db"
     outside.write_bytes(b"x" * 100)
     (backups / "linked.db").symlink_to(outside)
     assert local_backup.backup_bytes_by_class() == {
-        "daily": 10, "daily_ok": 2, "preupdate": 5, "patient_context_reset": 4, "staging": 3, "manual": 7}
+        "daily": 10, "daily_ok": 2, "preupdate": 5, "patient_context_reset": 4,
+        "homecare_daily": 6, "homecare_daily_ok": 1, "homecare_preupdate": 8, "staging": 3, "manual": 7}
     assert local_backup.manual_backup_bytes() == 7
     assert sorted(os.listdir(backups)) == sorted([      # observation never deletes
         "ledger-20260101.db", "ledger-20260101.db.ok", "preupdate-1.0.28-20260101.db",
         "patient-context-reset-20261115-120000-ab12.db",
+        "homecare-20260101.db", "homecare-20260101.db.ok", "homecare-preupdate-20260101-000000-ab12.db",
         "ledger-20260102.db.tmp-wal", "hand-copy.db", "subdir", "linked.db"])
 
 

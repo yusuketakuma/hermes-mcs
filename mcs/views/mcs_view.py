@@ -18,11 +18,11 @@ import semantic_store
 import semantic_transport
 
 from ledger import LedgerReader
-from stamp_read import reaction_actor_summary
+from stamp_read import reaction_actor_summaries, reaction_actor_summary
 from project_metadata_contract import CLINICAL_DATASETS
 from project_metadata_view import physician_viewed_status
 from mcs_contract import project_url
-from mcs_queries import incomplete_reply_roots
+from mcs_queries import incomplete_reply_roots, karte_summary_bound
 import self_identity
 from self_identity import is_own_station_message
 from mcs_util import HOME, loads_dict, safe_error_code, search_fold, valid_text, valid_hash
@@ -49,6 +49,14 @@ REASONS = frozenset({
 
 def _reason(value):
     return value if value in REASONS else "not_recorded" if not value else "other_error"
+
+
+def _attachment_reason(value):
+    """An attachment fetch failure: the collector records an HTTP failure with its status (``http_404``)."""
+    if isinstance(value, str) and len(value) == 8 and value.startswith("http_") and value[5:].isascii() \
+            and value[5:].isdigit():
+        return value
+    return _reason(value)
 
 
 def _artifact_json(r):
@@ -108,7 +116,9 @@ class View:
                FROM patients p WHERE 1=1""",
             [], ("p.project_id",), ["link-hints"], limit, cursor)
 
-    def _page(self, sql, params, columns, scope, limit, cursor):
+    def _page(self, sql, params, columns, scope, limit, cursor, *, key_fields=None):
+        """One keyset page in descending ``columns`` order; ``key_fields`` names the row fields that hold
+        those column values (dropped from the rows) when they are not the message or ``_key`` columns."""
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
         binding = requests.payload_hash([self.meta["generation_id"], scope])
@@ -135,11 +145,13 @@ class View:
         next_cursor = None
         if more:
             last = rows[-1]
-            key = ([last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
+            key = ([last[field] for field in key_fields] if key_fields else
+                   [last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
                     last["message_id"]] if len(columns) == 2 else [last["_key"]])
             next_cursor = base64.urlsafe_b64encode(requests.canonical({"binding": binding, "key": key})).decode()
         for row in rows:
-            row.pop("_key", None)
+            for field in ("_key", *(key_fields or ())):
+                row.pop(field, None)
         return {"items": rows, "next_cursor": next_cursor}
 
     def _require_message(self, pid, mid):
@@ -168,16 +180,16 @@ class View:
                                              self_identity.own_sender_ids(self.db))
         return cached
 
-    def _evidence(self, row):
+    def _evidence(self, row, page=None):
+        """Decorate one message row; ``page`` is ``_page_counts`` of the rows it belongs to plus their
+        reaction_actor_summaries."""
         pid, mid = row["project_id"], row["message_id"]
         # Only return the known project URL, never an upstream signed URL or guessed deep link.
         if row.get("source_url") != project_url(pid):
             row["source_url"] = None
-        row["stored_replies"] = self.db.execute(
-            "SELECT count(*) FROM messages WHERE project_id=? AND parent_id=?", (pid, mid)).fetchone()[0]
-        row["attachments"] = [dict(r) for r in self.db.execute("""
-          SELECT state,count(*) AS count FROM attachments WHERE message_id=? GROUP BY state
-        """, (mid,))]
+        replies, files, actors = page or (*self._page_counts(pid, [mid]), None)
+        row["stored_replies"] = replies.get(mid, 0)
+        row["attachments"] = files.get(mid, [])
         row["body_complete"] = row["body_state"] == "full"
         sender_id = row.pop("sender_id", None)
         self_id, own = self._identity()
@@ -189,16 +201,30 @@ class View:
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
         row["patient_context"] = message_patient_context(self.db, row)
-        # 22-F: actor counts by profession × type for own posts only, no
-        # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
-        row["reaction_actors"] = (reaction_actor_summary(
-            self.db, mid, now=self.meta["generated_at"])
-            if row["is_self_sender"] else None)
+        # 22-F: who pressed each stamp on one's own posts (names since #22-D2, no actor IDs);
+        # 'stale'/'failed' are past sets
+        row["reaction_actors"] = (None if not row["is_self_sender"] else actors[mid] if actors is not None
+                                  else reaction_actor_summary(self.db, mid, now=self.meta["generated_at"]))
         # #24 x 22-F: care-team physicians whose 見ました is not observed
         row["physician_viewed"] = (physician_viewed_status(
             self.db, pid, mid, now=self.meta["generated_at"])
             if row["is_self_sender"] else None)
         return row
+
+    def _page_counts(self, pid, mids):
+        """({message_id: stored replies}, {message_id: [{state, count}] of its attachments}) for these posts."""
+        if not mids:
+            return {}, {}
+        marks = ",".join("?" * len(mids))
+        replies = dict(self.db.execute(
+            f"SELECT parent_id,count(*) FROM messages WHERE project_id=? AND parent_id IN ({marks}) "
+            "GROUP BY parent_id", [pid, *mids]).fetchall())
+        files = {}
+        for r in self.db.execute(f"SELECT message_id,state,count(*) AS count FROM attachments "
+                                 f"WHERE message_id IN ({marks}) GROUP BY message_id,state "
+                                 "ORDER BY message_id,state", mids):
+            files.setdefault(r["message_id"], []).append({"state": r["state"], "count": r["count"]})
+        return replies, files
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):
         params = [pid]
@@ -212,6 +238,15 @@ class View:
             self._require_message(pid, message_id)
             sql += " AND m.parent_id=?"
             params.append(message_id)
+        if kind == "senders":
+            # the poster's name only, with the same folding as search
+            terms = list(filter(None, map(search_fold, query.split()))) if isinstance(query, str) else []
+            if not terms or len(query) > 500:
+                raise ValueError("bad_query")
+            register_search_fold(self.db)
+            for term in terms:
+                sql += " AND instr(mcs_fold(m.sender_name),?)>0"
+                params.append(term)
         if kind == "search":
             if not isinstance(query, str) or not query.strip() or len(query) > 500:
                 raise ValueError("bad_query")
@@ -233,8 +268,14 @@ class View:
         page = self._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                           [kind, pid, query, message_id, since, until], limit, cursor)
         page["scope"] = "roots_only" if kind == "timeline" else "stored_messages"
+        counts = self._page_counts(pid, [row["message_id"] for row in page["items"]])
+        self_id = self._identity()[0]
+        # who pressed each stamp on one's own posts, read for the page at once
+        actors = reaction_actor_summaries(self.db, [
+            row["message_id"] for row in page["items"]
+            if is_self_sender(self.db, row.get("sender_id"), self_id=self_id)], now=self.meta["generated_at"])
         for row in page["items"]:
-            self._evidence(row)
+            self._evidence(row, (*counts, actors))
             if kind == "candidates":
                 row["candidates"] = requests.candidates(self.db, row)
         return page
@@ -337,8 +378,7 @@ class View:
         if not row:
             return None, None
         content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
-        if (content is None or meta is None or type(meta.get("karte_id")) is not int
-                or meta["karte_id"] != karte_id):
+        if content is None or not karte_summary_bound(meta, karte_id):
             return None, None
         at = meta.get("fetched_at")
         empty = content.get("empty")
@@ -583,15 +623,20 @@ class View:
 
     def _attachments(self, project, message_id, limit, cursor):
         from attachment_ocr import view as ocr_view
+        from mcs_util import config_read_state
 
         self._require_message(project, message_id)
+        # The OCR exclusion policy is configuration: without it a policy-rejected file reads as failed. A
+        # config.json that cannot be read leaves every OCR state unknown (and no text that policy might exclude).
+        cfg, config_state = config_read_state()
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
         for item in result["items"]:
-            item["error"] = _reason(item["error"])
-            item["ocr"] = ocr_view(self.db, item["attachment_id"], project_id=project,
-                                   include_text=True)
+            item["error"] = _attachment_reason(item["error"])
+            item["ocr"] = ({"state": "unknown", "reason": "config_unreadable"} if config_state == "unreadable"
+                           else ocr_view(self.db, item["attachment_id"], project_id=project,
+                                         include_text=True, cfg=cfg))
         return result
 
     @semantic_transport.with_local_model_scope
@@ -917,7 +962,7 @@ class View:
             return {"snapshot": self.meta, "warnings": WARNINGS,
                     **self._patient_context(project, view, since, query, role, cursor)}
         handlers = {
-            **dict.fromkeys(("search", "timeline", "thread", "candidates"),
+            **dict.fromkeys(("search", "senders", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
             "status": lambda: self._status(project, limit, cursor),
             "evidence": lambda: {"message": self._message(project, message_id)},

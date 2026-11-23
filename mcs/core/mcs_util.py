@@ -221,6 +221,18 @@ def load_config_checked(path: str = CONF_PATH, *, missing_ok: bool = False,
         return None
 
 
+def config_read_state(path: str = CONF_PATH) -> tuple[dict, str]:
+    """The settings ``load_config`` reads, with whether they were "read", or are defaults
+    because the file is "missing" or "unreadable" (malformed, unreadable provider settings)."""
+    try:
+        config = _load_config(path, allow_provider_unavailable=True)
+    except FileNotFoundError:
+        return {}, "missing"
+    except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
+        return {}, "unreadable"
+    return (config, "read") if config is not None else ({}, "unreadable")
+
+
 def load_config(path: str = CONF_PATH) -> dict:
     """config.json -> dict; missing/malformed files fall back to defaults."""
     try:

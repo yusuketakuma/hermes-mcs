@@ -17,6 +17,7 @@ import runtime_inspection
 import service_contract
 import service_management
 from lifecycle_io import KEYCHAIN_SERVICE
+from mcs_config import remote_access
 from mcs_util import env_value
 from safe_io import read_regular_nofollow
 
@@ -160,6 +161,14 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     return out
 
 
+def launch_agents_to_check(cfg: dict) -> list[str]:
+    """LaunchAgents this check expects: standalone checks its own host elsewhere, and the resident patient
+    workspace is checked here in either mode."""
+    if cfg.get("runtime_mode") == "standalone":
+        return [service_contract.REMOTE_ACCESS_LABEL] if remote_access(cfg) else []
+    return service_contract.diagnosed_agent_labels(cfg)
+
+
 def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                       chrome_bin: str, credential_paths: tuple[str, ...],
                       agents_dir: str, deadline=None) -> tuple[list[str], list[str]]:
@@ -281,9 +290,9 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
         warnings.append("TYPESAFE_API_KEYは未設定です。"
                         "外部の意味解析を有効にする場合に必要です")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
-    if paths.platform == "darwin" and cfg.get("runtime_mode") != "standalone":
+    labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
+    if labels:
         agents = agents_dir
-        labels = service_contract.diagnosed_agent_labels(cfg)
         lw = service_contract.LINEWORKS_LABEL
         warnings.extend(
             (f"常駐処理{label}が未導入です。"

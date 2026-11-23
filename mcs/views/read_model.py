@@ -33,7 +33,7 @@ import json
 import math
 from datetime import datetime
 from inference_version import CURRENT_VERSION
-from mcs_queries import ELIGIBLE_MESSAGE, JST, EXTRACTION_KINDS
+from mcs_queries import ELIGIBLE_MESSAGE, JST, EXTRACTION_KINDS, karte_summary_bound
 from mcs_queries import (_LEGACY_UNSCOPED_KINDS, _context_inputs, extraction_kind_map,
                          source_patient_context)
 from snapshot_access import snapshot_meta, table_exists
@@ -268,7 +268,7 @@ def _project_metadata(db, scope, project_id, limit):
             except OverflowError:
                 valid_time = False
             if (isinstance(content, dict) and isinstance(meta, dict)
-                    and type(meta.get("karte_id")) is int and meta["karte_id"] == row["karte_id"]
+                    and karte_summary_bound(meta, row["karte_id"])
                     and isinstance(content.get("empty"), bool)
                     and valid_time
                     and (content.get("updated_at") is None or isinstance(content["updated_at"], str))

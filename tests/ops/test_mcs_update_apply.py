@@ -747,6 +747,10 @@ def test_parent_tail_failure_after_child_done_never_rolls_back(updater, monkeypa
 
     monkeypatch.setattr(update_apply, "_run_post_merge", child_done_then_tail_failed)
     monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no rollback"))
+    import local_backup
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-applied")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate",
+                        lambda path: pytest.fail("the applied update keeps its home-care copy"))
     assert updater.apply("v1.1.0", target, "cid-done") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
     state = updater.journal_store.load_state(updater.STATE_PATH)
@@ -822,3 +826,110 @@ def test_apply_says_when_it_ran_recovery_or_did_not_start(updater, monkeypatch, 
     monkeypatch.setattr(update_apply, "recover_interrupted", lambda: 0)
     assert updater.apply("v1.1.0", sha, "cid-delegated") == 0
     assert "中断した更新の復旧を先に行います" in capsys.readouterr().out
+
+
+def test_home_care_copy_is_made_only_when_the_update_really_applies(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    """A re-run that exits as already applied must not rotate away the
+    home-care copies that predate the real update."""
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    import local_backup
+    copies = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup",
+                        lambda **_k: copies.append(True))
+    assert updater.apply("v1.2.0", sha, "cid-first") == 0
+    assert updater.apply("v1.2.0", sha, "cid-again") == 0
+    assert updater.apply("v1.2.0", sha, "cid-first") == 0
+    assert copies == [True]
+
+
+def test_a_failed_attempt_discards_its_home_care_copy_and_only_success_rotates(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    """Failed attempts must not take the places of the copies made before
+    successful updates: a failure removes its own copy, a success rotates."""
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    import local_backup
+    events = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup",
+                        lambda **_k: events.append("copy") or f"copy-{len(events)}")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate",
+                        lambda path: events.append(("discard", path)))
+    monkeypatch.setattr(local_backup, "rotate_homecare_preupdate",
+                        lambda: events.append("rotate"))
+    snapshot = update_apply._read_manifest_snapshot
+
+    def broken(**_k):
+        raise RuntimeError("synthetic failure after the copies")
+    monkeypatch.setattr(update_apply, "_read_manifest_snapshot", broken)
+    assert updater.apply("v1.2.0", sha, "cid-failed") != 0
+    assert events == ["copy", ("discard", "copy-1")]
+    monkeypatch.setattr(update_apply, "_read_manifest_snapshot", snapshot)
+    assert updater.apply("v1.2.0", sha, "cid-ok") == 0
+    assert events[2:] == ["copy", "rotate"]
+
+
+def test_an_interrupt_before_any_change_discards_its_home_care_copy(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    import local_backup
+    discarded = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-1")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate", discarded.append)
+
+    def interrupted():
+        raise KeyboardInterrupt
+    monkeypatch.setattr(update_apply, "_acquire_run_lock_wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.2.0", sha, "cid-interrupted")
+    assert discarded == ["copy-1"]
+
+
+def test_a_stop_failure_before_the_merge_discards_its_home_care_copy(
+        updater, prepared_run_log, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch)
+    remote_work = tmp_path / "remote-work"
+    (remote_work / "homecare-copy.txt").write_text("synthetic\n")
+    _git(remote_work, "add", ".")
+    _git(remote_work, "commit", "-qm", "update")
+    _git(remote_work, "tag", "v1.2.0")
+    _git(remote_work, "push", "-q", str(tmp_path / "remote.git"), "main", "v1.2.0")
+    sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
+    import local_backup
+    discarded = []
+    monkeypatch.setattr(local_backup, "preupdate_homecare_backup", lambda **_k: "copy-1")
+    monkeypatch.setattr(local_backup, "discard_homecare_preupdate", discarded.append)
+
+    def stop_failed(*_a, **_k):
+        raise updater.UpdateError("quiesce_unconfirmed")
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    assert updater.apply("v1.2.0", sha, "cid-stop-failed") != 0
+    assert discarded == ["copy-1"]

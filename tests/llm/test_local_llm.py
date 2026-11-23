@@ -394,6 +394,10 @@ def test_semantic_llm_chat_rejects_parseable_length_truncation(
         monkeypatch):
     """C05: finish_reason=length stays incomplete even when the text
     happens to parse — llm_chat must return None, not the payload."""
+    # llm_chat records its failure code and probed format in module state;
+    # restore both so later tests that inject their own model start clean
+    for name in ("_LLM_FAILURE", "_FMT_MODE", "_FMT_TS"):
+        monkeypatch.setattr(semantic_transport, name, getattr(semantic_transport, name))
     monkeypatch.setattr(
         local_llm, "bounded_request",
         _fake_request(_response('{"facts": []}', finish="length")))

@@ -528,3 +528,51 @@ def test_complete_walk_rerenders_thread_card_only_with_cfg(db, monkeypatch):
     _calls, adapter = actor_stage_adapter([ok(6), ok(6)])
     stage_metadata_shadow(adapter, db, {}, time.monotonic() + 60, actors=True)
     assert rerendered == [(1, 1)]           # no cfg: no card side effects
+
+
+def test_batch_summaries_equal_the_single_form(db):
+    for mid in (1, 2, 3, 4, 5):
+        save(db, message(mid=mid, reactions=reactions(viewed=2)))
+    now = time.time() + 10
+    db.save_reaction_actors(1, [{"actor_id": 5, "reaction_type": "viewed", "profession": "医師",
+                                 "name": "合成 一郎", "organization": "合成クリニック"},
+                                {"actor_id": SELF_ID, "reaction_type": "viewed"}], True, now=now)
+    db.save_reaction_actors(2, [{"actor_id": 6, "reaction_type": "viewed"}], True, now=now - 2 * 86400)
+    db.save_reaction_actors(3, [{"actor_id": 7, "reaction_type": "viewed"}], True, now=now)
+    db.save_reaction_actors(3, [], False, error="http_error", now=now)        # failed after a complete set
+    db.save_reaction_actors(4, [], False, error="http_error", now=now)        # never complete
+    with db.db:
+        db.db.execute("UPDATE message_metadata SET content=json_set(content,'$.reactions.observed_at',?) "
+                      "WHERE message_id=5", (now + 1,))
+    db.save_reaction_actors(5, [{"actor_id": 8, "reaction_type": "viewed"}], True, now=now)
+    with db.db:
+        db.db.execute("UPDATE message_metadata SET content=json_set(content,'$.reactions.observed_at',?) "
+                      "WHERE message_id=5", (now + 5,))                     # changed since the walk
+    ids = [5, 1, 2, 99, 3, 4, 1]
+    batch = stamp_read.reaction_actor_summaries(db.db, ids, now=now + 1)
+    assert list(batch) == [5, 1, 2, 99, 3, 4]
+    assert batch == {mid: reaction_actor_summary(db.db, mid, now=now + 1) for mid in ids}
+    assert {mid: s["state"] for mid, s in batch.items()} == {
+        1: "complete", 2: "stale", 3: "failed", 4: "failed", 5: "stale", 99: "not_fetched"}
+    # fixed expectations, not only agreement between the two forms
+    assert batch[1]["counts"] == {"医師": {"viewed": 1}, "": {"viewed": 1}} and batch[1]["self_included"] is True
+    assert batch[1]["actors"] == [
+        {"reaction_type": "viewed", "name": "合成 一郎", "profession": "医師", "organization": "合成クリニック",
+         "self": False},
+        {"reaction_type": "viewed", "name": None, "profession": None, "organization": None, "self": True}]
+    assert batch[1]["complete_at"] == now and batch[3]["actors"][0]["self"] is False
+    assert batch[4]["complete_at"] is None and batch[4]["actors"] == []
+    assert batch[99] == {"state": "not_fetched", "complete_at": None, "checked_at": None,
+                         "counts": {}, "self_included": None, "actors": []}
+    assert stamp_read.reaction_actor_summaries(db.db, [], now=now) == {}
+
+
+def test_batch_summaries_match_on_a_database_without_actor_tables(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "old.db"))
+    try:
+        unread = {"state": "not_fetched", "complete_at": None, "checked_at": None,
+                  "counts": {}, "self_included": None, "actors": []}
+        assert stamp_read.reaction_actor_summaries(conn, [1, 2]) == {1: unread, 2: unread}
+        assert reaction_actor_summary(conn, 1) == unread
+    finally:
+        conn.close()

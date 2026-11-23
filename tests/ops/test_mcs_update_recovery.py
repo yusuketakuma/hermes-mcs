@@ -228,12 +228,16 @@ def test_recover_completes_done_bookkeeping(updater, tmp_path,
                          "prev_sha": "a" * 40, "command_id": "cid-9",
                          "at": time.time()}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
+    import local_backup
+    rotated = []
+    monkeypatch.setattr(local_backup, "rotate_homecare_preupdate", lambda: rotated.append(True))
     assert updater.recover_interrupted() == 0
     after = updater.journal_store.load_state(updater.STATE_PATH)
     assert after["stages"] == []
     assert after["executed"]["cid-9"]["result"] == "applied"
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "resumed_done"
+    assert rotated == [True]       # a recovered apply trims the home-care copies too
 
 
 def test_recover_mixed_tree_after_merge_stage_crash(updater, tmp_path,

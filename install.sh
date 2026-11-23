@@ -24,6 +24,8 @@
 #                             プラグイン・復旧ツール・サービスの参照先が変わります。
 #   --with-yomitoku           非商用OCR専用 Python 3.13 環境とモデルを導入。
 #                             OCRの利用開始は attachment_ocr の別途設定が必要です。
+#   --with-tailscale          Mac mini 以外の端末（スマホなど）から患者画面を使う場合に
+#                             Tailscale を導入。サインイン後に mcs setup remote で設定します。
 #   --no-brew                 基本ソフトの導入を省略（導入済みの場合）。
 #   --no-llm                  段階4（ローカル AI のモデルと常駐サーバー）を省略。
 #                             llama.cpp 本体は段階1で導入されます。別途 OpenAI 互換
@@ -86,6 +88,7 @@ RECOVERY_OPTION=""
 RECOVERY_PYTHON=""
 SKIP_BREW=0; SKIP_LLM=0; SKIP_PLUGIN=0; SKIP_SERVICES=0; SKIP_RECOVERY=0
 WITH_YOMITOKU=0
+WITH_TAILSCALE=0
 FORCE_REPO=0
 ARG_HOME=""
 while [ $# -gt 0 ]; do
@@ -94,6 +97,7 @@ while [ $# -gt 0 ]; do
                       RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
                       case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' '--mode は hermes または standalone を指定してください' >&2; exit 2 ;; esac ;;
         --with-yomitoku) WITH_YOMITOKU=1 ;;
+        --with-tailscale) WITH_TAILSCALE=1 ;;
         --no-brew)     SKIP_BREW=1 ;;
         --recovery-python) if [ $# -lt 2 ] || [ -z "$2" ]; then printf '%s\n' '--recovery-python の後に Python の絶対パスを指定してください' >&2; exit 2; fi
                       RECOVERY_OPTION="$2"; shift ;;
@@ -163,7 +167,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="18a986d6219db74822b55e29bca0ef9dbd8250f5f45c45961e3ca90acce55333"
+INSTALL_RUNTIME_SHA256="0713f0c520d356daf2f820d39203d9f0db312da9c0e56bd01afd0b8ed80bec14"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -636,6 +640,12 @@ py_ok() {
     "$1" -c "import sys; sys.exit(0 if (3, $2) <= sys.version_info[:2] < (3, $3) else 1)" \
         >/dev/null 2>&1
 }
+# the app bundle (Homebrew cask, App Store or tailscale.com) or Homebrew's command-line formula;
+# MCS_TAILSCALE_APP lets the tests point the bundle probe away from the host's own app
+TAILSCALE_APP="${MCS_TAILSCALE_APP:-/Applications/Tailscale.app}"
+tailscale_installed() {
+    [ -x "$TAILSCALE_APP/Contents/MacOS/Tailscale" ] || command -v tailscale >/dev/null 2>&1
+}
 # hermes-agent requires >=3.14,<3.15 — prefer an explicitly versioned
 # interpreter over a possibly-too-new python3
 find_py() {
@@ -925,6 +935,12 @@ preflight() {
     if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$_brew_fills" -eq 0 ] && ! command -v uv >/dev/null 2>&1; then
         pf_ng "uv が未導入です（追加OCRの導入に必要です）" "brew install uv"
     fi
+    if [ "$WITH_TAILSCALE" -eq 0 ]; then :
+    elif [ "$OS" != Darwin ]; then pf_warn "macOS ではないため Tailscale は導入しません。別途導入してください" ""
+    elif tailscale_installed; then pf_ok "Tailscale: 導入済みです"
+    elif [ "$_brew_fills" -eq 1 ]; then pf_info "Tailscale は未導入です。段階1で導入します"
+    else pf_ng "Tailscale が未導入です（他の端末から使うために必要です）" "brew install --cask tailscale-app   （または https://tailscale.com/download）"
+    fi
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
@@ -1086,6 +1102,9 @@ dry_run_plan() {
         _yomitoku_ver="$(sed -n 's/^ENGINE_VERSION = "\([^"]*\)".*/\1/p' "$REPO/mcs/extract/ocr_model_contract.py" | head -1)"
         plan_line "追加OCR" "$MCS_ROOT/ocr-venv に Python 3.13・Yomitoku ${_yomitoku_ver:-未検出}・CPUモデルを導入（非商用向け、利用開始は別途設定）"
     fi
+    if [ "$WITH_TAILSCALE" -eq 1 ]; then
+        plan_line "遠隔接続" "Tailscale アプリを導入（brew --cask tailscale-app。導入済みなら維持）。サインイン後に mcs setup remote で tailnet への公開と常駐を設定"
+    fi
     plan_line "省略項目の保存" "$MCS_ROOT/config.json （更新計画の install_args に表示。旧記録は保持）"
 }
 
@@ -1096,13 +1115,16 @@ if [ "$MODE" != install ]; then
     exit 0
 fi
 
-require_ocr_tools() {
+require_added_tools() {  # what --no-brew leaves to the operator for the added software
     if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$SKIP_BREW" -eq 1 ]; then
         command -v uv >/dev/null 2>&1 || die "追加OCRの導入には uv が必要です。導入してから再実行してください"
         command -v git >/dev/null 2>&1 || die "追加OCRの導入には git が必要です。導入してから再実行してください"
     fi
+    if [ "$WITH_TAILSCALE" -eq 1 ] && [ "$SKIP_BREW" -eq 1 ] && [ "$OS" = Darwin ] && ! tailscale_installed; then
+        die "--no-brew では Tailscale を導入しません。https://tailscale.com/download から導入してから再実行してください"
+    fi
 }
-require_ocr_tools
+require_added_tools
 
 # ---------------------------------------------------------- guards
 [ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
@@ -1283,6 +1305,7 @@ set --
 [ "$SKIP_PLUGIN" -eq 0 ] || set -- "$@" --no-plugin
 [ "$SKIP_RECOVERY" -eq 0 ] || set -- "$@" --no-recovery
 [ "$WITH_YOMITOKU" -eq 0 ] || set -- "$@" --with-yomitoku
+[ "$WITH_TAILSCALE" -eq 0 ] || set -- "$@" --with-tailscale
 OPTIONS_BASE=empty
 OPTIONS_ACTION=inspect
 [ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
@@ -1290,18 +1313,26 @@ if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$
     OPTIONS_PY="${MODE_PY:-}"
     [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
     [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
-    _ocr_previous=$("$OPTIONS_PY" -I - "$REPO/mcs" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" <<'PYOCR'
+    # Added software (OCR, Tailscale) chosen once stays chosen on later runs that omit it.
+    _added_previous=$("$OPTIONS_PY" -I - "$REPO/mcs" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" <<'PYADDED'
 import sys
 sys.path.insert(0, sys.argv[1])
 import _mcs_path
 import install_options
 install_options.inspect(sys.argv[2], sys.argv[3])
-print(int('--with-yomitoku' in (install_options.selection(sys.argv[2], sys.argv[3]) or [])))
-PYOCR
-    ) || die "以前のOCR導入設定を確認できません。変更は行っていません"
+chosen = install_options.selection(sys.argv[2], sys.argv[3]) or []
+print(*(int(option in chosen) for option in ('--with-yomitoku', '--with-tailscale')))
+PYADDED
+    ) || die "以前の追加ソフトの導入設定を確認できません。変更は行っていません"
+    _ocr_previous="${_added_previous%% *}"
+    _tailscale_previous="${_added_previous##* }"
     if [ "$_ocr_previous" = 1 ] && [ "$WITH_YOMITOKU" -eq 0 ]; then
         WITH_YOMITOKU=1
         set -- "$@" --with-yomitoku
+    fi
+    if [ "$_tailscale_previous" = 1 ] && [ "$WITH_TAILSCALE" -eq 0 ]; then
+        WITH_TAILSCALE=1
+        set -- "$@" --with-tailscale
     fi
     OPTIONS_BASE="$("$OPTIONS_PY" "$REPO/mcs/ops/install_options.py" "$OPTIONS_ACTION" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" - "$@")" \
         || die "導入設定を変更せず中止しました。旧記録と設定を確認してください"
@@ -1311,7 +1342,7 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
     [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
         || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
-require_ocr_tools
+require_added_tools
 
 if recovery_wanted && recovery_dir_loose; then
     # Tighten only after confirmation, the install lock and all read-only guards.

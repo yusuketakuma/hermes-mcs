@@ -39,7 +39,7 @@ def test_unfetched_stamps_are_not_reported_as_no_reaction(led):
     assert "本人反応なし" not in text
     assert "MCS 本人スタンプ: 0投稿" not in text
     assert "スタンプ未取得 1投稿" in text
-    assert "取得不正 0" not in text
+    assert "読み取れない 0" not in text
 
 
 def test_digest_scope_help_and_errors_use_japanese_keys():

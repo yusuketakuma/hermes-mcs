@@ -581,6 +581,14 @@ def karte_source_record(row, project_id, *, historical=False):
             'posted_at': posted, 'posted_at_ts': timestamp, 'first_seen': 0,
             'sender_name': (content.get('updater') or {}).get('name')}
 
+def karte_summary_bound(meta, karte_id) -> bool:
+    """Whether a stored 連携サマリー belongs to the patient's current karte: both IDs are the same integer.
+
+    A patient without a linked karte_id has no summary of its own, so nothing binds to it."""
+    return (isinstance(meta, dict) and type(meta.get("karte_id")) is int
+            and type(karte_id) is int and meta["karte_id"] == karte_id)
+
+
 def karte_summary_current(db, project_id: int) -> dict | None:
     """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
     row = karte_summary_row(db, project_id)
@@ -1607,7 +1615,7 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
     latest = True
     for row in rows:
         meta = loads_dict(row[2]) or {}
-        if not scope or scope["karte_id"] is None or meta.get("karte_id") != scope["karte_id"]:
+        if not scope or not karte_summary_bound(meta, scope["karte_id"]):
             continue
         source_key = "karte:" + str(row[0])
         current_record, latest = latest, False

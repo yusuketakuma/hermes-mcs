@@ -179,20 +179,26 @@ class DrugMap:
                     "generic": "総称のため個別薬剤を確定できません。",
                     "unresolved": "一致する候補はありません。類似名から推定しません。"}[ref["status"]]}
 
+    def matching(self, needle: str) -> tuple[dict, set]:
+        """Every entry whose folded alias or identifier contains needle, and the ids matched by identifier."""
+        matches, id_matched, seen = {}, set(), set()
+        for alias, entries in self.aliases.items():
+            for entry in entries:
+                if entry.id not in seen:
+                    seen.add(entry.id)
+                    if needle in fold(entry.id):
+                        id_matched.add(entry.id)
+                if entry.id in id_matched or needle in alias:
+                    matches[entry.id] = entry
+        return matches, id_matched
+
     def search(self, query: str, *, limit: int = 20) -> dict:
         """Search reference names/IDs by normalized substring, without resolution."""
         if (not valid_text(query) or not fold(query) or type(limit) is not int
                 or not 0 <= limit <= 200):
             raise ValueError("drug_map_search_argument")
         needle = fold(query)
-        identities, matches = {}, {}
-        for alias, entries in self.aliases.items():
-            for entry in entries:
-                if entry.id not in identities:
-                    identities[entry.id] = (entry, needle in fold(entry.id))
-                id_match = identities[entry.id][1]
-                if id_match or needle in alias:
-                    matches[entry.id] = entry
+        matches, id_matched = self.matching(needle)
         items = []
         for code in sorted(matches)[:limit]:
             entry = matches[code]
@@ -201,7 +207,7 @@ class DrugMap:
                 "matching_aliases": aliases[:limit], "matching_alias_count": len(aliases),
                 "aliases_truncated": len(aliases) > limit,
                 "matched_by": (["alias"] if aliases else [])
-                              + (["id"] if identities[code][1] else [])})
+                              + (["id"] if code in id_matched else [])})
         return {"query": query, "normalized_query": needle,
                 "candidate_only": True, "read_only": True,
                 "dictionary": {"id": self.dict_id, "sha256": self.sha256,

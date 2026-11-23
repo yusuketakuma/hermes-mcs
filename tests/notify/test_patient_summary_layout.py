@@ -54,3 +54,24 @@ def test_source_coverage_gap_never_presents_medication_reports_as_a_complete_cur
     _, text = patient_summary_text(led.db, 1)
     assert "薬（現在の状態は未確定）" in text and "変更前の根拠が未確認: 3件" in text
     assert "架空の報告薬 5mg" in text
+
+
+def test_summary_counts_what_it_does_not_list(led, monkeypatch):
+    _seed_thread(led)
+    for i in range(12):
+        _add_request(led, title=f"合成の依頼{i}", due=f"2999-01-{i + 1:02d}")
+    led.artifact_add(rollup.KIND, "{}", project_id=1)
+    monkeypatch.setattr("notify_views.current_cached_refs", lambda *args, **kwargs: {
+        "medications": [{"name": f"架空薬{i}"} for i in range(17)],
+        "planned_medications": [{"name": f"架空の予定薬{i}"} for i in range(7)]})
+    _, text = patient_summary_text(led.db, 1)
+    assert "  他2件（期限の早い順に10件を表示）" in text and "合成の依頼11" not in text
+    assert "  他2剤（原記録で確認）" in text and "架空薬16" not in text
+    assert "架空の予定薬4 他2剤" in text
+
+
+def test_summary_adds_no_count_line_when_everything_is_listed(led):
+    _seed_thread(led)
+    _add_request(led, title="合成の確認", due="2999-01-01")
+    _, text = patient_summary_text(led.db, 1)
+    assert "他" not in text.split("■ 未完了タスク")[1].split("■")[0]

@@ -29,6 +29,10 @@
     同じ host 内の redirect と、署名付き URL を返す `files.medical-care.net` への redirect（1回）だけを追い、
     後者は Authorization を付けない新しい要求で取得する。許可外の redirect 先は拒否し、
     proxy は常に無効（`mcs/ingest/mcs_download.py`）
+  - 在宅ケアの訪問ルート（任意。`mcs_local_chat.py --route-settings` で所有者だけが読める設定ファイルを指定したときだけ）。
+    操作者が「ルートを作る」を押したときに、患者の住所の文字列を国土地理院の住所検索（`https://msearch.gsi.go.jp`）へ、
+    出発地と訪問先の緯度・経度、時刻を決めた訪問の時刻の幅を openrouteservice（`https://api.openrouteservice.org`）へ送る。訪問は要求ごとの通し番号で区別し、氏名・台帳の ID・電話・注意事項・メモは送らない。
+    宛先はこの2 host に固定し、proxy 無効・redirect 拒否（`mcs/homecare/core/homecare_route.py`）。所有者の判断（2026-11-23）による例外
 - MCSスタンプの追加・変更・取消は、操作者1人とMCSアカウントを明示した場合だけ既定で有効（`stamps.enabled=false`で無効）。操作できるのはその操作者だけで、カードのスタンプ列の1回押し（理由は自動記録）またはフォームの確認画面を通して依頼する。
   保存済みの承認・投稿の版・患者範囲を照合し、同じセッションの本人IDを再取得してから送る。
   送信前に私有領域`data/stamp_operations/`へ記録を同期し、POSTは1回だけ試みる。
@@ -38,6 +42,11 @@
   そのため、ログイン可能な別のアカウントがあるMacでは、自動ログインはCDP付きChromeを起動せず、
   パスワードも入力せずに`manual_required:multi_user_host`で止まる。単一ユーザーのMacで運用する
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
+- ローカル患者画面の常駐モード（`mcs_local_chat.py --tailnet-host <名前>.ts.net`、在宅ケア台帳と固定ポートが必須。`mcs setup remote` が設定した Mac だけ常駐サービス `ai.mcs.local-chat` として動く）は 127.0.0.1 にだけ待ち受け、
+  `tailscale serve` が tailnet 内の端末へ HTTPS で公開する（Funnel で一般公開しない）。各要求の `Tailscale-User-Login`
+  （serve が付け、端末から送られた同名ヘッダーは取り除く）が在籍中の職員に登録されたログインと一致する場合だけ応答し、
+  書込みの操作者はこのログインの職員に置き換える。未登録のログインには MCS の記録も台帳も返さない（職員が1人もいない間の最初の登録だけを除く）。
+  同じ Mac の別プロセスはこのヘッダーを偽れるため、単一ユーザーの Mac で運用する
 - Hermes モード（`runtime_mode` 未指定/`hermes`）では、Slack/Discord の対話カード
   addon は Hermes が接続済みの client と interaction だけを使う。Discord SDK は必要な関数内で遅延 import し、独自 Bot・token 取得・
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・

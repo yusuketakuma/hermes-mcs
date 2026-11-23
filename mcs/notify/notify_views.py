@@ -19,7 +19,7 @@ from clinical_display import vital_line
 import drug_map
 from drug_map import candidate_note
 from rollup import current_cached_refs
-from mcs_queries import karte_summary_block
+from mcs_queries import karte_summary_block, karte_summary_bound
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context, pharmacy_state_items
 import patient_context_status
 from mcs_contract import project_url
@@ -28,22 +28,23 @@ from mcs_util import fold_map, search_fold
 from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
-    render_source_generation, posted_hhmm, inline_text, mmdd, patient_label, project_display_name,
-    source_fingerprint,
+    render_source_generation, posted_time_label, inline_text, mmdd, patient_label, project_display_name,
+    room_url, source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
-def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
+def patient_summary_text(db, project_id, *, cfg=None, now=None) -> tuple:
     """🧾 answer: current meds (with the dated period), latest vitals,
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
-    the text never implies completeness."""
+    the text never implies completeness. ``now`` dates the overdue marks
+    (a snapshot passes its own time; live cards use the clock)."""
     name = project_display_name(db, project_id) or f"project {project_id}"
     title = f"{name} — 患者の記録まとめ"
     lines = [_coverage_line(db, project_id)]
     from extraction_progress import summary_lines
     lines.extend(summary_lines(db, project_id, cfg=cfg))
-    lines.extend(_open_task_lines(db, project_id))
+    lines.extend(_open_task_lines(db, project_id, now))
     row = db.execute(
         "SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
         "AND project_id=? AND json_valid(content) "
@@ -82,13 +83,16 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
                          + (f"（最終言及 {m['last']}）" if m.get("last") else "")
                          + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
                          for m in meds[:15])
+            if len(meds) > 15:
+                lines.append(f"  他{len(meds) - 15}剤（原記録で確認）")
             if not meds:
                 lines.append("・現在使用中の薬剤: 未確認")
             for key, label in (("planned_medications", "予定"), ("unverified_medications", "確認待ち")):
                 candidates = [m for m in roll.get(key) or [] if isinstance(m, dict) and m.get("name")]
                 if candidates:
                     lines.append(f"・{label}: " + " / ".join(" ".join(str(m[k]) for k in
-                        ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5]))
+                        ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5])
+                        + (f" 他{len(candidates) - 5}剤" if len(candidates) > 5 else ""))
             vit = roll.get("latest_vitals")
             vline = (vital_line({"vitals": vit}, {})
                      if isinstance(vit, dict) else None)
@@ -98,26 +102,26 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
                 lines.append(f"■ 次回予定: {roll['next_planned']}")
             lines.extend(_request_reply_lines(db, project_id, roll))
     # one current-summary read on this connection serves both sections
-    summary = _karte_summary_from_artifact(db, project_id)
+    reading, summary = _karte_summary_reading(db, project_id)
     lines.extend(_patient_context_lines(db, project_id, roll, summary))
     lines.extend(_pharmacy_state_lines(db, project_id, roll, cfg=cfg))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
     # (updated or emptied summary) supersedes
-    lines.append("■ " + _karte_summary_line(summary))
+    lines.append("■ " + (KARTE_SUMMARY_UNKNOWN_LINE if reading == "unknown" else _karte_summary_line(summary)))
     return title, "\n".join(lines)
 
 
-def _open_task_lines(db, project_id) -> list[str]:
+def _open_task_lines(db, project_id, now=None) -> list[str]:
     """■ 未完了タスク — what needs action comes first in the summary;
     an overdue due date is marked."""
     tasks = db.execute(
-        "SELECT request_id,title,assignee,due_date FROM requests "
+        "SELECT request_id,title,assignee,due_date,COUNT(*) OVER () AS total FROM requests "
         "WHERE project_id=? AND status IN ('open','in_progress') "
         "ORDER BY due_date IS NULL, due_date, request_id LIMIT 10",
         (project_id,)).fetchall()
-    today = today_jst()
+    today = today_jst(now)
     lines = ["■ 未完了タスク" + ("" if tasks else ": なし")]
     lines.extend(f"・#{t['request_id']} {inline_text(t['title'], 60)}"
                  + (f" — 担当 {inline_text(t['assignee'], 40)}"
@@ -126,6 +130,8 @@ def _open_task_lines(db, project_id) -> list[str]:
                     + (" ⚠期限切れ" if t["due_date"] < today else "")
                     if t["due_date"] else "")
                  for t in tasks)
+    if tasks and tasks[0]["total"] > len(tasks):
+        lines.append(f"  他{tasks[0]['total'] - len(tasks)}件（期限の早い順に{len(tasks)}件を表示）")
     return lines
 
 
@@ -254,46 +260,47 @@ def _pharmacy_state_lines(db, project_id, roll, *, cfg=None) -> list[str]:
     return lines
 
 
+REGISTERED_NAMES = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
+REGISTERED_STATES = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
+                     "failed": "取得失敗", "stale": "古い・定義変更あり"}
+
+
 def _registered_clinical_lines(db, project_id) -> list[str]:
-    """Private fetch-state summary, kept separate from reported chat facts."""
-    from registered_data import registered_data
-    registered = registered_data(db, "detail", project_id, 8)
+    """Private fetch-state summary, kept separate from reported chat facts.
+
+    Every item of the patient is read (as the workspace does; the item list is bounded by the contract), so
+    the per-state totals are exact; an item has a value when any of its stored rows carries one."""
+    from registered_data import VALUE_KEYS, first_valued_row, registered_data
+    registered = registered_data(db, "detail", project_id, None, unfetched_items=True)
     if registered is None or not registered["total"]:
         return []
-    names = {"medication_periods": "薬剤登録", "observation_items": "観測項目", "observation_values": "観測値"}
-    states = {"complete": "取得済み", "empty": "登録行なし", "unknown": "未取得・未確認",
-              "failed": "取得失敗", "stale": "古い・定義変更あり"}
+    names, states = REGISTERED_NAMES, REGISTERED_STATES
     lines = ["■ MCS登録情報（チャットとは別の記録・抜粋）"]
     for dataset, name in names.items():
         records = [r for r in registered["records"] if r["dataset"] == dataset]
         if not records:
             continue
-        counts = {}
-        for record in records:
-            counts[record["state"]] = counts.get(record["state"], 0) + 1
         if dataset != "observation_values":
             record = records[0]
             suffix = (f"（{record['rows_total']}{'処方期間' if dataset == 'medication_periods' else '項目'}）"
                       if record.get("last_complete_at") is not None else "")
             lines.append(f"・{name}: {states.get(record['state'], '未確認')}{suffix}")
-        else:
-            lines.append(f"・{name}: " + "、".join(
-                f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
-        if dataset == "observation_values":
-            for record in records[:3]:
-                definition = record.get("definition") or {}
-                lab = definition.get("lab_test_item") or {}
-                rows = record.get("rows") or []
-                if not rows:
-                    continue
-                row = rows[0]
-                values = " / ".join(str(row[key]) for key in ("scalar", "max", "min", "left", "right")
-                                    if row.get(key) is not None)
-                if values:
-                    previous = "・以前取得した情報" if record.get("historical") else ""
-                    lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {values} "
-                                 f"{inline_text(lab.get('unit'), 20)}（記録日 "
-                                 f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+            continue
+        counts = {}
+        for record in records:
+            counts[record["state"]] = counts.get(record["state"], 0) + 1
+        lines.append(f"・{name}: " + "、".join(
+            f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
+        valued = [(record, row) for record in records if (row := first_valued_row(record.get("rows")))]
+        for record, row in valued[:3]:
+            lab = (record.get("definition") or {}).get("lab_test_item") or {}
+            text = " / ".join(str(row[key]) for key in VALUE_KEYS if row.get(key) is not None)
+            previous = "・以前取得した情報" if record.get("historical") else ""
+            lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {text} "
+                         f"{inline_text(lab.get('unit'), 20)}（記録日 "
+                         f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+        if len(valued) > 3:
+            lines.append(f"  他{len(valued) - 3}項目の観測値は抜粋外（原記録で確認）")
     return lines
 
 
@@ -303,7 +310,8 @@ REPLY_LABELS = {"ack": "了解", "intent": "対応予定", "progress": "対応�
 
 def _request_reply_lines(db, project_id, roll) -> list:
     """#25: rollupの依頼候補ごとのスレッド内返信状況（記録上）とLoop候補の有無。"""
-    reqs = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)][:5]
+    found = [r for r in roll.get("recent_requests") or [] if isinstance(r, dict)]
+    reqs = found[:5]
     lines = ["■ 依頼候補の返信状況" + ("" if reqs else ": なし")]
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
@@ -323,38 +331,50 @@ def _request_reply_lines(db, project_id, roll) -> list:
                 "AND a.message_id=? AND json_valid(a.content) "
                 "AND json_extract(a.content,'$.origin.revision')=m.content_hash "
                 "LIMIT 1", (project_id, mid)).fetchone():
-            line += "・Loop候補（semantic shadow）あり"
+            line += "・未完了のやり取りの候補あり"
         lines.append(line)
+    if len(found) > len(reqs):
+        from rollup_builder import REQUEST_LIMIT
+        # the cached rollup keeps REQUEST_LIMIT requests, so a full list may hide more
+        more = f"{len(found) - len(reqs)}件" + ("以上" if len(found) >= REQUEST_LIMIT else "")
+        lines.append(f"  他{more}（すべては「連絡・返答の確認」で確認）")
     return lines
+
+
+# A stored 連携サマリー that cannot be read or belongs to another karte: stored, so not 未取得, but not this
+# patient's summary either (read_model reads it as "unknown" too).
+KARTE_SUMMARY_UNKNOWN_LINE = "連携サマリー（MCS）: 未確認"
 
 
 def _karte_summary_from_artifact(db, project_id) -> dict | None:
     """Newest karte_summary artifact in the rollup's block shape; None
     when the summary was never fetched or the newest one is unreadable —
     an older summary never stands in for it. A summary of another karte
-    than the patient's current one is not this patient's (read_model rule)."""
+    than the patient's current one is not this patient's (mcs_queries.karte_summary_bound)."""
+    return _karte_summary_reading(db, project_id)[1]
+
+
+def _karte_summary_reading(db, project_id) -> tuple[str, dict | None]:
+    """``("not_fetched", None)`` when no 連携サマリー is stored, ``("unknown", None)`` when the newest stored
+    one is unreadable or not bound to the patient's current karte, else ``("stored", block)``."""
     row = db.execute(
         "SELECT a.content,a.meta,p.karte_id FROM artifacts a "
         "LEFT JOIN patients p ON p.project_id=a.project_id WHERE a.kind='karte_summary' "
         "AND a.project_id=? ORDER BY a.artifact_id DESC LIMIT 1",
         (project_id,)).fetchone()
     if not row:
-        return None
+        return "not_fetched", None
     try:
         c = json.loads(row["content"])
     except (ValueError, TypeError, RecursionError):
-        return None
+        return "unknown", None
     try:
         meta = json.loads(row["meta"] or "{}")
     except (ValueError, TypeError, RecursionError):
         meta = None
-    if not isinstance(c, dict):
-        return None
-    # patients.karte_id is never cleared once linked (COALESCE upsert); a NULL one is a pre-link legacy row
-    if row["karte_id"] is not None and not (isinstance(meta, dict) and type(meta.get("karte_id")) is int
-                                            and meta["karte_id"] == row["karte_id"]):
-        return None
-    return karte_summary_block(c)
+    if not isinstance(c, dict) or not karte_summary_bound(meta, row["karte_id"]):
+        return "unknown", None
+    return "stored", karte_summary_block(c)
 
 
 def _karte_summary_line(ks) -> str:
@@ -369,6 +389,37 @@ def _karte_summary_line(ks) -> str:
     prof = inline_text(ks.get("updater_profession"), 20) or "職種不明"
     return (f"連携サマリー（MCS・更新 {when}・{prof}）: "
             f"{inline_text(ks['comment'], 80)}")
+
+
+def karte_summary_status(db, project_id) -> dict:
+    """The MCS 患者連携サマリー whole, for a reader with room for it: ``state`` not_fetched / failed
+    (never obtained, latest GET failed) / unknown (stored but unreadable or another karte's) / empty /
+    present, the stored comment, its MCS update date and updater profession, ``failed_at`` of a failed
+    latest GET (the shown summary is then the last one obtained) and the one-line wording the summary
+    card uses."""
+    reading, block = _karte_summary_reading(db, project_id)
+    try:
+        row = db.execute("SELECT karte_summary_failed_at FROM patients WHERE project_id=?",
+                         (project_id,)).fetchone()
+    except sqlite3.OperationalError:     # a snapshot older than the failure record
+        row = None
+    failed_at = row[0] if row is not None and type(row[0]) in (int, float) else None
+
+    def text(value):
+        return value if isinstance(value, str) and value else None
+    if reading == "unknown":
+        state = "unknown"
+    elif not isinstance(block, dict):
+        state = "failed" if failed_at is not None else "not_fetched"
+    else:
+        state = "empty" if block.get("empty") or not text(block.get("comment")) else "present"
+    present = state == "present"
+    return {"state": state, "comment": text(block.get("comment")) if present else None,
+            "updated_at": text(block.get("updated_at")) if isinstance(block, dict) else None,
+            "updater_profession": text(block.get("updater_profession")) if isinstance(block, dict) else None,
+            "failed_at": failed_at,
+            "line": ("連携サマリー（MCS）: 取得失敗" if state == "failed" else
+                     KARTE_SUMMARY_UNKNOWN_LINE if state == "unknown" else _karte_summary_line(block))}
 
 
 def _coverage_line(db, project_id) -> str:
@@ -401,7 +452,7 @@ _FETCH_REASON_JA = {
     "session_expired": "ログイン切れ", "parent_body_incomplete": "本文の取得が未完了",
     "thread_incomplete": "返信の取得が未完了", "unavailable": "取得できず",
     "unread_capped": "未読件数の上限", "replies_missing": "返信の一部が未取得",
-    "http_error": "サーバー応答エラー",
+    "http_error": "サーバー応答エラー", "forbidden": "閲覧権限なし",
 }
 
 
@@ -670,8 +721,27 @@ def _question_term(query):
     return term, latest
 
 
-def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict:
-    """Search all terms across patient originals with resumable, source-bound pages."""
+# Why a room's originals were not searched or opened (patient_search raises patient_scope_unavailable).
+_SCOPE_CLOSED = "この患者はアーカイブ済みか閲覧権限がないため、"
+SEARCH_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を検索していません。"
+SOURCE_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を表示していません。"
+
+
+# The settings that enable attachment OCR could not be read: whether OCR text exists is not known.
+OCR_SEARCH_SETTINGS_UNREADABLE = "設定を読み取れないため、添付OCRの文字記録を検索できるか確認できません。"
+
+
+def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False,
+                        room_link=True, settings_unreadable=False) -> dict:
+    """Search all terms across patient originals with resumable, source-bound pages.
+
+    ``settings_unreadable`` (a config.json that exists but cannot be read) searches the posts only and says
+    the OCR side is unknown, instead of reading as OCR disabled.
+
+    ``keep_message_id`` adds the post to open (the post itself, or the post carrying the attachment),
+    the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out.
+    The head line carries the room's MCS address only for a patient room (``room_url``);
+    ``room_link=False`` leaves it out for every room."""
     import patient_search
     patient_search.parse_query(query)
     question = _question_term(query)
@@ -686,11 +756,14 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict
         prefix = '' if row['source'] == 'chat' else '添付元 '
         availability = '' if row['original_available'] else '（原本ファイルはローカル未保存）'
         items.append({"project_id": project_id, "source_ref": row['source_ref'],
-                      "text": f"・{prefix}{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])} {label}{availability} "
+                      **({"message_id": row['message_id'], "source": row['source'], "page": row['page']}
+                         if keep_message_id else {}),
+                      "text": f"・{prefix}{posted_time_label(row['posted_at'])} {label}{availability} "
                               f"{inline_text(row['profession'], 20) or '職種不明'}: "
                               f"{_snippet(row['body_text'], terms[0], width=160)}"})
     count = f"表示{len(items)}件（続きあり）" if result['next_cursor'] else f"{len(items)}件"
-    head = [f"{count}（取得済み原資料・新しい投稿順）— MCS: {project_url(project_id)}"]
+    link = room_url(db, project_id) if room_link else None
+    head = [f"{count}（取得済み原資料・新しい投稿順）" + (f"— MCS: {link}" if link else "")]
     if question and question[0]:
         head.insert(0, f"「{inline_text(question[0], 40)}」を含む原資料を検索しました"
                     + ("（新しい投稿から順に確認）" if question[1] else ""))
@@ -705,17 +778,25 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict
         notes.append(f"この範囲に本文未取得・確認不能の原資料が{result['unavailable']}件あります。")
     if result['unclassified']:
         notes.append(f"解析未完了のため分類を判定できない原資料が{result['unclassified']}件あります。")
-    if not result['ocr_available']:
+    if settings_unreadable:
+        notes.append(OCR_SEARCH_SETTINGS_UNREADABLE)
+    elif not result['ocr_available']:
         notes.append('添付OCRは設定で無効、または利用を確認できないため検索していません。')
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
-            # an unscanned range keeps its scope wording: no match there is not no record
-            "empty": ("この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+            # this range's unsearched counts, for a reader that adds them up across 「続きを検索」 ranges;
+            # attachments left unexamined (OCR off, or the settings unreadable) have no count (None), not 0
+            "skipped": {"ocr_pending": result['pending'] if result['ocr_available'] else None,
+                        "body_unavailable": result['unavailable'],
+                        "unclassified": result['unclassified']},
+            # no match says what was searched: an unsearched, unfetched or unanalysed source is not no record
+            "empty": ("この範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
                       if result['unclassified'] and result['next_cursor'] else
-                      "解析が完了した原資料には、この分類で一致するものはありません。" if result['unclassified'] else
-                      "この範囲には一致する原資料がありません。" if result['next_cursor'] else
-                      "検索した取得済み原資料に一致するものはありません。"),
+                      "調べた範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
+                      if result['unclassified'] else
+                      "この範囲の取得済み原資料には、一致する記載は見つかりませんでした。" if result['next_cursor'] else
+                      "調べた範囲の取得済み原資料には、一致する記載は見つかりませんでした。"),
             "notes": notes}
 
 
@@ -909,8 +990,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         unverified = [(text, ref if structured_view.dictionary_unmatched(ref) else current(ref))
                       for text, ref in unverified]
     refs = [ref for _, ref in meds + unverified if ref and not structured_view.dictionary_unmatched(ref)]
-    when = f"{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])}"
-    head = [f"{'日時不明' if '?' in when else when} "
+    head = [f"{posted_time_label(row['posted_at'])} "
             f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     attachment_pending = False
@@ -1033,20 +1113,83 @@ def _bare_quote(text: str, category) -> str:
     return text
 
 
+def _stamp_time(at, now) -> str:
+    """MM/DD HH:MM, with the year only when it is not the year of ``now``."""
+    year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
+    return at.strftime(("%m/%d" if at.year == year else "%Y/%m/%d") + " %H:%M")
+
+
+def analysis_incomplete(ev) -> bool:
+    """Whether the patient's analysis is unfinished, so an empty or small patient-context view is a lower bound."""
+    inference = ev["coverage"].get("inference") or {}
+    return bool(inference) and not inference.get("complete")
+
+
+def context_status_lines(db, project_id, ev, *, now=None, history=True) -> list[str]:
+    """How complete a patient-context reading is: reflection time, history acquisition (``history``),
+    analysis and source coverage — the status lines every patient-context view ends with."""
+    status = []
+    context_coverage = ev["coverage"].get("context") or ev["coverage"].get("nightly") or {}
+    if ev.get("as_of"):
+        status.append("患者コンテキストの反映時点: " + _stamp_time(datetime.fromtimestamp(ev["as_of"], JST), now))
+    if history:
+        status.append(_coverage_line(db, project_id))
+    inference = ev["coverage"].get("inference") or {}
+    if analysis_incomplete(ev):
+        sources = inference.get("sources") or {}
+        status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
+                      f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
+        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
+        status.append(patient_context_status.status_text(inference.get("status")))
+        gap = (inference.get("dependencies") or {}).get("coverage")
+        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
+                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
+            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
+                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
+                             if gap["terminal"] and gap["repairable"] else ""))
+    if context_coverage:
+        status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
+        status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
+        status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
+        attachments = context_coverage.get("attachments") or {}
+        if attachments.get("count"):
+            processing = attachments.get("processing") or {}
+            analysis = attachments.get("analysis")
+            state = "解析状況不明"
+            if processing.get("mode") == "off":
+                state = "OCR無効・内容未点検"
+            elif processing.get("mode") == "invalid":
+                state = "OCR設定不正・解析状況不明"
+            elif analysis == "complete":
+                state = "内容の点検完了"
+            elif analysis == "partial":
+                state = (f"内容の点検済み {attachments.get('analyzed', 0)}ページ / "
+                         f"未点検 {attachments.get('unscanned', 0)}ページ")
+            if processing.get("mode") == "on":
+                state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
+            status.append(f"添付 {attachments['count']}件（{state}）")
+    return status
+
+
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
-                         intervention_history=False, intervention_cursor=None, measurement=None):
+                         intervention_history=False, intervention_cursor=None, measurement=None,
+                         keep_message_id=False, since_label="前回の表示依頼"):
+    """``keep_message_id`` keeps each row's source post id for a reader that links rows to posts; chat cards drop it.
+    ``since_label`` names what ``since`` is in the 前回から変わったこと header."""
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
     if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                      role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                     intervention_cursor=intervention_cursor)
+                                     intervention_cursor=intervention_cursor, keep_message_id=keep_message_id,
+                                     since_label=since_label)
     # Coverage, source references and the final rendered labels share the same snapshot.
     db.execute("SAVEPOINT care_event_notification")
     try:
         result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                        role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                       intervention_cursor=intervention_cursor)
+                                       intervention_cursor=intervention_cursor, keep_message_id=keep_message_id,
+                                     since_label=since_label)
     except BaseException:
         try:
             db.execute("RELEASE care_event_notification")
@@ -1096,7 +1239,8 @@ def _measurement_list(db, project_id, measurement):
 
 
 def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
-                          intervention_history=False, intervention_cursor=None):
+                          intervention_history=False, intervention_cursor=None, keep_message_id=False,
+                          since_label="前回の表示依頼"):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
     one post in one group share that line. Every row carries project_id so the
@@ -1240,7 +1384,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         view = views.changes(db, ev, since)
         stamped = stamp_time(datetime.fromtimestamp(since, JST)) if since else None
         head.append("初回（直近7日）: " + stamped + "から" if first_view and stamped
-                    else "前回の表示依頼: " + (stamped or "初回"))
+                    else f"{since_label}: " + (stamped or "初回"))
         for key, label in DISCOVERY_LABELS:
             add(view["by_discovery"].get(key, []), label)
         # a deleted post shows only when its deletion was observed, never its old text
@@ -1432,12 +1576,12 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         if not care["coverage"].get("source_complete"):
             head.append("介入・経過：未取得・未解析などにより、確認できた範囲を表示")
     for row in rows:
-        row.pop("message_id", None)
+        if not keep_message_id:
+            row.pop("message_id", None)
         # text transports: the source rides at the end of the last quote line, not on a line of its own
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
                        if row["quotes"] else tail)
-    context_coverage = ev["coverage"].get("context") or ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     document_coverage = view.get("document_coverage")
     if document_coverage is not None:
@@ -1459,44 +1603,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
     if pump_coverage.get("documents"):
         status.append(f"PCA: {pump_coverage['documents']}資料・記載値は未確認"
                       + ("・点検未完了" if not pump_coverage.get("complete") else ""))
-    if ev.get("as_of"):
-        status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
-    if section != "care_events":
-        status.append(_coverage_line(db, project_id))
-    inference = ev["coverage"].get("inference") or {}
-    if inference and not inference.get("complete"):
-        sources = inference.get("sources") or {}
-        status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
-                      f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
-        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
-        status.append(patient_context_status.status_text(inference.get("status")))
-        gap = (inference.get("dependencies") or {}).get("coverage")
-        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
-                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
-            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
-                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
-                             if gap["terminal"] and gap["repairable"] else ""))
-    if context_coverage:
-        status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
-        status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
-        status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
-        attachments = context_coverage.get("attachments") or {}
-        if attachments.get("count"):
-            processing = attachments.get("processing") or {}
-            analysis = attachments.get("analysis")
-            state = "解析状況不明"
-            if processing.get("mode") == "off":
-                state = "OCR無効・内容未点検"
-            elif processing.get("mode") == "invalid":
-                state = "OCR設定不正・解析状況不明"
-            elif analysis == "complete":
-                state = "内容の点検完了"
-            elif analysis == "partial":
-                state = (f"内容の点検済み {attachments.get('analyzed', 0)}ページ / "
-                         f"未点検 {attachments.get('unscanned', 0)}ページ")
-            if processing.get("mode") == "on":
-                state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
-            status.append(f"添付 {attachments['count']}件（{state}）")
+    status.extend(context_status_lines(db, project_id, ev, now=now, history=section != "care_events"))
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
     if section == "care_events":
@@ -1522,7 +1629,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                       else "介入の記載の有無は確認できません"
                       if intervention_history
                       else "解析が完了していないため、該当する記録の有無は未確認です"
-                      if inference and not inference.get("complete") else "この範囲で該当する記録は見つかりません"),
+                      if analysis_incomplete(ev) else "この範囲で該当する記録は見つかりません"),
             "page": page, "pages": pages,
             **({"intervention_next_cursor": view["interventions"]["next_cursor"]}
                if section == "previsit" and intervention_history else {})}
