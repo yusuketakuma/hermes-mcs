@@ -509,18 +509,29 @@ def _unit_end(readings: list[tuple[int, str]], at: int, stop: int) -> int:
     return readings[i][0] if i < len(readings) and readings[i][0] < stop else stop
 
 
+def _word_starts(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
+    """Whether folded position ``at`` starts a word: after a space, a mark, a digit or a particle (本日の尿)."""
+    if not at or _spaced(evidence, starts, ends, at):
+        return True
+    before = quote[at - 1]
+    if not ("一" <= before <= "龥" or before == "々" or "ァ" <= before <= "ヺ" or before == "ー" or "a" <= before <= "z"):
+        return True
+    return evidence[starts[at - 1]] in "のでにはがをともへや"   # a hiragana particle (folding makes it katakana)
+
+
 def _specimen_sections(quote: str, evidence, starts: list, ends: list,
                        lines: list[int]) -> tuple[set, list, list]:
     """Folded positions a specimen word is glued to, and the spans its headings name."""
     glued, headings = set(), []   # headings: (start, end, line end or None for the rest of the quote)
     line_ends = {*lines, len(quote)}
-    for match in _SECTION_HEADING.finditer(quote):
+    at = 0
+    while match := _SECTION_HEADING.search(quote, at):
         start, end = match.span()
+        at = start + 1   # a word that is no heading is read again from its next character (再検 尿検査)
         line_start, line_end = _line_span(quote, start, lines)
         end = min(end, line_end)   # folding joins a delimiter to the next line's bullet (尿：\n・pH)
         first = bool(_LINE_BULLETS.fullmatch(quote, line_start, start))
-        if not (first or quote[start] in "([【<" or _WORD_BEFORE.match(quote, start - 1)
-                or _spaced(evidence, starts, ends, start)):
+        if not (first or quote[start] in "([【<" or _word_starts(quote, start, evidence, starts, ends)):
             continue   # the end of another word (排尿, 血尿, 軟便)
         spaced = _spaced(evidence, starts, ends, end)
         closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] \
@@ -529,16 +540,19 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
             glued.add(end)   # 尿TP, 尿中Ca
             continue
         if end in line_ends:
-            heading = first   # a heading line of its own
+            heading = True   # a heading that ends its line (11/20 尿検査, 本日の尿検査)
         elif match["particle"]:
             heading = bool(_LAB_NAME.match(quote, end))   # 尿検査で白血球, not 尿検査は異常なし
         else:
-            result = _SECTION_RESULT.match(quote, end, line_end)
+            bare = match["word"] and match["suffix"] in (None, "") and not match[0].startswith(("(", "[", "【", "<"))
+            result = (_LAB_RESULT if bare else _SECTION_RESULT).match(quote, end, line_end)
             # The item word is one source word: folding joins 淡黄色 白血球 30 into one.
             heading = bool((closed or spaced) and result and not any(
-                _spaced(evidence, starts, ends, at) for at in range(end + 1, result.end(1))))
+                _spaced(evidence, starts, ends, pos) for pos in range(end + 1, result.end(1))))
         if heading:
-            headings.append((start, end, None if first else line_end, bool(match["word"])))
+            at = end
+            open_ended = first or end in line_ends
+            headings.append((start, end, None if open_ended else line_end, bool(match["word"])))
     blank = [at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2]
     opened, closed_at = [], []
     for i, (start, end, line_end, specimen) in enumerate(headings):
@@ -624,18 +638,27 @@ _LAB_TAIL = re.compile(fold_surface(
 # result of the section. A heading in the middle of a line names the rest of its line only.
 # Words (排尿, 血尿, 尿酸, 便秘), statements (尿検査は異常なし) and other notes (尿：淡黄色,
 # 再検査, 本日測定, 【看護師より】) head nothing and end nothing.
+_SPECIMEN_WORDS = ("カテ尿|導尿|採尿|自然尿|新鮮尿|部分尿|スポット尿|随時尿|早朝尿|中間尿|蓄尿|検尿|検便"
+                   "|尿|沈渣|髄液|胸水|腹水|便|喀痰")
+_SPECIMEN_SUFFIX = ("(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査"
+                    "|生化学検査|検査|の結果|定性|一般|生化学|穿刺液?|の性状|性状|所見|データ|結果|検体)?")
+_BLOOD_HEADING = ("(?:血液|生化学?|電解質|定期|本日|今日|今回)?採血(?:の結果|結果|データ)?"
+                  "|(?:血液|生化学?|電解質)(?:一般|検査|測定)?(?:結果|値|データ|所見)?|血算|血清|末梢血|静脈血|cbc")
 _SECTION_HEADING = re.compile(
-    rf"[(\[【<]?(?:(?P<word>{fold_surface('随時尿|早朝尿|中間尿|蓄尿|検尿|尿|沈渣|髄液|胸水|腹水|便|喀痰')})"
-    rf"(?P<suffix>{fold_surface('(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査|生化学検査|検査|の結果|定性|一般|生化学|穿刺液?|の性状|性状)?')})"
-    rf"|(?P<blood>{fold_surface('(?:血液|生化学?|電解質|定期|本日|今日|今回)?採血(?:結果|データ)?|(?:血液|生化学?|電解質)(?:検査|測定)?(?:結果|値|データ|所見)?|血算|血清')}))"
+    rf"[(\[【<]?(?:(?P<word>{fold_surface(_SPECIMEN_WORDS)})"
+    rf"(?P<suffix>{fold_surface(_SPECIMEN_SUFFIX)})"
+    rf"|(?P<blood>{fold_surface(_BLOOD_HEADING)}))"
     rf"(?:\([^()]{{0,16}}\))?(?P<close>[)\]】>]?)(?P<desu>{fold_surface('(?:です|でした)。?')})?"
     rf"(?P<particle>{fold_surface('にて|では|で|の|は')})?(?P<delimiter>[:・|=、,;]*)")
-_WORD_BEFORE = re.compile(fold_surface(r"[、,;:。・|=/()\[\]【】<>*•●○◦◆◇■□▪\-]"))
 _LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
 _LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
 # A result: an item word followed by a number or a qualitative mark (pH 6.0, 比重 1.015, 蛋白(1+)).
+# Each word is tried from its first character only, so a long word costs its length once.
+_RESULT_NUMBER = fold_surface(r"(?:値|は|:|=)*\(?[0-9+±-]")
 _SECTION_RESULT = re.compile(fold_surface(
-    rf"({_LAB_SPELLINGS}|[a-z][a-z0-9]*|[ァ-ヺー]+|[一-龥]{{1,6}})(?:値|は|:|=)*\(?[0-9+±-]"))
+    rf"({_LAB_SPELLINGS}|(?<![a-z0-9])[a-z][a-z0-9]*|(?<![ァ-ヺー])[ァ-ヺー]++|[一-龥]{{1,6}})") + _RESULT_NUMBER)
+# After a bare specimen word (尿 WBC 30) only a lab item is a result: 尿 量 500ml is a note.
+_LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)

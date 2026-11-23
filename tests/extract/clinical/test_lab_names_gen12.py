@@ -1022,7 +1022,13 @@ def test_specimen_sections_are_read_in_linear_time(body):
     "今朝排便\nWBC 5200/μL", "発熱あり、血尿\nCRP 5.2mg/dL\nWBC 5200/μL", "軟便\nWBC 5200/μL",
     "トイレで排便\nWBC 5200/μL", "排尿：6回\n排便：1回\nWBC 5200/μL CRP 0.3mg/dL", "排尿・排便問題なし\nWBC 5200/μL",
     "尿：淡黄色\nWBC 5200/μL", "便はブリストル4\nWBC 5200/μL", "尿検査：蛋白(1+)\n\nWBC 5200/μL",
-    "発熱、血尿 CRP 5.2mg/dL WBC 5200/μL", "食事良好、便\nWBC 5200/μL",
+    "発熱、血尿 CRP 5.2mg/dL WBC 5200/μL",
+    # A specimen word followed by a word and a count is a nursing note, not a lab result.
+    "尿：淡黄色 6回\n便：普通便 1回\nWBC 5200/μL CRP 0.3mg/dL", "便：ブリストル4\nWBC 5200/μL", "尿 量 500ml\nWBC 5200/μL",
+    "便 普通 1回\nWBC 5200/μL", "尿：バルン300ml\nWBC 5200/μL", "喀痰 吸引 3回\nWBC 5200/μL",
+    # Blood headings outside the specimen section's words end it.
+    "尿検査\npH 6.0\nCBC\nWBC 5200/μL", "尿検査：pH 6.0\n定期採血の結果 WBC 5200/μL", "尿検査\npH 6.0\n末梢血\nWBC 5200/μL",
+    "尿検査\npH 6.0\n血液一般：WBC 5200/μL", "尿検査：pH 6.0\n静脈血 WBC 5200/μL", "尿検査\npH 6.0\n血液データ：\nWBC 5200/μL",
     # A heading in the middle of a line names the rest of that line only.
     "発熱あり、尿検査：蛋白(1+)\nWBC 5200/μL",
 ])
@@ -1081,6 +1087,33 @@ def test_a_specimen_word_that_heads_nothing_does_not_end_a_section():
 def test_a_note_after_a_specimen_word_is_not_read_as_a_result():
     body = "尿：淡黄色 白血球 5200/μL"
     assert _validated("白血球", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported"
+
+
+# A heading may follow a date, a time word, の or a mark on its line; 尿所見, 尿データ and
+# urine collections (カテ尿) head their section as before.
+@pytest.mark.parametrize("body", [
+    "11/20 尿検査\nWBC 30/μL\n蛋白(1+)", "本日 尿検査：\nWBC 30/μL", "11/20 【尿検査】\nWBC 30/μL",
+    "本日の尿検査 WBC 30/μL", "昨日の尿検査：WBC 30/μL、蛋白(1+)", "※尿検査 WBC 30/μL", "①尿検査\nWBC 30/μL",
+    "尿所見：WBC 30/μL", "尿所見\nWBC 30/μL", "尿データ\nWBC 30/μL", "カテ尿：WBC 30/μL", "カテ尿 WBC 30/μL",
+    "11/20 尿検査：WBC 30/μL", "・尿検査\n・WBC 30/μL", "入院時 尿検査\nWBC 30/μL", "★髄液検査\nWBC 30/μL",
+    "導尿検体：WBC 30/μL", "尿 WBC 30/μL\n白血球 30/μL",
+    # A space sets the heading apart from the word before it (再検 is no 検尿).
+    "再検 尿検査\nWBC 30/μL", "再検 尿：WBC 30/μL",
+])
+def test_a_prefixed_or_compound_specimen_heading_heads_its_section(body):
+    assert _validated("WBC" if "WBC" in body.split("\n")[-1] else "白血球", "30", "/μL",
+                      body)["normalized"]["confirmation"] == "unverified", body
+
+
+@pytest.mark.parametrize("body", [
+    "尿検査\n" + "ア" * 10000 + "\nWBC 5200/μL", "尿検査\n" + "あ" * 10000 + "\nWBC 5200/μL",
+    "尿検査\n" + "a" * 10000 + "\nWBC 5200/μL",
+])
+def test_a_long_word_in_a_specimen_section_is_read_in_linear_time(body):
+    import time
+    began = time.perf_counter()
+    clinical_values.lab_candidate("WBC", "5200", "/μL", body)
+    assert time.perf_counter() - began < 1
 
 
 @pytest.mark.parametrize("name,body", [("XYZ", "XYZ5 " * 2000), ("XYZ", "XYZ 5mg " * 1250), ("カリウム", "カリウム 4.0mEq/L " * 600)])
