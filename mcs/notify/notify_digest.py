@@ -40,6 +40,7 @@ KIND = "daily_digest"
 MAX_LIST = 10
 DAY_S = 86400
 MAX_DAYS = 7
+RX_AHEAD_D = 7           # period-expression ends listed this many days ahead
 STALE_ALERT_D = 3        # an open alert first detected longer ago
                          # than this and never acked is re-surfaced
 NOTICE_BUDGET = 1900     # relayed text notice (one chat message)
@@ -505,6 +506,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         "・" + "・".join(f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())) + mark
         for mark, counts in by_class(by_type)])
 
+    section(f"処方期限の記録（{RX_AHEAD_D}日以内・期限後）", _rx_period_lines(
+        latest if signals_on else {}, ok, room, archived, end.date()), fold=True)
+
     reacted, reaction_counts = _self_reaction_count(db, since, until, keep)
     # an observed zero is omitted; unfetched stamps are counted in 取得状況
     section(f"MCS 本人スタンプ: {reacted}投稿", [
@@ -578,6 +582,31 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                 shown.update(pid for pid in refs[n] if type(pid) is int)
     return model
 
+
+
+def _rx_period_lines(latest, ok, room, archived, today) -> list:
+    """Open period-expression signals per patient, by end date — the
+    week's dispensing plan at a glance; never a verified prescription."""
+    ends = []
+    for c in latest.values():
+        if not c or c["state"] != "open" or c["type"] not in ("rx_period_expiry", "rx_period_lapsed") \
+                or not ok(c["project_id"]):
+            continue
+        try:
+            end_d = datetime.strptime(str((c.get("evidence") or {}).get("end")), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (end_d - today).days <= RX_AHEAD_D:
+            ends.append((c["project_id"] in archived, end_d, c["project_id"]))
+    ends = sorted(set(ends))
+    lines = [(f"・{end_d:%m/%d} {room(pid)}（"
+              + (f"あと{(end_d - today).days}日" if end_d >= today else f"{(today - end_d).days}日経過")
+              + "）", {pid}) for _, end_d, pid in ends[:MAX_LIST]]
+    if len(ends) > MAX_LIST:
+        lines.append(f"  他{len(ends) - MAX_LIST}件")
+    if lines:
+        lines.append("※ 抽出した期間表現の終了日です。処方の継続・切れは原記録で確認してください")
+    return lines
 
 
 def _nonzero(parts) -> str:
