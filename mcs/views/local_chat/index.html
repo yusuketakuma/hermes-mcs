@@ -7,11 +7,13 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="homecare.js" defer></script>
 </head>
 <body>
   <aside class="sidebar" aria-label="患者一覧">
     <a class="brand" href="./"><span class="brand-mark">H</span><span>Hermes <b>MCS</b><small>患者ワークスペース</small></span></a>
     <div class="local-badge"><span class="status-dot"></span> このMac内で表示 <span>LOCAL</span></div>
+    <div id="hc-tools" class="hc-tools" hidden><div id="hc-modes" class="hc-modes" role="group" aria-label="表示の切替"><button type="button" data-mode="mcs" class="selected">MCS</button><button type="button" data-mode="pharmacy">薬局の患者</button><button type="button" data-mode="staff">職員</button></div><label class="hc-actor"><span>操作者</span><select id="hc-actor"></select></label></div>
     <div class="sidebar-heading">患者 <span id="patient-count"></span></div>
     <form id="patient-form" role="search"><label class="sr-only" for="patient-search">患者名・IDで検索</label><input id="patient-search" placeholder="患者名・IDで検索" maxlength="200" autocomplete="off"><button class="sr-only">患者を検索</button></form>
     <nav id="patients" aria-label="患者チャンネル"></nav>
@@ -21,7 +23,7 @@
   <div class="workspace">
     <header class="topbar"><div class="breadcrumb">患者ワークスペース <span>/</span> タイムライン</div><button id="refresh" class="button">更新</button></header>
     <div id="error" class="error" role="alert" hidden></div>
-    <div class="page-heading"><div class="patient-heading"><div class="eyebrow">PATIENT CHANNEL</div><h1 id="patient-name">患者タイムライン</h1><p id="patient-meta">左の一覧から患者を選択してください</p></div><section id="patient-context" class="patient-context" aria-label="患者コンテキスト"><h2>患者コンテキスト</h2><p>患者を選ぶと、保存済みの背景情報を表示します。</p></section><span class="read-only">閲覧専用</span></div>
+    <div class="page-heading"><div class="patient-heading"><div class="eyebrow">PATIENT CHANNEL</div><h1 id="patient-name">患者タイムライン</h1><p id="patient-meta">左の一覧から患者を選択してください</p></div><section id="patient-context" class="patient-context" aria-label="患者コンテキスト"><h2>患者コンテキスト</h2><p>患者を選ぶと、保存済みの背景情報を表示します。</p></section><span id="read-only" class="read-only">閲覧専用</span></div>
     <div class="toolbar"><label class="sr-only" for="view-select">表示する内容</label><select id="view-select" class="view-select"><option value="">タイムライン</option></select><form id="message-form" role="search"><label class="sr-only" for="message-search">この患者の本文・投稿者を検索</label><input id="message-search" placeholder="この患者の本文・投稿者を検索" maxlength="500" autocomplete="off"><button class="button">検索</button><button id="clear-search" class="text-button" type="button" hidden>解除</button></form></div>
     <div class="snapshot-bar"><span id="snapshot-time">スナップショットを読込中…</span><span>投稿時刻順 · 古い → 新しい</span></div>
     <div class="content">

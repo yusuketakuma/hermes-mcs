@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0};
+const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
@@ -54,6 +54,7 @@ function selectPatient(patient) {
   $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
   $("coverage").hidden = false;
   state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadMain();
+  state.onSelect?.(patient.project_id);
 }
 async function loadPatientContext(project) {
   const request = ++state.contextRequest, panel = $("patient-context");
@@ -207,7 +208,13 @@ async function showMessageInfo(row, request, withContext = true) {
     files.append(more);
     if (!data.items.length) files.append(el("p", "保存済みの添付はありません。"));
     if (row.parent_id) {files.append(el("h3", "この返信の状態")); for (const text of row.metadata_flags || []) files.append(el("p", text));}
-    $("message-info").replaceChildren(files, ...(withContext ? [contextSection(source.message)] : []));
+    const replyMeds = [];
+    if (row.parent_id) {
+      const meds = section("この返信の薬剤"), body = el("div"), button = el("button", "この返信の薬剤を表示", "text-button");
+      button.onclick = () => showMeds(body, row.message_id, request);
+      meds.append(button, body); replyMeds.push(meds);
+    }
+    $("message-info").replaceChildren(files, ...replyMeds, ...(withContext ? [contextSection(source.message)] : []));
   } catch (error) {if (request === state.detailRequest) fail(error);}
 }
 async function loadSections() {
@@ -238,7 +245,7 @@ function renderPanel(view, onPage) {
     else if (item.source) row.append(el("small", item.source));
     if (item.message_id) {
       const open = el("button", "投稿を開く", "text-button"), project = state.project;
-      open.onclick = async () => {try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project) openDetail(source.message);} catch (error) {fail(error);}};
+      open.onclick = async () => {const detail = state.detailRequest; try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project && detail === state.detailRequest) openDetail(source.message);} catch (error) {fail(error);}};
       row.append(open);
     }
     box.append(row);
@@ -267,18 +274,18 @@ async function loadPanel() {
     $("timeline-panel").scrollTop = 0;
   } catch (error) {if (request === state.mainRequest) {$("panel-view").replaceChildren(el("p", "表示できませんでした。", "empty")); fail(error);}}
 }
-async function showMeds(target, message, request) {
+async function showMeds(target, message, request, page = 0) {
   target.replaceChildren(el("p", "薬剤を読込中…", "empty"));
   try {
-    const data = await api("panel", {project: state.project, section: "meds", message});
-    if (request === state.detailRequest) target.replaceChildren(renderPanel(data.panel));
+    const data = await api("panel", {project: state.project, section: "meds", message, page});
+    if (request === state.detailRequest) target.replaceChildren(renderPanel(data.panel, next => showMeds(target, message, request, next)));
   } catch (error) {if (request === state.detailRequest) {target.replaceChildren(); fail(error);}}
 }
-$("patient-form").onsubmit = event => {event.preventDefault(); loadPatients();};
+$("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch || loadPatients)();};
 $("more-patients").onclick = () => loadPatients(true);
 $("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; $("view-select").value = ""; closeDetail(); loadMain();};
 $("view-select").onchange = () => {state.panel = $("view-select").value; state.panelPage = 0; closeDetail(); loadMain();};
-$("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadTimeline();};
+$("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadMain();};
 $("older").onclick = () => loadTimeline(true);
 $("close-detail").onclick = closeDetail;
 $("refresh").onclick = () => location.reload();
