@@ -225,6 +225,15 @@ def test_an_existing_file_that_is_not_a_homecare_database_is_left_untouched(tmp_
         with pytest.raises(RuntimeError, match="not a homecare database"):
             homecare_store.connect(path, REGISTRY.modules)
     assert snapshot.read_bytes() == before and not (tmp_path / "snapshot.db-wal").exists()
+    lookalike = tmp_path / "lookalike.db"
+    with sqlite3.connect(lookalike) as other:
+        other.execute("CREATE TABLE schema_migrations(version TEXT)")
+    other.close()
+    with pytest.raises(sqlite3.Error):
+        homecare_store.connect(lookalike, REGISTRY.modules)
+    with sqlite3.connect(f"{lookalike.as_uri()}?mode=ro", uri=True) as other:
+        assert other.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    other.close()
 
 
 def test_links_are_one_to_one_append_only_and_suggested_only_on_exact_name(db):

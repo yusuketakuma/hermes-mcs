@@ -142,11 +142,15 @@ async function showHcPatient(patientId) {
   $("patient-meta").textContent = `薬局の患者台帳 · ${patient.kana || "フリガナ未登録"}`;
   const team = el("section", null, "detail-section"), link = el("section", null, "detail-section");
   // Team and link actions redraw only their own sections, so unsaved edits in the record form stay.
-  const refresh = async () => {
+  const refreshTeam = async () => {
     const fresh = await api("hc/patient", {patient: patientId});
-    if (hc.patient === patientId) {careTeam(team, patientId, fresh.team, refresh); mcsLink(link, patientId, fresh, refresh);}
+    if (hc.patient === patientId) careTeam(team, patientId, fresh.team, refreshTeam);
   };
-  careTeam(team, patientId, data.team, refresh); mcsLink(link, patientId, data, refresh);
+  const refreshLink = async () => {
+    const fresh = await api("hc/patient", {patient: patientId});
+    if (hc.patient === patientId) mcsLink(link, patientId, fresh, refreshLink);
+  };
+  careTeam(team, patientId, data.team, refreshTeam); mcsLink(link, patientId, data, refreshLink);
   hcMain("基本情報", recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, link);
 }
 function mcsLink(link, patientId, data, refresh) {

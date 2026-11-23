@@ -42,8 +42,9 @@ def connect(path, modules) -> sqlite3.Connection:
     try:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA journal_mode=WAL")
         _migrate(db, modules)
+        # Only once the file has proved itself a home-care database by migrating cleanly.
+        db.execute("PRAGMA journal_mode=WAL")
     except BaseException:
         db.close()
         raise
