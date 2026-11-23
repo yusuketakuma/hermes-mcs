@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "薬局から医師への照会・提案の返答待ちをアラートで知らせる",
+  "summary": "自局から医師へ出した処方・薬の照会や処方提案の投稿に、スレッド内で他の人の返信も、ルーム内で医師の投稿も見つからないまま3日（request_response_days）を過ぎると、アラート「照会の返答未記録」の候補にします。返事がまだの照会を覚えておく負担を減らします。電話・FAXなど記録外の返答は判定に含みません。自局の照会は、これまで出ていた「処方依頼」（rx_request_visibility）の参考情報には出なくなります。",
+  "upgrade": "自局の投稿を見分けるため、signals.self_organizations（または取得済みの本人プロフィールの所属）が必要です。未設定では新しいアラートは出ません。通知はこれまでのアラートと同じく signals.notify がオンのときだけで、既定は日次サマリーにまとめる digest 扱いです（signals.tiers で即時にもできます）。設定値の変更は不要です。",
+  "details": ["返答の判定はアラートの解消時にも同じ関数で行い、解消理由 reply_observed を記録します。", "外部出力のシグナル種別一覧（export_schema.SIGNAL_TYPES）に pharmacist_inquiry_unanswered を追加しました。"],
+  "refs": ["mcs/signals/mcs_signals.py", "mcs/notify/notify_render.py", "mcs/views/signal_feedback_stats.py", "mcs/export/export_schema.py"]
+}
