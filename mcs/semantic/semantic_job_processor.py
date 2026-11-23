@@ -68,6 +68,35 @@ def _fixed_stop_reason(reason, fallback):
 
 
 
+def _assessment_meta(scfg, bundle, mid, fp, policy) -> dict:
+    """Binding shared by every primary assessment row written for one target."""
+    return {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+            "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION, "schema": SCHEMA_VERSION,
+            "jev_input": semantic_store.assessment_input(bundle, mid, scfg)}
+
+
+def _carry_assessment(ledger, scfg, bundle, pid, mid, fp, policy, rows, guard):
+    """Re-bind the stored answer of an identical Jev request to this source fingerprint.
+
+    A thread's fingerprint moves with fields Jev never receives; when the
+    request itself is unchanged its answer is already known, so no request
+    is spent. Returns the verdicts, or None when the target must be asked."""
+    meta = _assessment_meta(scfg, bundle, mid, fp, policy)
+    carried = semantic_store._carried_primary_assessment(rows, mid, policy, scfg, meta["jev_input"])
+    if carried is None:
+        return None
+    guard("assessment_carry")
+    target_verdicts = carried["content"]["verdicts"]
+    ledger.artifact_add(
+        KIND_ASSESS,
+        json.dumps({"target_message_id": mid, "verdicts": target_verdicts, "detail": {}},
+                   ensure_ascii=False),
+        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        meta={**meta, "technical_status": "complete", "jev_requests": 0,
+              "carried_fingerprint": carried["meta"]["fingerprint"]})
+    return target_verdicts
+
+
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                    prev, deadline, *, diagnostics: dict):
     """Primary Jev proposition assessment of one target, durably recorded.
@@ -77,9 +106,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
     _jev_fail_flag of a raised JevError, else None."""
     flag = None
     state = jev_state(bundle, mid)
-    meta_base = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
-                 "registry": jev.REGISTRY_VERSION,
-                 "schema": SCHEMA_VERSION}
+    meta_base = _assessment_meta(scfg, bundle, mid, fp, policy)
     answers = None
     try:
         old = prev["content"].get("verdicts", {}) if prev else {}
@@ -105,9 +132,8 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                   "skipped": "prefilter_no_signal"})
         return {}, flag
     if jev_client is not None and state is not None:
-        qs = {k: jev.noul_question(p["instructions"], p["true"],
-                                   p["false"])
-              for k, p in jev.active_propositions(scfg).items() if k not in old}
+        qs = {k: question for k, question in semantic_store.primary_questions(scfg).items()
+              if k not in old}
         if not qs:
             _why(diagnostics, "assess_partial_invalid")
             return None, "hard"
@@ -510,6 +536,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             break
         if prev and prev["meta"].get("technical_status") == "complete":
             verdicts[mid] = prev["content"].get("verdicts", {})
+        elif prev is None and (carried := _carry_assessment(
+                ledger, scfg, bundle, pid, mid, fp, policy, history_rows.get(mid, ()), guard)) is not None:
+            verdicts[mid] = carried
         elif jev_skip is not None:
             partial = prev["content"].get("verdicts", {}) if prev else {}
             try:

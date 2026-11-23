@@ -250,6 +250,20 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
 - Input identity: `semantic_store.bundle_fingerprint` names no backend.
   The `local_model` key holds `_LEGACY_FINGERPRINT_LOCAL_MODEL`
   (`Qwen3.5-9B`) only so that existing fingerprints stay equal.
+- Primary assessment request identity: the thread-wide fingerprint also
+  moves with stored fields Jev never receives (`reply_count`, attachment
+  download state, sender display name and organization).
+  `semantic_store.assessment_input` hashes exactly what one primary
+  request sends (target, same-thread context, active questions, Jev
+  model) and is recorded as `meta.jev_input` on every primary
+  `semantic_assess` row. When a target has no row under the new
+  fingerprint and the newest row recorded for the same `jev_input` and
+  policy is complete and valid, `semantic_job_processor._carry_assessment`
+  writes its verdicts under the new fingerprint with `jev_requests: 0`
+  and `carried_fingerprint`, and no request is sent. A new or edited
+  thread member changes the context and is asked again. Medication-detail
+  rows, fact audits and claim audits remain keyed by the thread
+  fingerprint.
 - Producer rule: `semantic_policy.LOCAL_MODEL_GATED_KINDS` (facts v1/v2,
   projections, v4, summary, candidate, both chunk kinds) are current only
   while `extraction_provenance.local_producer_current` accepts the row:
