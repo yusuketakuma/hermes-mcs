@@ -159,6 +159,10 @@ def _dicts(value) -> list[dict]:
         if isinstance(value, list) else []
 
 
+# Requests kept in a cached rollup; the patient-context reply view rebuilds without a limit.
+REQUEST_LIMIT = 15
+
+
 def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit):
     """Append one message's v1/llm request rows to the rollup lists."""
     for rq in _dicts(v1.get("requests")):
@@ -697,7 +701,7 @@ def _check_deadline(deadline):
         raise RollupDeadlineExceeded("rollup_deadline_exceeded")
 
 
-def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, deadline=None) -> dict:
+def build_rollup(db, project_id: int, *, request_limit: int | None = REQUEST_LIMIT, cfg=None, deadline=None) -> dict:
     # All source, artifact and progress checks must observe the same snapshot.
     # Releasing a nested savepoint leaves the caller's transaction untouched.
     _check_deadline(deadline)
@@ -719,7 +723,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=Non
         return result
 
 
-def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, resources, deadline=None) -> dict:
+def _build_rollup(db, project_id: int, *, request_limit: int | None = REQUEST_LIMIT, cfg=None, resources, deadline=None) -> dict:
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
     measurement_complete, fetch_status, history_status, pending_jobs = _acquisition_state(db, project_id)

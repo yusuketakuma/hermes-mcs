@@ -542,6 +542,28 @@ def first_changes_baseline(now) -> float:
     return now - FIRST_CHANGES_BASELINE_S
 
 
+def observed_revisions(db, project_id, *, since=None, message_id=None) -> dict:
+    """{message_id: (body_state, observed_at)} of each post's newest observed edit ('full') or deletion
+    ('deleted'): a revision of a fully read body after a fully read (or deleted) one, observed by the
+    collector at ``observed_at`` (not the author's edit time); optionally since ``since`` or for one post."""
+    sql = ("SELECT r.message_id, r.body_state, MAX(r.observed_at) FROM message_revisions r "
+           "JOIN messages m ON m.message_id=r.message_id "
+           "JOIN message_revisions prior ON prior.message_id=r.message_id AND prior.seq=("
+           "SELECT MAX(p.seq) FROM message_revisions p WHERE p.message_id=r.message_id AND p.seq<r.seq) "
+           "WHERE m.project_id=? "
+           "AND r.body_state IN ('full','deleted') AND prior.body_state IN ('full','deleted') "
+           "AND r.prev_content_hash IS NOT NULL AND (r.content_hash IS NOT r.prev_content_hash OR "
+           "r.body_state IS NOT prior.body_state)")
+    params = [project_id]
+    if since is not None:
+        sql += " AND r.observed_at>=?"
+        params.append(since)
+    if message_id is not None:
+        sql += " AND r.message_id=?"
+        params.append(message_id)
+    return {mid: (state, at) for mid, state, at in db.execute(sql + " GROUP BY r.message_id", params)}
+
+
 def changes(db, ev, since_ts) -> dict:
     """前回から変わったこと, from the ledger's own observation record (messages.first_seen,
     message_revisions) so edits and deletions not yet reflected at night still show:
@@ -552,17 +574,7 @@ def changes(db, ev, since_ts) -> dict:
     fact (record, revision, category) the erased context or its current scans already held."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
-    revised = {}
-    for mid, state, at in db.execute(
-            "SELECT r.message_id, r.body_state, MAX(r.observed_at) FROM message_revisions r "
-            "JOIN messages m ON m.message_id=r.message_id "
-            "JOIN message_revisions prior ON prior.message_id=r.message_id AND prior.seq=("
-            "SELECT MAX(p.seq) FROM message_revisions p WHERE p.message_id=r.message_id AND p.seq<r.seq) "
-            "WHERE m.project_id=? AND r.observed_at>=? "
-            "AND r.body_state IN ('full','deleted') AND prior.body_state IN ('full','deleted') "
-            "AND r.prev_content_hash IS NOT NULL AND (r.content_hash IS NOT r.prev_content_hash OR "
-            "r.body_state IS NOT prior.body_state) GROUP BY r.message_id", (ev["project_id"], since_ts)):
-        revised[mid] = (state, at)
+    revised = observed_revisions(db, ev["project_id"], since=since_ts)
 
     reset_at = db.execute("SELECT MAX(created_at) FROM artifacts WHERE kind=?", (RESET_MARK_KIND,)).fetchone()[0]
     prior = _reset_prior(db, ev["project_id"]) if reset_at is not None else None

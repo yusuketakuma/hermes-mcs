@@ -108,7 +108,9 @@ class View:
                FROM patients p WHERE 1=1""",
             [], ("p.project_id",), ["link-hints"], limit, cursor)
 
-    def _page(self, sql, params, columns, scope, limit, cursor):
+    def _page(self, sql, params, columns, scope, limit, cursor, *, key_fields=None):
+        """One keyset page in descending ``columns`` order; ``key_fields`` names the row fields that hold
+        those column values (dropped from the rows) when they are not the message or ``_key`` columns."""
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("bad_limit")
         binding = requests.payload_hash([self.meta["generation_id"], scope])
@@ -135,11 +137,13 @@ class View:
         next_cursor = None
         if more:
             last = rows[-1]
-            key = ([last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
+            key = ([last[field] for field in key_fields] if key_fields else
+                   [last["posted_at_ts"] if last["posted_at_ts"] is not None else UNKNOWN_TIME,
                     last["message_id"]] if len(columns) == 2 else [last["_key"]])
             next_cursor = base64.urlsafe_b64encode(requests.canonical({"binding": binding, "key": key})).decode()
         for row in rows:
-            row.pop("_key", None)
+            for field in ("_key", *(key_fields or ())):
+                row.pop(field, None)
         return {"items": rows, "next_cursor": next_cursor}
 
     def _require_message(self, pid, mid):
@@ -538,15 +542,18 @@ class View:
 
     def _attachments(self, project, message_id, limit, cursor):
         from attachment_ocr import view as ocr_view
+        from mcs_util import load_config
 
         self._require_message(project, message_id)
+        # the OCR exclusion policy is configuration: without it a policy-rejected file reads as failed
+        cfg = load_config()
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
         for item in result["items"]:
             item["error"] = _reason(item["error"])
             item["ocr"] = ocr_view(self.db, item["attachment_id"], project_id=project,
-                                   include_text=True)
+                                   include_text=True, cfg=cfg)
         return result
 
     @semantic_transport.with_local_model_scope

@@ -73,6 +73,14 @@ def response(snapshot, allowed, route, query):
     try:
         if route == "patients":
             return local_chat_view.patients(view, allowed, query=text, cursor=cursor)
+        if route in ("counts", "registered"):
+            if text or cursor or message:
+                raise ValueError("bad_arguments")
+            return getattr(local_chat_view, route)(view, allowed, project)
+        if route == "sources":
+            if message:
+                raise ValueError("bad_arguments")
+            return local_chat_view.source_search(view, allowed, project, text, cursor=cursor)
         if route == "brief":
             if text or cursor or message:
                 raise ValueError("bad_arguments")
@@ -253,7 +261,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 code = str(exc)
                 # Only fixed, non-clinical codes reach the browser.
-                code = code if code in {"cursor_scope_or_generation_changed", "project_not_allowed"} else "bad_request"
+                code = code if code in {"cursor_scope_or_generation_changed", "project_not_allowed",
+                                        "bad_search_filter", "search_cursor_invalid"} else "bad_request"
                 self._json(400, {"error": code})
             except (OSError, sqlite3.Error):
                 self._send(503, b'{"error":"snapshot_unavailable"}', "application/json")
