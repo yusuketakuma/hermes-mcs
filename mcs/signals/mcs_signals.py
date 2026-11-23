@@ -39,7 +39,7 @@ from mcs_queries import (CHANGE_ACTIONS, CHANGE_ACTIONS_SQL, DAY_S,
                          med_capability_evidence,
                          med_is_patient_current, med_period_artifacts,
                          item_unverified, transition_cooccurrences)
-from clinical_values import patient_item_scope
+from clinical_values import MED_FORMS, patient_item_scope
 
 from mcs_util import loads_dict
 from self_identity import self_sets
@@ -493,10 +493,11 @@ def _rx_request_visibility(db, now, th, sig_cfg):
 
 
 # requests.to values meaning 'addressed to a physician' (the extractor's
-# enum is 医師; free spellings like 主治医・往診医 also occur). Whole values,
+# enum is 医師; free spellings like 主治医・往診医師 also occur). Whole values,
 # not substrings: 医療事務 or a therapist called 先生 is not a physician.
-PHYSICIAN_TARGETS = frozenset(("医師", "主治医", "主治医師", "担当医", "往診医", "訪問医", "在宅医",
-                               "ドクター", "Dr", "Dr."))
+PHYSICIAN_TARGETS = frozenset(("医師", "ドクター", "Dr", "Dr.",
+                               *(f"{role}医{tail}" for role in ("主治", "担当", "往診", "訪問", "在宅")
+                                 for tail in ("", "師"))))
 # A medication word, or the name of a medicine extracted from the same post,
 # in the request's summary or quote is required: 変更・中止・提案・照会 alone
 # also describe visit scheduling and other non-medication requests.
@@ -506,19 +507,22 @@ NON_DRUG_TERMS = ("薬剤師", "薬局", "薬剤部")
 _KATAKANA_TAIL = re.compile(r"[ァ-ヺー]")
 # a dose written right after a Latin-ending name: 200mL, 2.5mg, 10単位
 _DOSE_AFTER = re.compile(r"\d+(?:\.\d+)?\s*(?:mg|mL|ml|g|μg|mcg|IU|%|単位|錠|包|本|枚|滴|cc)", re.I)
+# a known dosage form right after the name: ロキソニンテープ
+_FORM_AFTER = re.compile(rf"(?:{MED_FORMS})", re.I)
 
 
 def _names_medicine(text, name):
     """The medicine name as a word of text: not the head of a longer
-    katakana or Latin word (「アセス」 is not in 「アセスメント」); a dose
-    written right after it (「ラコールNF200mL」) still names it."""
+    katakana or Latin word (「アセス」 is not in 「アセスメント」); a known
+    dosage form (「ロキソニンテープ」) or a dose (「ラコールNF200mL」) written
+    right after it still names it."""
     start = text.find(name)
     while start >= 0:
         rest = text[start + len(name):]
-        after = rest[:1]
+        after, head = rest[:1], unicodedata.normalize("NFKC", rest[:16])
         latin = name[-1].isascii() and name[-1].isalnum() and after.isascii() and after.isalnum()
-        if not after or not ((_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after))
-                             or (latin and not _DOSE_AFTER.match(unicodedata.normalize("NFKC", rest[:16])))):
+        joined = (_KATAKANA_TAIL.fullmatch(name[-1]) and _KATAKANA_TAIL.fullmatch(after)) or latin
+        if not after or not joined or _FORM_AFTER.match(head) or (latin and _DOSE_AFTER.match(head)):
             return True
         start = text.find(name, start + 1)
     return False

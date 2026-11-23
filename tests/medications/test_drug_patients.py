@@ -120,6 +120,11 @@ def test_master_impact_and_formulary_map_to_dictionary_identities(tmp_path):
                          {"name": "架空ブランド", "sha256": "a", "observed_sha256": "a", "last": "unchanged"}]}
     codes, names, _limits = drug_patients.formulary_identities(active, watch)
     assert names == ["架空製品錠5mg"] and codes == {"mhlw:medicine:900000001"}
+    # a revised name longer than the dictionary's text bound is counted, not looked up
+    watch["inserts"].append({"name": "架" * 513, "sha256": "a", "observed_sha256": "b"})
+    codes, names, limits = drug_patients.formulary_identities(active, watch)
+    assert names == ["架空製品錠5mg"] and codes == {"mhlw:medicine:900000001"}
+    assert limits["names_not_matched"] == 1
 
 
 def test_attachment_mentions_are_dated_by_their_parent_post(corpus, monkeypatch):

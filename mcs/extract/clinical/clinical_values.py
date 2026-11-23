@@ -102,9 +102,10 @@ class MedicationSurface(TypedDict):
     method: Literal["surface"]
 
 
-_MED_FORMS = r"od錠|錠|カプセル|顆粒|細粒|散|シロップ|テープ|パップ|軟膏|点眼液|注射液|坐剤"
+# dosage forms written right after a medicine name (shared with signal matching)
+MED_FORMS = r"od錠|錠|カプセル|顆粒|細粒|散|シロップ|テープ|パップ|軟膏|点眼液|注射液|坐剤"
 _MED_SUFFIX = re.compile(
-    rf"(?P<form>{_MED_FORMS})?"
+    rf"(?P<form>{MED_FORMS})?"
     r"(?P<strength>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%))?$")
 
 

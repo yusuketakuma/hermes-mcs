@@ -175,8 +175,10 @@ def dictionary_state(db, cfg):
 
 
 def query_identities(active, name):
-    """Official identities of a searched name; empty unless exactly one identity resolves."""
-    if active is None:
+    """Official identities of a searched name; empty unless exactly one identity resolves.
+
+    A name the dictionary cannot look up (empty or over its text bound) resolves to nothing."""
+    if active is None or not drug_map.valid_text(name):
         return set()
     related = active.related_names(name)
     return set(related["identities"]) if related["status"] == "resolved" and related["official_identity"] else set()
