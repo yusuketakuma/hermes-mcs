@@ -1081,3 +1081,11 @@ def test_a_specimen_word_that_heads_nothing_does_not_end_a_section():
 def test_a_note_after_a_specimen_word_is_not_read_as_a_result():
     body = "尿：淡黄色 白血球 5200/μL"
     assert _validated("白血球", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported"
+
+
+@pytest.mark.parametrize("name,body", [("XYZ", "XYZ5 " * 2000), ("XYZ", "XYZ 5mg " * 1250), ("カリウム", "カリウム 4.0mEq/L " * 600)])
+def test_many_readings_on_one_line_are_cut_in_linear_time(name, body):
+    import time
+    began = time.perf_counter()
+    clinical_values.lab_candidate(name, "4", None, body)
+    assert time.perf_counter() - began < 1

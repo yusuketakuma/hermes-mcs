@@ -493,15 +493,20 @@ def _spaced(evidence, starts: list, ends: list, at: int) -> bool:
 _UNIT_SPELLINGS = frozenset({*_LAB_UNITS, "mg", "μg", "mcg", "ml"})
 
 
-def _unit_end(quote: str, at: int, stop: int, evidence, starts: list, ends: list) -> int:
-    """Where a quoted unit starting at ``at`` ends: before the first named reading set apart
-    by a space, whatever separator follows its name (Cr 0.9, Cr:0.9, Crは0.9)."""
-    for start in range(at, stop):
-        reading = _spaced(evidence, starts, ends, start) and _LAB_NEXT_NUMBER.match(quote, start)
-        # A unit spelling right after the number is its own unit (10 mg 2), never a next reading.
-        if reading and not (start == at and reading[1] in _UNIT_SPELLINGS):
-            return start
-    return stop
+def _named_reading_starts(quote: str, evidence, starts: list, ends: list) -> list[tuple[int, str]]:
+    """Folded positions (and names) where a named reading set apart by a space starts,
+    whatever separator follows its name (Cr 0.9, Cr:0.9, Crは0.9); read once per quote."""
+    return [(at, reading[1]) for at in range(1, len(starts))
+            if _spaced(evidence, starts, ends, at) and (reading := _LAB_NEXT_NUMBER.match(quote, at))]
+
+
+def _unit_end(readings: list[tuple[int, str]], at: int, stop: int) -> int:
+    """Where a quoted unit starting at ``at`` ends: before the first named reading in it."""
+    i = bisect.bisect_left(readings, at, key=lambda reading: reading[0])
+    # A unit spelling right after the number is its own unit (10 mg 2), never a next reading.
+    if i < len(readings) and readings[i][0] == at and readings[i][1] in _UNIT_SPELLINGS:
+        i += 1
+    return readings[i][0] if i < len(readings) and readings[i][0] < stop else stop
 
 
 def _specimen_sections(quote: str, evidence, starts: list, ends: list,
@@ -766,6 +771,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     folded_value = fold_surface(raw_value)
     specimen_sections = (_specimen_sections(quote, evidence, starts, ends, lines)
                          if analyte in _SPECIMEN_SHARED_ITEMS else None)
+    named_readings = None   # read once, when a quoted unit first needs cutting
     for match in re.finditer(pattern, quote):
         if len(readings) > 1:
             break
@@ -779,8 +785,11 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             _, line_end = _line_span(quote, match.start(), lines)
             result = _QUOTED_RESULT.match(quote, match.end(), line_end)
             if result and result[2]:
-                result = _QUOTED_RESULT.match(quote, match.end(), _unit_end(
-                    quote, result.start(2), result.end(), evidence, starts, ends))
+                if named_readings is None:
+                    named_readings = _named_reading_starts(quote, evidence, starts, ends)
+                cut = _unit_end(named_readings, result.start(2), result.end())
+                if cut < result.end():
+                    result = _QUOTED_RESULT.match(quote, match.end(), cut)
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(quote, result.end()))):
