@@ -270,6 +270,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         interrupted = False
         terminal = False   # the journal's terminal save happened (bail or success)
 
+        # This attempt's home-care copy. It becomes a real generation once the
+        # tree may change; an attempt that stops before that discards it.
+        homecare_copy = None
+        tree_may_change = False
+
         def bail(reason: str) -> int:
             nonlocal interrupted
             try:
@@ -616,12 +621,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return bail(str(e))
             # Restoring the home-care records stays manual. After a rollback the
             # older code refuses a database the new version migrated; this is its
-            # copy. A re-run that will exit as already applied must not rotate
-            # the copies that still predate the real update.
+            # copy, with its own room check. A re-run that will exit as already
+            # applied makes none, so it neither needs that room nor rotates the
+            # copies that still predate the real update.
             if _head_sha(**before_args) != sha and not (
                     command_id and state.get("executed", {}).get(command_id)):
                 try:
-                    local_backup.preupdate_homecare_backup(**before_args)
+                    homecare_copy = local_backup.preupdate_homecare_backup(**before_args)
                 except local_backup.MaintenanceError as e:
                     return bail(f"homecare_{e}")
             snap = _read_manifest_snapshot(**before_args)
@@ -722,6 +728,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if borrowed is not None:
                 release_apply_owner._check_git_metadata(REPO, deadline=time.monotonic() + 10)
             journal(state, "merge")
+            tree_may_change = True
             r = _git(["merge", "--ff-only", target_ref],
                      timeout=T_MERGE)
             if r.returncode != 0:
@@ -747,6 +754,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
 
             state = _apply_record_success(tag, command_id)
             terminal = True
+            if homecare_copy is not None:
+                local_backup.rotate_homecare_preupdate()
             quiesced = False
             # gateway restart is fire-and-forget AFTER applied is durable —
             # a synchronous restart would deadlock when this updater is a
@@ -768,6 +777,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _hold_after_interrupt(error)
             raise
         finally:
+            if homecare_copy is not None and not tree_may_change:
+                import local_backup
+                local_backup.discard_homecare_preupdate(homecare_copy)
             if quiesced and not consent_hold and not rollback_failed and (not interrupted or terminal):
                 _remove_marker()
             if borrowed is None:

@@ -457,7 +457,7 @@ import はモジュール先頭に置くのが原則。関数内に残すのは�
 - `data/ledger.db`          — 取得済みレコード (WAL)
 - `data/snapshots/`         — read-only スナップショット (CCO/コンテナ向け、
                               DELETE journal化→schema/quick_check→atomic rename)
-- `data/backups/`           — 日次検証済み sqlite backup (7世代)
+- `data/backups/`           — 日次検証済み sqlite backup (3世代。在宅記録の台帳は homecare-*)
 - `data/cmd/*.json`         — bot コマンドキュー (WatchPaths で即時実行)
 - `token_cache.json`        — bearer cache (0600; data/ 外=サンドボックス非公開)
 - `config.json`             — {mcs_login_id, notify_target,
