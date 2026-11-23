@@ -5,6 +5,9 @@
 .patient .patient-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .patient .patient-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .patient .patient-top .chip { flex-shrink: 0; line-height: 1.5; }
+.patient .patient-sub { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.patient .patient-sub .chip { flex-shrink: 0; line-height: 1.5; }
+.patient .patient-disease { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .patient .count { min-width: 22px; padding: 0 6px; border-radius: 999px; background: var(--side-bg-3); text-align: center; opacity: 1; color: var(--side-muted); }
 .patient.selected .count { background: #e2d9e8; color: var(--side-pick-ink); }
 
@@ -23,7 +26,16 @@
 .context-brief .context-scope { color: var(--warn-ink); overflow-wrap: anywhere; }
 .context-brief .context-scope { display: block; }
 .context-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--fs-sm); }
-.context-records { max-height: 45vh; overflow: auto; }
+.context-records { max-height: 55vh; overflow: auto; }
+.context-completeness { grid-column: 1 / -1; min-width: 0; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: var(--fs-xs); color: var(--muted); }
+.context-completeness:hover { color: var(--ink-2); text-decoration: underline; }
+.context-overview { display: grid; gap: 8px; margin: 6px 0 10px; }
+.context-overview:focus { outline: none; }
+.context-overview .card { padding: 8px 12px; }
+.context-overview h3 { font-size: var(--fs-xs); color: var(--muted); }
+.context-overview p { margin: 2px 0; font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.karte-comment { white-space: pre-wrap; }
+.karte-meta { color: var(--muted); }
 .context-records > summary { cursor: pointer; color: var(--accent); font-weight: 550; white-space: nowrap; padding: 1px 0; }
 .context-records[open] { grid-column: 1 / -1; padding-bottom: 6px; }
 .context-records h3 { font-size: var(--fs-sm); margin-top: 8px; }
@@ -59,6 +71,10 @@
 .post-heading { display: flex; align-items: baseline; gap: 0 6px; flex-wrap: wrap; line-height: 1.5; }
 .post-heading > * + *::before { content: "·"; margin-right: 6px; color: var(--muted); }
 .sender { font-size: var(--fs-sm); font-weight: 650; }
+.post-heading > .post-marks::before { content: none; }
+.post-marks { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.post-note { margin: 2px 0; font-size: var(--fs-sm); color: var(--ink-2); overflow-wrap: anywhere; }
+.post-note.state-note { color: var(--warn-ink); }
 .post-role, .timestamp { font-size: var(--fs-xs); color: var(--muted); }
 .post-body { margin: 2px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs); line-height: var(--lh); }
 .post-body-missing { color: var(--muted); }
@@ -73,6 +89,19 @@
 .avatar { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; margin-top: 2px; border-radius: 7px; background: var(--accent-soft); color: var(--accent-ink); font-size: var(--fs-sm); font-weight: 600; }
 
 /* ---------- いまの状況 (right column while no post is open) ---------- */
+/* Heading extras: the counts (buttons into their tabs) flow with the other chips; the MCS room link. */
+.count-chips { display: contents; }
+.chip-urgent { color: #fff; background: #b4372b; }
+.chip-link { color: var(--accent-ink); background: var(--accent-soft); text-decoration: none; }
+.chip-link:hover { text-decoration: underline; }
+
+/* ---------- Search results and MCS registered data ---------- */
+.search-item p { margin: 0 0 2px; }
+.search-results .load-more { margin: 10px 0; }
+.registered .cards { margin-top: 8px; }
+.table-wrap { overflow-x: auto; }
+.registered .rows td, .registered .rows th { padding: 4px 8px; font-size: var(--fs-sm); }
+
 .side-status { padding: 12px; }
 .side-status > h2 { margin: 2px 4px 10px; font-size: var(--fs); }
 .side-status .card { margin-bottom: 10px; padding: 10px 12px; }
@@ -152,7 +181,8 @@ body[data-mode="mcs"] .panel-view { max-width: 920px; }
      ID and counts stay in the patient sheet. */
   body[data-mode="mcs"] .page-title, body[data-mode="mcs"] .page-sub { display: contents; }
   body[data-mode="mcs"] .page-title h1 { flex: 1; min-width: 0; line-height: var(--head-h); }
-  body[data-mode="mcs"] .page-meta { display: none; }
+  body[data-mode="mcs"] .page-meta { display: block; order: 5; flex-basis: 100%; margin: -4px 0 4px; white-space: normal; }
+  body[data-mode="mcs"] .page-meta:empty { display: none; }
   /* A zero-height break ends the bar's first line; chips and the snapshot time (how old the data is) follow. */
   body[data-mode="mcs"] .page-head::after { content: ""; order: 3; flex-basis: 100%; }
   body[data-mode="mcs"] #patient-chips { order: 4; flex-wrap: wrap; margin: -4px 0 6px; }

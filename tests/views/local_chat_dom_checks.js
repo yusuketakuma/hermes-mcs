@@ -355,5 +355,114 @@ async function checkDisplayGaps() {
   assert.equal(details.open, true);
   assert.match(content(document.activeElement), /合成の分類[\s\S]*合成の長い記録/);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); console.log("local chat DOM contracts passed");}
+async function checkMcsData() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  const texts = nodes => nodes.map(node => node.textContent).join("|");
+  // 1. Post row: urgency with reasons, summary state, self/own station, latest reply, observed flags and changes.
+  const row = {message_id: 11, body_state: "full", body_complete: true, body_text: "合成", sender_name: "合成 看護", sender_self: true, sender_own_station: true,
+    urgency: {level: "high", label: "至急", qc_note: "？", reasons: ["合成の根拠"], review_label: "要確認"}, summary_state_label: "要約 作成失敗", summary_state: "failed",
+    last_reply: {posted_at_ts: 1793491200, sender_name: "合成 薬剤", profession: "薬剤師", complete: false},
+    flags: {mention_self: {value: true}, pinned: {value: null, state: "not_fetched"}, bookmarked: {value: false}},
+    change_observed_at: 1793491200, deleted_observed_at: null,
+    stamps: {state: "observed", self: "👍", counts: [{emoji: "👍", count: 1}], actors: {state: "stale", items: [{emoji: "👍", name: "合成 医師", self: false}], observed_at: 1793491200}}};
+  const plain = content(run("post")(row)), detailed = content(run("post")(row, true));
+  assert.match(plain, /合成 看護（自分）/); assert.doesNotMatch(plain, /自事業所/, "self is not repeated as own station");
+  assert.match(plain, /至急？/); assert.match(plain, /要確認/); assert.doesNotMatch(plain, /AI|判定/);
+  assert.match(detailed, /緊急度の根拠: 「合成の根拠」/);
+  assert.match(plain, /要約 作成失敗/); assert.doesNotMatch(plain, /要約なし/);
+  assert.match(plain, /最新返信 .* 合成 薬剤・薬剤師（未取得の返信あり）/);
+  assert.match(plain, /@自分宛て/); assert.doesNotMatch(plain, /ピン留め|ブックマーク/);
+  assert.match(plain, /変更を検知（取得側の観測 /); assert.doesNotMatch(plain, /削除を観測/);
+  assert.match(plain, /自分のスタンプ 👍/);
+  assert.match(detailed, /押した人（古い情報）: 👍 合成 医師/);
+  assert.equal(texts(run("urgencyChips")({level: "low", label: null, review_label: null})), "");
+  const other = content(run("post")({message_id: 12, body_state: "full", body_complete: true, body_text: "合成", sender_name: "合成 事務", sender_own_station: true, deleted_observed_at: 1793491200}));
+  assert.match(other, /自事業所/); assert.match(other, /削除を観測（取得側の観測 /);
+  assert.equal(run("lastReplyChip")({posted_at_ts: 1793491200, sender_name: "合成", complete: true}).className, "chip chip-muted");
+  // 2. Stamps: each actor-list state is said in the detail.
+  const actors = state => texts(run("stampDetail")({state: "observed", counts: [{emoji: "👍", count: 1}], actors: {state}}));
+  assert.equal(actors("not_fetched"), "押した人: 未取得"); assert.equal(actors("failed"), "押した人: 取得失敗");
+  assert.equal(texts(run("stampDetail")({state: "invalid"})), "スタンプの記録を読み取れませんでした。");
+  // 3/4. Identity and freshness on the heading and list.
+  assert.equal(run("patientTitle")({heading: "合成 花子（合成施設）", patient_name: "合成 花子", project_id: 1}), "合成 花子（合成施設）");
+  assert.equal(run("placeNames")({heading: "合成 花子（合成施設）", station_name: "合成施設", group_name: "合成グループ"}).join("|"), "合成グループ");
+  const fetch = patient => texts(run("fetchChips")({history_floor: -1, ...patient}));
+  assert.equal(fetch({fetch_state: "complete"}), "");
+  assert.equal(fetch({fetch_state: "incomplete", fetch_reason_label: "通信エラー"}), "一部未取得（通信エラー）");
+  assert.equal(fetch({fetch_state: "forbidden"}), "閲覧権限なし");
+  assert.equal(fetch({fetch_state: "complete", initial_import: "capturing"}), "初回取込中");
+  assert.equal(fetch({fetch_state: "complete", initial_import: "held"}), "初回取込 保留");
+  assert.equal(fetch({fetch_state: "complete", initial_import: "unknown"}), "初回取込 状態不明");
+  assert.equal(fetch({fetch_state: "complete", history_floor: 5}), "履歴全体の取得は未確認");
+  assert.match(run("fetchChips")({fetch_state: "failed", history_floor: -1, last_complete_fetch: null})[0].title, /完了した取得の記録なし/);
+  assert.equal(run("mcsRoomLink")("https://example.invalid/projects/1")[0].rel, "noreferrer noopener");
+  assert.equal(run("mcsRoomLink")("https://example.invalid/projects/1")[0].target, "_blank");
+  assert.equal(run("mcsRoomLink")("file:///synthetic").length, 0); assert.equal(run("mcsRoomLink")("http://example.invalid").length, 0);
+  // 5. Counts: partial is never 0件, failed is 取得できません; list badges likewise.
+  const counts = data => texts(run("countChips")(data));
+  assert.equal(counts({open_signals: {state: "complete", count: 2}, replies: {state: "observed", requests: 3, not_found: 1, unknown: 1}}), "未解消シグナル 2|返答確認 依頼 3（返答が見つからない 1・確認できない 1）");
+  assert.equal(counts({open_signals: {state: "partial", count: 0}, replies: {state: "failed"}}), "未解消シグナル 判定中|返答確認 取得できません");
+  assert.equal(counts({open_signals: {state: "partial", count: 2}, replies: {state: "observed", requests: 0}}), "未解消シグナル 2以上（判定中）|返答確認 依頼 0");
+  assert.equal(counts({open_signals: {state: "failed", count: null}, replies: {}}), "未解消シグナル 取得できません|返答確認 取得できません");
+  const badge = signals => run("signalBadge")(signals)?.textContent ?? null;
+  assert.equal(badge({state: "complete", count: 0}), null); assert.equal(badge({state: "complete", count: 3}), "シグナル 3");
+  assert.equal(badge({state: "partial", count: 0}), "シグナル 判定中"); assert.equal(badge({state: "partial", count: 1}), "シグナル 1+");
+  assert.equal(badge({state: "failed", count: null}), "シグナル 不明");
+  run("state.project = 101; state.countBox = el('span'); state.countRequest = 0");
+  let shown = null; run("showView = view => {globalThis.shownView = view;}"); // stubbed navigation
+  sandbox.api = async kind => {assert.equal(kind, "counts"); return {open_signals: {state: "complete", count: 1}, replies: {state: "observed", requests: 1}};};
+  await run("loadCounts()");
+  const box = run("state.countBox");
+  box.children[1].onclick(); shown = run("globalThis.shownView");
+  assert.equal(shown, "replies"); assert.equal(box.children[0].tagName, "button");
+  sandbox.api = async () => {throw new Error("x");};
+  await run("loadCounts()");
+  assert.equal(texts(box.children), "未解消シグナル 取得できません|返答確認 取得できません");
+  // 7. 連携サマリー: the four states and a failed latest fetch.
+  const karte = value => content(run("karteCard")(value));
+  assert.match(karte({state: "present", comment: "合成の連携コメント", updated_at: "2026-11-01", updater_profession: "看護師"}), /あり[\s\S]*合成の連携コメント[\s\S]*MCS の更新 2026-11-01 · 更新した職種 看護師/);
+  assert.match(karte({state: "present", comment: "合成", failed_at: 1793491200}), /前回取得した内容を表示しています/);
+  assert.match(karte({state: "not_fetched"}), /未取得[\s\S]*まだ取得していません/);
+  assert.match(karte({state: "failed", failed_at: 1793491200}), /取得失敗[\s\S]*一度も取得できていません/);
+  assert.match(karte({state: "empty"}), /空（MCS に記載がありません）[\s\S]*空でした/);
+  assert.match(karte(null), /取得できませんでした/);
+  // 9. Search: source and page, notes, empty, 続きを検索, unavailable.
+  run("state.project = 101; state.query = '合成'; state.panel = ''");
+  const pages = [{state: "searched", title: "検索結果", head: [], items: [{source: "body", text: "合成の本文", message_id: 1}, {source: "ocr", page: 2, text: "合成のOCR", message_id: 2}], notes: ["添付の一部は未処理です。"], next_cursor: "c1", range_complete: false},
+    {state: "searched", items: [{source: "ocr", page: null, text: "合成の続き", message_id: 3}], notes: [], next_cursor: null, range_complete: true}];
+  const cursors = [];
+  sandbox.api = async (kind, params) => {assert.equal(kind, "sources"); cursors.push(params.cursor); return pages.shift();};
+  await run("loadSearch()");
+  let view = content(byId("panel-view"));
+  assert.match(view, /合成の本文[\s\S]*本文[\s\S]*合成のOCR[\s\S]*添付OCR 2ページ/); assert.match(view, /添付の一部は未処理です/);
+  assert.equal(run("state.search.more").hidden, false);
+  await run("state.search.more.onclick()");
+  assert.equal(cursors.join("|"), "|c1"); view = content(byId("panel-view"));
+  assert.match(view, /合成のOCR[\s\S]*合成の続き\n\n添付OCR\n/); assert.equal(run("state.search.more").hidden, true);
+  sandbox.api = async () => ({state: "unavailable", items: [], notes: [], empty: "合成の検索していない理由"});
+  await run("loadSearch()");
+  assert.match(content(byId("panel-view")), /合成の検索していない理由/);
+  assert.equal(run("errorTexts.bad_search_filter").includes("検索の条件"), true);
+  assert.equal(run("errorTexts.search_cursor_invalid").includes("もう一度検索"), true);
+  // 8. MCS登録データ: separate record, states, compact rows and 他N件.
+  const registered = data => content(run("renderRegistered")(data));
+  assert.match(registered({state: "unavailable", collection_enabled: true}), /チャットの投稿とは別の記録[\s\S]*読み取れません/);
+  assert.match(registered({state: "not_linked", collection_enabled: false, datasets: []}), /収集は設定で無効[\s\S]*取得していません/);
+  const listed = run("renderRegistered")({state: "listed", collection_enabled: true, datasets: [
+    {dataset: "medication_periods", label: "合成の服薬期間", state: "complete", state_label: "取得済み", rows: [{begin_date: "2026-01-01", end_date: null, medicines: ["合成薬A"]}], rows_total: 3},
+    {dataset: "observation_values", label: "合成の測定値", state: "failed", state_label: "取得失敗", rows: [], rows_total: 0}]});
+  const listedText = content(listed);
+  assert.match(listedText, /合成の服薬期間[\s\S]*取得済み[\s\S]*開始[\s\S]*2026-01-01[\s\S]*未記録[\s\S]*合成薬A[\s\S]*他2件（先頭 1 件を表示）/);
+  assert.match(listedText, /合成の測定値[\s\S]*取得失敗[\s\S]*行を表示できません（取得失敗）/);
+  assert.ok(find(listed, node => node.tagName === "table"));
+  // 10. The open patient is remembered by #project=N and found even off the first page.
+  sandbox.location.hash = "#project=205";
+  run("state.patients = [{project_id: 1}]");
+  sandbox.api = async (kind, params) => {assert.equal(params.q, "205"); return {items: [{project_id: 2050}, {project_id: 205, heading: "合成"}]};};
+  assert.equal((await run("rememberedPatient()")).project_id, 205);
+  sandbox.location.hash = "#other";
+  assert.equal(await run("rememberedPatient()"), null);
+  sandbox.location.hash = "";
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});
