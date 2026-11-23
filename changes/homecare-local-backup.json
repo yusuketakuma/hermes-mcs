@@ -1,12 +1,19 @@
 {
   "category": "added",
   "title": "在宅記録の台帳をローカルバックアップの対象に追加",
-  "summary": "在宅記録の台帳が $MCS_ROOT/data/homecare.db にあると、原本 DB と同じく毎日検証したコピー（homecare-YYYYMMDD.db、3世代）と、更新を適用する前のコピー（homecare-preupdate-*.db、新しい3つ）が data/backups に作られます。mcs_local_backup.py の list --verify で台帳の世代も完全検査でき、restore で1世代を新しいディレクトリへ homecare.db として戻せます。台帳は手入力の記録で MCS から取り直せないためです。台帳のコピーが作れない（台帳でないファイルが置かれている・容量不足など）ときは、更新の適用は何も変えずに止まります。",
+  "summary": "在宅記録の台帳が $MCS_ROOT/data/homecare.db にあると、原本 DB と同じく毎日検証したコピー（homecare-YYYYMMDD.db、3世代）と更新を適用する前のコピー（homecare-preupdate-*.db、新しい3つ）が data/backups に作られます。台帳は手入力の記録で MCS から取り直せないためです。mcs_local_backup.py の list --verify で検査し、restore で新しいディレクトリへ戻せます。台帳のコピーが作れないときは、更新の適用は何も変えずに止まります。",
   "upgrade": "追加操作は不要です。台帳を使う場合は --homecare-db に $MCS_ROOT/data/homecare.db を指定すると対象になります。ほかの場所の台帳や、まだ作っていない台帳はバックアップされず、新しく作られもしません。台帳の復元はチャット表示を止めて手でファイルを入れ替える手順で、配送の保留や承認は使いません（docs/guides/BACKUP.md）。原本 DB を復元するときは、移した古い data/ から homecare.db も新しい data/ へ移してください。暗号化した外部バックアップには台帳は入りません。",
   "details": [
     "日次の台帳コピーは収集の定期処理の後片付けで原本 DB のあとに作り、失敗は homecare_backup として記録する。",
     "台帳の検査は quick_check／integrity_check・foreign_key_check と、台帳の基盤 migration の記録で行う。",
     "台帳の世代は原本 DB の復元点・配送記録の保持期間の計算に数えない。"
   ],
-  "refs": ["mcs/core/local_backup.py", "mcs/core/backup_names.py", "mcs/ops/mcs_local_backup.py", "mcs/ops/backup/held_restore.py", "mcs/ops/update_apply.py", "mcs/ingest/run_check.py"]
+  "refs": [
+    "mcs/core/local_backup.py",
+    "mcs/core/backup_names.py",
+    "mcs/ops/mcs_local_backup.py",
+    "mcs/ops/backup/held_restore.py",
+    "mcs/ops/update_apply.py",
+    "mcs/ingest/run_check.py"
+  ]
 }
