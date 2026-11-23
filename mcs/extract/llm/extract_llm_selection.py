@@ -176,7 +176,7 @@ def upgrade_status(db, *, model: str | None) -> dict:
         EXISTS ({_hold_sql()}) AS held,
         EXISTS (SELECT 1 {_ERROR_ROWS_SQL}
             AND COALESCE(json_extract({json_or_null('e.meta')},'$.attempts'),0)>=5) AS failed
-        FROM messages m WHERE {ELIGIBLE_MESSAGE}""", (KIND, EXTRACT_VERSION))
+        FROM messages m WHERE {ELIGIBLE_MESSAGE}""")
     for row in rows:
         meta = loads_dict(row["latest_meta"]) or {}
         integrity = meta.get("integrity")
@@ -476,7 +476,7 @@ def _focus_patients(ledger, scope_sql: str = "") -> list:
             # new arrivals would hold a place it cannot use
             f" GROUP BY m.project_id HAVING SUM(CASE WHEN {_FRESH_SQL} THEN 0 ELSE 1 END) > 0"
             " ORDER BY COUNT(*), m.project_id LIMIT ?",
-            (KIND, EXTRACT_VERSION, time.time(), _FOCUS_PATIENTS))]
+            (time.time(), _FOCUS_PATIENTS))]
         hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids, "scope": scope_sql}
     return hit["pids"]
 
@@ -494,7 +494,7 @@ def patient_progress_counts(db) -> dict:
         f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL})), 0) "
         "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
         f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",
-        (KIND, EXTRACT_VERSION, time.time())).fetchone()
+        (time.time(),)).fetchone()
     return {"active_patients": active, "extraction_complete": max(0, active - remaining),
             "focus_eligible": focus, "focus_targets": min(focus, _FOCUS_PATIENTS)}
 
@@ -697,13 +697,11 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
                                                fresh, archived, rehold, bounded=not cloud_only,
                                                prioritize_patients=prioritize_patients, cloud_followup=cloud_only), (
-            KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
             shard[1] if shard else None,
             shard[1] if shard else 1,
             shard[0] if shard else 0,
             now,
-            KIND, EXTRACT_VERSION,
             now, *((n,) if not cloud_only else ())))
         try:
             if not cloud_only:

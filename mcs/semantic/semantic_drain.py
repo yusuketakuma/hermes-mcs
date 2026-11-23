@@ -230,7 +230,12 @@ _REPROCESS_JOB_MAX_BYTES = semantic_store._REPROCESS_JOB_MAX_BYTES
 # for the bounded raw-CAS quarantine before any admission or model call.
 
 
-_BACKLOG_INVALIDATE_S = 300.0
+# Backlog lanes run the O(corpus) preamble maintenance (projection
+# invalidation and the reprocess walk slice) under the shared run lock at
+# most once per this interval per process; the tick's realtime lane still
+# runs both on every pass, so the backlog copy is only a freshness backstop
+# and must not cost a slice of lock time per job.
+_BACKLOG_INVALIDATE_S = 600.0
 # Per-pass cap for the inference reprocess keyset walk: it is resumable by
 # cursor, so a short slice each drain still advances it without letting one
 # pass consume the window the model jobs and the snapshot tail need.
@@ -326,11 +331,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     global _invalidated_at
     # The scan is O(corpus) (thread_bundle per canonical thread) and the
     # backlog resident calls run_due once per job under the run lock, so
-    # that lane refreshes at most every _BACKLOG_INVALIDATE_S; the tick
-    # (_semantic_enabled + realtime lane) still runs it every pass.
+    # that lane runs the preamble maintenance (invalidation and the
+    # reprocess slice) at most every _BACKLOG_INVALIDATE_S; the tick
+    # (_semantic_enabled + realtime lane) still runs both every pass.
     now_m = time.monotonic()
-    if not cloud_only and (lane != "backlog" or _invalidated_at is None \
-            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S):
+    maintenance = not cloud_only and (lane != "backlog" or _invalidated_at is None
+                                      or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S)
+    if maintenance:
         from semantic_publication import invalidate_projections
         _phase_t = time.perf_counter()
         invalidate_projections(ledger.db, scfg)
@@ -339,7 +346,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if scfg["mode"] == "off":
         _hold_tail()
         return out
-    if not cloud_only:
+    if maintenance:
         _phase_t = time.perf_counter()
         try:
             out['inference_reprocess'] = reprocess_step(

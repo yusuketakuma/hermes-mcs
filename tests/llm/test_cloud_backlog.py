@@ -41,6 +41,12 @@ def installed_pool_log_helper(tmp_path, monkeypatch):
     monkeypatch.setattr(backlog, "helper_path", helper)
 
 
+@pytest.fixture(autouse=True)
+def _single_semantic_lock_poll(monkeypatch):
+    """One acquire per semantic lock try: the worker tests pin the try/yield cadence."""
+    monkeypatch.setattr(backlog, "_SEMANTIC_LOCK_TRY_S", 0.0)
+
+
 def test_shared_slots_count_reduced_limits_and_release(tmp_path):
     with backlog.request_slot(tmp_path, 2) as first:
         assert first
@@ -1867,3 +1873,32 @@ def test_no_backlog_worker_spawns_while_the_window_is_open_but_the_route_is_not(
         assert spawned == [True, True]            # patient-context children only
     finally:
         owner.close()
+
+
+def test_semantic_lock_try_polls_released_window(monkeypatch):
+    """A semantic lock try keeps polling at RUN_LOCK_POLL_S and wins a window that opens mid-try."""
+    import writer_lock
+    clock, polls, sleeps = [0.0], [], []
+    lock = SimpleNamespace(RUN_LOCK_POLL_S=writer_lock.RUN_LOCK_POLL_S,
+                           acquire_run_lock=lambda: polls.append(clock[0]) or (7 if clock[0] >= 1.0 else None))
+    monkeypatch.setattr(backlog.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    assert backlog._poll_run_lock(lock, 10.0, lambda: True) == 7
+    assert sleeps and all(s == writer_lock.RUN_LOCK_POLL_S for s in sleeps)
+    assert len(polls) == len(sleeps) + 1
+
+
+def test_semantic_lock_try_stops_on_fence_or_expiry(monkeypatch):
+    clock = [0.0]
+    lock = SimpleNamespace(RUN_LOCK_POLL_S=0.2, acquire_run_lock=lambda: None)
+    monkeypatch.setattr(backlog.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(backlog.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    assert backlog._poll_run_lock(lock, 1.0, lambda: True) is None
+    assert clock[0] == pytest.approx(1.0)
+    clock[0] = 0.0
+    assert backlog._poll_run_lock(lock, 10.0, lambda: False) is None
+    assert clock[0] == 0.0
