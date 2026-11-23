@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import homecare_links as links
 import homecare_records as records
+import homecare_route as route
 import homecare_team as team
 import homecare_visits as visits
 from homecare_records import record_id as _id
@@ -13,7 +14,8 @@ from homecare_records import record_id as _id
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
                     "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "invalid_fields", "not_found",
-                    "project_not_allowed", "bad_request"})
+                    "project_not_allowed", "route_unavailable", "route_failed",
+                    "too_many_stops", "bad_request"})
 
 
 def read(db, route, params, *, registry, mcs_patients):
@@ -55,7 +57,7 @@ def read(db, route, params, *, registry, mcs_patients):
     raise ValueError("bad_request")
 
 
-def write(db, op, body, *, registry, allowed, mcs_patients):
+def write(db, op, body, *, registry, allowed, mcs_patients, route_settings=None):
     """POST api/hc/<op>; the body names its actor, and updates carry the version they edit.
 
     A new link must name an MCS room in the current snapshot and scope; an unlink only needs the scope, so a
@@ -67,6 +69,11 @@ def write(db, op, body, *, registry, allowed, mcs_patients):
     module, _, sub_op = op.partition("/")
     if sub_op:
         return registry.module(module).api.write(db, sub_op, body, actor=actor)
+    if op == "route.plan":
+        # Sends addresses out, so it is a deliberate POST with an actor, never a page load.
+        staff = body.get("staff")
+        return route.plan(db, route_settings, body.get("date"), actor=actor,
+                          staff_id=None if staff in (None, "") else _id(staff))
     if op == "visit.create":
         return {"record": visits.create(db, registry, body.get("values"), actor=actor)}
     if op == "visit.update":

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
+import urllib.request
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -13,6 +15,7 @@ import homecare_catalog
 import homecare_links as links
 import homecare_modules
 import homecare_records as records
+import homecare_route as route
 import homecare_store
 import homecare_team as team
 import homecare_visits as visits
@@ -72,7 +75,7 @@ def test_database_is_private_migrated_per_module_and_reopenable(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
     again = homecare_store.connect(path, REGISTRY.modules)
     assert [tuple(row) for row in again.execute("SELECT module, number FROM schema_migrations")] == [
-        ("core", 1), ("core", 2), ("pharmacy", 1)]
+        ("core", 1), ("core", 2), ("core", 3), ("pharmacy", 1)]
     again.close()
 
 
@@ -317,7 +320,7 @@ def server(tmp_path):
     path = tmp_path / "homecare.db"
     homecare_store.connect(path, REGISTRY.modules).close()
     return SimpleNamespace(server_port=8765, token="synthetic-capability", csrf="synthetic-csrf", snapshot="unused",
-                           allowed={1}, homecare=path, homecare_registry=REGISTRY)
+                           allowed={1}, homecare=path, homecare_registry=REGISTRY, route_settings=None)
 
 
 BODY = {"values": {"name": "合成 薬剤師", "qualifications": ["pharmacy.pharmacist"]}, "actor": None}
@@ -441,6 +444,59 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     listed = homecare_api.read(db, "pharmacy/prescriptions", {"patient": str(row["patient_id"])},
                                registry=REGISTRY, mcs_patients=scope)
     assert len(listed["items"]) == 1
-    for route in ("nursing/visits", "core/visits", "pharmacy/unknown"):
+    for path in ("nursing/visits", "core/visits", "pharmacy/unknown"):
         with pytest.raises(ValueError, match="bad_request"):
-            homecare_api.read(db, route, {"patient": "1"}, registry=REGISTRY, mcs_patients=scope)
+            homecare_api.read(db, path, {"patient": "1"}, registry=REGISTRY, mcs_patients=scope)
+
+
+class FakeServices:
+    """Stands in for the GSI address search and openrouteservice; records what would have been sent."""
+
+    def __init__(self, places):
+        self.places, self.sent = places, []
+
+    def __call__(self, request):
+        self.sent.append(request)
+        if request.full_url.startswith(route.GEOCODE_URL):
+            address = parse_qs(urlsplit(request.full_url).query)["q"][0]
+            return [{"geometry": {"coordinates": self.places[address]}}] if address in self.places else []
+        jobs = json.loads(request.data)["jobs"]
+        return {"routes": [{"steps": [{"type": "start"}] + [
+            {"type": "job", "id": job["id"], "arrival": 600 * n, "duration": 300 * n}
+            for n, job in enumerate(reversed(jobs), 1)] + [{"type": "end"}]}]}
+
+
+def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(db, tmp_path):
+    me = first_staff(db)
+    settings_path = tmp_path / "route.json"
+    settings_path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
+    settings_path.chmod(0o644)
+    with pytest.raises(SystemExit, match="chmod 600"):
+        route.RouteSettings(settings_path)
+    settings_path.chmod(0o600)
+    settings = route.RouteSettings(settings_path)
+    one = patient(db, me["staff_id"], name="合成 一郎", address="合成市2-2", caution_note="秘密のメモ")
+    two = patient(db, me["staff_id"], name="合成 二郎", address="合成市3-3")
+    none = patient(db, me["staff_id"], name="合成 三郎")
+    ids = [visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])["visit_id"]
+           for row in (one, two, none)]
+    fake = FakeServices({"合成市1-1": [139.7, 35.6], "合成市2-2": [139.71, 35.61], "合成市3-3": [139.72, 35.62]})
+    with pytest.raises(ValueError, match="route_unavailable"):
+        route.plan(db, None, "2026-11-24", actor=me["staff_id"], fetch=fake)
+    result = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
+    assert [stop["visit_id"] for stop in result["stops"]] == [ids[1], ids[0]] and result["unlocated"] == [ids[2]]
+    sent = " ".join(r.full_url + (r.data or b"").decode() for r in fake.sent)
+    assert "合成 一郎" not in sent and "秘密のメモ" not in sent and str(one["patient_id"]) not in sent.split("q=")[0]
+    assert all(r.get_header("Authorization") in (None, "synthetic-key-0000") for r in fake.sent)
+    geocoded = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
+    route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
+    again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
+    assert len(again) - len(geocoded) == 1  # only the origin; patient locations are reused
+    failing = lambda request: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
+    with pytest.raises(ValueError, match="route_failed"):
+        route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=failing)
+
+
+def test_route_transport_refuses_other_hosts():
+    with pytest.raises(ValueError, match="route_failed"):
+        route._fetch(urllib.request.Request("https://example.invalid/"))

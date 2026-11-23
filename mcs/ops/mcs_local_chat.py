@@ -18,6 +18,7 @@ from mcs_view import View
 import local_chat_view
 import homecare_api
 import homecare_catalog
+import homecare_route
 import homecare_store
 
 ASSETS = Path(__file__).resolve().parents[1] / "views" / "local_chat"
@@ -89,13 +90,14 @@ def homecare_response(server, method, route, query=None, body=None):
             return homecare_api.read(db, route, params, registry=registry,
                                      mcs_patients=lambda: mcs_patients(server.snapshot, server.allowed))
         return homecare_api.write(db, route, body, registry=registry, allowed=server.allowed,
-                                  mcs_patients=lambda: mcs_patients(server.snapshot, server.allowed))
+                                  mcs_patients=lambda: mcs_patients(server.snapshot, server.allowed),
+                                  route_settings=server.route_settings)
     finally:
         db.close()
 
 
 class ChatServer(ThreadingHTTPServer):
-    def __init__(self, snapshot, allowed, port=0, homecare=None, modules=("pharmacy",)):
+    def __init__(self, snapshot, allowed, port=0, homecare=None, modules=("pharmacy",), route_settings=None):
         self.snapshot = Path(snapshot)
         self.allowed = None if allowed is None else frozenset(allowed)
         self.token = secrets.token_urlsafe(32)
@@ -103,6 +105,7 @@ class ChatServer(ThreadingHTTPServer):
         self.csrf = secrets.token_urlsafe(32)
         self.homecare = None if homecare is None else Path(homecare)
         self.homecare_registry = homecare_catalog.registry(modules)
+        self.route_settings = route_settings
         if self.homecare is not None:
             homecare_store.connect(self.homecare, self.homecare_registry.modules).close()
         super().__init__(("127.0.0.1", port), ChatHandler)
@@ -174,7 +177,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             name, mime = FILES[route]
             self._send(200, (ASSETS / name).read_bytes(), mime)
         elif route == "api/session":
-            self._json(200, {"csrf": self.server.csrf, "homecare": self.server.homecare is not None})
+            self._json(200, {"csrf": self.server.csrf, "homecare": self.server.homecare is not None,
+                             "routes": self.server.route_settings is not None})
         elif route.startswith("api/hc/"):
             self._homecare("GET", route[7:], query)
         elif route.startswith("api/"):
@@ -240,6 +244,8 @@ def main(argv=None):
                         help="Home-care records database to read and edit (created on first use)")
     parser.add_argument("--homecare-module", action="append", choices=sorted(homecare_catalog.AVAILABLE),
                         help="Occupation module to enable with --homecare-db; repeatable (default: pharmacy)")
+    parser.add_argument("--route-settings", type=Path,
+                        help="Private JSON (chmod 600) enabling visit routes; sends addresses only, when asked")
     args = parser.parse_args(argv)
     if args.project and any(pid <= 0 for pid in args.project) or not 0 <= args.port <= 65535:
         parser.error("invalid project or port")
@@ -248,9 +254,15 @@ def main(argv=None):
         view.close()
     except (ValueError, OSError, sqlite3.Error):
         parser.exit(2, "Published snapshot unavailable; no server started.\n")
+    if args.route_settings and not args.homecare_db:
+        parser.error("--route-settings needs --homecare-db")
+    try:
+        routes = None if args.route_settings is None else homecare_route.RouteSettings(args.route_settings)
+    except (OSError, ValueError) as exc:
+        parser.exit(2, f"Route settings unavailable ({type(exc).__name__}); no server started.\n")
     try:
         server = ChatServer(args.snapshot, args.project, args.port, homecare=args.homecare_db,
-                            modules=args.homecare_module or ("pharmacy",))
+                            modules=args.homecare_module or ("pharmacy",), route_settings=routes)
     except (OSError, sqlite3.Error, RuntimeError):
         parser.exit(2, "Home-care database unavailable; no server started.\n")
     with server:
