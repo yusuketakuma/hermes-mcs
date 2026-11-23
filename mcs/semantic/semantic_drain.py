@@ -536,8 +536,17 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     hold_lane = lane or 'combined'
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
     def select_cloud(*args, **kwargs):
-        return _unlocked("select", _select_cloud_due, *args, **kwargs, deadline=deadline,
-                         isolated=run_lock_fd is not None)
+        try:
+            return _unlocked("select", _select_cloud_due, *args, **kwargs, deadline=deadline,
+                             isolated=run_lock_fd is not None)
+        except writer_lock.RunLockLost as e:
+            # Same outcome as a loss in a job's transport window: no further
+            # writes, and the pass record (with run_lock_lost_detail) is still
+            # returned to the caller instead of ending the worker silently.
+            out["run_lock_lost"] = ("held" if e.held else "updated" if e.updated
+                                    else "timeout")
+            result["errors"].append("semantic: run_lock_lost")
+            raise _CloudSelectionIncomplete("run_lock_lost") from e
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
         selector = (select_cloud if cloud_only else
@@ -1027,6 +1036,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 result["errors"].append("semantic: jev_payment_required")
                 out["jev_blocked"] = "payment_required"
                 break
+    if out.get("run_lock_lost"):
+        # a refill selection lost the run lock: nothing below may write
+        _hold_tail()
+        return out
     if held_after and not saw_held and sum(selected.values()):
         sched_mut.update(hold_cursor_changed=True, hold_cursor_lane=hold_lane, hold_cursor=None)
     if llm_health["fed"]:

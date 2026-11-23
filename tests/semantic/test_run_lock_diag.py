@@ -334,3 +334,34 @@ def _lock_free(path):
         return False
     finally:
         os.close(other)
+
+
+def test_cloud_selection_lock_loss_returns_the_pass_record(lock_env, monkeypatch):
+    """A reacquire lost after the unlocked selection ends the pass like a
+    loss in a model window: no writes, and the caller still gets a record
+    whose loss detail names the selection."""
+    tmp_path, path, fd = lock_env
+    monkeypatch.setattr(semantic_drain, "RUN_LOCK_REACQUIRE_S", 0.05)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
+    other = []
+
+    def select(*args, **kwargs):
+        other.append(writer_lock.acquire_run_lock(path))   # a tick takes it
+        return [], [], [], [], {"turn": None}
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select)
+    db = _seeded(tmp_path)
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
+                                     jev_client=_FakeJev(), max_jobs=1, run_lock_fd=fd,
+                                     lane="backlog", cloud_only=True)
+        assert out["run_lock_lost"] == "timeout"
+        assert out["cloud_selection_reason"] == "run_lock_lost"
+        assert out["run_lock_lost_detail"]["kind"] == "select"
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts "
+                             "WHERE kind='semantic_drain_run'").fetchone()[0] == 0
+    finally:
+        for o in other:
+            if o is not None:
+                os.close(o)
+        db.close()

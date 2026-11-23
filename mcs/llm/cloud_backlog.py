@@ -811,6 +811,7 @@ def worker(parent, *, index=None, context_only=False):
                             "reader_close_failed": "cloud_selection_reader_close_failed",
                             "memory": "cloud_selection_memory",
                             "selection_busy": "cloud_selection_busy",
+                            "run_lock_lost": "cloud_selection_run_lock_lost",
                         }.get(result.get("cloud_selection_reason"), "cloud_selection_incomplete")
                     elif phase % 2 and result.get("budget_exhausted") is True:
                         record["reason"] = "jev_backlog_budget_reserved"

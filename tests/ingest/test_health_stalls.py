@@ -486,8 +486,8 @@ def test_worker_older_than_its_code_is_reported_without_a_delivery_stall(db, mon
 
 
 def test_health_run_carries_each_stage_elapsed(db):
-    """The tick's stdout is discarded by the scheduler, so health is where
-    the per-stage seconds (each stage's run-lock time) stay observable."""
+    """health carries the latest tick's per-stage elapsed seconds next to
+    the run summary; non-finite or non-numeric entries are dropped."""
     result = {"errors": [], "notify": {},
               "run": {"elapsed_s": 143.0, "overshoot_s": 0, "slowest_stage": "derive"},
               "stage_elapsed_s": {"fetch": 12.5, "derive": 98.25, "semantic": 0,

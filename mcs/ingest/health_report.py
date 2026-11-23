@@ -1408,8 +1408,8 @@ def build_health(db, result: dict, status: str,
                                  "reason": "observation_unavailable"}
     if result.get("deferred_stages"):
         run["deferred_stages"] = list(result["deferred_stages"])
-    # per-stage seconds of this tick, so the run-lock hold of each stage is
-    # observable without the tick's stdout (which the scheduler discards)
+    # per-stage elapsed seconds of the latest tick (unlocked model windows
+    # included), readable alongside the run log
     stages = result.get("stage_elapsed_s")
     if isinstance(stages, dict):
         run["stage_elapsed_s"] = {

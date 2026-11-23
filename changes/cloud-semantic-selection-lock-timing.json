@@ -1,12 +1,12 @@
 {
   "category": "fixed",
   "title": "クラウド意味解析のロック保持時間の記録を正す",
-  "summary": "クラウド意味解析は、ロックを手放して対象を選んでいる時間とロックの取り直しを待つ時間も、ロックを持ち続けた時間として記録していました。この時間を選定の時間として分けて記録します。health.json には収集1回ごとの段別の所要時間も載せます。処理の内容と順序は変えていません。",
+  "summary": "クラウド意味解析は、ロックを手放して対象を選んでいる時間とロックの取り直しを待つ時間も、ロックを持ち続けた時間として記録していました。この時間を選定の時間として分けて記録します。選定の後にロックを取り直せなかった回も記録が残ります。health.json には直近の収集の段別の経過時間も載せます。",
   "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更は不要です。",
   "details": [
     "クラウド意味解析の対象選定（読取り専用の別接続で、ロックを手放して実行）を、モデル呼出しと同じ窓として扱う。所要時間は pass 記録の transport.select_transport_s、取り直しの待ちは select_reacquire_s に入り、lock_hold には含めない。",
-    "選定の後でロックを取り直せなかったときは、run_lock_lost_detail.kind が select になる。",
-    "health.json の run.stage_elapsed_s に、その回の収集の段ごとの秒数を載せる。これまでは収集の標準出力にだけあり、定期実行では残らなかった。"
+    "選定の後でロックを取り直せなかったときは、その回の処理を書込みなしで終え、pass 記録に reason=cloud_selection_run_lock_lost と run_lock_lost_detail.kind=select を残す。従来は記録を出さずに常駐処理が終了していた。",
+    "health.json の run.stage_elapsed_s に、直近の収集の段ごとの経過秒数を載せる（ロックを手放したモデル呼出しの時間も含む）。収集の実行ログに加えて、health.json でも確認できる。"
   ],
   "refs": [
     "mcs/semantic/semantic_drain.py",
