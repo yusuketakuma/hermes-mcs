@@ -363,15 +363,31 @@ def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
 
 def preupdate_homecare_backup(*, deadline: float | None = None) -> str | None:
     """Verified copy of the home-care records before an apply, only when that
-    file exists; the newest BACKUP_KEEP such copies are kept. Returns the path or None."""
+    file exists. Returns the path or None; nothing is rotated here — the
+    attempt discards its own copy when it fails and rotates when it succeeds."""
     if not os.path.isfile(HOMECARE_DB):
         return None
-    dest = _stamped_copy(HOMECARE_DB, "homecare-preupdate", _valid_homecare, deadline)
-    for old in sorted(glob.glob(os.path.join(BACKUP_DIR, "homecare-preupdate-*.db")))[:-BACKUP_KEEP]:
-        if backup_class(os.path.basename(old)) == "homecare_preupdate":
-            with suppress(OSError):
-                os.unlink(old)
-    return dest
+    return _stamped_copy(HOMECARE_DB, "homecare-preupdate", _valid_homecare, deadline)
+
+
+def _homecare_preupdate_backups() -> list[str]:
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "homecare-preupdate-*.db"))
+                  if backup_class(os.path.basename(path)) == "homecare_preupdate")
+
+
+def discard_homecare_preupdate(path: str | None) -> None:
+    """Remove the copy a failed apply attempt made, so it never takes the
+    place of a copy that predates a successful update."""
+    if path and os.path.abspath(path) in map(os.path.abspath, _homecare_preupdate_backups()):
+        with suppress(OSError):
+            os.unlink(path)
+
+
+def rotate_homecare_preupdate() -> None:
+    """After a successful apply, keep the newest BACKUP_KEEP home-care copies."""
+    for old in _homecare_preupdate_backups()[:-BACKUP_KEEP]:
+        with suppress(OSError):
+            os.unlink(old)
 
 
 def reset_backup(db_path: str) -> str:

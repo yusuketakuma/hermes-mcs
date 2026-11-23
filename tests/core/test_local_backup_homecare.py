@@ -97,6 +97,8 @@ def test_preupdate_copies_keep_the_newest_three(world, monkeypatch):
     for second in range(4):
         monkeypatch.setattr(local_backup.time, "strftime", lambda _f, s=second: f"20261101-00000{s}")
         paths.append(local_backup.preupdate_homecare_backup())
+    assert len([n for n in os.listdir(backups) if n.endswith(".db")]) == 4   # rotation is separate
+    local_backup.rotate_homecare_preupdate()
     kept = sorted(n for n in os.listdir(backups) if n.endswith(".db"))
     assert kept == sorted(os.path.basename(p) for p in paths[1:])
     assert {backup_names.backup_class(n) for n in kept} == {"homecare_preupdate"}
@@ -111,7 +113,20 @@ def test_a_hand_named_preupdate_copy_is_never_rotated(world, monkeypatch):
     for second in range(4):
         monkeypatch.setattr(local_backup.time, "strftime", lambda _f, s=second: f"20261101-00000{s}")
         local_backup.preupdate_homecare_backup()
+    local_backup.rotate_homecare_preupdate()
     assert hand.exists() and backup_names.backup_class(hand.name) == "manual"
+
+
+def test_a_failed_attempt_discards_only_its_own_copy(world, monkeypatch):
+    homecare, backups, _ = world
+    _records(homecare, "合成").close()
+    monkeypatch.setattr(local_backup.time, "strftime", lambda _f: "20261101-000000")
+    kept = local_backup.preupdate_homecare_backup()
+    monkeypatch.setattr(local_backup.time, "strftime", lambda _f: "20261102-000000")
+    failed = local_backup.preupdate_homecare_backup()
+    local_backup.discard_homecare_preupdate(failed)
+    local_backup.discard_homecare_preupdate(str(homecare))      # never a non-copy
+    assert os.path.exists(kept) and not os.path.exists(failed) and homecare.exists()
 
 
 def test_home_care_copies_are_not_ledger_restore_points():
