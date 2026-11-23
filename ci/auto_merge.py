@@ -169,44 +169,59 @@ def _review_time(review: dict):
     return parsed.timestamp()
 
 
-def human_approval(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
-    number = pr.get("number")
-    reviews_path = _repo_path(repo, f"pulls/{number}/reviews")
+def _latest_formal_reviews(api, pr: dict, repo: str) -> tuple[dict | None, str]:
+    """Each reviewer's latest decisive review, or None and the reason when the history cannot be trusted."""
+    reviews_path = _repo_path(repo, f"pulls/{pr.get('number')}/reviews")
     try:
         reviews = _api_list(api, reviews_path)
     except Exception as exc:
-        return False, f"review history unavailable: {exc}"
+        return None, f"review history unavailable: {exc}"
     latest_by_user = {}
     for review in reviews:
         if not isinstance(review, dict):
-            return False, "invalid review data"
+            return None, "invalid review data"
         state = review.get("state")
         if not isinstance(state, str) or state not in KNOWN_REVIEW_STATES:
-            return False, "unknown review state"
+            return None, "unknown review state"
         if state not in REVIEW_STATES:
             continue
         submitted = _review_time(review)
         user = review.get("user") or {}
         if not isinstance(user, dict):
-            return False, "incomplete formal review data"
+            return None, "incomplete formal review data"
         login = user.get("login")
         if submitted is None or not isinstance(login, str) or not login:
-            return False, "incomplete formal review data"
+            return None, "incomplete formal review data"
         try:
             review_id = int(review.get("id") or 0)
         except (TypeError, ValueError):
-            return False, "invalid formal review id"
+            return None, "invalid formal review id"
         item = (submitted, review_id, review)
         key = login.casefold()
         if key not in latest_by_user or item[:2] >= latest_by_user[key][:2]:
             latest_by_user[key] = item
     if any(item[2].get("state") == "CHANGES_REQUESTED" for item in latest_by_user.values()):
-        return False, "outstanding changes requested"
+        return None, "outstanding changes requested"
+    return latest_by_user, ""
+
+
+def human_approval(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
+    latest_by_user, reason = _latest_formal_reviews(api, pr, repo)
+    if latest_by_user is None:
+        return False, reason
     if _formal_approval(api, pr, repo, head_sha, latest_by_user):
         return True, "current-head human approval"
     if _owner_label_state(api, pr, repo, head_sha) == "valid":
         return True, "current-head owner approval label"
     return False, "no authorized current-head human approval"
+
+
+def _human_login(actor) -> str | None:
+    """The login of a person (never a bot or app), as the owner label and reservation checks require."""
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if not isinstance(login, str) or not login or login.casefold().endswith("[bot]"):
+        return None
+    return login
 
 
 def _admin_or_owner(api, repo: str, login: str) -> bool:
@@ -275,9 +290,8 @@ def _owner_label_state(api, pr: dict, repo: str, head_sha: str) -> str:
     if latest[0][0] <= pushed:
         return "stale"
     actor = latest[1].get("actor") or {}
-    login = actor.get("login") if isinstance(actor, dict) else None
-    if (not isinstance(login, str) or not login or actor.get("type") != "User"
-            or login.casefold().endswith("[bot]") or not _admin_or_owner(api, repo, login)):
+    login = _human_login(actor)
+    if login is None or actor.get("type") != "User" or not _admin_or_owner(api, repo, login):
         return "invalid"
     return "valid"
 
@@ -346,6 +360,39 @@ def merge_evidence(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
     return True, "current-head merge-gate and required evidence succeeded"
 
 
+AUTO_MERGE_REQUEST_QUERY = (
+    "query($id:ID!){node(id:$id){... on PullRequest{"
+    "headRefOid autoMergeRequest{enabledAt enabledBy{__typename login}}}}}"
+)
+
+
+def _owner_reservation_kept(api, pr: dict, repo: str) -> bool:
+    """Keep a reservation only when a human admin/owner made it after the current head was pushed and no change request is open."""
+    head_sha = _sha(pr)
+    rest_actor = (pr.get("auto_merge") or {}).get("enabled_by")
+    login = _human_login(rest_actor)
+    if login is None or rest_actor.get("type") != "User":
+        return False
+    try:
+        response = api.graphql(AUTO_MERGE_REQUEST_QUERY, {"id": pr.get("node_id")})
+        node = ((response or {}).get("data") or {}).get("node") if not (response or {}).get("errors") else None
+        request = (node or {}).get("autoMergeRequest") if isinstance(node, dict) else None
+        if not isinstance(request, dict) or node.get("headRefOid") != head_sha:
+            return False
+        enabled_by = request.get("enabledBy")
+        if (_human_login(enabled_by) or "").casefold() != login.casefold() or enabled_by.get("__typename") != "User":
+            return False
+        enabled_at = _parse_time(request.get("enabledAt"))
+        pushed = _head_pushed_at(_workflow_runs(api, repo, head_sha))
+        if enabled_at is None or pushed is None or enabled_at <= pushed:
+            return False
+        if not _admin_or_owner(api, repo, login):
+            return False
+        return _latest_formal_reviews(api, pr, repo)[0] is not None
+    except Exception:
+        return False
+
+
 def withdraw_inherited_reservations(api, repo: str, default_branch: str) -> list[int]:
     query = (
         "mutation($id:ID!){"
@@ -363,6 +410,8 @@ def withdraw_inherited_reservations(api, repo: str, default_branch: str) -> list
         path = _repo_path(repo, f"pulls/{number}")
         pr = api.get(path)
         if not default_branch_pr(pr, repo, default_branch) or not pr.get("auto_merge"):
+            continue
+        if _owner_reservation_kept(api, pr, repo):
             continue
         node_id = pr.get("node_id")
         if not isinstance(node_id, str) or not node_id:

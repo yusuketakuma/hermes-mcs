@@ -84,6 +84,17 @@ PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` 
 自動マージの予約は push のたびに外します。`merge-gate` が緑でも、`.github/` を含む PR は差分を見て判断してください。
 自動マージの予約は、判定した head のコミットに結び付けます（`--match-head-commit`）。判定後に push された head には引き継ぎません。
 
+`gate` job は動くたびに、既定ブランチ向けの開いた PR の自動マージ予約（GitHub の Enable auto-merge）を調べ、次をすべて満たす予約だけを残して、ほかは外します（`ci/auto_merge.py` の `withdraw_inherited_reservations`）。
+
+- 予約したのが人（ボット・App ではない）で、リポジトリの所有者か admin であること（「オーナー承認」ラベルと同じ確認）。
+- 予約した時刻が、現在の head が push された時刻より後であること。push の時刻は「オーナー承認」ラベルと同じく、その head の CI（`ci.yml`）の実行から求めます。
+  予約時刻は GraphQL の `autoMergeRequest.enabledAt` で読み、そのとき GitHub が返す head が現在の head と一致することも確かめます。
+- その PR に、取り下げられていない Request changes のレビューが残っていないこと。
+
+ボット（`github-actions[bot]`・Dependabot など）の予約、admin でない人の予約、push より前の予約は、これまでどおり外します。
+API の失敗や欠けた値で判断できないときも外します。残した予約は、GitHub が必須チェックと branch protection の通過を待ってマージします。
+`merge-gate` が main-protect の必須チェックでない間は、残した所有者の予約は `merge-gate` の不合格を待たずにマージされ得ます（所有者が自分でマージする場合と同じ扱いです）。
+
 ## レビューの判定と `merge-ready`
 
 レビュー合格かどうかは、`ci/agent_control.py` の `review_verdict` だけが決めます。`merge-ready` と Issue の進み具合は同じ判定を使います。
