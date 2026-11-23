@@ -26,7 +26,7 @@ def _clean(db, registry, values, held_kind=None, held_staff=None):
         if not (row[field] is None and field == "staff_id") and (type(row[field]) is not int or row[field] <= 0):
             bad.append(field)
     row["kind"] = values.get("kind")
-    if row["kind"] not in registry.visit_kinds and row["kind"] != held_kind:
+    if not isinstance(row["kind"], str) or row["kind"] not in registry.visit_kinds and row["kind"] != held_kind:
         bad.append("kind")
     row["visit_date"] = values.get("visit_date")
     if not calendar_date(row["visit_date"]):

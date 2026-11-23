@@ -516,7 +516,9 @@ def test_visits_are_validated_versioned_and_audited(db):
     for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
                         ({"visit_date": "2026-02-30"}, ["visit_date"]),
                         ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
-                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"])):
+                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"]),
+                        ({"kind": None}, ["kind"]), ({"kind": ["pharmacy.home_visit"]}, ["kind"]),
+                        ({"kind": {"pharmacy.home_visit": 1}}, ["kind"])):
         with pytest.raises(records.InvalidFields) as error:
             visits.create(db, REGISTRY, visit_values(row["patient_id"]) | bad, actor=me["staff_id"])
         assert error.value.fields == fields
@@ -529,12 +531,16 @@ def test_visits_are_validated_versioned_and_audited(db):
     assert done["status"] == "done" and done["version"] == 2 and done["staff_name"] == "合成 薬剤師"
     with pytest.raises(homecare_store.Conflict):
         visits.update(db, REGISTRY, early["visit_id"], {"note": "x"}, expected_version=1, actor=me["staff_id"])
+    # A kind whose module was since disabled stays valid while it is left unchanged.
+    kept = visits.update(db, homecare_modules.Registry([]), later["visit_id"], {"note": "合成"},
+                         expected_version=1, actor=me["staff_id"])
+    assert kept["kind"] == "pharmacy.home_visit"
     with pytest.raises(records.InvalidFields):
         visits.update(db, REGISTRY, early["visit_id"], {"patient_id": 2}, expected_version=2, actor=me["staff_id"])
     with pytest.raises(ValueError, match="actor_required"):
         visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=None)
     kinds = [r["kind"] for r in db.execute("SELECT kind FROM audit_events WHERE kind LIKE 'visit.%'")]
-    assert kinds == ["visit.create", "visit.create", "visit.update"]
+    assert kinds == ["visit.create", "visit.create", "visit.update", "visit.update"]
 
 
 def test_a_done_visit_by_staff_who_since_left_can_still_be_corrected(db):
