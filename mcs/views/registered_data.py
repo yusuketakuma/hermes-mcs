@@ -22,6 +22,16 @@ def field_counts(rows):
     return [{"key": key, "count": count} for key, count in sorted(counts.items())]
 
 
+VALUE_KEYS = ("scalar", "max", "min", "left", "right")
+
+
+def first_valued_row(rows):
+    """The first stored observation-value row that carries a measurement, or None when every row's
+    measurements are missing (such rows are kept as received, so the first row alone does not decide)."""
+    return next((row for row in rows or () if isinstance(row, dict)
+                 and any(row.get(key) is not None for key in VALUE_KEYS)), None)
+
+
 def _with_unfetched_values(db, targets, now):
     """Add an observation_values target for every item of the validated observation-item list that has no
     stored values attempt, so an item the rotation has not reached reads 未取得 (state unknown, reason
@@ -50,8 +60,7 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
 
     ``unfetched_items`` (for a reader that shows each item's state) also lists every item of the validated
     observation-item list whose values were never attempted, as 未取得; without it the records are the
-    stored targets only, which the rollup freshness signature hashes. With a ``limit`` the stored targets are
-    read first and ``unfetched_omitted`` counts the never-attempted items left out (each 未取得)."""
+    stored targets only, which the rollup freshness signature hashes."""
     if not table_exists(db, "patients") or not {"project_type", "karte_id"} <= {
             row[1] for row in db.execute("PRAGMA table_info(patients)")}:
         return None
@@ -78,18 +87,10 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
         ) """
     now = snapshot_meta(db)["generated_at"]
     query = sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id"
-    extra = {}
     if unfetched_items:
         targets = _with_unfetched_values(db, [dict(row) for row in db.execute(query, params)], now)
         total = len(targets)
-        if limit is not None:
-            # stored targets take the bounded slots first: an item never attempted reads 未取得 without a read,
-            # so the ones left out are only counted
-            kept = {id(t) for t in sorted(targets, key=lambda t: "_item_row" in t)[:limit]}
-            extra["unfetched_omitted"] = sum("_item_row" in t and id(t) not in kept for t in targets)
-            targets = [t for t in targets if id(t) in kept]
-        else:
-            extra["unfetched_omitted"] = 0
+        targets = targets if limit is None else targets[:limit]
     else:
         total = db.execute(sql + "SELECT COUNT(*) FROM targets", params).fetchone()[0]
         targets = [dict(row) for row in db.execute(query + (" LIMIT ?" if limit is not None else ""),
@@ -118,4 +119,4 @@ def registered_data(db, scope, project_id, limit, *, unfetched_items=False):
             record["definition_fields"] = field_counts([result["definition"]] if result["definition"] else [])
         records.append(record)
     return {"records": records, "total": total, "truncated": limit is not None and total > limit,
-            "absence_confirmed": False, "clinical_state": "not_inferred", **extra}
+            "absence_confirmed": False, "clinical_state": "not_inferred"}

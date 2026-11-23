@@ -266,49 +266,41 @@ REGISTERED_STATES = {"complete": "取得済み", "empty": "登録行なし", "un
 
 
 def _registered_clinical_lines(db, project_id) -> list[str]:
-    """Private fetch-state summary, kept separate from reported chat facts."""
-    from registered_data import registered_data
-    registered = registered_data(db, "detail", project_id, 8, unfetched_items=True)
+    """Private fetch-state summary, kept separate from reported chat facts.
+
+    Every item of the patient is read (as the workspace does; the item list is bounded by the contract), so
+    the per-state totals are exact; an item has a value when any of its stored rows carries one."""
+    from registered_data import VALUE_KEYS, first_valued_row, registered_data
+    registered = registered_data(db, "detail", project_id, None, unfetched_items=True)
     if registered is None or not registered["total"]:
         return []
     names, states = REGISTERED_NAMES, REGISTERED_STATES
-    unfetched = registered["unfetched_omitted"]
-    # stored records past the bounded read: their state was not read, so they stay out of the totals
-    unread = registered["total"] - len(registered["records"]) - unfetched
     lines = ["■ MCS登録情報（チャットとは別の記録・抜粋）"]
     for dataset, name in names.items():
         records = [r for r in registered["records"] if r["dataset"] == dataset]
-        values = dataset == "observation_values"
-        if not records and not (values and unfetched + unread):
+        if not records:
             continue
-        counts = {"unknown": unfetched} if values and unfetched else {}
-        for record in records:
-            counts[record["state"]] = counts.get(record["state"], 0) + 1
-        if not values:
+        if dataset != "observation_values":
             record = records[0]
             suffix = (f"（{record['rows_total']}{'処方期間' if dataset == 'medication_periods' else '項目'}）"
                       if record.get("last_complete_at") is not None else "")
             lines.append(f"・{name}: {states.get(record['state'], '未確認')}{suffix}")
             continue
+        counts = {}
+        for record in records:
+            counts[record["state"]] = counts.get(record["state"], 0) + 1
         lines.append(f"・{name}: " + "、".join(
             f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
-        if unread:
-            lines.append(f"  他{unread}項目の取得状態は抜粋外（原記録で確認）")
-        shown = []
-        for record in records:
-            row = (record.get("rows") or [None])[0] or {}
-            text = " / ".join(str(row[key]) for key in ("scalar", "max", "min", "left", "right")
-                              if row.get(key) is not None)
-            if text:
-                shown.append((record, row, text))
-        for record, row, text in shown[:3]:
+        valued = [(record, row) for record in records if (row := first_valued_row(record.get("rows")))]
+        for record, row in valued[:3]:
             lab = (record.get("definition") or {}).get("lab_test_item") or {}
+            text = " / ".join(str(row[key]) for key in VALUE_KEYS if row.get(key) is not None)
             previous = "・以前取得した情報" if record.get("historical") else ""
             lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {text} "
                          f"{inline_text(lab.get('unit'), 20)}（記録日 "
                          f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
-        if len(shown) > 3:
-            lines.append(f"  他{len(shown) - 3}項目の観測値は抜粋外（原記録で確認）")
+        if len(valued) > 3:
+            lines.append(f"  他{len(valued) - 3}項目の観測値は抜粋外（原記録で確認）")
     return lines
 
 

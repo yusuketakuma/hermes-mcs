@@ -222,41 +222,82 @@ def test_item_without_a_values_attempt_is_listed_as_not_fetched(context_db, monk
     assert "・観測値: " in lines and "未取得・未確認 1項目" in lines
 
 
-def test_summary_unfetched_items_do_not_take_the_stored_value_slots(context_db, monkeypatch):
+def _lab(i, name):
+    return {"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": name}}
+
+
+EMPTY_ROW = {"observation_issued_at": "2026-10-01T09:00:00+09:00"}     # every measurement missing
+
+
+def _summary(store):
     import notify_views
+    return notify_views._registered_clinical_lines(store.db, 1)
+
+
+def test_first_valued_row_reads_every_row():
+    from registered_data import first_valued_row
+    second = {"observation_issued_at": "x", "scalar": None, "max": 0}
+    assert first_valued_row([{"scalar": None}, second, {"scalar": 5}]) is second    # 0 is a value
+    assert first_valued_row([{"scalar": None, "left": None}]) is None and first_valued_row(None) is None
+
+
+def test_summary_unfetched_items_do_not_hide_the_stored_values(context_db, monkeypatch):
     store = context_db
     _clinical(store, monkeypatch)
-
-    def item(i, name):
-        return {"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": name}}
-    stored = item(99, "合成の取得済み項目")
-    pin = _metadata(store, "observation_items", [*(item(i, f"合成の未取得{i}") for i in range(1, 7)), stored])
+    stored = _lab(99, "合成の取得済み項目")
+    pin = _metadata(store, "observation_items", [*(_lab(i, f"合成の未取得{i}") for i in range(1, 7)), stored])
     _metadata(store, "observation_values", [VALUE], item_id=99, definition=stored, pin=pin)
-    bounded = registered_data(store.db, "detail", 1, 8, unfetched_items=True)
-    values = [r for r in bounded["records"] if r["dataset"] == "observation_values"]
-    # the stored item is read first; the never-attempted ones past the bound are counted, not dropped
-    assert [r["item_id"] for r in values] == [1, 2, 3, 4, 5, 99]
-    assert (bounded["total"], bounded["unfetched_omitted"], bounded["truncated"]) == (9, 1, True)
-    lines = notify_views._registered_clinical_lines(store.db, 1)
+    lines = _summary(store)
     assert "・観測値: 取得済み 1項目、未取得・未確認 6項目" in lines
     assert any(line.startswith("  合成の取得済み項目: 23 ") for line in lines)
     assert not any("抜粋外" in line for line in lines)
 
 
-def test_summary_says_which_stored_items_were_left_out(context_db, monkeypatch):
-    import notify_views
+def test_summary_attempted_empty_items_do_not_hide_a_valued_one(context_db, monkeypatch):
     store = context_db
     _clinical(store, monkeypatch)
-    items = [{"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": f"合成項目{i}"}} for i in range(1, 10)]
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 8)]
+    pin = _metadata(store, "observation_items", items)
+    for definition in items[:6]:     # attempted: three with no rows, three with only measurement-less rows
+        i = definition["lab_test_item"]["id"]
+        _metadata(store, "observation_values", [] if i <= 3 else [EMPTY_ROW], item_id=i,
+                  definition=definition, pin=pin)
+    _metadata(store, "observation_values", [VALUE], item_id=7, definition=items[6], pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 4項目、登録行なし 3項目" in lines
+    assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目7"]
+    assert not any("抜粋外" in line for line in lines)
+
+
+def test_summary_judges_an_item_by_all_its_rows(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 6)]
+    pin = _metadata(store, "observation_items", items)
+    # item 1: first row empty, second row valued -> shown with the valued row; item 5 likewise -> in the
+    # remainder; item 3 has only an empty row -> neither shown nor counted as having a value
+    rows = {1: [EMPTY_ROW, VALUE], 2: [VALUE], 3: [EMPTY_ROW], 4: [VALUE], 5: [EMPTY_ROW, VALUE]}
+    for definition in items:
+        i = definition["lab_test_item"]["id"]
+        _metadata(store, "observation_values", rows[i], item_id=i, definition=definition, pin=pin)
+    lines = _summary(store)
+    assert "・観測値: 取得済み 5項目" in lines
+    shown = [line for line in lines if ": 23 " in line]
+    assert [line.split(":")[0].strip() for line in shown] == ["合成項目1", "合成項目2", "合成項目4"]
+    assert all(VALUE["observation_issued_at"] in line for line in shown)
+    assert "  他1項目の観測値は抜粋外（原記録で確認）" in lines
+
+
+def test_summary_counts_every_valued_item_past_the_examples(context_db, monkeypatch):
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [_lab(i, f"合成項目{i}") for i in range(1, 10)]
     pin = _metadata(store, "observation_items", items)
     for definition in items:
         _metadata(store, "observation_values", [VALUE], item_id=definition["lab_test_item"]["id"],
                   definition=definition, pin=pin)
-    lines = notify_views._registered_clinical_lines(store.db, 1)
-    # 8 slots: 2 datasets + 6 stored value items read; 3 stored items past the bound have an unread state
-    assert "・観測値: 取得済み 6項目" in lines
-    assert "  他3項目の取得状態は抜粋外（原記録で確認）" in lines
+    lines = _summary(store)
+    assert "・観測値: 取得済み 9項目" in lines
     assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目1", "合成項目2", "合成項目3"]
-    assert "  他3項目の観測値は抜粋外（原記録で確認）" in lines
-    # default (stored-only) output is unchanged by the opt-in bookkeeping
-    assert "unfetched_omitted" not in registered_data(store.db, "detail", 1, 8)
+    assert "  他6項目の観測値は抜粋外（原記録で確認）" in lines
+    assert not any("取得状態は抜粋外" in line for line in lines)
