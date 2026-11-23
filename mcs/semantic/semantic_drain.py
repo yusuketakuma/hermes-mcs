@@ -310,12 +310,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # at return. Only a borrowed fd makes the release/reacquire real;
     # fd-less passes (standalone, per-write extract) emit nothing.
     lock_hold = None
+    lock_released = [False]
     if run_lock_fd is not None:
         lock_hold = out["lock_hold"] = {"hold_max_s": 0.0, "hold_sum_s": 0.0,
                                         "hold_count": 0}
 
     def _hold_tail():
-        if lock_hold is not None:
+        # a timed-out reacquire left the lock with the other holder: no tail
+        if lock_hold is not None and not lock_released[0]:
             hold = time.monotonic() - held_since
             lock_hold["hold_sum_s"] += hold
             lock_hold["hold_max_s"] = max(lock_hold["hold_max_s"], hold)
@@ -454,7 +456,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     return call(*args, **kwargs)
                 finally:
                     ended = time.monotonic()
-        except writer_lock.RunLockLost:
+        except writer_lock.RunLockLost as lost:
+            lock_released[0] = not lost.held
             if ended is not None:
                 wait = writer_lock.RUN_LOCK_REACQUIRE_S if reacquire_s is None \
                     else reacquire_s

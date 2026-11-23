@@ -358,6 +358,7 @@ def test_cloud_selection_lock_loss_returns_the_pass_record(lock_env, monkeypatch
         assert out["run_lock_lost"] == "timeout"
         assert out["cloud_selection_reason"] == "run_lock_lost"
         assert out["run_lock_lost_detail"]["kind"] == "select"
+        assert out["lock_hold"]["hold_count"] == 1   # no tail after the lock was lost
         assert db.db.execute("SELECT COUNT(*) FROM artifacts "
                              "WHERE kind='semantic_drain_run'").fetchone()[0] == 0
     finally:
