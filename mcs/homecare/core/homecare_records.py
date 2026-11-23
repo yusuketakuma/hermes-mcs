@@ -137,6 +137,19 @@ def require_actor(db, actor, *, admin=False):
         raise ValueError("admin_required")
 
 
+def staff_for_login(db, login):
+    """The active staff member a Tailscale login belongs to: ``{"staff_id", "name", "admin"}``, or None."""
+    if not isinstance(login, str) or not login.strip():
+        return None
+    row = db.execute("SELECT staff_id, name, admin FROM staff WHERE tailscale_login=? AND active=1",
+                     (login.strip().lower(),)).fetchone()
+    return None if row is None else {**dict(row), "admin": bool(row["admin"])}
+
+
+def any_staff(db):
+    return db.execute("SELECT 1 FROM staff").fetchone() is not None
+
+
 def get(db, kind, record_id):
     table, key = ("staff", "staff_id") if kind == "staff" else ("patients", "patient_id")
     row = db.execute(f"SELECT * FROM {table} WHERE {key}=?", (record_id,)).fetchone()

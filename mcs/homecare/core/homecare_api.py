@@ -15,7 +15,7 @@ from homecare_records import record_id as _id
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
-                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "team_changed", "invalid_fields", "not_found",
+                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "team_changed", "visit_not_qualified", "invalid_fields", "not_found",
                     "project_not_allowed", "route_unavailable", "route_failed",
                     "too_many_stops", "bad_request"})
 

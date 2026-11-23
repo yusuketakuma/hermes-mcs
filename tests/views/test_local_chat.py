@@ -158,7 +158,7 @@ def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
 
 def handler(path, headers=None):
     obj = chat.ChatHandler.__new__(chat.ChatHandler)
-    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1})
+    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1}, tailnet_host=None)
     obj.path = path
     obj.headers = Message()
     for name, value in (headers if headers is not None else [("Host", "127.0.0.1:8765")]):

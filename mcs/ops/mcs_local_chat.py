@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 from socketserver import TCPServer
@@ -18,11 +19,17 @@ from mcs_view import View
 import local_chat_view
 import homecare_api
 import homecare_catalog
+import homecare_records
 import homecare_route
 import homecare_store
 
 ASSETS = Path(__file__).resolve().parents[1] / "views" / "local_chat"
 MAX_BODY = 64 * 1024
+# Resident mode sits behind `tailscale serve`, which strips any copy a client sends and sets this for tailnet users.
+IDENTITY = "Tailscale-User-Login"
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+TAILNET_HOST = re.compile(rf"^{_LABEL}(?:\.{_LABEL})*\.ts\.net$")
+UNREGISTERED = "このTailscaleのアカウントは職員として登録されていません。管理者に職員の登録を頼んでください。".encode()
 FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "app.js": ("app.js", "text/javascript; charset=utf-8"),
          "homecare.js": ("homecare.js", "text/javascript; charset=utf-8"),
@@ -104,8 +111,25 @@ def homecare_response(server, method, route, query=None, body=None):
         db.close()
 
 
+def resident_user(server, login):
+    """``(staff, empty)`` for a resident request: the active staff member of this login, and whether the
+    ledger has no staff yet (then only the first registration may proceed)."""
+    db = homecare_store.connect(server.homecare, server.homecare_registry.modules)
+    try:
+        return homecare_records.staff_for_login(db, login), not homecare_records.any_staff(db)
+    finally:
+        db.close()
+
+
 class ChatServer(ThreadingHTTPServer):
-    def __init__(self, snapshot, allowed, port=0, homecare=None, modules=("pharmacy",), route_settings=None):
+    """Serves one launch: on this computer behind a per-launch capability URL, or resident behind
+    ``tailscale serve`` (``tailnet_host``), where each request is a registered staff member's Tailscale login."""
+
+    def __init__(self, snapshot, allowed, port=0, homecare=None, modules=("pharmacy",), route_settings=None,
+                 tailnet_host=None):
+        if tailnet_host is not None and (homecare is None or not port or not TAILNET_HOST.match(tailnet_host)):
+            raise ValueError("resident mode needs a home-care ledger, a fixed port and a *.ts.net name")
+        self.tailnet_host = tailnet_host
         self.snapshot = Path(snapshot)
         self.allowed = None if allowed is None else frozenset(allowed)
         self.token = secrets.token_urlsafe(32)
@@ -124,6 +148,8 @@ class ChatServer(ThreadingHTTPServer):
 
     @property
     def url(self):
+        if self.tailnet_host:
+            return f"https://{self.tailnet_host}/"
         return f"http://127.0.0.1:{self.server_port}/{self.token}/"
 
     def handle_error(self, request, client_address):
@@ -155,10 +181,15 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _route(self, *, write=False):
-        """The route after the capability prefix, or None once a refusal was sent."""
-        host = f"127.0.0.1:{self.server.server_port}"
+        """The route after the capability prefix, or None once a refusal was sent.
+
+        Resident mode has no capability: the page is the tailnet name's root, and every request must carry one
+        Tailscale login that belongs to active staff (``self.user``), except the very first registration."""
+        local, resident = f"127.0.0.1:{self.server.server_port}", self.server.tailnet_host
+        hosts, page_origin = ([resident, local], "https://" + resident) if resident else ([local], "http://" + local)
         origin = self.headers.get("Origin")
-        if self.headers.get_all("Host") != [host] or origin not in (None, "http://" + host) \
+        host = self.headers.get_all("Host") or []
+        if len(host) != 1 or host[0] not in hosts or origin not in (None, page_origin) \
                 or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none") \
                 or write and (origin is None or self.headers.get("Sec-Fetch-Site") not in (None, "same-origin")):
             self._send(403)
@@ -167,11 +198,30 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._send(414)
             return None
         parts = urlsplit(self.path)
-        prefix = "/" + self.server.token + "/"
+        prefix = "/" if resident else "/" + self.server.token + "/"
         if not hmac.compare_digest(parts.path[:len(prefix)].encode(), prefix.encode()):
             self._send(404)
             return None
-        return parts.path[len(prefix):], parts.query
+        route = parts.path[len(prefix):]
+        self.user, self.login, self.first = None, None, False
+        if resident:
+            logins = self.headers.get_all(IDENTITY) or []
+            if len(logins) != 1 or not logins[0].strip():
+                self._send(403)
+                return None
+            self.login = logins[0].strip().lower()
+            try:
+                self.user, self.first = resident_user(self.server, self.login)
+            except (OSError, sqlite3.Error, RuntimeError):
+                self._send(503)
+                return None
+            # Before anyone is registered, only the page and the ledger's own routes answer, so the first person
+            # can register; no MCS record is served to a login that is not staff.
+            if self.user is None and not (self.first and (route in FILES or route == "api/session"
+                                                          or route.startswith("api/hc/"))):
+                self._send(403, UNREGISTERED)
+                return None
+        return route, parts.query
 
     def _json(self, status, data):
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json")
@@ -186,7 +236,9 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._send(200, (ASSETS / name).read_bytes(), mime)
         elif route == "api/session":
             self._json(200, {"csrf": self.server.csrf, "homecare": self.server.homecare is not None,
-                             "routes": self.server.route_settings is not None})
+                             "routes": self.server.route_settings is not None,
+                             "resident": bool(self.server.tailnet_host), "login": self.login,
+                             "user": self.user and {"staff_id": self.user["staff_id"], "name": self.user["name"]}})
         elif route.startswith("api/hc/"):
             self._homecare("GET", route[7:], query)
         elif route.startswith("api/"):
@@ -225,6 +277,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         except (ValueError, RecursionError):
             self._json(400, {"error": "bad_request"})
             return
+        if self.server.tailnet_host and isinstance(body, dict):
+            # Who writes is the Tailscale login, never what the page says.
+            body = {**body, "actor": self.user and self.user["staff_id"]}
+            if self.first and route == "api/hc/staff.create" and isinstance(body.get("values"), dict):
+                body["values"] = {**body["values"], "tailscale_login": self.login}
         self._homecare("POST", route[7:], body=body)
 
     def _homecare(self, method, route, query=None, body=None):
@@ -254,7 +311,12 @@ def main(argv=None):
                         help="Occupation module to enable with --homecare-db; repeatable (default: pharmacy)")
     parser.add_argument("--route-settings", type=Path,
                         help="Private JSON (chmod 600) enabling visit routes; sends addresses only, when asked")
+    parser.add_argument("--tailnet-host", metavar="NAME.ts.net",
+                        help="Resident mode behind `tailscale serve` on this name: staff sign in with their Tailscale "
+                             "login (needs --homecare-db and a fixed --port)")
     args = parser.parse_args(argv)
+    if args.tailnet_host and (not args.homecare_db or not args.port or not TAILNET_HOST.match(args.tailnet_host)):
+        parser.error("--tailnet-host needs --homecare-db, a fixed --port and a *.ts.net name")
     if args.project and any(pid <= 0 for pid in args.project) or not 0 <= args.port <= 65535:
         parser.error("invalid project or port")
     try:
@@ -270,12 +332,18 @@ def main(argv=None):
         parser.exit(2, f"Route settings unavailable ({type(exc).__name__}); no server started.\n")
     try:
         server = ChatServer(args.snapshot, args.project, args.port, homecare=args.homecare_db,
-                            modules=args.homecare_module or ("pharmacy",), route_settings=routes)
+                            modules=args.homecare_module or ("pharmacy",), route_settings=routes,
+                            tailnet_host=args.tailnet_host)
     except (OSError, sqlite3.Error, RuntimeError):
         parser.exit(2, "Home-care database unavailable; no server started.\n")
     with server:
-        print("Local patient chat (keep this private URL on this computer):", flush=True)
-        print(server.url, flush=True)
+        if server.tailnet_host:
+            print("Resident patient workspace. Publish it to your tailnet only (never Funnel) with:", flush=True)
+            print(f"  tailscale serve --bg http://127.0.0.1:{server.server_port}", flush=True)
+            print(f"Staff open {server.url} and are known by their Tailscale login.", flush=True)
+        else:
+            print("Local patient chat (keep this private URL on this computer):", flush=True)
+            print(server.url, flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

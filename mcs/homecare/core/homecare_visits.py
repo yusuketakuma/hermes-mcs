@@ -5,7 +5,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field
+from homecare_records import InvalidFields, calendar_date, get, qualifications, require_actor, text_field
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "staff_id", "kind", "visit_date", "start_time", "status", "note")
@@ -51,6 +51,14 @@ def _clean(db, registry, values, held_kind=None, held_staff=None):
     return row
 
 
+def _require_clinical(db, registry, row, actor):
+    """A done visit of a restricted kind is written by, and names, staff holding the kind's qualification."""
+    needed = registry.done_requires.get(row["kind"])
+    if row["status"] == "done" and needed and not all(
+            set(qualifications(db, staff)) & set(needed) for staff in (actor, row["staff_id"])):
+        raise ValueError("visit_not_qualified")
+
+
 def visit(db, visit_id):
     row = db.execute("SELECT v.*, s.name AS staff_name FROM visits v LEFT JOIN staff s USING(staff_id) "
                      "WHERE v.visit_id=?", (visit_id,)).fetchone()
@@ -65,6 +73,7 @@ def create(db, registry, values, *, actor):
     with transaction(db):
         require_actor(db, actor)
         row = _clean(db, registry, values)
+        _require_clinical(db, registry, row, actor)
         now = time.time()
         visit_id = db.execute(f"INSERT INTO visits({','.join(row)},created_at,updated_at) VALUES"
                               f"({','.join('?' * len(row))},?,?)", (*row.values(), now, now)).lastrowid
@@ -84,6 +93,7 @@ def update(db, registry, visit_id, values, *, expected_version, actor):
             raise Conflict("version_conflict")
         row = _clean(db, registry, {field: before[field] for field in FIELDS} | values, before["kind"],
                      before["staff_id"])
+        _require_clinical(db, registry, row, actor)
         db.execute(f"UPDATE visits SET {','.join(f'{field}=?' for field in row)},version=version+1,updated_at=? "
                    "WHERE visit_id=? AND version=?", (*row.values(), time.time(), visit_id, expected_version))
         after = visit(db, visit_id)

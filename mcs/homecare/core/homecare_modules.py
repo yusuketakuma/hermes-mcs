@@ -29,14 +29,18 @@ class Module:
     qualifications: dict[str, str] = field(default_factory=dict)
     roles: dict[str, Role] = field(default_factory=dict)
     visit_kinds: dict[str, str] = field(default_factory=dict)
+    # A kind listed here is a clinical record once done: only staff with one of these qualifications record it.
+    done_requires: dict[str, tuple[str, ...]] = field(default_factory=dict)
     api: object = None
 
     def __post_init__(self):
         if not _NAME.match(self.name):
             raise ValueError(f"bad module name: {self.name}")
-        for code in (*self.qualifications, *self.roles, *self.visit_kinds):
+        for code in (*self.qualifications, *self.roles, *self.visit_kinds, *self.done_requires):
             if not code.startswith(self.name + "."):
                 raise ValueError(f"{self.name} declares a code outside its namespace: {code}")
+        if not set(self.done_requires) <= set(self.visit_kinds):
+            raise ValueError(f"{self.name} restricts a visit kind it does not declare")
 
 
 CORE = Module("core", "共通", Path(__file__).resolve().parent / "migrations",
@@ -56,9 +60,10 @@ class Registry:
         self.roles = {code: role for module in self.modules for code, role in module.roles.items()}
         # Occupation kinds first so a new visit defaults to one; the core's catch-all comes last.
         self.visit_kinds = {code: label for module in (*modules, CORE) for code, label in module.visit_kinds.items()}
-        for role in self.roles.values():
-            if not set(role.requires) <= set(self.qualifications):
-                raise ValueError("role requires an unknown qualification")
+        self.done_requires = {kind: codes for module in self.modules for kind, codes in module.done_requires.items()}
+        for codes in (*(role.requires for role in self.roles.values()), *self.done_requires.values()):
+            if not set(codes) <= set(self.qualifications):
+                raise ValueError("a role or visit kind requires an unknown qualification")
 
     def describe(self):
         """The browser's view of the enabled modules, their qualifications and roles."""
@@ -66,7 +71,8 @@ class Registry:
                 "qualifications": self.qualifications,
                 "roles": {code: {"label": role.label, "requires": list(role.requires), "single": role.single}
                           for code, role in self.roles.items()},
-                "visit_kinds": self.visit_kinds}
+                "visit_kinds": self.visit_kinds,
+                "done_requires": {kind: list(codes) for kind, codes in self.done_requires.items()}}
 
     def module(self, name):
         """An enabled module that has its own routes; anything else is refused."""

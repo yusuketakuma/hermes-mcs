@@ -1,7 +1,7 @@
 "use strict";
 // Home-care core screens (staff, patient register, care team, MCS links). Shares $, el, api, fail and state with app.js.
 // Occupation modules add their own screens; the core only reads their declared qualifications and roles from api/hc/meta.
-const hc = {enabled: false, routes: false, csrf: "", actor: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0, view: 0,
+const hc = {enabled: false, routes: false, csrf: "", actor: null, resident: false, user: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0, view: 0,
   // Occupation modules register their own patient sections and visit-sheet parts here (see pharmacy.js).
   modules: {}};
 const VISIT_STATUS = {planned: "予定", done: "実施", cancelled: "中止"};
@@ -24,6 +24,7 @@ const HC_ERRORS = {version_conflict: "ほかの人が先に更新しました。
   already_linked: "この患者か MCS の患者は、すでに別の相手と対応付けられています。", not_linked: "対応付けが見つかりません。読み直してください。",
   already_assigned: "この職員はすでにこの役割の担当です。", admin_required: "この操作は管理者だけができます。",
   not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。", team_changed: "ほかの人が先に担当を変えました。最新のケアチームを読み直しました。",
+  visit_not_qualified: "この種類の訪問を「実施」にできるのは、必要な資格（薬局なら薬剤師）を持つ職員だけです。記録する人と訪問した職員を確かめてください。",
   actor_required: "操作者を選んでください。", invalid_fields: "入力を確認してください。", not_found: "記録が見つかりません。",
   project_not_allowed: "この MCS の患者は閲覧範囲の外です。",
   route_unavailable: "訪問ルートは設定されていません。", route_failed: "地図サービスからルートを受け取れませんでした。時間をおいてやり直してください。",
@@ -108,6 +109,10 @@ async function loadStaff() {
   select.firstChild.value = "";
   for (const person of hc.staff.filter(s => s.active)) {const option = el("option", person.name); option.value = String(person.staff_id); select.append(option);}
   if (hc.actor && hc.staff.some(s => s.staff_id === hc.actor && s.active)) select.value = String(hc.actor); else hc.actor = null;
+  if (hc.resident) {
+    // On the tailnet the server knows who is writing from the Tailscale login; the choice is shown, not made.
+    hc.actor = hc.user?.staff_id ?? null; select.value = hc.actor == null ? "" : String(hc.actor); select.disabled = true;
+  }
 }
 // Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing.
 function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
@@ -127,8 +132,8 @@ async function showStaff() {
     row.append(recordForm("staff", STAFF_FORM, person, async () => {await loadStaff(); showStaff();}));
     list.append(row);
   }
-  const added = el("details", null, "hc-row"); added.append(el("summary", "職員を追加"), recordForm("staff", STAFF_FORM, null, async saved => {if (!hc.actor) hc.actor = saved.staff_id; await loadStaff(); showStaff();}));
-  hcMain("職員", ...(hc.staff.length ? [] : [el("p", "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")]), list, added);
+  const added = el("details", null, "hc-row"); added.append(el("summary", "職員を追加"), recordForm("staff", STAFF_FORM, null, async saved => {if (hc.resident && !hc.user) {location.reload(); return;} if (!hc.actor) hc.actor = saved.staff_id; await loadStaff(); showStaff();}));
+  hcMain("職員", ...(hc.staff.length ? [] : [el("p", hc.resident ? `最初に自分を職員として登録してください。今の Tailscale のログイン（${hc.login}）がこの人に結び付き、管理者になります。` : "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")]), list, added);
 }
 async function loadHcPatients() {
   const request = ++hc.request;
@@ -378,7 +383,7 @@ async function showLinkedPharmacyPatient(projectId) {
 async function initHomecare() {
   try {
     const session = await api("session");
-    hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes;
+    hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes; hc.resident = session.resident; hc.user = session.user; hc.login = session.login;
     if (!hc.enabled) return;
     $("hc-tools").hidden = false;
     $("hc-actor").onchange = () => {hc.actor = $("hc-actor").value ? Number($("hc-actor").value) : null;};
