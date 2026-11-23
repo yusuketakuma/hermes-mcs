@@ -1,9 +1,63 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0, onSelect: null, onSearch: null};
+const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
+// Shared UI kit: every screen builds its chips, cards, key-value lists and tab strips from these.
+function chip(text, tone = "") {return el("span", text, tone ? `chip chip-${tone}` : "chip");}
+function card(title, nodes = [], {wide = false, tone = "", actions = []} = {}) {
+  const box = el("section", null, ["card", wide && "card-wide", tone && `card-${tone}`].filter(Boolean).join(" "));
+  const head = el("div", null, "card-head");
+  head.append(el("h3", title));
+  if (actions.length) {const tools = el("div", null, "card-actions"); tools.append(...actions); head.append(tools);}
+  box.append(head, ...nodes);
+  return box;
+}
+function kv(pairs) {
+  const list = el("dl", null, "kv");
+  for (const [label, value] of pairs) {
+    if (value == null || value === "") continue;
+    const item = el("div");
+    const dd = el("dd");
+    if (typeof value === "object") dd.append(value); else dd.textContent = String(value);
+    item.append(el("dt", label), dd);
+    list.append(item);
+  }
+  return list;
+}
+function tabs(items, current, onPick) {
+  const strip = el("div", null, "tabs");
+  strip.setAttribute("role", "tablist");
+  for (const [key, label] of items) {
+    const tab = el("button", label, "tab");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(key === current));
+    tab.onclick = () => onPick(key);
+    strip.append(tab);
+  }
+  return strip;
+}
+// The page frame: mode, one-line heading, the main area and (on phones) the patient sheet.
+const shell = {
+  setMode(mode) {document.body.dataset.mode = mode;},
+  heading(title, meta = "", chips = [], actions = []) {
+    $("patient-name").textContent = title; $("patient-meta").textContent = meta;
+    $("patient-chips").replaceChildren(...chips); $("heading-actions").replaceChildren(...actions);
+  },
+  main(...nodes) {
+    // A screen that takes the main area ends any timeline load still on its way.
+    ++state.mainRequest;
+    for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
+    $("panel-view").hidden = false; $("panel-view").replaceChildren(...nodes);
+    shell.openList(false);
+  },
+  openList(open = true) {
+    document.body.classList.toggle("list-open", open);
+    $("patients-toggle").setAttribute("aria-expanded", String(open));
+  },
+};
 function fail(error) {$("error").textContent = error.message || "表示できませんでした。更新して再度お試しください。"; $("error").hidden = false;}
 async function api(kind, values = {}) {
   const params = new URLSearchParams();
@@ -42,15 +96,14 @@ async function loadPatients(more = false) {
     state.patientCursor = data.next_cursor;
     patientList();
     if (!state.project && state.patients.length) selectPatient(state.patients[0]);
-    if (!state.project && !state.patients.length) $("timeline-status").textContent = "閲覧範囲に保存済みの患者がいません。";
+    if (!state.project && !state.patients.length) {shell.heading("患者タイムライン"); $("timeline-status").textContent = "閲覧範囲に保存済みの患者がいません。";}
   } catch (error) {if (request === state.patientRequest) fail(error);}
 }
 function closeDetail() {++state.detailRequest; $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));}
 function selectPatient(patient) {
-  document.body.classList.add("picked");
+  shell.openList(false);
   state.project = patient.project_id; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
-  $("patient-name").textContent = patient.patient_name || `患者 ${patient.project_id}`;
-  $("patient-meta").textContent = `患者ID ${patient.project_id} · 保存済み ${patient.message_count} 件${patient.is_archived ? " · アーカイブ" : ""}`;
+  shell.heading(patient.patient_name || `患者 ${patient.project_id}`, `ID ${patient.project_id} · 保存済み ${patient.message_count} 件`, patient.is_archived ? [chip("アーカイブ", "muted")] : []);
   const fetchLabels = {pending: "未取得", complete: "取得済み", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
   $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
   $("coverage").hidden = false;
@@ -224,11 +277,16 @@ async function showMessageInfo(row, request, withContext = true) {
 async function loadSections() {
   try {
     const data = await api("sections");
-    for (const item of data.items) {const option = el("option", item.label); option.value = item.key; $("view-select").append(option);}
+    state.sections = [["", "タイムライン"], ...data.items.map(item => [item.key, item.label])];
+    viewTabs();
   } catch (error) {fail(error);}
+}
+function viewTabs() {
+  $("view-tabs").replaceChildren(tabs(state.sections, state.panel, key => {state.panel = key; state.panelPage = 0; closeDetail(); loadMain();}));
 }
 function loadMain() {
   const timeline = !state.panel;
+  viewTabs();
   for (const id of ["coverage", "older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
   $("panel-view").hidden = timeline;
   if (timeline) {$("coverage").hidden = !state.project; $("timeline").hidden = false; loadTimeline();}
@@ -290,12 +348,14 @@ async function showMeds(target, message, request, page = 0) {
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch || loadPatients)();};
 $("more-patients").onclick = () => loadPatients(true);
-$("patients-toggle").onclick = () => document.body.classList.toggle("picked");
-$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; $("view-select").value = ""; closeDetail(); loadMain();};
-$("view-select").onchange = () => {state.panel = $("view-select").value; state.panelPage = 0; closeDetail(); loadMain();};
+$("patients-toggle").onclick = () => shell.openList(!document.body.classList.contains("list-open"));
+$("close-list").onclick = () => shell.openList(false);
+$("sidebar").onkeydown = event => {if (event.key === "Escape") shell.openList(false);};
+$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; closeDetail(); loadMain();};
 $("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadMain();};
 $("older").onclick = () => loadTimeline(true);
 $("close-detail").onclick = closeDetail;
 $("refresh").onclick = () => location.reload();
+viewTabs();
 loadSections();
 loadPatients();

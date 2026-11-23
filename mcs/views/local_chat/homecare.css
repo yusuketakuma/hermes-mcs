@@ -1,0 +1,45 @@
+/* Home-care screens: patient register, visit sheet, day list, staff and the pharmacy module.
+   Moved from the old single stylesheet; these screens are redesigned in a later change. */
+
+/* ---------- Record forms ---------- */
+.hc-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; max-width: 760px; }
+.hc-field { display: grid; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.hc-field input, .hc-field select, .hc-field textarea { font-size: var(--fs); padding: 7px 10px; }
+.hc-field textarea { min-height: 76px; }
+.hc-field input[type="checkbox"] { justify-self: start; width: 20px; height: 20px; }
+.hc-field:has(textarea) { grid-column: 1 / -1; }
+.hc-field.invalid input, .hc-field.invalid select, .hc-field.invalid textarea { border-color: #c4554a; background: #fff6f5; }
+.hc-field.invalid span { color: var(--danger); }
+.hc-form > .button { justify-self: start; grid-column: 1 / -1; padding: 7px 20px; border-color: var(--accent); background: var(--accent); color: #fff; font-size: var(--fs-sm); }
+.hc-form > .state-note { grid-column: 1 / -1; color: var(--danger); }
+.hc-form h4 { grid-column: 1 / -1; }
+
+/* ---------- Checkbox groups ---------- */
+.hc-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0; padding: 0; border: 0; }
+.hc-checks legend { width: 100%; margin-bottom: 4px; padding: 0; font-size: var(--fs-xs); color: var(--muted); }
+.hc-checks label { display: flex; align-items: center; gap: 6px; font-size: var(--fs); color: var(--ink); }
+.hc-checks.invalid legend { color: var(--danger); }
+
+/* ---------- History rows and inline forms ---------- */
+.hc-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.hc-row summary { cursor: pointer; padding: 2px 0; font-size: var(--fs); }
+.hc-row .hc-form { margin: 10px 0 6px; }
+.panel .detail-section { max-width: 760px; margin: 20px 0 0; }
+.hc-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.hc-inline input { width: 160px; }
+.hc-note { white-space: pre-wrap; color: var(--muted); }
+
+/* ---------- Pharmacy prescriptions ---------- */
+.rx-line input { flex: 1 1 8em; min-width: 0; }
+.rx-line input[name="days"] { flex: 0 1 5em; }
+.rx-line > .hc-note { margin: 4px 0 0; font-size: var(--fs-xs); }
+.rx-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+
+/* ---------- Phones ---------- */
+@media (max-width: 699px) {
+  .hc-form { grid-template-columns: 1fr; }
+  .hc-field input, .hc-field select, .hc-field textarea { font-size: var(--fs-lg); }
+  .hc-inline input { flex: 1; width: auto; }
+  .hc-inline select { flex: 1 1 40%; }
+  .hc-row summary { padding: 8px 0; }
+}
