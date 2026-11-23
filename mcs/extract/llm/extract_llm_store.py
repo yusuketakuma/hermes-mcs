@@ -252,20 +252,25 @@ def _cloud_attempt_withdrawn(cfg, started) -> bool:
                                                                purpose="backlog", root=HOME).state == "gone")
 
 
-def _open_cloud_attempts(db) -> list:
-    """Rows (``_close_cloud_attempt`` shape) of the open QC second attempts of current bodies; it only reads."""
+def _open_cloud_attempts(db, r=None) -> list:
+    """Rows (``_close_cloud_attempt`` shape) of the open QC second attempts of current bodies; it only reads.
+
+    With ``r`` only that post's attempts are read, so a re-check under the
+    writer lock does not scan the whole attempt history."""
     content = json_or_null("ca.content")
+    narrow, params = ("", ()) if r is None else (
+        " AND ca.project_id=? AND ca.message_id=?", (r["project_id"], r["message_id"]))
     rows = db.execute(
         f"""SELECT DISTINCT ca.project_id, ca.message_id, m.content_hash,
                    json_extract({content},'$.source_artifact_id') FROM artifacts ca
             JOIN messages m ON m.message_id=ca.message_id AND m.project_id=ca.project_id
-            WHERE ca.kind=? AND json_extract({content},'$.state')='open'
+            WHERE ca.kind=?{narrow} AND json_extract({content},'$.state')='open'
               AND json_extract({content},'$.hash')=m.content_hash
               AND json_extract({content},'$.revision')={source_revision_sql()}
               AND NOT EXISTS (SELECT 1 FROM artifacts cc WHERE cc.kind=ca.kind AND cc.message_id=ca.message_id
                     AND json_extract({json_or_null('cc.content')},'$.state')='closed'
                     AND json_extract({json_or_null('cc.content')},'$.hash')=m.content_hash)""",
-        (CLOUD_ATTEMPT_KIND,)).fetchall()
+        (CLOUD_ATTEMPT_KIND, *params)).fetchall()
     return [{"project_id": project_id, "message_id": message_id, "content_hash": content_hash, "qc_cloud": source}
             for project_id, message_id, content_hash, source in rows if type(source) is int]
 
@@ -279,8 +284,11 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
     (``load_config_checked``): a pass without them closes nothing. The write
     lock is taken only when one is found, and the lock, the SQLite writer
     wait and the SQL are bounded like the stale GC's, so a busy database
-    never delays selection; the next pass retries. Nothing here sends or
-    reserves."""
+    never delays selection; the next pass retries. Once the lock is held the
+    settings and review are read again, so a provider re-approved while
+    waiting keeps its attempt; each attempt then closes in its own short
+    transaction, so a pass that runs out of time keeps the ones it closed.
+    Nothing here sends or reserves."""
     candidates = [] if ledger.db.in_transaction else _open_cloud_attempts(ledger.db)
     cfg = load_config_checked() if candidates else None
     if cfg is None:
@@ -290,17 +298,23 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
         return 0
     close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
     closed = 0
-    try:
-        with lock(per_write_lock, deadline=close_by) as held:
-            if not held or not _writer_current():
-                return 0
-            with _stale_gc_transaction(ledger.db, close_by):
-                for r in withdrawn:
-                    if r in _open_cloud_attempts(ledger.db):   # still open under the writer lock
+    with lock(per_write_lock, deadline=close_by) as held:
+        if not held or not _writer_current():
+            return 0
+        cfg = load_config_checked()   # judged again under the lock
+        if cfg is None:
+            return 0
+        for r in withdrawn:
+            try:
+                with _stale_gc_transaction(ledger.db, close_by):
+                    # this post only, so the re-check stays small however long the history
+                    ended = (r in _open_cloud_attempts(ledger.db, r)
+                             and _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(ledger.db, r)))
+                    if ended:
                         _close_cloud_attempt_tx(ledger.db, r)
-                        closed += 1
-    except _StaleGCDeadline:
-        return 0   # rolled back whole; the next pass retries
+            except _StaleGCDeadline:
+                break   # this one rolled back; it and the rest wait for the next pass
+            closed += ended
     return closed
 
 

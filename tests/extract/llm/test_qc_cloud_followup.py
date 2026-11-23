@@ -1086,3 +1086,49 @@ def test_a_busy_database_bounds_the_close_write_like_the_stale_gc(qc_window, mon
     assert _attempts(ledger) == [('qc', 'open')]
     assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 1
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')] and len(cloud_calls) == 1
+
+
+def test_a_provider_re_approved_while_waiting_for_the_lock_keeps_its_attempt(qc_window, monkeypatch):
+    import contextlib
+    import functools
+    import extract_llm_errors
+    import extract_llm_store
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    review = {"value": _review("acknowledged", ["openai"])}   # withdrawn when the pass looks
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: review["value"])
+    real_lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
+
+    @contextlib.contextmanager
+    def lock(enabled, *, deadline=None):
+        review["value"] = _review("not_required")   # approved again while the pass waited
+        with real_lock(enabled, deadline=deadline) as held:
+            yield held
+
+    assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 0
+    assert _attempts(ledger) == [('qc', 'open')], "judged again under the lock"
+    assert len(cloud_calls) == 1
+
+
+def test_the_close_re_check_reads_only_its_own_post(qc_window, monkeypatch):
+    import functools
+    import extract_llm_errors
+    import extract_llm_store
+    ledger, _cfg, _local_calls, _cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    real = extract_llm_store._open_cloud_attempts
+    in_tx = []
+
+    def spy(db, r=None):
+        if db.in_transaction:
+            in_tx.append(r)
+        return real(db, r)
+
+    monkeypatch.setattr(extract_llm_store, "_open_cloud_attempts", spy)
+    lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
+    assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 1
+    assert in_tx and all(r is not None for r in in_tx), "no whole-history scan inside the write transaction"
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
