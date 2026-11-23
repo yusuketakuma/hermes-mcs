@@ -863,3 +863,42 @@ def test_a_panel_line_is_read_up_to_the_layout_reach():
     assert _confirmation("カリウム", "4.0", panel) == "quote_supported"
     assert _confirmation("カリウム", "4.0", "Cr 0.9 " * 60 + "カリウム 4.0") == "unverified"
     assert _confirmation("カリウム", "4.0", "カリウム 4.0 " + "Cr 0.9 " * 60) == "unverified"
+
+# The layout grammars read each reading in one way: a run of readings that ends in a
+# character no grammar accepts fails in bounded time, however long the run (the layout
+# reach is not what bounds it).
+_LAYOUT_RUNS = ("cr1.0、", "cr1.0", "cr1", "カリウム4.0", "hba1c6.5%", "na140mmol/l", "検査結果", "↑", "低下")
+
+
+@pytest.mark.parametrize("grammar", ["_LAB_PREFIX", "_LAB_TAIL"])
+@pytest.mark.parametrize("count", [22, 60, 200])
+@pytest.mark.parametrize("run", _LAYOUT_RUNS)
+def test_a_layout_grammar_fails_a_long_run_in_bounded_time(grammar, count, run):
+    import time
+    pattern = getattr(clinical_values, grammar)
+    began = time.perf_counter()
+    assert pattern.fullmatch(run * count + "※") is None
+    assert time.perf_counter() - began < 1
+
+
+@pytest.mark.parametrize("count", [22, 60, 200])
+@pytest.mark.parametrize("body,run", [("Cr 1.0、{run}追記 カリウム 4.0", "HbA1c 6.5%、"),
+                                      ("カリウム 4.0 {run}※", "HbA1c 6.5% ")])
+def test_a_long_panel_with_an_unmatched_word_is_read_in_bounded_time(count, body, run):
+    import time
+    began = time.perf_counter()
+    lab = clinical_values.lab_candidate("カリウム", "4.0", None, body.format(run=run * count))
+    assert time.perf_counter() - began < 1
+    assert lab["confirmation"] == "unverified" and lab["value"] == "4"
+
+
+# One parse per reading keeps every reading the grammars accepted before.
+@pytest.mark.parametrize("grammar,text", [
+    *(("_LAB_PREFIX", text) for text in ("cr1", "cr1.0", "hba1c6.5", "hba1c6.5%", "cr1.0mg2.0", "spo298%",
+                                         "na140k4.0", "電解質検査", "今回の検査", "生化学", "2026/11/16採血cr0.9",
+                                         "・1)検査結果:cr0.9、bun15/")),
+    *(("_LAB_TAIL", text) for text in ("cr1", "hba1c6.5%", "低下", "低", "↑↑", "高値です", "報告しました",
+                                       "cr0.9mg/dl", "前回4.2", "(h)", "正常範囲内")),
+])
+def test_the_layout_grammars_still_accept_their_readings(grammar, text):
+    assert getattr(clinical_values, grammar).fullmatch(clinical_values.fold_surface(text))

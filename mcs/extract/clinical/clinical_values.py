@@ -525,16 +525,20 @@ _LAB_HEADER = "|".join((
     r"(?:血液|生化学?|電解質|定期|本日|今日|今回)?(?:採血|検査|測定)(?:結果|値|データ|所見)?",
     r"電解質|生化学?|緊急値|本日|今日|今回",
 ))
+# Each word of a layout is read once and kept (an atomic group, repeated possessively):
+# a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
+# every split of a run of readings that ends in an unknown word. Alternatives that
+# start alike are therefore listed longest first (低下 before 低).
 _LAB_PREFIX = re.compile(fold_surface(
-    r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*"
-    rf"(?:[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
-    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*"))
+    r"(?>[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*+"
+    rf"(?>[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
+    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*+"))
 _LAB_TAIL = re.compile(fold_surface(
-    rf"(?:[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
-    r"|[でとにがはも]?(?:高値|低値|高め|低め|高|低|↑+|↓+|high|low|上昇|低下|改善|悪化|横ばい|不変"
+    rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    r"|[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
-    r"|でした|です|だった|である)*"))
+    r"|でした|です|だった|である)*+"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
