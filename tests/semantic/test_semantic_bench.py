@@ -167,6 +167,24 @@ def test_detection_requires_every_probe_to_be_evaluated(monkeypatch, capsys, une
     assert f"unevaluated={unevaluated}" in capsys.readouterr().out
 
 
+def test_detection_names_why_a_probe_went_unevaluated(monkeypatch, capsys):
+    probe = bench._probe_case("reject", "source", "claim", True)
+    client = SimpleNamespace(requests_made=0, last_error="stale")
+
+    def audit(client, bundle, summary, deadline):
+        assert client.last_error is None
+        summary["_claim_audit_reason"] = "service_error"
+        client.last_error = bench.jev.JevError("budget_exceeded", "usage_lock_busy")
+        return [{"code": "support_unevaluated"}], False
+
+    monkeypatch.setattr(bench, "_PROBES", [probe])
+    monkeypatch.setattr(bench.jev, "api_key", lambda: "synthetic")
+    monkeypatch.setattr(bench.jev, "live_client", lambda *a, **kw: nullcontext(client))
+    monkeypatch.setattr(bench, "audit_claims", audit)
+    assert bench.cmd_detect(SimpleNamespace()) == 1
+    assert "UNEVAL reason=service_error error=budget_exceeded/usage_lock_busy" in capsys.readouterr().out
+
+
 def test_private_output_replaces_link_without_changing_target(tmp_path):
     target = tmp_path / "other.json"
     target.write_text("unchanged")
