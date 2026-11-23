@@ -98,6 +98,9 @@
 /* ---------- Search results and MCS registered data ---------- */
 .search-item p { margin: 0 0 2px; }
 .search-results .load-more { margin: 10px 0; }
+.search-results .empty { padding: 8px 0; text-align: left; }
+.sender-matches { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sender-matches h3 { margin: 0 0 6px; font-size: var(--fs-sm); }
 .registered .cards { margin-top: 8px; }
 .table-wrap { overflow-x: auto; }
 .registered .rows td, .registered .rows th { padding: 4px 8px; font-size: var(--fs-sm); }
@@ -177,8 +180,8 @@ body[data-mode="mcs"] .panel-view { max-width: 920px; }
   .context-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 699px) {
-  /* The name stays on the 48px bar; the state chips get a full-width row under it instead of being cut off.
-     ID and counts stay in the patient sheet. */
+  /* The name stays on the 48px bar; the state and count chips get a full-width row under it instead of
+     being cut off, and the ID/place/disease line wraps below them. */
   body[data-mode="mcs"] .page-title, body[data-mode="mcs"] .page-sub { display: contents; }
   body[data-mode="mcs"] .page-title h1 { flex: 1; min-width: 0; line-height: var(--head-h); }
   body[data-mode="mcs"] .page-meta { display: block; order: 5; flex-basis: 100%; margin: -4px 0 4px; white-space: normal; }

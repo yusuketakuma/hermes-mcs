@@ -400,17 +400,24 @@ async function checkMcsData() {
   assert.equal(run("mcsRoomLink")("file:///synthetic").length, 0); assert.equal(run("mcsRoomLink")("http://example.invalid").length, 0);
   // 5. Counts: partial is never 0件, failed is 取得できません; list badges likewise.
   const counts = data => texts(run("countChips")(data));
-  assert.equal(counts({open_signals: {state: "complete", count: 2}, replies: {state: "observed", requests: 3, not_found: 1, unknown: 1}}), "未解消シグナル 2|返答確認 依頼 3（返答が見つからない 1・確認できない 1）");
+  assert.equal(counts({open_signals: {state: "confirmed", count: 2}, replies: {state: "observed", requests: 3, not_found: 1, unknown: 1}}), "未解消シグナル 2|返答確認 依頼 3（返答が見つからない 1・確認できない 1）");
   assert.equal(counts({open_signals: {state: "partial", count: 0}, replies: {state: "failed"}}), "未解消シグナル 判定中|返答確認 取得できません");
   assert.equal(counts({open_signals: {state: "partial", count: 2}, replies: {state: "observed", requests: 0}}), "未解消シグナル 2以上（判定中）|返答確認 依頼 0");
   assert.equal(counts({open_signals: {state: "failed", count: null}, replies: {}}), "未解消シグナル 取得できません|返答確認 取得できません");
+  // Server values added in parallel: partial replies and the partial-signal reason; an unknown state is never read as confirmed.
+  assert.equal(counts({open_signals: {state: "partial", count: 0, reason: "unreadable"}, replies: {state: "partial", requests: 2, not_found: 1}}), "未解消シグナル 一部読み取れません|返答確認 判定中（依頼 2以上・返答が見つからない 1）");
+  assert.equal(counts({open_signals: {state: "partial", count: 1, reason: "pending"}, replies: {state: "partial", requests: 0}}), "未解消シグナル 1以上（判定中）|返答確認 判定中（依頼 0以上）");
+  assert.match(run("countChips")({open_signals: {state: "partial", count: 0, reason: "unreadable"}, replies: {}})[0].title, /一部のシグナルの状態を読み取れません/);
+  assert.equal(counts({open_signals: {state: "synthetic_new", count: 0}, replies: {state: "synthetic_new", requests: 0}}), "未解消シグナル 取得できません|返答確認 取得できません");
+  assert.equal(counts({open_signals: {state: "complete", count: 0}, replies: {}}), "未解消シグナル 取得できません|返答確認 取得できません");
   const badge = signals => run("signalBadge")(signals)?.textContent ?? null;
-  assert.equal(badge({state: "complete", count: 0}), null); assert.equal(badge({state: "complete", count: 3}), "シグナル 3");
+  assert.equal(badge({state: "confirmed", count: 0}), null); assert.equal(badge({state: "confirmed", count: 3}), "シグナル 3");
+  assert.equal(badge({state: "synthetic_new", count: 0}), "シグナル 不明"); assert.equal(badge({state: "partial", count: 0, reason: "unreadable"}), "シグナル 一部不明");
   assert.equal(badge({state: "partial", count: 0}), "シグナル 判定中"); assert.equal(badge({state: "partial", count: 1}), "シグナル 1+");
   assert.equal(badge({state: "failed", count: null}), "シグナル 不明");
   run("state.project = 101; state.countBox = el('span'); state.countRequest = 0");
   let shown = null; run("showView = view => {globalThis.shownView = view;}"); // stubbed navigation
-  sandbox.api = async kind => {assert.equal(kind, "counts"); return {open_signals: {state: "complete", count: 1}, replies: {state: "observed", requests: 1}};};
+  sandbox.api = async kind => {assert.equal(kind, "counts"); return {open_signals: {state: "confirmed", count: 1}, replies: {state: "observed", requests: 1}};};
   await run("loadCounts()");
   const box = run("state.countBox");
   box.children[1].onclick(); shown = run("globalThis.shownView");
@@ -428,10 +435,11 @@ async function checkMcsData() {
   assert.match(karte(null), /取得できませんでした/);
   // 9. Search: source and page, notes, empty, 続きを検索, unavailable.
   run("state.project = 101; state.query = '合成'; state.panel = ''");
-  const pages = [{state: "searched", title: "検索結果", head: [], items: [{source: "body", text: "合成の本文", message_id: 1}, {source: "ocr", page: 2, text: "合成のOCR", message_id: 2}], notes: ["添付の一部は未処理です。"], next_cursor: "c1", range_complete: false},
+  const pages = [{state: "searched", title: "検索結果", head: [], items: [{source: "chat", text: "合成の本文", message_id: 1}, {source: "ocr", page: 2, text: "合成のOCR", message_id: 2}], notes: ["添付の一部は未処理です。"], next_cursor: "c1", range_complete: false},
     {state: "searched", items: [{source: "ocr", page: null, text: "合成の続き", message_id: 3}], notes: [], next_cursor: null, range_complete: true}];
   const cursors = [];
-  sandbox.api = async (kind, params) => {assert.equal(kind, "sources"); cursors.push(params.cursor); return pages.shift();};
+  const posts = {items: [{message_id: 8, body_state: "full", body_complete: true, body_text: "本文に語なし", sender_name: "合成 太郎"}, {message_id: 9, body_state: "full", body_complete: true, body_text: "合成の語を含む本文", sender_name: "別の人"}], next_cursor: null};
+  sandbox.api = async (kind, params) => {if (kind === "search") {assert.equal(params.q, "合成"); return posts;} assert.equal(kind, "sources"); cursors.push(params.cursor); return pages.shift();};
   await run("loadSearch()");
   let view = content(byId("panel-view"));
   assert.match(view, /合成の本文[\s\S]*本文[\s\S]*合成のOCR[\s\S]*添付OCR 2ページ/); assert.match(view, /添付の一部は未処理です/);
@@ -439,22 +447,49 @@ async function checkMcsData() {
   await run("state.search.more.onclick()");
   assert.equal(cursors.join("|"), "|c1"); view = content(byId("panel-view"));
   assert.match(view, /合成のOCR[\s\S]*合成の続き\n\n添付OCR\n/); assert.equal(run("state.search.more").hidden, true);
-  sandbox.api = async () => ({state: "unavailable", items: [], notes: [], empty: "合成の検索していない理由"});
+  // Sender matches come from the post search, filtered on the sender name only.
+  const senders = find(byId("panel-view"), node => node.className === "sender-matches");
+  assert.match(content(senders), /投稿者名が一致する投稿[\s\S]*合成 太郎/); assert.doesNotMatch(content(senders), /別の人/);
+  assert.equal(cursors.length, 2, "the post search runs once, on the first page");
+  // 0 hits with a cursor, then hits: the empty line says "so far" and goes away when an item arrives.
+  const later = [{state: "searched", items: [], notes: [], next_cursor: "c2", range_complete: false, empty: "合成の一致なし"},
+    {state: "searched", items: [{source: "chat", text: "合成の後の一致", message_id: 4}], notes: [], next_cursor: null, range_complete: true}];
+  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : later.shift();
+  await run("loadSearch()");
+  assert.match(content(byId("panel-view")), /ここまでに検索した範囲では見つかりませんでした/);
+  assert.equal(find(byId("panel-view"), node => node.className === "sender-matches"), null);
+  await run("state.search.more.onclick()");
+  view = content(byId("panel-view"));
+  assert.match(view, /合成の後の一致/); assert.doesNotMatch(view, /見つかりませんでした|合成の一致なし/); assert.equal(run("state.search.empty").hidden, true);
+  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : {state: "searched", items: [], notes: [], next_cursor: null, range_complete: true, empty: "合成の一致なし。"};
+  await run("loadSearch()");
+  assert.match(content(byId("panel-view")), /合成の一致なし。見つからないことは、記録がないことを意味しません。/);
+  sandbox.api = async kind => {if (kind === "search") throw new Error("x"); return {state: "searched", items: [], notes: [], next_cursor: null};};
+  await run("loadSearch()");
+  assert.match(content(byId("panel-view")), /投稿者名での検索はできませんでした/);
+  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : {state: "unavailable", items: [], notes: [], empty: "合成の検索していない理由"};
   await run("loadSearch()");
   assert.match(content(byId("panel-view")), /合成の検索していない理由/);
   assert.equal(run("errorTexts.bad_search_filter").includes("検索の条件"), true);
   assert.equal(run("errorTexts.search_cursor_invalid").includes("もう一度検索"), true);
+  assert.equal(run("errorTexts.config_unreadable"), "設定を読み取れないため表示できません。");
+  assert.match(run("errorTexts.search_query_empty"), /語句[\s\S]*資料: 分類: 開始: 終了:/);
   // 8. MCS登録データ: separate record, states, compact rows and 他N件.
   const registered = data => content(run("renderRegistered")(data));
   assert.match(registered({state: "unavailable", collection_enabled: true}), /チャットの投稿とは別の記録[\s\S]*読み取れません/);
   assert.match(registered({state: "not_linked", collection_enabled: false, datasets: []}), /収集は設定で無効[\s\S]*取得していません/);
+  const unreadable = registered({state: "not_linked", collection_enabled: null, config_state: "unreadable", datasets: []});
+  assert.match(unreadable, /設定を読み取れません/); assert.doesNotMatch(unreadable, /無効/);
   const listed = run("renderRegistered")({state: "listed", collection_enabled: true, datasets: [
     {dataset: "medication_periods", label: "合成の服薬期間", state: "complete", state_label: "取得済み", rows: [{begin_date: "2026-01-01", end_date: null, medicines: ["合成薬A"]}], rows_total: 3},
-    {dataset: "observation_values", label: "合成の測定値", state: "failed", state_label: "取得失敗", rows: [], rows_total: 0}]});
+    {dataset: "observation_values", label: "合成の測定値", state: "failed", state_label: "取得失敗", reason: "http_error", rows: [], rows_total: 0},
+    {dataset: "observation_items", label: "合成の項目", state: "unknown", state_label: "未確認", reason: "synthetic_new_reason", rows: [], rows_total: 0}]});
   const listedText = content(listed);
   assert.match(listedText, /合成の服薬期間[\s\S]*取得済み[\s\S]*開始[\s\S]*2026-01-01[\s\S]*未記録[\s\S]*合成薬A[\s\S]*他2件（先頭 1 件を表示）/);
   assert.match(listedText, /合成の測定値[\s\S]*取得失敗[\s\S]*行を表示できません（取得失敗）/);
   assert.ok(find(listed, node => node.tagName === "table"));
+  assert.match(listedText, /理由: MCS がエラーを返しました/); assert.match(listedText, /理由: 理由を判別できません/);
+  assert.doesNotMatch(listedText, /http_error|synthetic_new_reason|理由コード/);
   // 10. The open patient is remembered by #project=N and found even off the first page.
   sandbox.location.hash = "#project=205";
   run("state.patients = [{project_id: 1}]");
@@ -463,6 +498,13 @@ async function checkMcsData() {
   sandbox.location.hash = "#other";
   assert.equal(await run("rememberedPatient()"), null);
   sandbox.location.hash = "";
+  run("state.patients = [{project_id: 1, heading: '合成 一', message_count: 1}]; state.project = 205; state.openPatient = {project_id: 205, heading: '合成 二', message_count: 2}; patientList()");
+  const listRows = byId("patients").children;
+  assert.equal(listRows[0].className, "patient selected"); assert.match(content(listRows[0]), /合成 二/); assert.equal(listRows.length, 2);
+  // 記録の状態 lists each flag, including the ones not fetched.
+  const lines = texts(run("flagLines")({mention_self: {value: null, state: "self_unknown"}, pinned: {value: null, state: "not_fetched"}, bookmarked: {value: false, state: "observed"}}));
+  assert.equal(lines, "@自分宛て: 自分のアカウントを特定できません|ピン留め: 未取得|ブックマーク: なし");
+  assert.equal(texts(run("flagLines")({})), "@自分宛て: 状態不明|ピン留め: 状態不明|ブックマーク: 状態不明");
 }
 async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});
