@@ -211,7 +211,7 @@ PRODUCER_CODES = [
     ("discovery: patient_write_failed:OSError archived:none", "storage"),
     ("health_write_failed: OSError", "storage"), ("code_changed", "runtime"),
     ("extract: ValueError", "postprocess"), ("extract_llm: TimeoutError", "postprocess"),
-    ("drug_map: partial", "postprocess"), ("rollup: KeyError", "postprocess"),
+    ("drug_map: no_progress", "postprocess"), ("rollup: KeyError", "postprocess"),
     ("signals: request_aging:KeyError", "postprocess"), ("cmd:OSError", "command"),
     ("restore_reconcile:OSError", "command"), ("cmd_sweep:OSError", "command"),
     ("snapshot_publish_failed", "runtime"), ("config: semantic_not_object", "config"),

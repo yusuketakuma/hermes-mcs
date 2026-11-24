@@ -13,7 +13,7 @@ import sqlite3
 import stat
 import time
 from types import MappingProxyType
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from clinical_values import MedicationSurface, fold_surface, medication_surface
 from mcs_queries import current_extract_pred, current_fact_pred
@@ -95,6 +95,8 @@ class DeriveResult(TypedDict):
     status: str
     done: int
     pids: list[int]
+    # partial only: whether the cut walk moved its cursor (a resumable cut)
+    progressed: NotRequired[bool]
 
 
 def fold(text: str) -> str:
@@ -663,6 +665,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
     Completed cycles start again to catch changes at earlier message IDs.
     Source bindings hide changed originals immediately; dictionary generation
     changes hide old references even while their bounded cleanup is unfinished.
+    A cut walk reports ``progressed``: False means it examined no message.
     """
     usable = dictionary is not None and (dictionary.approved or synthetic)
     generation = [dictionary.dict_id, dictionary.sha256, synthetic, RESOLVER_VERSION] if usable else None
@@ -686,6 +689,7 @@ def derive(ledger, dictionary: DrugMap | None, *,
     if type(cursor) is not int or cursor < 0:
         cursor = 0
     progress = {"dictionary": generation, "cursor": cursor}
+    start = cursor
     with ledger.db:
         _save_progress(ledger.db, progress)
     while True:
@@ -749,7 +753,10 @@ def derive(ledger, dictionary: DrugMap | None, *,
         # synchronous=FULL); the cursor is only a resume hint, saved here
         with ledger.db:
             _save_progress(ledger.db, progress)
-    return {"status": "unavailable" if not usable else "partial" if cut else "ok",
+    if usable and cut:
+        return {"status": "partial", "done": done, "pids": sorted(pids),
+                "progressed": progress["cursor"] != start}
+    return {"status": "unavailable" if not usable else "ok",
             "done": done, "pids": sorted(pids)}
 
 

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "薬剤辞書照合の期限打ち切りで健康レポートが低下扱いになる問題を修正",
+  "summary": "薬剤辞書との照合が実行時間の期限で途中まで進んだ場合、要約や通知の後回しと同じく次回に続きを処理する延期として記録し、健康レポートを低下扱いにしなくなりました。1件も進まずに打ち切られた場合は、従来どおり要確認のエラーとして残します。照合の結果と対象は変わりません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。",
+  "details": [
+    "drug_map.derive は期限で打ち切った結果（status=partial）に、照合位置が進んだかを示す progressed を付ける。",
+    "収集後の処理は、位置が進んだ打ち切りを deadline_deferred:derive_medications として記録する（分類は deferred）。従来の drug_map: partial は記録しない。",
+    "位置が進まなかった打ち切りは drug_map: no_progress として記録し、従来どおり収集後の処理のエラー（stage_errors）として健康レポートを低下させる。"
+  ],
+  "refs": [
+    "mcs/medications/drug_map.py",
+    "mcs/ingest/run_check.py"
+  ]
+}

@@ -516,7 +516,30 @@ def test_deadline_cut_scan_reports_partial(store, tmp_path, monkeypatch):
     _seed(store)
     monkeypatch.setattr(drug_map.time, "monotonic", lambda: 10.0)
     assert drug_map.derive(store, _dictionary(tmp_path), deadline=5.0) == {
-        "status": "partial", "done": 0, "pids": []}
+        "status": "partial", "done": 0, "pids": [], "progressed": False}
+
+
+def test_short_deadline_walks_resume_and_finish(store, tmp_path, monkeypatch):
+    for mid in (1, 2, 3):
+        _seed(store, mid=mid)
+    dictionary = _dictionary(tmp_path)
+    # the walk reads the clock before each batch and each message: a deadline
+    # between the second and third read admits exactly one message
+    clock = [0.0]
+
+    def tick():
+        clock[0] += 1
+        return clock[0]
+    monkeypatch.setattr(drug_map.time, "monotonic", tick)
+    first = drug_map.derive(store, dictionary, deadline=clock[0] + 2.5)
+    assert first["status"] == "partial" and first["progressed"] is True
+    assert first["done"] >= 1
+    assert drug_map.read_annotation_progress(store.db)["cursor"] >= 1
+    finished = drug_map.derive(store, dictionary, deadline=clock[0] + 100)
+    assert finished["status"] == "ok" and "progressed" not in finished
+    assert first["done"] + finished["done"] == 3
+    assert drug_map.read_annotation_progress(store.db)["cursor"] == 0
+    assert all(drug_map.current_refs(store.db, mid) for mid in (1, 2, 3))
 
 
 @pytest.mark.parametrize("invalid_name", [None, "", "  ", 3, {"name": "キラナ"}, "薬" * 513])
