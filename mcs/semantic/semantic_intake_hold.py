@@ -909,7 +909,7 @@ def release_root(ledger, project_id, root, *, expected_job_sha256,
                  expected_hold_epoch, expected_snapshot_sha256, cfg, run_lock_fd):
     """Replay verified held intent with a new job identity and retained evidence."""
     from mcs_queries import paused
-    from semantic_policy import runtime_config
+    from semantic_policy import primary_verdicts_consumed, runtime_config
     from semantic_drain import _job_lock
     import fcntl
     db_path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
@@ -930,7 +930,8 @@ def release_root(ledger, project_id, root, *, expected_job_sha256,
             or not 0 < expected_hold_epoch < 2**63):
         raise ValueError('semantic_release_args')
     scfg, errors = runtime_config(cfg)
-    if (errors or scfg['mode'] == 'off' or scfg['project_ids'] is not None
+    if (errors or scfg['mode'] == 'off' or not primary_verdicts_consumed(scfg)
+            or scfg['project_ids'] is not None
             and project_id not in scfg['project_ids']):
         raise ValueError('semantic_release_disabled')
     if ledger.db.in_transaction:

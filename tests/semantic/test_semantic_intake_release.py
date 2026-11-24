@@ -59,6 +59,15 @@ def _state(db):
             for table in ('fetch_jobs', 'artifacts', 'notify_outbox')}
 
 
+def test_release_is_disabled_when_no_feature_reads_verdicts(store):
+    _hold(store)
+    plan = hold.prepare_release(store, 1, 1)
+    before = _state(store)
+    with pytest.raises(ValueError, match='semantic_release_disabled'):
+        _release(store, plan, cfg=_cfg('assist', summary_mode='off', loop_mode='off'))
+    assert _state(store) == before
+
+
 def test_prepare_is_read_only_including_cli(store, tmp_path, monkeypatch, capsys):
     _hold(store)
     before = _state(store)

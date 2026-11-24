@@ -163,6 +163,21 @@ def test_disabled_processing_has_no_eta_even_with_recorded_completions(led):
     assert snapshot(led, cfg)["queues"]["backfill"]["estimate"]["reason"] == "processing_disabled"
 
 
+def test_unread_semantic_queue_is_not_estimated_as_runnable(led):
+    cfg = _cfg("assist", summary_mode="off", loop_mode="off")
+    job(led, 1, state="pending", kind="semantic")
+    job(led, 2, state="pending", kind=progress.QC_JOB_KIND)
+
+    out = snapshot(led, cfg)
+    assert out["semantic_results_consumed"] is False
+    assert out["unread_semantic_pending"] == 1
+    assert out["queues"]["backfill"]["pending"] == 1
+    assert out["queues"]["backfill"]["unread_pending"] == 1
+    assert out["queues"]["backfill"]["runnable_pending"] == 0
+    assert out["queues"]["backfill"]["estimate"]["reason"] == "no_result_reader"
+    assert out["queues"]["qc"]["runnable_pending"] == 1
+
+
 def room(led, pid, *, coverage=NOW - 1000, state="pending", updated=NOW - 10,
          due=0, archived=False):
     _patient(led, pid)
