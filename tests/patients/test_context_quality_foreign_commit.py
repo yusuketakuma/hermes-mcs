@@ -7,7 +7,6 @@ from contextlib import closing
 
 import pytest
 
-import cloud_backlog
 import extract_llm as worker
 import patient_context_quality_controller
 import patient_context_quality_receipts
@@ -153,27 +152,6 @@ def test_summary_audit_stops_when_another_process_changes_the_audited_summary(qu
     assert not led.db.in_transaction
 
 
-def test_summary_audit_reports_the_gate_that_deferred_it(quality_owner, monkeypatch):
-    import cloud_policy
-    led, clock, cfg, doc, sends, _ = quality_owner
-    monkeypatch.setattr(cloud_policy, "stopped", lambda *_: True)
-    detail = []
-    status, _ = _summary_step(led, clock, cfg, doc, detail_out=detail)
-    assert status == "deferred" and detail == ["cloud_stopped"] and not sends
-    assert set(detail) <= patient_context_quality_controller.DEFERRAL_CODES
-
-
-def test_summary_unknown_request_reports_its_receipt_without_resending(quality_owner, monkeypatch):
-    import semantic_runtime
-    led, clock, cfg, doc, sends, _ = quality_owner
-    monkeypatch.setattr(semantic_runtime, "patient_summary_request_problem",
-                        lambda *_a, **_kw: "patient_summary_request_unknown")
-    detail = []
-    status, _ = _summary_step(led, clock, cfg, doc, detail_out=detail)
-    assert status == "unknown" and detail == ["request_receipt_unknown"]
-    assert not sends and not led.artifacts("semantic_usage")
-
-
 def test_summary_repair_is_reserved_while_another_process_keeps_committing(repair, monkeypatch):
     led, run, facts, _, sent, _, _ = repair
     commits = _commit_at_every_lock(monkeypatch, led)
@@ -224,41 +202,3 @@ def test_source_audit_is_not_adopted_when_another_process_removes_its_answer(run
     assert not led.db.in_transaction
     assert not led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
-
-
-@pytest.mark.parametrize("result,expected", [
-    ({"reason": "source_quality_unavailable:patient_summary_quality_source_changed"},
-     "patient_summary_quality_source_changed"),
-    ({"reason": "source_quality_unavailable:RuntimeStale"}, "RuntimeStale"),
-    ({"reason": "summary_quality_unavailable:patient_summary_quality_lock"}, "patient_summary_quality_lock"),
-    ({"reason": "source_quality_deferred", "quality_detail": "claim"}, "claim"),
-    ({"reason": "summary_quality_deferred", "quality_detail": "retry_wait"}, "retry_wait"),
-    ({"reason": "source_quality_unavailable:synthetic private text"}, "unclassified"),
-    ({"reason": "source_quality_unavailable:synthetic_private_value"}, "unclassified"),
-    ({"reason": "source_quality_unavailable:SyntheticPrivateError"}, "unclassified"),
-    ({"reason": "source_quality_unknown", "quality_detail": "request_receipt_unknown"}, "request_receipt_unknown"),
-    ({"reason": "summary_quality_unknown"}, "unclassified"),
-    ({"reason": "source_quality_unavailable:Synthetic"}, "unclassified"),
-    ({"reason": "source_quality_unavailable:A1234567"}, "unclassified"),
-    ({"reason": "source_quality_unavailable:JSONDecodeError"}, "JSONDecodeError"),
-    ({"reason": "source_quality_deferred", "quality_detail": "合成の値"}, "unclassified"),
-    ({"reason": "source_quality_deferred", "quality_detail": 7}, "unclassified"),
-])
-def test_context_pass_records_only_a_declared_quality_detail(result, expected):
-    record = cloud_backlog._context_pass_observation({"status": "deferred", "done": 0, "lane": "C", **result})
-    assert record["quality_detail"] == expected
-    assert record["reason"] == result["reason"].partition(":")[0]
-
-
-@pytest.mark.parametrize("result", [
-    {"status": "deferred", "reason": "patient_context_waiting", "quality_detail": "claim"},
-    {"status": "deferred", "reason": "source_quality_pending"},
-    {"status": "progressed", "done": 1, "lane": "C"},
-])
-def test_context_pass_keeps_quality_detail_to_quality_deferrals(result):
-    assert "quality_detail" not in cloud_backlog._context_pass_observation(result)
-
-
-def test_quality_deferral_codes_are_identifiers():
-    assert all(code.isidentifier() and code.islower() for code in patient_context_quality_controller.DEFERRAL_CODES)
-    assert json.dumps(sorted(patient_context_quality_controller.DEFERRAL_CODES))

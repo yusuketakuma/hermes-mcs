@@ -51,28 +51,18 @@ def test_cloud_page_result_survives_local_model_change_without_calls(page_store)
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
-def test_reviewed_context_logging_change_keeps_an_existing_page_result(page_store, monkeypatch):
+def test_patient_quality_changes_keep_the_stored_page_result(page_store, monkeypatch):
     ledger, cfg, key, local_calls, cloud_calls, _ = page_store
-    code = worker._CODE
-    before = {'attachment_inference': code, 'cloud_backlog': 'a' * 64, contract.WITNESS_KEY: 'b' * 64}
-    monkeypatch.setattr(worker.extract_llm, '_LOADED_SOURCE_DIGESTS', before)
     assert run(ledger, cfg, 'local')['done'] == 1
     stored = worker.current(ledger.db, 1, key, cfg=cfg)
     calls = len(local_calls)
-    after = {**before, 'cloud_backlog': 'c' * 64, contract.WITNESS_KEY: 'd' * 64}
-    monkeypatch.setattr(contract, '_WITNESS', {
-        'schema': contract.WITNESS_SCHEMA, 'baseline': 'e' * 40, 'baseline_code_digest': code,
-        'versions': [worker.extract_llm._INFERENCE_VERSION, worker.extract_llm.EXTRACT_VERSION,
-                     worker.extract_llm.PATIENT_CONTEXT_VERSION],
-        'components': {'attachment_inference': code, 'cloud_backlog': after['cloud_backlog']},
-        'replacements': before, 'additions': {},
-    })
-    monkeypatch.setattr(contract, '_WITNESS_DIGEST', after[contract.WITNESS_KEY])
-    monkeypatch.setattr(worker.extract_llm, '_LOADED_SOURCE_DIGESTS', after)
+    loaded = worker.extract_llm._LOADED_SOURCE_DIGESTS
+    for name in ('patient_context_refresh', 'patient_context_quality_receipts', 'patient_context_quality_controller'):
+        monkeypatch.setitem(loaded, name, 'a' * 64)
     assert worker.current(ledger.db, 1, key, cfg=cfg)['artifact_id'] == stored['artifact_id']
     assert run(ledger, cfg, 'local')['done'] == 0
     assert len(local_calls) == calls and not cloud_calls
-    monkeypatch.setitem(after, 'cloud_backlog', 'f' * 64)
+    monkeypatch.setitem(loaded, 'cloud_backlog', 'b' * 64)
     assert worker.current(ledger.db, 1, key, cfg=cfg) is None
 
 

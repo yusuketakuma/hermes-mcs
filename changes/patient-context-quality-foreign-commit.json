@@ -1,18 +1,15 @@
 {
   "category": "fixed",
-  "title": "患者コンテキストの品質確認を保存するときに対象の入力を照合し、停止理由を記録",
-  "summary": "原文や概況が品質確認を通った後、ほかの患者の更新が入っても、対象の原文・回答・公開中の概況を照合できれば保存へ進みます。クラウド処理の周回記録には、照会記録を確認できない場合や、品質確認を見送った理由も残ります。",
+  "title": "ほかの患者の更新が重なっても品質確認済みの原文や概況を保存",
+  "summary": "クラウドで作った患者コンテキストの品質確認後、ほかの患者の記録が更新されても、確認に使った原文・回答・調査結果が一致すれば公開へ進みます。対象の記録が変わった場合や照合できない場合は保存を見送ります。",
   "upgrade": "Hermes gateway または独立実行の mcs_standalone を再起動してください。既定の legacy 構成は追加設定不要です。fact_source が shadow の場合は新しい条件で品質を再確認します。canonical の場合は更新後の候補で比較・承認をやり直してください。",
   "details": [
-    "既に支払った照会は、元の回答・予約を検証して再利用します。確認した記録が変わった場合や照合できない場合は保存を見送ります。",
-    "patient_context_pass の quality_detail に、対象の品質確認を見送った理由の固定コードを記録します。照会記録が未確定なら request_receipt_unknown、分類できない理由は unclassified と記録します。",
-    "患者コンテキストの周回記録だけを変更した更新では、照合済みのハッシュを使って添付解析結果を再利用します。"
+    "照合した対象の原文・調査結果・回答・公開中の概況を、保存直前に書込み側の台帳で確かめます。",
+    "同じ接続で想定外の書込みを検出した場合は保存を見送ります。既に支払った照会は、元の回答と予約の照合が通れば再利用します。"
   ],
   "refs": [
-    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/patients/patient_context_quality_receipts.py",
     "mcs/patients/patient_context_refresh.py",
-    "mcs/llm/cloud_backlog.py",
-    "resources/inference-contracts/attachment-refactor-20261105.json",
     "tests/patients/test_context_quality_foreign_commit.py"
   ]
 }

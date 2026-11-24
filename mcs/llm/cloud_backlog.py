@@ -886,24 +886,6 @@ def _bounded_pass_code(value):
             and len(value) <= 80)
 
 
-# Only exception classes the quality check handles may enter the pass log.
-_QUALITY_EXCEPTION_NAMES = frozenset({
-    "Deferred", "ValueError", "JSONDecodeError", "UnicodeError", "UnicodeDecodeError",
-    "RuntimeError", "RecursionError", "RuntimeGuardError", "RuntimeOff", "RuntimeStale",
-    "RuntimeBudget", "RuntimeBudgetShort", "LLMNotSent", "LLMRejected",
-})
-
-
-def _quality_detail_declared(value):
-    """Fixed identifiers only: registered codes, pass reasons, deferral gates and exception type names."""
-    import error_codes
-    import patient_context_quality_controller
-    return type(value) is str and (
-        value in error_codes.KNOWN_ERROR_CODES or value in _CONTEXT_PASS_REASONS
-        or value in patient_context_quality_controller.DEFERRAL_CODES
-        or value in _QUALITY_EXCEPTION_NAMES)
-
-
 def _context_pass_observation(result):
     """Report bounded context progress and fixed reasons without source or exception values."""
     status = result.get("status")
@@ -914,25 +896,13 @@ def _context_pass_observation(result):
         reason = result.get("error")
     if reason is not None or record["status"] in ("deferred", "failed", "error"):
         # Suffixed detail (e.g. source_quality_unavailable:RuntimeStale) classifies
-        # by its fixed base; the suffix never enters the reason (a declared one is
-        # recorded as quality_detail below).
+        # by its fixed base; exception-derived suffixes never enter the record.
         # failed/error carry safe_error_code output or a type name — both are
         # bounded identifiers, so they pass through verbatim.
         base = reason.partition(":")[0] if type(reason) is str else None
         record["reason"] = base if base in _CONTEXT_PASS_REASONS or (
                 record["status"] in ("failed", "error") and _bounded_pass_code(base)) \
             else "unclassified"
-    # Why a quality check did not finish: the declared code after ``..._quality_unavailable:``
-    # (a registered error code, a pass reason or an exception type name), or the gate that
-    # deferred the step. Anything else is recorded as unclassified, never as written.
-    detail = result.get("quality_detail")
-    if detail is None and type(reason) is str and reason.partition(":")[0] in (
-            "source_quality_unavailable", "summary_quality_unavailable"):
-        detail = reason.partition(":")[2] or None
-    if record.get("reason") in ("source_quality_deferred", "summary_quality_deferred",
-                                "source_quality_unavailable", "summary_quality_unavailable",
-                                "source_quality_unknown", "summary_quality_unknown"):
-        record["quality_detail"] = detail if _quality_detail_declared(detail) else "unclassified"
     for key, limit in (("done", 1), ("scanned", 8), ("scan_ms", 900000)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
