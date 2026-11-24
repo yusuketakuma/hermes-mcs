@@ -437,7 +437,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             jev_client.last_error = error
         from semantic_audit import jev_skip_reason
         reason = jev_skip_reason(error)
-        if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
+        if reason == "daily_budget" and waits_for_jev_quota(scfg, lane, QC_JOB_KIND):
             # the next quota window asks only what is still unanswered
             if diagnostics is not None:
                 diagnostics["jev_wait"] = reason

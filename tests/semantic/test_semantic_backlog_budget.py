@@ -69,10 +69,14 @@ def test_only_the_backlog_lane_passes_the_long_reacquire_bound(
                                jev_client=_FakeJev(), llm_fn=_llm,
                                lane=lane, max_jobs=1)
         assert out["done"] == 1
-        # every transport waits at most until the deadline run_due was
-        # given (the backlog pass budget / the tick deadline); the
-        # per-call runtime guard inside the job stays shorter
-        assert calls and set(calls) == {(expected, deadline)}
+        # every transport, and the lock retake after it, waits at most until
+        # the served job's own run deadline: an answer retaken later would
+        # only be refused by the job's result guard
+        job_budget = semantic_policy.semantic_config(_cfg("shadow"))[0]["job_budget_seconds"]
+        assert calls and {wait for wait, _ in calls} == {expected}
+        bounds = {bound for _, bound in calls}
+        assert len(bounds) == 1
+        assert deadline - 300 < bounds.pop() <= deadline - 300 + job_budget + 1
     finally:
         db.close()
 

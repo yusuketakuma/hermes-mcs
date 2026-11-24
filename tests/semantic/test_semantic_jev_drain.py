@@ -311,10 +311,8 @@ def _clock(monkeypatch, start=1000.0):
     return clock
 
 
-def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads, monkeypatch):
-    """The drain cap closes the start window only: the job in flight retakes
-    the lock after a tick held it past that point and saves its answer;
-    no new job starts after it."""
+def _tick_holds_lock(monkeypatch, threads, hold_s):
+    """One drain whose first Jev answer meets a tick holding run.lock for hold_s."""
     clock = _clock(monkeypatch)
     windows = []
 
@@ -322,23 +320,44 @@ def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads,
     def tick_holds_lock(ledger, lock_fd, wait_s=None, deadline=None):
         yield
         if not windows:
-            clock[0] += 20          # the tick held run.lock across start_by
+            clock[0] += hold_s
         windows.append(deadline)
-        if clock[0] >= deadline:
+        if clock[0] >= deadline:   # the bounded retake ran out
             raise writer_lock.RunLockLost(held=False, updated=False)
 
     monkeypatch.setattr(writer_lock, "unlocked_transport", tick_holds_lock)
     fd = os.open(os.devnull, os.O_RDONLY)
+    started = clock[0]
     try:
-        start_by = clock[0] + 10
+        start_by = started + 10
         out = semantic_drain.run_due(threads, _cfg("shadow", **JEV_ONLY), {"errors": []},
                                      start_by + 45 + 30, jev_client=_HookedJev(), llm_fn=_no_local_model,
                                      lane="backlog", max_jobs=8, run_lock_fd=fd, start_by=start_by)
     finally:
         os.close(fd)
+    # the retake is bounded by the job's own run deadline, not the drain's
+    assert windows[0] == started + 45
+    return out
+
+
+def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads, monkeypatch):
+    """The drain cap closes the start window only: the job in flight retakes
+    the lock after a tick held it past that point and saves its answer;
+    no new job starts after it."""
+    out = _tick_holds_lock(monkeypatch, threads, 20)
     assert "run_lock_lost" not in out
     assert out["done"] == 1 and out["start_window_closed"] is True
     assert _pending(threads) == 3
+
+
+def test_a_tick_holding_the_lock_past_the_job_deadline_keeps_the_attempt(threads, monkeypatch):
+    """A retake that cannot finish inside the job's run deadline gives up
+    there: nothing is written and the job keeps its attempts."""
+    out = _tick_holds_lock(monkeypatch, threads, 50)
+    assert out["run_lock_lost"] == "timeout" and out["done"] == 0
+    rows = threads.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                              (semantic_drain.JOB_KIND,)).fetchall()
+    assert {tuple(r) for r in rows} == {("pending", 0)}
 
 
 class _HookedJev(_FakeJev):
@@ -438,5 +457,65 @@ def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monke
         assert sorted(asked) == sorted(questions) and len(questions) == 5
         assert json.loads(qc[0])["coverage"]["checked"] == 5
         assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (semantic_qc.QC_WAIT_KIND,)).fetchall()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("sends", [False, True])
+def test_realtime_needs_jev_start_room_only_for_a_job_that_will_send(tmp_path, monkeypatch, sends):
+    """22 s left: a realtime job that Jev is switched off for sends nothing
+    and still completes; one that would send waits for start room."""
+    clock = _clock(monkeypatch)
+    db = _one_job(tmp_path)
+    try:
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1)")
+        jev = _HookedJev() if sends else None
+        out = semantic_drain.run_due(db, _cfg("shadow", budget=50 if sends else 0, **JEV_ONLY),
+                                     {"errors": []}, clock[0] + 22, jev_client=jev,
+                                     llm_fn=_no_local_model, lane="realtime", max_jobs=4)
+        if sends:
+            assert out["done"] == 0 and out["floor_skipped"] == {"semantic": 1}
+            assert jev.requests_made == 0 and _job_row(db) == ("pending", 0)
+        else:
+            assert out["done"] == 1 and out["jev_skipped"] == {"disabled": 1}
+    finally:
+        db.close()
+
+
+def _qc_source(db, items=4):
+    from extract_testkit import _hash, _v2_artifact
+    db.save_messages([_message(1)])
+    content = {"meds": [{"name": f"合成薬M{i}", "action": "start", "subject": "patient"}
+                        for i in range(items - 1)], "urgency": "routine"}
+    _v2_artifact(db, 1, _hash(db), content=content)
+
+
+def _qc_state(db):
+    job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                        (semantic_drain.QC_JOB_KIND,)).fetchone()
+    kinds = {r[0] for r in db.db.execute(
+        "SELECT kind FROM artifacts WHERE kind IN ('extract_qc','extract_qc_skipped',?)",
+        (semantic_qc.QC_WAIT_KIND,))}
+    return tuple(job), kinds
+
+
+@pytest.mark.parametrize("usage,requests", [(9, 0), (7, 2)], ids=["at_reserve", "mid_job"])
+def test_backlog_qc_waits_for_quota_with_local_model_stages_on(tmp_path, monkeypatch, usage, requests):
+    """QC's whole result is Jev's whatever the semantic stages: in the backlog
+    lane it waits for the next quota window instead of completing as skipped."""
+    db = _ledger(tmp_path)
+    try:
+        _qc_source(db)
+        cfg = _cfg("shadow", budget=10, max_questions_per_request=1, extract_qc="annotate")
+        assert semantic_policy.needs_local_model(semantic_policy.semantic_config(cfg)[0])
+        _usage(monkeypatch, usage)
+        jev = _CappedJev()
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert jev.requests_made == requests and out["done"] == 0
+        job, kinds = _qc_state(db)
+        assert job == ("pending", 0)
+        assert kinds == ({semantic_qc.QC_WAIT_KIND} if requests else set())
     finally:
         db.close()

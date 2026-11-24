@@ -308,12 +308,13 @@ def needs_local_model(scfg: dict) -> bool:
     return scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off"
 
 
-def waits_for_jev_quota(scfg: dict, lane) -> bool:
+def waits_for_jev_quota(scfg: dict, lane, kind: str) -> bool:
     """Whether a Jev refused for quota leaves the job due instead of completing it as skipped.
 
-    A backlog job with no local-model stage would complete with nothing but a
-    skipped assessment, so it waits for the next quota window."""
-    return lane == "backlog" and not needs_local_model(scfg)
+    A backlog job whose whole result is Jev's — every QC job, and a semantic
+    job with no local-model stage — would complete with nothing but a skipped
+    assessment, so it waits for the next quota window. Realtime jobs complete."""
+    return lane == "backlog" and (kind == QC_JOB_KIND or not needs_local_model(scfg))
 
 
 def policy_fingerprint(scfg: dict) -> str:

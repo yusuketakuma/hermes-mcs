@@ -560,7 +560,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if target_verdicts is None:
                 error = getattr(jev_client, "last_error", None)
                 reason = semantic_audit.jev_skip_reason(error)
-                if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
+                if reason == "daily_budget" and waits_for_jev_quota(scfg, lane, job["kind"]):
                     # _assess_target kept the answers obtained so far on its
                     # wait row; the next quota window asks only the rest.
                     diagnostics["jev_wait"] = reason

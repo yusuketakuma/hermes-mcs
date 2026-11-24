@@ -451,9 +451,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # Log-only totals belong to this pass output; only its explicit stage chain may add to them.
     shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
+    # The served job's own run deadline, settled once when it starts: its
+    # transports, the lock retake after them and its result checks all end
+    # there, so a retake never outwaits the job and voids a received answer.
+    # Between jobs (selection) it is the pass deadline.
+    job_run_deadline = deadline
+
     def _unlocked(kind, call, *args, **kwargs):
         nonlocal held_since
         started, ended = time.monotonic(), None
+        bound = job_run_deadline
         if lock_hold is not None:
             hold = started - held_since
             lock_hold["hold_sum_s"] += hold
@@ -461,7 +468,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             lock_hold["hold_count"] += 1
         try:
             with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s,
-                                    deadline=deadline):
+                                    deadline=bound):
                 try:
                     return call(*args, **kwargs)
                 finally:
@@ -474,7 +481,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["run_lock_lost_detail"] = {
                     "kind": kind, "transport_s": round(ended - started, 1),
                     "reacquire_s": round(time.monotonic() - ended, 1),
-                    "window_s": round(max(0.0, min(wait, deadline - ended)), 1)}
+                    "window_s": round(max(0.0, min(wait, bound - ended)), 1)}
             raise
         finally:
             if ended is not None:
@@ -784,10 +791,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # Only start one when a call can plausibly fit, using the same
             # reserve applied to follow-up calls. Further stages defer
             # via BudgetShort without charging an attempt. QC rows and
-            # semantic jobs without a local-model stage need room for Jev
-            # requests only, so they use the short Jev start floor.
-            floor = deadline - (_QC_START_RESERVE_S if job["kind"] == QC_JOB_KIND
-                                else runtime.jev_start_reserve(scfg) if not needs_local_model(scfg)
+            # semantic jobs without a local-model stage start on the short
+            # floor here; one that will send to Jev also needs room for its
+            # first request, checked below once its Jev skip is known.
+            jev_only_job = job["kind"] == QC_JOB_KIND or not needs_local_model(scfg)
+            floor = deadline - (_QC_START_RESERVE_S if jev_only_job
                                 else min(runtime.LLM_CALL_RESERVE_S,
                                          float(scfg["job_budget_seconds"]) * 2 / 3))
             if lane == "backlog":
@@ -846,12 +854,21 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
                 if hasattr(jev_client, "job_budget"):
                     jev_client.job_budget = scfg["job_budget_seconds"]
-            if job_skip in _JEV_WAIT_SKIPS and waits_for_jev_quota(scfg, lane):
-                # A Jev-only backlog job would complete with nothing but a
-                # skipped assessment: leave it due for the next quota window
-                # and end the pass, which cannot spend Jev either.
+            if job_skip in _JEV_WAIT_SKIPS and waits_for_jev_quota(scfg, lane, job["kind"]):
+                # This job would complete with nothing but a skipped
+                # assessment: leave it due for the next quota window. With no
+                # local-model work in the pass nothing else can progress, so
+                # the pass ends; otherwise local-model jobs go on.
                 _defer_note(out, job_skip)
-                break
+                if not needs_local_model(scfg):
+                    break
+                continue
+            if (job["kind"] == JOB_KIND and jev_only_job and job_skip is None
+                    and time.monotonic() > deadline - runtime.jev_start_reserve(scfg)):
+                # its first Jev request must pass the pre-send cutoff
+                out["floor_skipped"][job["kind"]] = \
+                    out["floor_skipped"].get(job["kind"], 0) + 1
+                continue
             if job_skip is not None:
                 try:
                     if errors:
@@ -922,17 +939,18 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             diagnostics = _job_diagnostics()
             if job_skip is not None:
                 diagnostics["jev_skip_reason"] = job_skip
+            job_run_deadline = runtime.job_deadline(scfg, deadline)
             try:
                 if job["kind"] == QC_JOB_KIND:
                     status = semantic_qc._process_qc_job(
-                        ledger, scfg, job, job_jev, deadline,
+                        ledger, scfg, job, job_jev, job_run_deadline,
                         reserve_fn=reserve_fn, cfg_path=cfg_path,
                         config_generation=cfg_generation,
                         jev_transport=jev_transport, jev_timing=jev_timing,
                         skip_reason=job_skip, lane=lane, diagnostics=diagnostics)
                 else:
                     status = _process_job(
-                        ledger, scfg, job, job_jev, timed_llm, deadline,
+                        ledger, scfg, job, job_jev, timed_llm, job_run_deadline,
                         cfg_path=cfg_path,
                         config_generation=cfg_generation,
                         reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
@@ -962,6 +980,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     f"semantic {job['message_id']}: {type(e).__name__}")
                 out["failed"] += 1
                 status = None
+            job_run_deadline = deadline
             job_elapsed = time.perf_counter() - job_started
             skip_observed = diagnostics.get("jev_skip_reason")
             if skip_observed and status == "done":
@@ -1054,9 +1073,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                  and len(targets) == 1):
                 break
             if diagnostics.get("jev_wait"):
-                # the quota ran out inside this job: no later job can call Jev
+                # the quota ran out inside this job: no later job can call Jev,
+                # and only local-model work could still progress in this pass
                 out["budget_exhausted"] = True
-                break
+                if not needs_local_model(scfg):
+                    break
             # A free hold with no new work must not starve independent due jobs.
             if free_hold:
                 selected[cohort_name] -= 1
