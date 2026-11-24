@@ -571,6 +571,39 @@ def test_superseded_hold_shortens_when_the_pending_set_changes(routed):
         == extract_llm_runner._PREPARE_HOLD_S
 
 
+def test_other_prepare_refusals_keep_no_lookahead_claim(routed, monkeypatch):
+    """Regression check: in the cloud lookahead, a prepare refusal outside the
+    hold set (here a prepare budget refusal) keeps main's behavior — no claim
+    is placed, so the next pass re-selects the row immediately instead of
+    waiting out a preparation hold."""
+    ledger, cfg, calls, reserved, results = routed
+    cfg["cloud_llm"]["max_concurrency"] = 32
+    row, frame = _frozen(ledger, body=_multi_piece_body(), mid=2)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    old(ledger, 1)
+    now = time.time()
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET first_seen=?,posted_at_ts=?", (now - 1200, now - 1200))
+        ledger.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=2", (now - 1100,))
+        ledger.db.execute("UPDATE message_revisions SET observed_at=?", (now - 1200,))
+        cloud_policy.capture_history_tx(ledger.db, "synthetic-refused-head", now)
+    monkeypatch.setattr(worker, "_probe_format", lambda **kw: pytest.fail("cloud probed local backend"))
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
+
+    def _refuse(led, rows, target, prefilter, **kw):
+        kw['blocked_rows'].append((dict(rows[0]), "prepare_context_prepare_budget_exceeded"))
+        kw['blocked_reasons']["prepare_context_prepare_budget_exceeded"] = 1
+        return [], 0, 1
+
+    monkeypatch.setattr(extract_llm_runner, "_prepare_jobs", _refuse)
+    with legacy_cloud_routes():
+        first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180,
+            background=True, cloud_only=True, prioritize_patients=True)
+    assert first["defer_reasons"]["prepare_context_prepare_budget_exceeded"] >= 1
+    assert _superseded_claim(ledger, row) is None
+
+
 def test_superseded_head_keeps_one_claim_and_the_cloud_tail_runs(
         routed, monkeypatch):
     """Cloud lane: a still-superseded head takes one bounded claim in the
