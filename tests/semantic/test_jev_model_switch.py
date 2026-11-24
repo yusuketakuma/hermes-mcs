@@ -53,9 +53,10 @@ def home(tmp_path, monkeypatch):
 
 def _lister(calls, listed=None, error=None):
     @contextmanager
-    def factory(key, *, operation, root, **options):
+    def factory(key, *, operation, root, guard, **options):
         calls.append(operation)
         def models():
+            guard("jev_attempt")   # as JevEvaluation.models does after the reservation
             if error is not None:
                 raise error
             return listed
@@ -95,9 +96,43 @@ def test_list_is_not_asked_without_a_key_or_budget(home, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda *_: None)
     assert jev_model_updates.check({}, str(home), client_factory=factory) is None
     monkeypatch.setattr(jev, "api_key", lambda *_: "synthetic")
-    off = {"semantic": {"mode": "off", "project_ids": []}}
+    off = {"semantic": {"mode": "off", "project_ids": [], "daily_request_budget": 10}}
     assert jev_model_updates.check(off, str(home), client_factory=factory) is None
     assert calls == []
+
+
+def test_availability_is_checked_again_right_before_the_list_request(home):
+    calls = []
+    held = {"semantic": {"mode": "off", "project_ids": [], "daily_request_budget": 10}}
+    state = jev_model_updates.refresh(str(home), "synthetic", now=10.0, client_factory=_lister(calls, [NEXT]),
+                                      load_config=lambda: held)
+    assert calls == ["jev_model_check"] and state["error"] == "jev_unavailable" and state["models"] == []
+
+
+@pytest.mark.parametrize("listed, error", [(["jev-latest"], None), ([], None), (None, jev.JevError("timeout"))])
+def test_an_alias_only_empty_or_failed_listing_is_never_reported_as_up_to_date(home, listed, error):
+    cfg = json.loads((home / "config.json").read_text())
+    notice = jev_model_updates.check(cfg, str(home), now=1.0, client_factory=_lister([], listed, error))
+    assert "確認できませんでした" in notice and jev.JEV_MODEL in notice
+
+
+def test_live_tools_use_the_model_in_use(home):
+    config = json.loads((home / "config.json").read_text())
+    config["semantic"]["model"] = NEXT
+    (home / "config.json").write_text(json.dumps(config))
+    with jev.live_client("synthetic", operation="wire_smoke", root=str(home), post_fn=lambda *a: None) as client:
+        assert client.model == NEXT
+    with jev.live_client("synthetic", operation="jev_model_probe", root=str(home), model=jev.JEV_MODEL,
+                         post_fn=lambda *a: None) as client:
+        assert client.model == jev.JEV_MODEL
+
+
+def test_candidate_fingerprint_names_the_resolved_model():
+    import semantic_candidate
+    base = semantic_candidate.candidate_fingerprint({})
+    for same in [jev.JEV_MODEL, *provider_settings.JEV_RETIRED_PINS]:
+        assert semantic_candidate.candidate_fingerprint({"semantic": {"model": same}}) == base
+    assert semantic_candidate.candidate_fingerprint({"semantic": {"model": NEXT}}) != base
 
 
 def _args(**kw):
@@ -175,3 +210,127 @@ def test_status_shows_the_model_in_use_and_newer_listed_models(home, capsys):
     assert jev_model_setup.command(_args()) == 0
     shown = json.loads(capsys.readouterr().out)
     assert shown["model"] == jev.JEV_MODEL and shown["newer"] == [NEXT]
+
+
+def test_canonical_fact_source_refuses_before_any_probe(home, monkeypatch, capsys):
+    monkeypatch.setattr(jev_model_setup, "_scfg", lambda cfg: {"model": jev.JEV_MODEL, "fact_source": "canonical"})
+    monkeypatch.setattr(jev, "live_client", lambda *a, **k: pytest.fail("probe sent"))
+    before = (home / "config.json").read_bytes()
+    assert jev_model_setup.command(_args(to=NEXT)) == 1
+    assert (home / "config.json").read_bytes() == before and "fact-source shadow" in capsys.readouterr().out
+
+
+def test_receipt_commits_first_and_a_rerun_publishes_the_config(home, monkeypatch, capsys):
+    _probe(monkeypatch, "pass")
+    publish = jev_model_setup._publish
+    monkeypatch.setattr(jev_model_setup, "_publish", lambda *a: (_ for _ in ()).throw(OSError("synthetic crash")))
+    command_id = "00000000-0000-4000-8000-0000000000aa"
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 1
+    assert "model" not in json.loads((home / "config.json").read_text())["semantic"]
+    assert [r["outcome"] for r in _receipts(home)] == ["applied"] and command_id in capsys.readouterr().out
+    monkeypatch.setattr(jev_model_setup, "_publish", publish)
+    monkeypatch.setattr(jev, "live_client", lambda *a, **k: pytest.fail("rerun probes again"))
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 0
+    assert json.loads((home / "config.json").read_text())["semantic"]["model"] == NEXT
+    assert len(_receipts(home)) == 1
+
+
+def test_a_failed_fsync_after_publication_is_reconciled_not_rejected(home, monkeypatch, capsys):
+    import safe_io
+    _probe(monkeypatch, "pass")
+    real, failed = safe_io.fsync_dir, []
+    def flaky(path, **kw):
+        if not failed:
+            failed.append(path)
+            raise OSError("synthetic fsync failure")
+        return real(path, **kw)
+    monkeypatch.setattr(safe_io, "fsync_dir", flaky)
+    command_id = "00000000-0000-4000-8000-0000000000bb"
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 1
+    assert failed and json.loads((home / "config.json").read_text())["semantic"]["model"] == NEXT
+    assert [r["outcome"] for r in _receipts(home)] == ["applied"]
+    assert "再実行" in capsys.readouterr().out
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 0
+    assert [r["outcome"] for r in _receipts(home)] == ["applied"]
+
+
+def test_a_rerun_never_undoes_a_later_switch(home, monkeypatch, capsys):
+    _probe(monkeypatch, "pass")
+    publish = jev_model_setup._publish
+    monkeypatch.setattr(jev_model_setup, "_publish", lambda *a: (_ for _ in ()).throw(OSError("synthetic crash")))
+    first = "00000000-0000-4000-8000-0000000000cc"
+    assert jev_model_setup.command(_args(to=NEXT, command_id=first)) == 1
+    monkeypatch.setattr(jev_model_setup, "_publish", publish)
+    assert jev_model_setup.command(_args(to="jev-2.0.0")) == 0
+    assert jev_model_setup.command(_args(to=NEXT, command_id=first)) == 0
+    assert json.loads((home / "config.json").read_text())["semantic"]["model"] == "jev-2.0.0"
+    assert "別の変更" in capsys.readouterr().out
+
+
+def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
+    import time as clock
+
+    import semantic_drain
+    import semantic_policy
+    import semantic_store
+    from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+
+    class NextJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            return {**super().evaluate(state, questions, deadline), "model": NEXT}
+
+    cfg = _cfg("shadow", summary_mode="off", loop_mode="off", model=NEXT)
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1)]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
+    client = NextJev()
+    semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
+                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+    assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    policy = semantic_policy.policy_fingerprint(scfg)
+    fp = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
+    row, previous = semantic_store._primary_assessment_history(db.db, 1, 1, fp, policy)
+    assert row["model"] == NEXT == row["meta"]["model"]
+    assert semantic_store._valid_primary_assessment(row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
+    default = semantic_policy.runtime_config(_cfg("shadow", summary_mode="off", loop_mode="off"))[0]
+    assert not semantic_store._valid_primary_assessment(row["content"], row["meta"], row["model"], 1, fp,
+                                                        policy, default)
+
+
+def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_path):
+    """A pinned env's pre-switch rows said JEV_MODEL while the policy pinned NEXT:
+    the label cannot be trusted, so the job re-evaluates instead of failing."""
+    import time as clock
+
+    import semantic_drain
+    import semantic_policy
+    import semantic_store
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    from semantic_policy import SCHEMA_VERSION
+    from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+
+    class NextJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            return {**super().evaluate(state, questions, deadline), "model": NEXT}
+
+    cfg = _cfg("shadow", summary_mode="off", loop_mode="off", model=NEXT)
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1)]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": bundle["source_fingerprint"],
+            "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
+            "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION, "schema": SCHEMA_VERSION,
+            "jev_input": semantic_store.assessment_input(bundle, 1, scfg),
+            "technical_status": "error", "jev_requests": 1}
+    db.artifact_add("semantic_assess",
+                    json.dumps({"target_message_id": 1, "verdicts": {}}, ensure_ascii=False),
+                    project_id=1, message_id=1, model=jev.JEV_MODEL, meta=meta)
+    client = NextJev()
+    semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
+                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+    assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0

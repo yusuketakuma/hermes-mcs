@@ -173,7 +173,7 @@ def assessment_input(bundle: dict, target_id: int, scfg: dict) -> str | None:
     state = jev_state(bundle, target_id)
     if state is None:
         return None
-    return payload_hash({VERSION_KEY: CURRENT_VERSION, "model": jev.JEV_MODEL,
+    return payload_hash({VERSION_KEY: CURRENT_VERSION, "model": jev.model_in_use(scfg),
                          "state": state, "questions": primary_questions(scfg)})
 
 
@@ -412,7 +412,7 @@ def _valid_primary_assessment(content, meta, model, mid, fp, policy, scfg, *, pr
         if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
                 or meta.get('invalidated') or meta.get('stale') or meta.get('fact_id') is not None
                 or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
-                or meta.get('schema') != SCHEMA_VERSION or model != jev.JEV_MODEL
+                or meta.get('schema') != SCHEMA_VERSION or model != jev.model_in_use(scfg)
                 or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid):
             return False
         verdicts = content.get('verdicts')
@@ -422,8 +422,8 @@ def _valid_primary_assessment(content, meta, model, mid, fp, policy, scfg, *, pr
         if status != 'complete':
             return (status in ('retry_wait', 'error', 'pending', 'skipped')
                     and (not verdicts or (meta.get('registry') == jev.REGISTRY_VERSION
-                                          and meta.get('model') == jev.JEV_MODEL)))
-        if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
+                                          and meta.get('model') == jev.model_in_use(scfg))))
+        if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.model_in_use(scfg):
             return False
         return (set(verdicts) == set(jev.active_propositions(scfg))
                 or (verdicts == {} and prefiltered and meta.get('skipped') == 'prefilter_no_signal'
@@ -486,9 +486,9 @@ def _valid_primary_history(content, meta, previous, mid, fp, policy, scfg):
         old_verdicts = old.get('verdicts')
         if (not is_current(old_meta) or old_meta.get('invalidated') or old_meta.get('stale')
                 or old_meta.get('fingerprint') != fp or old_meta.get('policy_fingerprint') != policy
-                or old_meta.get('schema') != SCHEMA_VERSION or old_model != jev.JEV_MODEL
+                or old_meta.get('schema') != SCHEMA_VERSION or old_model != jev.model_in_use(scfg)
                 or (old_verdicts and (old_meta.get('registry') != jev.REGISTRY_VERSION
-                                      or old_meta.get('model') != jev.JEV_MODEL))
+                                      or old_meta.get('model') != jev.model_in_use(scfg)))
                 or type(old.get('target_message_id')) is not int or old['target_message_id'] != mid
                 or _partial_assessment(old_verdicts, scfg) != old_verdicts
                 or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
@@ -830,7 +830,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
                 or not _valid_primary_history(content, meta, previous, mid, fp, policy, scfg)):
             return 'held'
         if meta.get('technical_status') == 'complete':
-            if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
+            if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.model_in_use(scfg):
                 return 'held'
             return 'current'
         if meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in jev.SKIP_REASONS:
@@ -869,7 +869,7 @@ def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
                 or meta.get('policy_fingerprint') != policy or meta.get('target_revision') != member['revision']
                 or meta.get('execution_generation') != runtime.interpretation_generation(scfg)
                 or meta.get('loop_status') != status or meta.get('skip_reason') != content.get('skip_reason')
-                or meta.get('content_hash') != mcs_util.payload_hash(content) or receipt['model'] != jev.JEV_MODEL):
+                or meta.get('content_hash') != mcs_util.payload_hash(content) or receipt['model'] != jev.model_in_use(scfg)):
             return 'held'
         if status == 'SKIPPED':
             reason = content.get('skip_reason')
