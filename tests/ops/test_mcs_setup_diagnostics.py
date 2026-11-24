@@ -45,13 +45,19 @@ def test_check_explicit_jev_mode_without_private_key_is_a_warning(monkeypatch):
     assert not any("no_api_key" in e for e in errors)
 
 
-@pytest.mark.parametrize("key, warned", [(None, True), ("synthetic-jev-key", False)])
-def test_check_warns_when_requested_qc_annotations_cannot_run(monkeypatch, key, warned):
+@pytest.mark.parametrize("semantic, key, remedy", [
+    ({}, None, "TYPESAFE_API_KEYを登録"),
+    ({}, "synthetic-jev-key", None),
+    ({"mode": "off"}, None, "semantic.mode を off 以外に変更"),
+    ({"mode": "off"}, "synthetic-jev-key", "semantic.mode を off 以外に変更"),   # a key never overrides off
+])
+def test_check_warns_when_requested_qc_annotations_cannot_run(monkeypatch, semantic, key, remedy):
     _linux_probe(monkeypatch)
     monkeypatch.setattr(mcs_util, "private_env_value", lambda *a, **k: key)
-    cfg = {"notify_target": "slack", "semantic": {"extract_qc": "annotate"}}
+    cfg = {"notify_target": "slack", "semantic": {**semantic, "extract_qc": "annotate"}}
     _, warnings = mcs_setup.check_environment(cfg)
-    assert any("extract_qc_inactive" in w for w in warnings) is warned
+    found = [w for w in warnings if "extract_qc_inactive" in w]
+    assert (remedy in found[0]) if remedy else not found
     assert environment_diagnostics.jev_notice(cfg, None) is None
 
 

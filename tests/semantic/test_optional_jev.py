@@ -540,3 +540,12 @@ def test_jev_scope_never_depends_on_the_key(monkeypatch, semantic, excluded, key
     scope_policy, errors = semantic_policy.jev_scope_policy(cfg)
     assert not errors
     assert {pid for pid in (1, 2) if semantic_policy.jev_scope_excludes(scope_policy, pid)} == excluded
+
+
+def test_patient_policy_turns_semantic_off_only_outside_the_jev_scope():
+    import semantic_policy
+    cfg = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    policy, errors = semantic_policy.semantic_config(cfg, key_present=True, transfer_status=_no_review)
+    assert not errors
+    assert semantic_policy.patient_policy(policy, cfg, 1) is policy
+    assert semantic_policy.patient_policy(policy, cfg, 2) == {**policy, "mode": "off"}

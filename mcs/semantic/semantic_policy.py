@@ -284,6 +284,13 @@ def jev_scope_excludes(scope_policy: dict, project_id) -> bool:
     return scope_policy["mode"] != "off" and scope is not None and project_id not in scope
 
 
+def patient_policy(policy: dict, cfg: dict, project_id) -> dict:
+    """The semantic policy one patient runs under: outside Jev's patient scope it is off, as without Jev."""
+    if policy["mode"] != "off" and jev_scope_excludes(jev_scope_policy(cfg)[0], project_id):
+        return {**policy, "mode": "off"}
+    return policy
+
+
 def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     return semantic_config(cfg, key_present=runtime_key_present(cfg, root), root=root)
