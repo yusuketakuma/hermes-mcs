@@ -51,7 +51,8 @@ def test_derive_rollup_timing_has_remaining_budget_and_no_stage_double_count(tim
     assert result["rollup_scan"]["unknown_observed"] == 1
     assert result["rollups"] == 1 and result["rollup_source_unknown"] == 1
     assert result["errors"] == ["deadline_deferred:rollup_scan", "rollup: source_unknown"]
-    assert set(result["stage_elapsed_s"]) == {"derive_rules", "derive_medications"}
+    assert set(result["stage_elapsed_s"]) == {
+        "derive_rules", "derive_llm", "derive_medications", "derive_signals"}
     assert result["run"]["slowest_stage"] == "derive_rules"
 
 
