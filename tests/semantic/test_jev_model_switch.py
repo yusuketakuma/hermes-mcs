@@ -338,3 +338,11 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
                            llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done"
     assert any("P01" in questions for questions in client.calls)
+    fp = bundle["source_fingerprint"]
+    policy = semantic_policy.policy_fingerprint(scfg)
+    row, _ = semantic_store._primary_assessment_history(db.db, 1, 1, fp, policy)
+    assert row is not None
+    assert row["model"] == NEXT == row["meta"]["model"]
+    assert row["meta"]["technical_status"] == "complete"
+    assert semantic_store._valid_primary_assessment(
+        row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
