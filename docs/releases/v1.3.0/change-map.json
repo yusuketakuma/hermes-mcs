@@ -179,7 +179,7 @@
     "semantic-drain-followup": {
       "title": "Jevの日次上限で待機した抽出QCを、保存した回答の続きから再開",
       "path": "changes/archive/1.3.0/semantic-drain-followup.json",
-      "sha256": "6a19ba41614a9d6d338f4a5d731b7c1b959444062c37ce9ef9bdc7e1318532a4"
+      "sha256": "58514aa4a57e1e90c61a4635686b6596430e89ca3dc47c23eceedeae6e9b9c47"
     },
     "semantic-drain-throughput": {
       "title": "未読の意味解析jobを止め抽出QCだけをまとめて処理",
