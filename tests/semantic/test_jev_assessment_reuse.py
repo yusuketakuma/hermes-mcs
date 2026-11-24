@@ -55,6 +55,8 @@ def test_corrupt_complete_assessment_never_reaches_following_stage(tmp_path, mon
         return {'content': content, 'meta': meta, 'model': model}, []
 
     monkeypatch.setattr(semantic_store, '_primary_assessment_history', artifact)
+    # the assessment stage as a reader of its results (summary/loop) runs it
+    monkeypatch.setattr(drain, 'primary_verdicts_consumed', lambda scfg: True)
     client = _FakeJev()
     try:
         result = drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
@@ -233,8 +235,10 @@ def test_resumed_questions_still_obey_guard_and_reservation(runtime):
     assert all('P01' not in call for call in raw.calls)
 
 
-def test_job_does_not_reuse_older_valid_row_after_invalidation(tmp_path):
+def test_job_does_not_reuse_older_valid_row_after_invalidation(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
+    # the assessment stage as a reader of its results (summary/loop) runs it
+    monkeypatch.setattr(drain, 'primary_verdicts_consumed', lambda scfg: True)
     cfg = _cfg('shadow', summary_mode='off', loop_mode='off', extra_propositions=['E01'])
     scfg = semantic_policy.runtime_config(cfg)[0]
     try:
@@ -320,4 +324,6 @@ def test_prior_partial_provenance_is_required_after_later_completion(runtime, da
                         "WHERE m.message_id=1").fetchone()
     db.db.execute("UPDATE fetch_jobs SET state='done' WHERE state != 'done'")
     db.db.commit()
-    assert drain._reprocess_target_state(db, row, cfg) == ('current' if damage == 'none' else 'held')
+    # the primary-assessment evidence loop mode builds on (semantic_store._loop_only_state)
+    state = semantic_store._classification_only_state(db, row, cfg, semantic_store.load_config(), bundle, fp, policy)
+    assert state == ('current' if damage == 'none' else 'held')

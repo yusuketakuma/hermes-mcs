@@ -669,8 +669,17 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
         return False
 
 
+def _semantic_seeding(cfg) -> bool:
+    """Whether new input is queued as semantic jobs: only while a feature reads their results."""
+    try:
+        scfg, errors = semantic_policy.runtime_config(cfg)
+    except Exception:
+        return False   # _semantic_enabled already reported the failure
+    return not errors and semantic_policy.primary_verdicts_consumed(scfg)
+
+
 def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
-                 sem_on, notify_max_age_s, ack_exclusions=None):
+                 seed_on, notify_max_age_s, ack_exclusions=None):
     """Priority fetch work — unread, optional self-post probes, then
     backfill — skipped entirely by --jobs-only runs."""
     if args.jobs_only:
@@ -681,7 +690,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         result["outage_since"] = outage_since
     collection_stages.with_relogin(adapter, ledger, result, "unread",
                   collection_stages.stage_unread, adapter, ledger, result, deadline,
-                  run_id, mark_read=args.mark_read, semantic=sem_on,
+                  run_id, mark_read=args.mark_read, semantic=seed_on,
                   notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     self_posts = cfg.get("self_posts", False)
@@ -695,7 +704,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     if self_posts:
         window = collection_stages.with_relogin(adapter, ledger, result, "self_probe",
                       collection_stages.stage_self_probe, adapter, ledger, result,
-                      deadline, run_id, semantic=sem_on,
+                      deadline, run_id, semantic=seed_on,
                       notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
         _require_closed_transaction(ledger, result)
     probe_after = result.pop("self_probe_after", None)
@@ -706,7 +715,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     else:
         collection_stages.with_relogin(adapter, ledger, result, "backfill",
                       collection_stages.stage_backfill, adapter, ledger, result, deadline,
-                      run_id, semantic=sem_on,
+                      run_id, semantic=seed_on,
                       notify_max_age_s=notify_max_age_s,
                       notify_all_new=outage_since is not None,
                       notify_after=probe_after, ack_exclusions=ack_exclusions,
@@ -716,7 +725,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
 
 
-def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
+def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
               notify_max_age_s, ack_exclusions=()):
     """Durable job machinery — command ingest, discovery, reply and
     history drains, trickle seeding, reconcile and self profile."""
@@ -774,12 +783,12 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     _require_closed_transaction(ledger, result)
     collection_stages.with_relogin(adapter, ledger, result, "reply_jobs",
                   job_ops.run_reply_jobs, adapter, ledger, result,
-                  deadline, semantic=sem_on,
+                  deadline, semantic=seed_on,
                   notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     collection_stages.with_relogin(adapter, ledger, result, "history_jobs",
                   job_ops.run_history_jobs, adapter, ledger, result,
-                  deadline, trickle=False, semantic=sem_on,
+                  deadline, trickle=False, semantic=seed_on,
                   notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     if getattr(args, "mark_read", False):
@@ -792,7 +801,7 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     if args.download_files:
         collection_stages.with_relogin(adapter, ledger, result, "attachments",
                       collection_stages.stage_attachments, adapter, ledger, result, deadline,
-                      semantic=sem_on)
+                      semantic=seed_on)
         _require_closed_transaction(ledger, result)
 
     # -- idle-capacity deep history (trickle) ----------------------
@@ -821,14 +830,14 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   trickle_pages=trickle_pages,
                   max_jobs=8 if args.jobs_only else None,
                   min_margin=30 if args.jobs_only else None,
-                  semantic=sem_on, notify_max_age_s=notify_max_age_s,
+                  semantic=seed_on, notify_max_age_s=notify_max_age_s,
                   ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
 
     # -- post-import reconcile: edits/deletions below the cutoff ---
     collection_stages.with_relogin(adapter, ledger, result, "reconcile",
                   job_ops.run_reconcile_jobs, adapter, ledger, result,
-                  deadline, semantic=sem_on, ack_exclusions=ack_exclusions,
+                  deadline, semantic=seed_on, ack_exclusions=ack_exclusions,
                   notify_max_age_s=notify_max_age_s)
     _require_closed_transaction(ledger, result)
 
@@ -1612,14 +1621,15 @@ def _main() -> int:
         _bind_evidence(ledger, evidence, run_id, interrupt)
         cfg = _config()
         sem_on = _semantic_enabled(ledger, cfg, result)
+        seed_on = sem_on and _semantic_seeding(cfg)
         notify_max_age_s = _notify_max_age_s(cfg, result)
         ack_exclusions = set()
         _run_stage(result, "fetch", deadline, _stage_fetch,
                    adapter, ledger, args, cfg, result, deadline,
-                   run_id, sem_on, notify_max_age_s, ack_exclusions)
+                   run_id, seed_on, notify_max_age_s, ack_exclusions)
         _require_closed_transaction(ledger, result)
         _run_stage(result, "jobs", deadline, _run_jobs,
-                   adapter, ledger, args, cfg, result, deadline, sem_on,
+                   adapter, ledger, args, cfg, result, deadline, seed_on,
                    notify_max_age_s, ack_exclusions)
         _require_closed_transaction(ledger, result)
 

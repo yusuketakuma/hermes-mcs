@@ -718,14 +718,14 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
 
     def llm_due() -> bool:
         """Work that needs the local model is waiting: due semantic jobs
-        (semantic mode on) or legacy extraction pending (fact_source not
+        (a reader of their results enabled) or legacy extraction pending (fact_source not
         canonical — the default semantic-off install has no fetch_jobs
         for it). extract_qc is Jev-only and never counts. Evaluated
         lazily: the legacy probe walks eligible messages."""
         # due "now or within the slack": a deferring drainer keeps pushing
         # next_try a minute ahead, which must still read as waiting work
         _phase("llm_due_semantic")
-        if not errors and scfg["mode"] != "off" and db.execute(
+        if not errors and semantic_policy.primary_verdicts_consumed(scfg) and db.execute(
                 "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
                 "AND state='pending' AND next_try<=? LIMIT 1",
                 (now + DUE_SLACK_S,)).fetchone() is not None:
@@ -766,7 +766,8 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
         # touching due jobs while it waits, so the generic stall below
         # still only fires when the drainer itself stopped.
         reasons.append(f"semantic_jev_{blocked}")
-    sem_on = scfg["mode"] != "off"
+    # Semantic jobs nobody reads stay queued unrun: they are not a stalled backlog.
+    sem_on = semantic_policy.primary_verdicts_consumed(scfg)
     _phase("semantic_backlog")
     due = sem_on and db.execute(
         "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "

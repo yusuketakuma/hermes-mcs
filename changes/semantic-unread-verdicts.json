@@ -1,0 +1,30 @@
+{
+  "category": "changed",
+  "title": "使われない意味解析の判定を作らない",
+  "summary": "要約（summary_mode）とループ（loop_mode）がともに off の設定では、通常の取込・再処理で意味解析ジョブを作らず、待機中のものも実行しません。人が確認した保留解除は既存の解除契約どおり置換jobを保留状態で残し、患者コンテキストは保留解除後にそのjobを待たずに進みます。",
+  "upgrade": "設定変更は不要です。10分ごとの定期処理は次回から反映され、常駐の抽出worker（standalone では抽出worker）は再起動で反映されます。待機中の意味解析ジョブは削除せずそのまま残し、summary_mode か loop_mode を off 以外に戻すと再び実行・再処理されます。",
+  "details": [
+    "「判定を読む機能があるか」は semantic_policy.primary_verdicts_consumed の1か所で決め、通常の取込時作成・明示の再実行・再処理・ヒント再構築・コホート変換・ジョブ実行・患者コンテキストの準備判定・滞留警告で共有する。確認済みholdの解除はこの判定で拒否せず、既存のスナップショット・hold epoch・lock等を再検証してから置換jobを保留状態で残す。",
+    "読む機能がない間、通常の待機中意味解析ジョブは状態・試行回数・次回時刻を変えずに残し、実行結果に unread_semantic_pending として件数を記録する。明示のhold解除で置換されたjobも新たな評価は行わず、読者が再び有効になるまで待機する。",
+    "進捗・観測画面では未読の待機件数を実行可能な件数と分け、未読ジョブを完了予測の対象にしない。",
+    "読む機能がない間の再処理は取得状況の確認だけを行い、原文抽出とQCが最新なら完了として扱う。",
+    "読む機能がない間は待機中の意味解析ジョブを semantic_backlog_stalled の警告対象にしない。",
+    "抽出QC（extract_qc=annotate）と患者コンテキストの品質確認のJev利用は変更しない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_policy.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_due_selection.py",
+    "mcs/semantic/semantic_reprocess.py",
+    "mcs/semantic/semantic_store.py",
+    "mcs/semantic/semantic_conversion.py",
+    "mcs/semantic/semantic_intake_hold.py",
+    "mcs/core/ledger/ledger_semantic_sources.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_progress.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ingest/health_report.py",
+    "mcs/views/operational_progress.py",
+    "mcs/ops/semantic_observe.py"
+  ]
+}

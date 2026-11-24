@@ -150,14 +150,15 @@ def test_root_wait_does_not_release_stale_or_unverified_member(runtime, damage):
 
 
 @pytest.mark.parametrize('loop_mode', ['off', 'shadow'])
-def test_summary_off_keeps_root_completion_gate(runtime, loop_mode):
+def test_summary_off_keeps_root_completion_gate_only_for_a_reader(runtime, loop_mode):
     led, clock, _ = runtime
     cfg = _partial_thread(runtime)
     cfg['semantic'].update(summary_mode='off', loop_mode=loop_mode)
     policy, errors = semantic_policy.runtime_config(cfg)
     assert not errors
-    assert not readiness._message_ready(led, _row(led), cfg, policy,
-                                       deadline=clock.mono + 600, attachment_mode='on')
+    # with loops off nothing reads the pending root job, so it is not waited on
+    assert readiness._message_ready(led, _row(led), cfg, policy, deadline=clock.mono + 600,
+                                    attachment_mode='on') is (loop_mode == 'off')
 
 
 @pytest.mark.parametrize('body_state', ['full', 'deleted'])

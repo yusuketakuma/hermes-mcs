@@ -11,6 +11,17 @@ import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
+def test_no_runnable_job_kinds_report_empty_runnable_queue(tmp_path, monkeypatch):
+    db = _seeded(tmp_path)
+    try:
+        monkeypatch.setattr(drain, "reprocess_step", lambda *a, **k: {"status": "stub"})
+        out = drain.run_due(db, _cfg("assist", summary_mode="off", loop_mode="off"),
+                            {"errors": []}, time.monotonic() + 300)
+        assert out["left"] == 0
+    finally:
+        db.close()
+
+
 def _run(db, max_jobs=2):
     return drain.run_due(db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
                          jev_client=_FakeJev(), llm_fn=_llm, lane="backlog", max_jobs=max_jobs)
