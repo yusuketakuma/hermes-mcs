@@ -90,6 +90,23 @@ def test_pending_jobs_stay_queued_unrun_without_a_reader(threads, monkeypatch, l
     assert _jobs(threads) == before
 
 
+def test_config_change_after_selection_skips_semantic_job_without_mutation(threads, monkeypatch):
+    before = _jobs(threads)
+    calls = []
+    monkeypatch.setattr(semantic_drain, "_process_job",
+                        lambda *a, **k: calls.append(a[2]["job_id"]))
+    monkeypatch.setattr(semantic_drain, "reprocess_step", lambda *a, **k: {"status": "stub"})
+    monkeypatch.setattr(semantic_drain, "load_config",
+                        lambda path: _cfg("assist", **UNREAD))
+    jev = _FakeJev()
+    out = semantic_drain.run_due(
+        threads, _cfg("assist", loop_mode="shadow"), {"errors": []},
+        time.monotonic() + 300, jev_client=jev, cfg_path="synthetic-config", max_jobs=4)
+    assert calls == [] and jev.requests_made == 0
+    assert out["unread_semantic_pending"] == 4
+    assert _jobs(threads) == before
+
+
 def test_pending_jobs_run_again_once_a_reader_is_enabled(threads, monkeypatch):
     calls = []
     monkeypatch.setattr(semantic_drain, "_process_job", lambda *a, **k: calls.append(a[2]["job_id"]))

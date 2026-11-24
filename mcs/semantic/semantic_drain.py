@@ -822,6 +822,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     _defer_note(out, "mode_off")
                     out["mode"] = "off"
                     break
+                if job["kind"] == JOB_KIND and not primary_verdicts_consumed(scfg):
+                    out["unread_semantic_pending"] = out.get(
+                        "pending_by_kind", {}).get(JOB_KIND, 0)
+                    continue
             # A semantic job's first call is exempt from the in-call reserve
             # gate. Starting below that reserve can burn a doomed
             # generation and a retry attempt before any useful progress.
