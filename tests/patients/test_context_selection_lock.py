@@ -1,4 +1,4 @@
-"""Serialize patient selection and claim behind a per-database mutex."""
+"""Reserve patient scan turns without blocking another patient's evidence checks."""
 import os
 import select
 import subprocess
@@ -7,6 +7,7 @@ import sys
 import pytest
 
 import patient_context_refresh as refresh
+import patient_context_refresh_readiness as readiness
 import patient_context_refresh_state as state
 import writer_lock
 from ledger import Ledger
@@ -159,6 +160,65 @@ def test_lock_released_before_inference(runtime, monkeypatch):
     result = step(runtime)
     assert result['status'] == 'progressed', result
     assert probes and all(probes)
+
+
+@pytest.mark.parametrize('first_ready', [True, False])
+def test_workers_progress_different_patients_during_readiness(runtime, monkeypatch, first_ready):
+    led, clock, calls = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    db_path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    other = Ledger(db_path)
+    pending = readiness._pending
+    second = []
+
+    def overlap(db, pid, cfg, **kwargs):
+        if pid == 1 and not second:
+            second.append(step((other, clock, calls)))
+            if not first_ready:
+                seed(other, mid=3, pid=3)
+        snapshot, progress, due = pending(db, pid, cfg, **kwargs)
+        if pid == 1 and not first_ready:
+            due = dict.fromkeys(due, False)
+        return snapshot, progress, due
+
+    monkeypatch.setattr(readiness, '_pending', overlap)
+    try:
+        first = step(runtime)
+    finally:
+        other.close()
+    assert len(second) == 1 and second[0]['done'] == 1, (first, second)
+    assert first['done'] == 1, first
+    saved = {pid for pid in (1, 2, 3) if (document(led, state.SCAN, pid=pid) or {}).get('complete')}
+    assert saved == ({1, 2} if first_ready else {2, 3})
+    assert len(calls) == 2
+    rotation = state._latest(led.db, state.PROGRESS, 0)[0]
+    assert rotation['units'] == 2 and rotation['patient_scan']['activity_after'][-1] == max(saved)
+
+
+def test_busy_between_candidates_preserves_scanned_progress(runtime, monkeypatch):
+    led, _, calls = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    pending, held = readiness._pending, []
+
+    def no_work(db, pid, cfg, **kwargs):
+        if not held:
+            fd, reason = refresh._selection_lock(led.db)
+            assert reason is None
+            held.append(fd)
+        snapshot, progress, due = pending(db, pid, cfg, **kwargs)
+        return snapshot, progress, dict.fromkeys(due, False)
+
+    monkeypatch.setattr(readiness, '_pending', no_work)
+    try:
+        result = step(runtime)
+    finally:
+        for fd in held:
+            os.close(fd)
+    assert result['reason'] == 'patient_context_selection_busy' and not calls, result
+    assert result['scanned'] == result['scan_interrupts'] == 1 and not result['covered']
+    assert state._latest(led.db, state.PROGRESS, 0)[0]['patient_scan']['activity_after'][-1] == 1
 
 
 def test_run_lock_holder_does_not_deadlock_selection(runtime):
