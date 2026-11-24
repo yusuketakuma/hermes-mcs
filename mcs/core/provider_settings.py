@@ -814,14 +814,16 @@ SETTINGS_ORIGINS = frozenset({
 CHANGE_RECORD = "change.json"
 CHANGE_RECORDS_MAX = 1000
 _CHANGE_RECORD_MAX_BYTES = 64 * 1024
-_CHANGE_RECORD_KEYS = frozenset({"version", "operation", "committed_at", "origin", "command_id",
-                                 "files", "limits", "changed"})
+_CHANGE_RECORD_KEYS = frozenset({"version", "operation", "saved_at", "origin", "command_id",
+                                 "files", "authority", "limits", "changed"})
 _STAGE_NAME = re.compile(r"\.provider-settings-stage-([0-9a-f]{32})")
-_COMMITTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00")
+_SAVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00")
 _TIME_TEXT = re.compile(r"[0-9TZ:+.\- ]{10,64}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _BUDGET_FIELDS = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
 _JEV_LIMITS = ("daily_request_budget", "until")
+# Larger integers are not limits any validator accepts, and floats lose them.
+_LIMIT_INT_MAX = 2 ** 53
 # "absent" falls back to the code default; an explicit null means no limit.
 ABSENT, INVALID = "absent", "invalid"
 _MISSING, _MALFORMED = object(), object()
@@ -850,13 +852,16 @@ def _member(section, key):
     return section.get(key, _MISSING) if isinstance(section, dict) else _MALFORMED
 
 
+def _number(value):
+    return (type(value) is int and -_LIMIT_INT_MAX <= value <= _LIMIT_INT_MAX
+            or type(value) is float and math.isfinite(value))
+
+
 def _limit_value(value):
     if value is _MISSING:
         return ABSENT
-    if value is None:
-        return None
-    if type(value) in (int, float):
-        return value if math.isfinite(value) else INVALID
+    if value is None or _number(value):
+        return value
     if isinstance(value, str) and _TIME_TEXT.fullmatch(value):
         try:
             until_epoch(value)
@@ -902,32 +907,53 @@ def _source_limits(old, split, model_owners, jev_model):
     return _split_limits(common, providers)
 
 
-def _change_record(operation, pending, before, after, origin, command_id):
+def _authority_state(authority):
+    """The provider hashes and common-policy digest an authority binds, which chain the records."""
+    return {"files": {name: authority["files"][name] for name in PROVIDERS},
+            "common_policy_sha256": authority["common_policy_sha256"]}
+
+
+def _change_record(operation, pending, authority, limits, origin, command_id):
+    before, after = limits
     return _json_bytes({
         "version": 1, "operation": operation,
-        "committed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "saved_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "origin": origin, "command_id": command_id,
         "files": {"before": dict(pending["before"]), "after": dict(pending["after"])},
+        "authority": {"before": authority[0], "after": authority[1]},
         "limits": {"before": before, "after": after},
         "changed": sorted(key for key in after if before.get(key, ABSENT) != after[key])},
         limit=_CHANGE_RECORD_MAX_BYTES)
 
 
 def _stored_limit_ok(value):
-    return (value is None or value in (ABSENT, INVALID)
-            or type(value) in (int, float) and math.isfinite(value)
-            or isinstance(value, str) and _limit_value(value) == value)
+    return value is None or _number(value) or isinstance(value, str) and (
+        value in (ABSENT, INVALID) or _limit_value(value) == value)
+
+
+def _hashes_ok(side, keys):
+    return (isinstance(side, dict) and side.keys() == set(keys)
+            and all(value is None or isinstance(value, str) and _SHA256.fullmatch(value) is not None
+                    for value in side.values()))
+
+
+def _state_ok(state):
+    return (isinstance(state, dict) and state.keys() == {"files", "common_policy_sha256"}
+            and _hashes_ok(state["files"], PROVIDERS) and None not in state["files"].values()
+            and isinstance(state["common_policy_sha256"], str)
+            and _SHA256.fullmatch(state["common_policy_sha256"]) is not None)
 
 
 def _checked_record(record, operation):
-    files, limits = record.get("files"), record.get("limits")
-    if (record.keys() != _CHANGE_RECORD_KEYS or record["version"] != 1 or type(record["version"]) is not int
-            or record["operation"] != operation or not isinstance(record["committed_at"], str)
-            or _COMMITTED_AT.fullmatch(record["committed_at"]) is None
+    files, authority, limits = record.get("files"), record.get("authority"), record.get("limits")
+    if (record.keys() != _CHANGE_RECORD_KEYS or type(record["version"]) is not int or record["version"] != 1
+            or record["operation"] != operation or not isinstance(record["saved_at"], str)
+            or _SAVED_AT.fullmatch(record["saved_at"]) is None
             or not isinstance(files, dict) or files.keys() != {"before", "after"}
-            or any(not isinstance(side, dict) or side.keys() != set(_FILES)
-                   or any(value is not None and (not isinstance(value, str) or _SHA256.fullmatch(value) is None)
-                          for value in side.values()) for side in files.values())
+            or not all(_hashes_ok(side, _FILES) for side in files.values())
+            or not isinstance(authority, dict) or authority.keys() != {"before", "after"}
+            or not _state_ok(authority["after"])
+            or authority["before"] is not None and not _state_ok(authority["before"])
             or not isinstance(limits, dict) or limits.keys() != {"before", "after"}
             or any(not isinstance(side, dict) or any(not isinstance(key, str) or not _stored_limit_ok(value)
                                                      for key, value in side.items()) for side in limits.values())
@@ -940,11 +966,17 @@ def _checked_record(record, operation):
 
 
 def change_records(root, limit) -> dict:
-    """The newest ``limit`` change records of a split installation, read without changing anything.
+    """The change records of the newest ``limit`` saves of a split installation, read without changing anything.
 
-    A stage directory without a record (a save before records existed, or one
-    still held as pending) is counted, as is a record that is a link, too
-    large, not private or malformed; neither is ever returned."""
+    Only the ``limit`` stage directories with the latest modification times are
+    opened; ``more`` says whether older ones exist. A stage directory without a
+    record (a save before records existed, a held or later finalized pending
+    save) is counted, as is a record that is a link, too large, not private or
+    malformed; neither is returned. ``current`` is the authority's state, which
+    a record's ``authority.after`` equals when that save produced the current
+    settings. The reader takes no lock: while a save is publishing
+    (``save_in_progress``) the authority can already be new and its record not
+    yet written, so a caller must not compare the two then."""
     if type(limit) is not int or not 1 <= limit <= CHANGE_RECORDS_MAX:
         raise ValueError("provider_record_limit_invalid")
     root = Path(root)
@@ -955,15 +987,29 @@ def change_records(root, limit) -> dict:
     records, unrecorded, rejected = [], 0, 0
     try:
         data_fd = _directory(handle.fd, "data")
+        pending = _read_file(data_fd, ".provider-settings-pending.json")[1] is not None
+        try:
+            authority = _document(_read_file(data_fd, ".provider-settings-authority.json")[0])
+            current = _authority_state(authority)
+            if not _state_ok(current):
+                current = None
+        except (ValueError, KeyError, TypeError):
+            current = None
         stages = []
         with os.scandir(data_fd) as entries:
             for index, entry in enumerate(entries):
                 if index >= 100000:
                     raise ValueError("provider_artifact_scan_limit")
                 match = _STAGE_NAME.fullmatch(entry.name)
-                if match is not None:
-                    stages.append((entry.name, match.group(1)))
-        for name, operation in stages:
+                if match is None:
+                    continue
+                try:
+                    changed = os.stat(entry.name, dir_fd=data_fd, follow_symlinks=False).st_mtime_ns
+                except FileNotFoundError:
+                    continue
+                stages.append((changed, entry.name, match.group(1)))
+        stages.sort(reverse=True)
+        for modified, name, operation in stages[:limit]:
             try:
                 stage_fd = _directory(data_fd, name, private=True)
             except FileNotFoundError:
@@ -976,8 +1022,8 @@ def change_records(root, limit) -> dict:
                 if raw is None:
                     unrecorded += 1
                 else:
-                    records.append(_checked_record(_document(raw), operation))
-            except (OSError, ValueError, RecursionError):
+                    records.append((modified, _checked_record(_document(raw), operation)))
+            except (OSError, ValueError, RecursionError, ArithmeticError):
                 rejected += 1
             finally:
                 os.close(stage_fd)
@@ -986,8 +1032,10 @@ def change_records(root, limit) -> dict:
         if data_fd is not None:
             os.close(data_fd)
         handle.close()
-    records.sort(key=lambda record: (record["committed_at"], record["operation"]), reverse=True)
-    return {"records": records[:limit], "unrecorded_saves": unrecorded, "rejected_records": rejected}
+    # Newest first by the stage's modification time; the save time breaks ties.
+    records.sort(key=lambda item: (item[0], item[1]["saved_at"]), reverse=True)
+    return {"records": [record for _, record in records], "current": current, "save_in_progress": pending, "more": len(stages) > limit,
+            "unrecorded_saves": unrecorded, "rejected_records": rejected}
 
 
 def commit(root, expected_snapshot, common, providers, *, selected_provider, model_owners, jev_model=None,
@@ -1078,8 +1126,12 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
     snapshot or identity proof is refused as a change.
 
     The last write before pending is removed is the stage's CHANGE_RECORD:
-    ``origin``, ``command_id`` and the operating limits before (from the
-    verified old bytes) and after; a rollback removes it with the stage.
+    ``origin``, ``command_id``, the authority states and the operating limits
+    before (from the verified old bytes) and after, built before the first
+    write. Its exclusive create is handled like the other writes: an OSError or
+    interrupt rolls the save back and removes the record with the stage; a
+    name that already exists, a read-back mismatch, or a changed snapshot in
+    the following check keeps pending and every artifact for a person.
     """
     if configuration_state not in (None, "bootstrap"):
         raise ValueError("provider_configuration_state_invalid")
@@ -1141,13 +1193,19 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             if require_completed_bootstrap:
                 for name in (".provider-bootstrap-fresh.json", ".provider-bootstrap-complete.json"):
                     _must_be_absent(data_fd, name)
-            limits_before = _source_limits(old, authority_snapshot is not None, model_owners, jev_model)
-            limits_after = _split_limits(common, providers)
             operation = uuid.uuid4().hex
             pending = {"version": 1, "operation": operation,
                        "before": {name: actual["files"][name]["sha256"] if actual["files"][name] else None for name in _FILES},
                        "after": {name: hashlib.sha256(new_bytes[name]).hexdigest() for name in _FILES},
                        "authority_before": authority_snapshot["sha256"] if authority_snapshot else None}
+            # Built before anything is written, so only the write itself can fail late.
+            record_raw = _change_record(
+                operation, pending,
+                (_authority_state(_document(old_authority)) if old_authority is not None else None,
+                 {"files": {name: pending["after"][name] for name in PROVIDERS},
+                  "common_policy_sha256": common_policy_digest(common)}),
+                (_source_limits(old, authority_snapshot is not None, model_owners, jev_model),
+                 _split_limits(common, providers)), origin, command_id)
             stage_name = ".provider-settings-stage-" + operation
             pending_snapshot = authority_raw = None
             created_settings = False
@@ -1302,10 +1360,8 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             authority_snapshot = _replace(data_fd, ".provider-settings-authority.json", authority_raw,
                                           stage_fd, authority_snapshot, "authority", moved, True, CONFIG_MAX_BYTES)
             check()
-            # Written while pending still holds readers, so a failure rolls back like any other write.
-            _write_new(stage_fd, CHANGE_RECORD,
-                       _change_record(operation, pending, limits_before, limits_after, origin, command_id),
-                       limit=_CHANGE_RECORD_MAX_BYTES)
+            # Written while pending still holds readers; see the docstring for its failures.
+            _write_new(stage_fd, CHANGE_RECORD, record_raw, limit=_CHANGE_RECORD_MAX_BYTES)
             check()
             os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
             undo = None

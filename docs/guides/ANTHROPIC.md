@@ -145,13 +145,15 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --history 10                      
 設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
 
-**上限の変更記録**: 提供元別設定（`data/provider_settings/`）を使う環境では、設定を保存するたびに、その保存の作業フォルダ（`data/.provider-settings-stage-<操作ID>/change.json`、所有者だけが読める）へ変更記録を1件残します。記録は、保存した入口（`cloud_llm_budget`・`cloud_llm_providers`・`provider_dialog`・`settings`・`remote_access`・`jev_model`・`setup_init`・`setup_slack_channels`・`setup_fact_source`・`setup_features`・`update_migration`・`install_bootstrap`・`install_runtime`。経路を特定できない保存は `unattributed`）、保存日時（UTC）、保存前後の4ファイルのハッシュ、運用上限の保存前後の値と変わった項目です。Jevモデルの切り替えは承認記録の `command_id` も残します。上限を変えない保存でも記録します。
+**上限の変更記録**: 提供元別設定（`data/provider_settings/`）を使う環境では、設定を保存するたびに、その保存の作業フォルダ（`data/.provider-settings-stage-<操作ID>/change.json`、所有者だけが読める）へ変更記録を1件残します。記録は、保存した入口（`cloud_llm_budget`・`cloud_llm_providers`・`provider_dialog`・`settings`・`remote_access`・`jev_model`・`setup_init`・`setup_slack_channels`・`setup_fact_source`・`setup_features`・`update_migration`・`install_bootstrap`・`install_runtime`。経路を特定できない保存は `unattributed`）、保存日時（UTC、表示用）、保存前後の4ファイルのハッシュと設定の状態（提供元ファイルのハッシュと共通設定の要約値）、運用上限の保存前後の値と変わった項目です。Jevモデルの切り替えは承認記録の `command_id` も残します。上限を変えない保存でも記録します。
 
 - 対象の上限は、`cloud_llm` の運用上限（日額・月額・期間予算と開始・終了日時・件数・同時送信数・再開期限など）、API別の日額・月額、`semantic.daily_request_budget`・`semantic.until` です。値は数値、`null`（上限なし）、日時、`absent`（未設定のため既定値を使う）、`invalid`（数値・日時として読めない値。値そのものは残しません）のどれかで、`absent` と `null` を区別します。
-- 記録には設定の文字列・認証情報・`.env` の内容・患者情報を含めません。台帳DBには書きません。
-- `budget` と `providers` の出力の `last_limit_change` は、上限が変わった最新の記録（`state: "changed"`、入口・日時・変わった項目の前後）を示します。記録が1件も無い場合は `no_record`（この機能より前の保存には記録がありません）、記録はあるが上限が変わっていない場合は `unchanged`、従来形式の設定は `legacy`、記録を読み取れない場合は `unavailable` です。判定には新しい順に最大1000件の記録を使います。
-- `limits_match_record` は、最新の記録の保存後の上限と現在の設定が一致するかを示します（記録が無い場合は `null`）。`false` の場合は、記録の残らない方法で上限が変わったことを示し、`limits_differing_from_record` に項目名を表示します。
-- `budget --history N`（1〜100）は、新しい順にN件の記録を `limit_history` に表示します。`before_matches_previous: false` は、その保存の前に、記録されていない変更があったことを示します。記録の無い作業フォルダの数は `unrecorded_saves`、読み取らなかった不正な記録（リンク・大きすぎる・形式違い）の数は `rejected_records` です。
+- 記録には設定の文字列・認証情報・`.env` の内容・患者情報を含めません。台帳DBには書きません。記録の内容は書き込みの前に作り、書き込みでの入出力の失敗は保存前の状態へ戻します。同名の記録がすでにある場合、読み戻しが一致しない場合、直後の確認で設定が変わっていた場合は、保存中の記録を残して担当者の確認を待ちます。
+- 照合はロックを取らずに読みます。保存の途中では新しい設定と記録がそろわないため照合しません。
+- `budget` と `providers` は、新しい保存200件分の作業フォルダだけを開きます。現在の設定を作った保存は、日時ではなく、記録の保存後の状態が現在の設定の状態と一致するもので判定し、そこから保存前後の状態をハッシュでたどります。
+- 出力の `last_limit_change` は、たどった記録のうち上限が変わった最新のもの（`state: "changed"`、入口・日時・変わった項目の前後）を示します。記録が1件も無い場合は `no_record`（この機能より前の保存には記録がありません）、たどれる範囲で上限が変わっていない場合は `unchanged`、200件の範囲に変更が見つからない場合は `not_in_recent`、従来形式の設定は `legacy`、記録を読み取れない場合は `unavailable` です。
+- `limits_match_record` は、現在の設定がいずれかの記録の保存後の状態と一致するかを示します（記録が無い場合と、保存中で照合しない場合は `null`）。`false` は、現在の設定が記録と一致しないことだけを示し、記録の無い変更があったとは断定しません。原因には、記録を残さない保存（中断した保存の確定など）、この機能より前の保存、読み取る範囲より前の記録などが考えられます。`limits_record_note` に説明を、最新の記録と値が異なる項目を `limits_differing_from_record` に表示します。
+- `budget --history N`（1〜100）は、新しい順にN件の記録を `limit_history` に表示します。`previous_record_found: false` は、その保存の前の状態を作った記録が読み取る範囲に見つからないことを示します（最初に記録された保存、記録を残さない保存の後の保存などで起こります）。記録の無い作業フォルダの数は `unrecorded_saves`、読み取らなかった不正な記録（リンク・大きすぎる・形式違い）の数は `rejected_records` です。
 - 記録はこの版以降の保存から始まります。従来形式（`config.json` だけ）の環境には記録を残しません。上限の変更に新たな承認は求めません。
 
 論理的な設定構造の例です。提供元別設定を使う環境では、この断片をファイルへ直接書かず、設定画面またはCLIを使ってください。

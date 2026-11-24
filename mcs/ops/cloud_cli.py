@@ -1084,28 +1084,40 @@ def _time_value(text, *, end):
 
 
 _LIMIT_HISTORY_MAX = 100
+# The newest saves whose records budget/providers read; older ones are not opened.
+_LIMIT_AUDIT_WINDOW = 200
 _LIMIT_RECORD_NOTES = {
     "legacy": "分割前の設定形式のため、上限の変更記録はありません",
     "no_record": "変更記録はまだありません（この機能より前の保存には記録がありません）",
-    "unchanged": "記録のある保存では上限は変わっていません",
+    "unchanged": "記録をたどれる範囲の保存では上限は変わっていません",
+    "not_in_recent": f"新しい{_LIMIT_AUDIT_WINDOW}件の保存の記録には上限の変更が見つかりません",
     "unavailable": "変更記録を読み取れませんでした",
 }
+_LIMIT_MISMATCH_NOTE = ("現在の設定は変更記録のどの保存後の状態とも一致しません。記録を残さない保存"
+                        "（中断した保存の確定、この機能より前の保存など）や、読み取る範囲より前の記録が考えられます")
+_LIMIT_IN_PROGRESS_NOTE = "設定の保存中のため、現在の設定と記録を照合していません"
 
 
-def _limit_change(record, *, previous=None):
+def _previous_record(records, index, visited):
+    """The record whose saved state this one started from, matched by hashes, not by time."""
+    before = records[index]["authority"]["before"]
+    if before is None:
+        return None
+    found = [other for other, record in enumerate(records)
+             if other not in visited and other != index and record["authority"]["after"] == before]
+    older = [other for other in found if other > index]
+    return (older or found or [None])[0]
+
+
+def _limit_change(record):
     before, after = record["limits"]["before"], record["limits"]["after"]
-    entry = {"committed_at": record["committed_at"], "origin": record["origin"],
-             "command_id": record["command_id"], "operation": record["operation"],
-             "changes": {key: {"before": before[key], "after": after[key]} for key in record["changed"]}}
-    if previous is not None:
-        # A save outside a recorded commit shows as a gap between neighbouring records.
-        shared = previous["limits"]["after"].keys() & before.keys()
-        entry["before_matches_previous"] = all(previous["limits"]["after"][key] == before[key] for key in shared)
-    return entry
+    return {"saved_at": record["saved_at"], "origin": record["origin"],
+            "command_id": record["command_id"], "operation": record["operation"],
+            "changes": {key: {"before": before[key], "after": after[key]} for key in record["changed"]}}
 
 
 def _limit_audit(cfg, history=None):
-    """The newest recorded limit change and whether the current limits still match the newest record."""
+    """The latest recorded limit change and whether the current settings match a recorded save."""
     import provider_settings
 
     def state(name):
@@ -1116,7 +1128,7 @@ def _limit_audit(cfg, history=None):
     try:
         if not mcs_util._provider_config_active(path):
             return result
-        found = provider_settings.change_records(Path(path).absolute().parent, provider_settings.CHANGE_RECORDS_MAX)
+        found = provider_settings.change_records(Path(path).absolute().parent, _LIMIT_AUDIT_WINDOW)
         current = provider_settings.view_limits(cfg)
     except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         return {"last_limit_change": state("unavailable"), "limits_match_record": None}
@@ -1124,17 +1136,31 @@ def _limit_audit(cfg, history=None):
     if not records:
         result["last_limit_change"] = state("no_record")
     else:
-        recorded = records[0]["limits"]["after"]
-        differing = sorted(key for key in current.keys() & recorded.keys() if current[key] != recorded[key])
-        result["limits_match_record"] = not differing
-        if differing:
-            result["limits_differing_from_record"] = differing
-        changed = next((record for record in records if record["changed"]), None)
-        result["last_limit_change"] = (state("unchanged") if changed is None
-                                       else {"state": "changed", **_limit_change(changed)})
+        # The save that produced the current settings is the one whose state equals the authority's.
+        head = next((index for index, record in enumerate(records)
+                     if found["current"] is not None and record["authority"]["after"] == found["current"]), None)
+        if found["save_in_progress"]:
+            result["limits_record_note"] = _LIMIT_IN_PROGRESS_NOTE
+        else:
+            compared = records[0 if head is None else head]["limits"]["after"]
+            differing = sorted(key for key in current.keys() & compared.keys() if current[key] != compared[key])
+            result["limits_match_record"] = head is not None and not differing
+            if not result["limits_match_record"]:
+                result["limits_record_note"] = _LIMIT_MISMATCH_NOTE
+                if differing:
+                    result["limits_differing_from_record"] = differing
+        index, visited, changed = 0 if head is None else head, set(), None
+        while index is not None and changed is None:
+            visited.add(index)
+            if records[index]["changed"]:
+                changed = records[index]
+            index = _previous_record(records, index, visited)
+        result["last_limit_change"] = ({"state": "changed", **_limit_change(changed)} if changed is not None
+                                       else state("not_in_recent" if found["more"] else "unchanged"))
     if history is not None:
         result["limit_history"] = {
-            "records": [_limit_change(record, previous=records[index + 1] if index + 1 < len(records) else None)
+            "records": [{**_limit_change(record),
+                         "previous_record_found": _previous_record(records, index, {index}) is not None}
                         for index, record in enumerate(records[:history])],
             "unrecorded_saves": found["unrecorded_saves"], "rejected_records": found["rejected_records"]}
     return result

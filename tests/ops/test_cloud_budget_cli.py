@@ -404,7 +404,7 @@ def test_split_saves_record_their_origin_and_changed_limits(verified_split, caps
     assert (before["cloud_llm.monthly_cost_limit_usd"], after["cloud_llm.monthly_cost_limit_usd"]) == ("absent", None)
     assert (before["cloud_llm.daily_cost_limit_usd"], after["cloud_llm.daily_cost_limit_usd"]) == ("absent", 5)
     assert after["semantic.until"] is None and after["semantic.daily_request_budget"] == 0
-    assert shown["last_limit_change"] == {"state": "changed", "committed_at": record["committed_at"],
+    assert shown["last_limit_change"] == {"state": "changed", "saved_at": record["saved_at"],
         "origin": "cloud_llm_budget", "command_id": None, "operation": record["operation"],
         "changes": {"cloud_llm.daily_cost_limit_usd": {"before": "absent", "after": 5},
                     "cloud_llm.monthly_cost_limit_usd": {"before": "absent", "after": None}}}
@@ -433,7 +433,7 @@ def test_legacy_config_reports_that_it_keeps_no_records(conf, capsys):
     assert not list(conf.parent.glob("data/.provider-settings-stage-*"))
 
 
-def test_a_change_outside_a_recorded_save_is_reported_as_drift(verified_split, capsys):
+def test_settings_matching_no_recorded_save_are_reported_without_claiming_a_cause(verified_split, capsys):
     conf, _, _, authority, _ = verified_split
     assert _run(daily="2") == 0
     capsys.readouterr()
@@ -447,16 +447,40 @@ def test_a_change_outside_a_recorded_save_is_reported_as_drift(verified_split, c
     shown = json.loads(capsys.readouterr().out)
     assert shown["daily_cost_limit_usd"] == 1.5 and shown["limits_match_record"] is False
     assert shown["limits_differing_from_record"] == ["cloud_llm.daily_cost_limit_usd"]
-    assert _run(monthly="50") == 0
+    # A missing record is not proof of an unrecorded change: the note names possible causes only.
+    assert "考えられます" in shown["limits_record_note"] and "記録を残さない保存" in shown["limits_record_note"]
+    assert _run(monthly="50") == 0 and _run(monthly="60") == 0
     capsys.readouterr()
     assert cli.budget_command(SimpleNamespace(history=5)) == 0
     shown = json.loads(capsys.readouterr().out)
-    newest, older = shown["limit_history"]["records"]
-    assert newest["changes"] == {"cloud_llm.monthly_cost_limit_usd": {"before": "absent", "after": 50}}
-    assert newest["before_matches_previous"] is False and "before_matches_previous" not in older
-    assert older["changes"] == {"cloud_llm.daily_cost_limit_usd": {"before": "absent", "after": 2}}
+    newest, middle, oldest = shown["limit_history"]["records"]
+    assert newest["changes"] == {"cloud_llm.monthly_cost_limit_usd": {"before": 50, "after": 60}}
+    assert middle["changes"] == {"cloud_llm.monthly_cost_limit_usd": {"before": "absent", "after": 50}}
+    assert oldest["changes"] == {"cloud_llm.daily_cost_limit_usd": {"before": "absent", "after": 2}}
+    # Chained by hashes: only the newest save started from a state another record saved.
+    assert [entry["previous_record_found"] for entry in (newest, middle, oldest)] == [True, False, False]
     assert (shown["limit_history"]["unrecorded_saves"], shown["limit_history"]["rejected_records"]) == (0, 0)
-    assert shown["limits_match_record"] is True
+    assert shown["limits_match_record"] is True and "limits_record_note" not in shown
+
+
+def test_a_save_in_progress_is_not_compared(verified_split, monkeypatch, capsys):
+    conf, _, _, _, _ = verified_split
+    assert _run(daily="2") == 0
+    capsys.readouterr()
+    pending = conf.parent / "data" / ".provider-settings-pending.json"
+    original = provider_settings.change_records
+    def publishing(root, limit):
+        pending.write_text("{}")
+        pending.chmod(0o600)
+        try:
+            return original(root, limit)
+        finally:
+            pending.unlink()
+    monkeypatch.setattr(provider_settings, "change_records", publishing)
+    assert _run() == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["limits_match_record"] is None and "保存中" in shown["limits_record_note"]
+    assert shown["last_limit_change"]["state"] == "changed"
 
 
 @pytest.mark.parametrize("history", [0, 101, "5"])
