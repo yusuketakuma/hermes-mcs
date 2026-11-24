@@ -40,6 +40,7 @@ from extract_llm_context import (
     _extraction_dispatch_current,
     _frame_medications,
     _frame_refs,
+    _pending_superseded_scan,
 )
 from extract_llm_engine import (
     _resume_promotion_refusal,
@@ -219,11 +220,25 @@ def _prepare_hold_s(ledger, row, reasons):
     """How long a prepare refusal keeps its bounded claim. A positive mismatch of a local-rebuild
     approval (PROOF_CHANGED) waits the long revive interval, but only while the approval it was
     decided against is still the current one; a changed approval, UNVERIFIED and every other
-    refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait.
+    refusal keep the short prepare hold. A superseded hold (prepare_context_load_superseded)
+    waits the same long interval, but only while the pending set is still provably all
+    retired-generation; a regenerated pending set, an unreadable scan and every other refusal
+    keep the short hold so the next selection reconsiders the row on the normal path.
+    Not terminal: a later re-match is seen after the wait.
     Called by _claim inside its writer transaction, so the approval match and the long claim
     commit together."""
-    # the reason first: a sqlite3.Row candidate (the cloud path) has no .get and never holds long
-    if local_rebuild.PROOF_CHANGED not in reasons or not isinstance(row, dict):
+    if not isinstance(row, dict):
+        # a sqlite3.Row candidate has no .get and never holds long
+        return _PREPARE_HOLD_S
+    if "prepare_context_load_superseded" in reasons:
+        if row.get("_superseded_local"):
+            try:
+                if _pending_superseded_scan(ledger.db, row):
+                    return REVIVE_COOLDOWN_S
+            except sqlite3.Error:
+                pass
+        return _PREPARE_HOLD_S
+    if local_rebuild.PROOF_CHANGED not in reasons:
         return _PREPARE_HOLD_S
     held = row.get("_local_rebuild_held")
     if held is None:
@@ -997,10 +1012,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _defer_note(r.get("_defer_reason") or "other")
                 # Keep the existing finite claim for an unresolved paid unit;
                 # repeated refusals must not monopolize a single-job cloud pass.
-                if (cloud_only or r.get("_cloud_owned")) \
-                        and r.get("_defer_reason") in cloud_backlog._HOLD_DEFER_REASONS:
-                    keep_lease = True
-                    keep_claims.add(id(r))
+                # An unverifiable unit whose refusal basis was just proven keeps a long
+                # bounded claim through _release's commit_hold CAS, so the next pass sees
+                # the tail; a provably changed source or owner still releases immediately.
+                hold_reason = r.get("_defer_reason")
+                if (cloud_only or r.get("_cloud_owned")) and (
+                        hold_reason in cloud_backlog._HOLD_DEFER_REASONS
+                        or hold_reason == "prepare_context_load_superseded"):
+                    if hold_reason in ("cloud_unit_unresolved", "prepare_context_load_superseded"):
+                        r["_commit_hold"] = REVIVE_COOLDOWN_S
+                    else:
+                        keep_lease = True
+                        keep_claims.add(id(r))
                 if r.get("_defer_reason") == "cloud_fallback":
                     code = r.get("_fallback_code")
                     code = code if code in cloud_backlog._FALLBACK_CODES else "other"
@@ -1204,10 +1227,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         break
                     # Lookahead replenishes lost claims without freezing unused attempt frames.
                     row_reasons = {}
+                    row_refused = []
                     prepared, row_skipped, row_blocked = _prepare_jobs(
                         ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
                         background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
-                        blocked_reasons=row_reasons)
+                        blocked_reasons=row_reasons, blocked_rows=row_refused)
                     skipped += row_skipped
                     context_blocked += row_blocked
                     deferred += row_blocked
@@ -1215,11 +1239,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _defer_note(reason, count=count)
                     _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
                     if not prepared:
-                        if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
-                            # An unverifiable owned head keeps a bounded claim —
-                            # the next pass sees the tail instead of re-blocking.
-                            # approved local rebuilds never reach the cloud selection: the short hold
-                            _claim(ledger, candidate, _PREPARE_HOLD_S)
+                        for refused_row, reason in row_refused:
+                            if (reason in cloud_backlog._HOLD_DEFER_REASONS
+                                    or reason == "prepare_context_load_superseded") \
+                                    and time.monotonic() < deadline and _writer_current(full=True):
+                                # A refused head keeps a bounded claim — the next
+                                # pass sees the tail instead of re-blocking.
+                                # This CAS is a finite preparation wait, not a sent/failed unit.
+                                # Never replace another owner's active claim or discard proof.
+                                _claim(ledger, refused_row, _PREPARE_HOLD_S,
+                                       lease_for=lambda led, row=refused_row, why=(reason,):
+                                           _prepare_hold_s(led, row, why))
                         if prioritize_patients and time.monotonic() < deadline:
                             _cloud_priority_discard(ledger, candidate['message_id'])
                         continue

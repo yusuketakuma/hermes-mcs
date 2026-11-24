@@ -1,6 +1,8 @@
 """Same-pass replacement (request-wait-scheduling r2): a verified refusal of an already settled
 same request that began no work frees its slot for the next unvisited candidate. The real
 runner and CloudInferenceUnit run with the routed transport stubs; nothing is resent."""
+import time
+
 import pytest
 
 import cloud_inference
@@ -317,6 +319,39 @@ def test_refused_rows_keep_their_claims_for_both_selections_and_a_late_result_is
         led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
     again = {row["message_id"] for row in _select(led, "extract")}
     assert (refused - {late["message_id"]}) <= again and late["message_id"] not in again
+
+
+def test_an_unverifiable_unit_keeps_one_long_claim_and_the_tail_runs(cloud_candidates, monkeypatch):
+    """A paid unit that cannot be proven (result_missing, verified_repeat=False) keeps a
+    bounded claim for the revive interval instead of re-heading every pass; the next
+    pass sees the unclaimed tail."""
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    _refuse(monkeypatch, {head}, "result_missing")
+    report = _cloud_pass(led)
+    assert report["defer_reasons"] == {"cloud_unit_unresolved": 1} and report["refilled"] == 0
+    claim = led.db.execute(
+        "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' AND message_id=?",
+        (head,)).fetchone()
+    assert claim and claim[0] > time.time() + 5 * 3600
+    second = _cloud_pass(led)
+    # the held head is not re-selected; the next unclaimed candidate completes
+    assert second["done"] == 1 and second["defer_reasons"] == {}
+    assert len(calls) == len(reservations) == len(results) == 1
+
+
+def test_a_verified_repeat_keeps_one_long_claim(cloud_candidates, monkeypatch):
+    """The already-settled verified repeat gets the same bounded hold: once its slot is
+    refilled, the claim outlives the pass at the revive interval, not the claim lease."""
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    _refuse(monkeypatch, {head}, "repeat_success")
+    report = _cloud_pass(led)
+    assert report["refilled"] == 1 and report["done"] == 1
+    claim = led.db.execute(
+        "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' AND message_id=?",
+        (head,)).fetchone()
+    assert claim and claim[0] > time.time() + 5 * 3600
 
 
 def test_a_healthy_row_beyond_the_lookahead_is_reached_in_a_later_pass(cloud_candidates, monkeypatch):

@@ -347,7 +347,14 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
             plist = os.path.join(agents, f"{label}.plist")
             if not os.path.exists(plist) or not domain_ok:
                 continue
-            if not service_management.agent_loaded(label, paths=paths, **probe_args):
+            loaded = service_management.agent_loaded(label, paths=paths, **probe_args)
+            if loaded is None:
+                # A flaked probe is not proof of a stop: warn to verify, never
+                # point at a bootstrap that may clash with a running job
+                warnings.append(
+                    f"常駐処理{label}の読み込み状態を確認できません（launchctl が応答しません）。"
+                    + f"`launchctl print gui/{paths.uid}/{label}`で確認してください")
+            elif not loaded:
                 # LINE WORKS is newly diagnosed in this version: a warning, so an
                 # updater postcheck baseline from older code never sees a new error
                 (warnings if label == lw else errors).append(
