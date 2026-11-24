@@ -20,8 +20,8 @@ from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, is_c
 import semantic_jev as jev
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS,
                              KIND_FACTS_V2, KIND_LOOP, KIND_LOOP_EVENT, KIND_SUMMARY, KIND_USAGE,
-                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, needs_local_model,
-                             policy_fingerprint)
+                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, policy_fingerprint,
+                             primary_verdicts_consumed)
 
 
 def _member(row) -> dict:
@@ -732,19 +732,53 @@ def _loop_completion_manifest(db, pid, bundle, targets, scfg, *, facts_by_target
     return digest
 
 
+def _intake_held(db, pid, root) -> bool:
+    import semantic_intake_hold
+    return semantic_intake_hold.has_unstored(db, pid) or semantic_intake_hold.has_held_root(db, pid, root)
+
+
+def _raw_extraction_held(db, pid, mid, scfg, cfg) -> bool:
+    """Whether the source's selected raw extraction or its extraction QC is not yet current."""
+    import extract_llm
+    import patient_context_refresh
+    source = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
+    if source is None:
+        return True
+    if (scfg['extract_qc'] == 'annotate'
+            and not patient_context_refresh._extraction_qc_ready(db, pid, scfg, message_id=mid)):
+        return True
+    complete, selected_meta = patient_context_refresh._raw_extraction_current(db, source, cfg)
+    latest = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
+                        "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
+                        (extract_llm.KIND, mid, pid)).fetchone()
+    if not complete or latest is None:
+        return True
+    raw, raw_meta = strict_json(latest['content']), strict_json(latest['meta'])
+    return (not isinstance(raw, dict) or not isinstance(raw_meta, dict) or raw_meta != selected_meta
+            or not is_current(raw_meta) or bool(raw_meta.get('invalidated')))
+
+
+def _extraction_only_state(ledger, row, scfg, cfg):
+    """Coverage when no feature reads semantic job results: the raw extraction and its QC alone."""
+    db, pid, mid = ledger.db, row['project_id'], row['message_id']
+    try:
+        if _intake_held(db, pid, row['parent_id'] or mid) or _raw_extraction_held(db, pid, mid, scfg, cfg):
+            return 'held'
+        return 'current'
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return 'held'
+
+
 def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
     """Validate current raw and primary assessment evidence for classification only."""
     import semantic_audit
     import semantic_facts
     import semantic_publication as v4
-    import extract_llm
-    import patient_context_refresh
-    import semantic_intake_hold
 
     db, pid, mid = ledger.db, row['project_id'], row['message_id']
     root = row['parent_id'] or mid
     try:
-        if semantic_intake_hold.has_unstored(db, pid) or semantic_intake_hold.has_held_root(db, pid, root):
+        if _intake_held(db, pid, root):
             return 'held'
         job = db.execute("SELECT state,substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind=? "
                          "AND project_id=? AND message_id=?",
@@ -756,21 +790,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
                 return 'failed'
             if job['state'] != 'done':
                 return 'pending'
-        source = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
-        if source is None:
-            return 'held'
-        if (scfg['extract_qc'] == 'annotate'
-                and not patient_context_refresh._extraction_qc_ready(db, pid, scfg, message_id=mid)):
-            return 'held'
-        complete, selected_meta = patient_context_refresh._raw_extraction_current(db, source, cfg)
-        latest = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
-                            "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
-                            (extract_llm.KIND, mid, pid)).fetchone()
-        if not complete or latest is None:
-            return 'held'
-        raw, raw_meta = strict_json(latest['content']), strict_json(latest['meta'])
-        if (not isinstance(raw, dict) or not isinstance(raw_meta, dict) or raw_meta != selected_meta
-                or not is_current(raw_meta) or raw_meta.get('invalidated')):
+        if _raw_extraction_held(db, pid, mid, scfg, cfg):
             return 'held'
         # A newer adverse or unparseable audit never becomes a classification success.
         for kind in (KIND_AUDIT, KIND_FACT_AUDIT):
@@ -931,13 +951,14 @@ def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None, observ
         return 'empty_body'
     if row['body_state'] not in (None, 'full') or not row['body_text']:
         return 'body_unavailable'
+    if not primary_verdicts_consumed(scfg):
+        # No reader of the job results: coverage is the raw extraction alone.
+        return _extraction_only_state(ledger, row, scfg, cfg if cfg is not None else load_config())
     root = row['parent_id'] or mid
     bundle = thread_bundle(ledger.db, pid, root, [mid])
     if bundle is None:
         return 'held'
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
-    if not needs_local_model(scfg):
-        return _classification_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(), bundle, fp, policy)
     if scfg['summary_mode'] == 'off':
         return _loop_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(),
                                 bundle, fp, policy, deadline=deadline)

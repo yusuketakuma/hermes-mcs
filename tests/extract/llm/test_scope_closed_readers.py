@@ -119,7 +119,7 @@ def test_closed_scope_still_warns_for_new_work_and_semantic_due(tmp_path, down_l
         _old(db, 1, 1)
         assert "local_llm_down" not in health_report.backlog_stalls(db.db, cfg, time.time())
         db.job_add("semantic", 1, 1)
-        cfg["semantic"] = {"mode": "shadow", "project_ids": [1]}
+        cfg["semantic"] = {"mode": "shadow", "project_ids": [1], "summary_mode": "shadow"}
         assert "local_llm_down" in health_report.backlog_stalls(db.db, cfg, time.time())
     finally:
         db.close()

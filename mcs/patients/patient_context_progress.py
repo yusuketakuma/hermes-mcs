@@ -72,7 +72,7 @@ def _local_sources_ready_scoped(db, pid, cfg):
         if (semantic_intake_hold.has_held_root(db, pid, root)
                 or not readiness._raw_extraction_current(db, row, cfg)[0]):
             return False
-        if policy['mode'] != 'off' and (db.execute(
+        if semantic_policy.primary_verdicts_consumed(policy) and (db.execute(
                 "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=? AND state!='done' LIMIT 1",
                 (semantic_policy.JOB_KIND, pid, root)).fetchone() or semantic_store.reprocess_target_state(
                     SimpleNamespace(db=db), row, policy, cfg=cfg, deadline=db.scan_until, observe_paused=True) not in ('current', 'current_skipped')):

@@ -36,6 +36,36 @@ def _ready(runtime, cfg, **kw):
     return patient_context_refresh_readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600, **kw)
 
 
+def _run_classification(led, cfg, *args, **kwargs):
+    """Run a job's assessment stage as a reader of its results would see it.
+
+    With summary and loop off nothing reads the results, so no job runs; the
+    primary-assessment evidence these tests damage is still what loop mode
+    builds on (semantic_store._loop_only_state)."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(semantic_drain, 'primary_verdicts_consumed', lambda scfg: True)
+        return semantic_drain.run_due(led, cfg, *args, **kwargs)
+
+
+def _classification_state(led, row, policy, cfg):
+    bundle = semantic_store.thread_bundle(led.db, row['project_id'], row['parent_id'] or row['message_id'],
+                                          [row['message_id']])
+    return semantic_store._classification_only_state(
+        led, row, policy, cfg, bundle, bundle['source_fingerprint'], semantic_policy.policy_fingerprint(policy))
+
+
+def _classified(runtime, cfg):
+    """Primary-assessment evidence check; with a reader enabled, the real readiness."""
+    led, _, _ = runtime
+    policy, errors = semantic_policy.runtime_config(cfg)
+    assert not errors
+    if semantic_policy.primary_verdicts_consumed(policy):
+        return _ready(runtime, cfg)
+    row = led.db.execute("SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
+                         "JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=1").fetchone()
+    return _classification_state(led, row, policy, cfg) in ('current', 'current_skipped')
+
+
 def test_semantic_off_requires_complete_current_bound_extraction(runtime):
     led, _, _ = runtime
     cfg = {'semantic': {'mode': 'off'}}
@@ -306,7 +336,7 @@ def _classification_worker(runtime, *, initial_summary='off'):
     seed(led, 1, proof=False)
     _raw_proof(led, 1, 1)
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=_FakeJev(), llm_fn=_llm)
     assert out['done'] == 1
     assert led.artifacts('semantic_assess', message_id=1)
@@ -317,7 +347,7 @@ def test_classification_only_accepts_real_current_assessment(runtime):
     led, _, _ = runtime
     cfg = _classification_worker(runtime)
     assert not led.artifacts('semantic_summary', message_id=1)
-    assert _ready(runtime, cfg)
+    assert _classified(runtime, cfg)
 
 
 @pytest.mark.parametrize('damage', ['pending', 'failed', 'raw_missing', 'raw_corrupt',
@@ -327,7 +357,7 @@ def test_classification_only_accepts_real_current_assessment(runtime):
 def test_classification_only_holds_unproven_evidence(runtime, damage):
     led, _, _ = runtime
     cfg = _classification_worker(runtime)
-    assert _ready(runtime, cfg)
+    assert _classified(runtime, cfg)
     row = led.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='semantic_assess' "
                          "AND project_id=1 AND message_id=1 ORDER BY artifact_id DESC LIMIT 1").fetchone()
     if damage in ('pending', 'failed'):
@@ -367,7 +397,7 @@ def test_classification_only_holds_unproven_evidence(runtime, damage):
     else:
         cfg = _cfg('assist', summary_mode='off', loop_mode='assist')
     led.db.commit()
-    assert not _ready(runtime, cfg)
+    assert not _classified(runtime, cfg)
 
 
 def test_classification_only_ignores_newer_detail_assessment(runtime):
@@ -378,7 +408,7 @@ def test_classification_only_ignores_newer_detail_assessment(runtime):
     policy = semantic_policy.runtime_config(cfg)[0]
     semantic_assessment._persist_detail(led, 1, 1, bundle['source_fingerprint'],
         semantic_policy.policy_fingerprint(policy), 'synthetic-fact', 'status', 'planned', 0.9)
-    assert _ready(runtime, cfg)
+    assert _classified(runtime, cfg)
 
 
 def test_classification_only_accepts_real_disabled_jev_skip(runtime):
@@ -387,7 +417,7 @@ def test_classification_only_accepts_real_disabled_jev_skip(runtime):
     seed(led, 1, proof=False)
     _raw_proof(led, 1, 1)
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=None, llm_fn=_llm)
     assert out['done'] == 1
     row = led.artifacts('semantic_assess', message_id=1)[-1]
@@ -395,8 +425,8 @@ def test_classification_only_accepts_real_disabled_jev_skip(runtime):
     policy = semantic_policy.runtime_config(cfg)[0]
     source = led.db.execute("SELECT m.*, p.project_id AS patient_id, p.fetch_reason FROM messages m "
                             "JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=1").fetchone()
-    assert semantic_drain._reprocess_target_state(led, source, policy, cfg=cfg) == 'current_skipped'
-    assert _ready(runtime, cfg)
+    assert _classification_state(led, source, policy, cfg) == 'current_skipped'
+    assert _classified(runtime, cfg)
 
 
 def test_classification_only_reuses_current_assessment_from_summary_mode(runtime):
@@ -414,7 +444,7 @@ def test_classification_only_reuses_current_assessment_from_summary_mode(runtime
         led, on, bundle, _FakeJev(), 1, 1, bundle['source_fingerprint'],
         semantic_policy.policy_fingerprint(on), None, time.monotonic() + 60, diagnostics={})
     assert result and flag is None
-    assert _ready(runtime, cfg_off)
+    assert _classified(runtime, cfg_off)
 
 
 def test_classification_skip_preserves_previous_partial_verdict(runtime):
@@ -435,15 +465,15 @@ def test_classification_skip_preserves_previous_partial_verdict(runtime):
               'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait',
               'model': semantic_drain.jev.JEV_MODEL, 'registry': semantic_drain.jev.REGISTRY_VERSION})
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=None, llm_fn=_llm)
-    assert out['done'] == 1 and _ready(runtime, cfg)
+    assert out['done'] == 1 and _classified(runtime, cfg)
     latest = led.artifacts('semantic_assess', message_id=1)[-1]
     assert json.loads(latest['content'])['verdicts'] == {name: verdict}
     led.db.execute("UPDATE artifacts SET content=json_set(content,'$.verdicts',json('{}')) WHERE artifact_id=?",
                    (latest['artifact_id'],))
     led.db.commit()
-    assert not _ready(runtime, cfg)
+    assert not _classified(runtime, cfg)
 
 
 def test_classification_rejects_forged_no_signal_marker(runtime):
@@ -455,19 +485,19 @@ def test_classification_rejects_forged_no_signal_marker(runtime):
         led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.prefilter','no_signal') WHERE kind='extract_llm'")
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
     client = _FakeJev()
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=client, llm_fn=_llm)
     assert out['done'] == 1 and client.requests_made > 0
     latest = led.artifacts('semantic_assess', message_id=1)[-1]
     assert 'skipped' not in json.loads(latest['meta'])
     assert json.loads(latest['content'])['verdicts']
-    assert _ready(runtime, cfg)
+    assert _classified(runtime, cfg)
     # A forged completed no-signal assessment cannot bypass the source check either.
     with led.db:
         led.db.execute("UPDATE artifacts SET content=json_set(content,'$.verdicts',json('{}')), "
                        "meta=json_set(meta,'$.skipped','prefilter_no_signal','$.jev_requests',0) "
                        "WHERE artifact_id=?", (latest['artifact_id'],))
-    assert not _ready(runtime, cfg)
+    assert not _classified(runtime, cfg)
 
 
 @pytest.mark.parametrize('old_value,expected', [(0.9, True), (0.1, False)])
@@ -489,20 +519,20 @@ def test_complete_assessment_cannot_discard_prior_partial(runtime, old_value, ex
               'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait',
               'model': semantic_drain.jev.JEV_MODEL, 'registry': semantic_drain.jev.REGISTRY_VERSION})
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=_FakeJev(), llm_fn=_llm)
     assert out['done'] == 1
     latest = led.artifacts('semantic_assess', message_id=1)[-1]
     content = json.loads(latest['content'])
     assert content['verdicts'][name] == verdict
-    assert _ready(runtime, cfg)
+    assert _classified(runtime, cfg)
     # Simulate a later complete record that discards the durable partial answer.
     content['verdicts'][name] = {'noul': 0.9, 'verdict': semantic_drain.jev.verdict_for(
         0.9, policy['match_threshold'], policy['nomatch_threshold'])}
     with led.db:
         led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                        (json.dumps(content), latest['artifact_id']))
-    assert _ready(runtime, cfg) is expected
+    assert _classified(runtime, cfg) is expected
 
 
 def test_classification_only_requires_current_qc_for_reprocess(runtime):
@@ -513,7 +543,7 @@ def test_classification_only_requires_current_qc_for_reprocess(runtime):
         led.db.execute('UPDATE messages SET posted_at_ts=? WHERE message_id=1', (clock.wall,))
     _raw_proof(led, 1, 1)
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
+    out = _run_classification(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=_FakeJev(), llm_fn=_llm)
     assert out['done'] >= 1
     row = led.db.execute("SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
@@ -526,15 +556,15 @@ def test_classification_only_requires_current_qc_for_reprocess(runtime):
     led.artifact_add('extract_qc', '{}', project_id=1, message_id=1, meta=meta)
     led.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_qc'")
     led.db.commit()
-    assert semantic_drain._reprocess_target_state(led, row, policy, cfg=cfg) == 'current'
+    assert _classification_state(led, row, policy, cfg) == 'current'
     led.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state,created_at,updated_at) "
                    "VALUES('extract_qc',1,1,'pending',0,0)")
     led.db.commit()
-    assert semantic_drain._reprocess_target_state(led, row, policy, cfg=cfg) == 'held'
+    assert _classification_state(led, row, policy, cfg) == 'held'
     led.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_qc'")
     led.db.execute("DELETE FROM artifacts WHERE kind='extract_qc'")
     led.db.commit()
-    assert semantic_drain._reprocess_target_state(led, row, policy, cfg=cfg) == 'held'
+    assert _classification_state(led, row, policy, cfg) == 'held'
 
 
 @pytest.mark.parametrize('summary_mode', ['shadow', 'assist', 'enforce'])
@@ -551,7 +581,7 @@ def test_classification_only_reuses_real_summary_on_assessment_and_pass(runtime,
         led, policy, bundle, _FakeJev(), 1, 1, bundle['source_fingerprint'],
         semantic_policy.policy_fingerprint(policy), None, time.monotonic() + 60, diagnostics={})
     assert verdicts and flag is None
-    assert _ready(runtime, cfg_off)
+    assert _classified(runtime, cfg_off)
 
 
 @pytest.mark.parametrize('damage', ['audit_status', 'audit_hash', 'summary_hash', 'binding'])
@@ -567,10 +597,10 @@ def test_classification_only_holds_corrupt_summary_audit_pair(runtime, damage):
     result, flag = semantic_drain._assess_target(
         led, policy, bundle, _FakeJev(), 1, 1, bundle['source_fingerprint'],
         semantic_policy.policy_fingerprint(policy), None, time.monotonic() + 60, diagnostics={})
-    assert result and flag is None and _ready(runtime, cfg_off)
+    assert result and flag is None and _classified(runtime, cfg_off)
     fields = {'audit_status': '$.audit_status', 'audit_hash': '$.audit_content_hash',
               'summary_hash': '$.summary_hash', 'binding': '$.claim_input_binding'}
     led.db.execute("UPDATE artifacts SET meta=json_set(meta,?,?) WHERE kind='semantic_audit'",
                    (fields[damage], 'NEEDS_REVIEW' if damage == 'audit_status' else 'corrupt'))
     led.db.commit()
-    assert not _ready(runtime, cfg_off)
+    assert not _classified(runtime, cfg_off)

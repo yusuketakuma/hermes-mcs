@@ -514,7 +514,7 @@ v1.3.0は、ローカルの患者画面に在宅ケアの患者台帳・職員�
 
 - 設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。summary_mode か loop_mode が off 以外の設定でも、backlog のQCは日次上限で評価を省略した完了にせず、待機するようになります（ローカルLLMを使う意味解析は従来どおり続けます）。
 
-- 設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。summary_mode か loop_mode が off 以外の設定では、QCの割合以外の動作は変わりません。
+- 設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。要約とループがともにoffの間、通常の取込・再処理では意味解析jobは作成・実行されません。明示的な保留解除は既存の検証後に置換jobを作り、readerが戻るまでpendingです。抽出QCはextract_qc=annotateの場合だけ実行されます。
 
 </details>
 

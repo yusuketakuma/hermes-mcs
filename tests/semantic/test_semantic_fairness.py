@@ -169,7 +169,7 @@ def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
-    monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_drain, 'load_config', lambda _path: {})
     monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
@@ -192,7 +192,7 @@ def test_drain_cli_output_lines_carry_ts_and_pid(tmp_path, monkeypatch, capsys):
 
     import ledger
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
-    monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_drain, 'load_config', lambda _path: {})
     monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})

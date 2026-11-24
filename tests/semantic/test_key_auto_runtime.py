@@ -23,7 +23,7 @@ def test_explicit_mode_without_budget_keeps_zero_requests(mode):
     assert resolved["daily_request_budget"] == 0
 
 
-def test_key_auto_runs_real_assessment_without_promoting_notifications(tmp_path, monkeypatch):
+def test_key_auto_runs_no_unread_assessment_and_promotes_no_notifications(tmp_path, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda root=None: "synthetic-unused-key")
     db = _seeded(tmp_path)
     client = _FakeJev()
@@ -33,9 +33,10 @@ def test_key_auto_runs_real_assessment_without_promoting_notifications(tmp_path,
         out = semantic_drain.run_due(
             db, {}, result, time.monotonic() + 300, jev_client=client,
             llm_fn=lambda *_: pytest.fail("disabled summary must not call LLM"))
-        assert out["mode"] == "assist" and out["done"] == 1
-        assert client.requests_made > 0
-        assert db.artifacts("semantic_assess", message_id=1)
+        # key-auto leaves summary and loops off: nothing reads an assessment
+        assert out["mode"] == "assist" and out["done"] == 0
+        assert client.requests_made == 0 and not run_check._semantic_seeding({})
+        assert not db.artifacts("semantic_assess", message_id=1)
         assert not db.artifacts("semantic_summary", message_id=1)
         assert not db.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
         assert run_check._semantic_skipped({}, "background_worker")["mode"] == "assist"

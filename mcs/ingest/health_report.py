@@ -491,17 +491,18 @@ _JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
 
 
 def jev_block_reason(db) -> str | None:
-    """Why TypeSafe Jev is refusing work, from the readable assessment record
-    with the highest artifact_id. None when there is none or it went through.
+    """Report the last assessment error until later evidence of Jev recovery.
 
-    The newest-by-time readable row bounds the id scan from below: no row with
-    a smaller id can be the highest, and the id-descending scan sees every row
-    at or above it, so time and id disagreeing changes only how far it reads."""
+    Only an assessment can raise the alert. A readable assessment found by
+    time therefore bounds the id scan, including any later QC recovery."""
     row = db.execute(
-        "SELECT json_extract(meta,'$.error_kind') FROM artifacts NOT INDEXED "
-        "WHERE kind='semantic_assess' AND json_valid(meta) AND artifact_id>=("
+        "SELECT CASE WHEN kind='semantic_assess' THEN json_extract(meta,'$.error_kind') END "
+        "FROM artifacts NOT INDEXED WHERE artifact_id>=("
         "SELECT artifact_id FROM artifacts INDEXED BY idx_artifacts_kind_created "
         "WHERE kind='semantic_assess' AND json_valid(meta) ORDER BY created_at DESC LIMIT 1) "
+        "AND kind IN ('semantic_assess','extract_qc') AND json_valid(meta) "
+        "AND (kind='semantic_assess' OR (json_extract(meta,'$.qc')='done' "
+        "AND json_type(meta,'$.jev_requests')='integer' AND json_extract(meta,'$.jev_requests')>0)) "
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     kind = row[0] if row else None
     return kind if kind in _JEV_BLOCK_KINDS else None
@@ -718,14 +719,14 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
 
     def llm_due() -> bool:
         """Work that needs the local model is waiting: due semantic jobs
-        (semantic mode on) or legacy extraction pending (fact_source not
+        (a reader of their results enabled) or legacy extraction pending (fact_source not
         canonical — the default semantic-off install has no fetch_jobs
         for it). extract_qc is Jev-only and never counts. Evaluated
         lazily: the legacy probe walks eligible messages."""
         # due "now or within the slack": a deferring drainer keeps pushing
         # next_try a minute ahead, which must still read as waiting work
         _phase("llm_due_semantic")
-        if not errors and scfg["mode"] != "off" and db.execute(
+        if not errors and semantic_policy.primary_verdicts_consumed(scfg) and db.execute(
                 "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
                 "AND state='pending' AND next_try<=? LIMIT 1",
                 (now + DUE_SLACK_S,)).fetchone() is not None:
@@ -766,7 +767,8 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
         # touching due jobs while it waits, so the generic stall below
         # still only fires when the drainer itself stopped.
         reasons.append(f"semantic_jev_{blocked}")
-    sem_on = scfg["mode"] != "off"
+    # Semantic jobs nobody reads stay queued unrun: they are not a stalled backlog.
+    sem_on = semantic_policy.primary_verdicts_consumed(scfg)
     _phase("semantic_backlog")
     due = sem_on and db.execute(
         "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "

@@ -181,7 +181,7 @@ import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_publication as v4
 from semantic_policy import (BACKLOG_BUDGET_RESERVE, JOB_KIND, KIND_POLICY, KIND_USAGE,
-                             QC_JOB_KIND, needs_local_model, policy_fingerprint, runtime_config,
+                             QC_JOB_KIND, primary_verdicts_consumed, policy_fingerprint, runtime_config,
                              waits_for_jev_quota)
 import semantic_notice
 from semantic_store import jev_usage_today
@@ -398,10 +398,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception as e:
             result["errors"].append(f"semantic_reproject: {type(e).__name__}")
         out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
-    # Jobs with no local-model stage (QC, classification-only semantic)
-    # never call the endpoint this breaker guards.
+    # Without a reader of semantic results only QC runs, which never calls
+    # the endpoint this breaker guards.
     circuit_s = llm_availability.circuit_open_s(ledger.db)
-    if circuit_s and not cloud_only and needs_local_model(scfg):
+    if circuit_s and not cloud_only and primary_verdicts_consumed(scfg):
         out["circuit_open_s"] = round(circuit_s)
         _hold_tail()
         return out
@@ -551,7 +551,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception:
             result["errors"].append("semantic: qc_seed_failed")
     qc_active = scfg["extract_qc"] == "annotate"
-    kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
+    # Semantic jobs whose results no feature reads are never run: they stay
+    # pending, unchanged, and become due again once a reader is enabled.
+    verdicts_read = primary_verdicts_consumed(scfg)
+    kinds = (JOB_KIND,) * verdicts_read + (QC_JOB_KIND,) * qc_active
+    if not verdicts_read:
+        out["unread_semantic_pending"] = out["pending_by_kind"].get(JOB_KIND, 0)
+    if not kinds:
+        out["left"] = 0
+        _hold_tail()
+        return out
     # arrival-descended seeds outrank import/replay seeds: a deep
     # backfill must never starve a fresh notification's evaluation
     # (§19.1's existing-work-first ordering applied inside the queue
@@ -814,6 +823,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     _defer_note(out, "mode_off")
                     out["mode"] = "off"
                     break
+                if job["kind"] == JOB_KIND and not primary_verdicts_consumed(scfg):
+                    out["unread_semantic_pending"] = out.get(
+                        "pending_by_kind", {}).get(JOB_KIND, 0)
+                    continue
             # A semantic job's first call is exempt from the in-call reserve
             # gate. Starting below that reserve can burn a doomed
             # generation and a retry attempt before any useful progress.
@@ -823,7 +836,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # semantic jobs without a local-model stage start on the short
             # floor here; one that will send to Jev also needs room for its
             # first request, checked below once its Jev skip is known.
-            jev_only_job = job["kind"] == QC_JOB_KIND or not needs_local_model(scfg)
+            jev_only_job = job["kind"] == QC_JOB_KIND or not primary_verdicts_consumed(scfg)
             floor = deadline - (_QC_START_RESERVE_S if jev_only_job
                                 else min(runtime.LLM_CALL_RESERVE_S,
                                          float(scfg["job_budget_seconds"]) * 2 / 3))
@@ -889,7 +902,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # local-model work in the pass nothing else can progress, so
                 # the pass ends; otherwise local-model jobs go on.
                 _defer_note(out, job_skip)
-                if not needs_local_model(scfg):
+                if not primary_verdicts_consumed(scfg):
                     break
                 quota_waits(job["kind"])
                 continue
@@ -1122,7 +1135,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # the quota ran out inside this job: no later job can call Jev,
                 # and only local-model work could still progress in this pass
                 out["budget_exhausted"] = True
-                if not needs_local_model(scfg):
+                if not primary_verdicts_consumed(scfg):
                     break
                 quota_waits(job["kind"])
             # A free hold with no new work must not starve independent due jobs.
@@ -1193,7 +1206,7 @@ REVIVE_PER_INPUT = 3
 REVIVE_COOLDOWN_S = 6 * 3600
 
 
-def revive_failed(ledger, now: float | None = None) -> dict:
+def revive_failed(ledger, now: float | None = None, *, cfg=None) -> dict:
     """Give exhausted 'failed' semantic jobs one more bounded attempt.
 
     Oldest failures first. The job keeps its generation and accumulated
@@ -1203,6 +1216,12 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     human retry command)."""
     now = time.time() if now is None else now
     out = {"revived": 0, "skipped_cap": 0}
+    if cfg is not None:
+        scfg, errors = runtime_config(cfg)
+        if errors or not primary_verdicts_consumed(scfg):
+            out["skipped_no_result_reader"] = not errors
+            out["skipped_config_invalid"] = bool(errors)
+            return out
     # capped jobs are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible job behind it
     capped = ("(CASE WHEN json_valid(payload) AND "
@@ -1268,10 +1287,10 @@ def main() -> int:
         # made the 6-hourly maintenance report failure whenever a tick or
         # drain held the lock at that moment (2026-10).
         from ledger import Ledger
-        from mcs_util import DB
+        from mcs_util import CONF_PATH, DB
         led = Ledger(DB)
         try:
-            print(json.dumps(revive_failed(led)))
+            print(json.dumps(revive_failed(led, cfg=load_config(CONF_PATH))))
         finally:
             led.close()
         return 0
@@ -1292,11 +1311,11 @@ def main() -> int:
                 time.sleep(min(10, max(0.0, stop - time.monotonic())))
                 continue
             try:
+                cfg = load_config(CONF_PATH)
                 if led is None:
                     led = Ledger(DB)
                     if args.revive_failed:
-                        totals["revive"] = revive_failed(led)
-                cfg = load_config()
+                        totals["revive"] = revive_failed(led, cfg=cfg)
                 # The batch must fit one full job budget so a canonical
                 # generation can complete. A shorter batch can repeatedly
                 # abandon useful work and exhaust the retry allowance of

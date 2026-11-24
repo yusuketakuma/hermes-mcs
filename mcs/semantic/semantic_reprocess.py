@@ -8,7 +8,7 @@ import sqlite3
 import time
 from inference_version import (CURRENT_VERSION, VERSION_KEY, is_current)
 import semantic_runtime as runtime
-from semantic_policy import (JOB_KIND, runtime_config)
+from semantic_policy import (JOB_KIND, primary_verdicts_consumed, runtime_config)
 import semantic_notice
 import semantic_transport
 
@@ -460,13 +460,17 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         'WHERE m.message_id>? AND m.message_id<=? ORDER BY m.message_id LIMIT ?',
         (progress['cursor'], progress['upper'], limit)).fetchall()
     planned, sources = [], {}
+    # Without a reader of the job results the pass still observes coverage
+    # but queues nothing; enabling one changes the proof generation and the
+    # next round seeds what it then finds outdated.
+    adopt = primary_verdicts_consumed(scfg)
     for row in rows:
         if deadline is not None and time.monotonic() >= deadline:
             break
         extra = {'deadline': deadline} if scfg['summary_mode'] == 'off' and scfg['loop_mode'] != 'off' else {}
         state = semantic_store.reprocess_target_state(ledger, row, scfg, cfg=cfg, **extra)
         replay = None
-        if state in ('current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed'):
+        if adopt and state in ('current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
             old = ledger.db.execute('SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE kind=? '
@@ -547,7 +551,7 @@ def reprocess_job(ledger, cfg, job, *, deadline=None, cfg_path=None):
         cfg = mcs_util.load_config(cfg_path)
     cfg = copy.deepcopy(cfg)
     scfg, errors = runtime_config(cfg)
-    if errors or scfg['mode'] == 'off':
+    if errors or not primary_verdicts_consumed(scfg):
         return {'status': 'off', 'complete': False}
     generation = runtime.execution_generation(scfg)
     pid, root, job_id = job['project_id'], job['message_id'], job['job_id']

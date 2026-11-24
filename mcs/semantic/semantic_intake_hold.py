@@ -930,7 +930,8 @@ def release_root(ledger, project_id, root, *, expected_job_sha256,
             or not 0 < expected_hold_epoch < 2**63):
         raise ValueError('semantic_release_args')
     scfg, errors = runtime_config(cfg)
-    if (errors or scfg['mode'] == 'off' or scfg['project_ids'] is not None
+    if (errors or scfg['mode'] == 'off'
+            or scfg['project_ids'] is not None
             and project_id not in scfg['project_ids']):
         raise ValueError('semantic_release_disabled')
     if ledger.db.in_transaction:

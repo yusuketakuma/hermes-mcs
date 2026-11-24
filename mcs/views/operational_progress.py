@@ -6,7 +6,8 @@ import math
 import sqlite3
 
 from mcs_util import loads_dict
-from semantic_policy import JOB_KIND, QC_JOB_KIND, KIND_DRAIN_RUN, runtime_config
+from semantic_policy import (JOB_KIND, QC_JOB_KIND, KIND_DRAIN_RUN,
+                             primary_verdicts_consumed, runtime_config)
 from semantic_runtime import config_generation, payload_generation
 
 RATE_WINDOW_S = 3600
@@ -28,10 +29,10 @@ def _time(value):
 
 
 def _cohort(kind, payload):
-    if payload is None:
-        return "unclassified"
     if kind == QC_JOB_KIND:
         return "qc"
+    if payload is None:
+        return "unclassified"
     eligible = payload.get("eligible", False)
     return "arrival" if eligible is True or type(eligible) is int and eligible == 1 else "backfill"
 
@@ -162,6 +163,8 @@ _PROGRESS_REASON_LABELS = {
     'config_invalid': '設定を確認できません',
     'observation_size_exceeded': '観測範囲の上限に達しました',
     'processing_disabled': '処理が無効です',
+    'no_result_reader': '意味解析の結果を使う機能がありません',
+    'qc_disabled': '抽出QCが無効です',
     'new_arrivals_not_forecast': '新着の追加量は予測しません',
     'unclassified_jobs': '処理の分類を確認できません',
     'queue_requires_attention': '失敗・再試行待ち・状態不明の処理があります',
@@ -195,10 +198,21 @@ def pipeline_progress(db, cfg, *, now, checkpoint=lambda: None,
         return {"status": "unavailable", "reason": "observation_size_exceeded", "observed_at": now}
     rates = _rates(db, cfg, projects, now, checkpoint)
     enabled = policy["mode"] != "off"
+    results_consumed = primary_verdicts_consumed(policy)
     for cohort, slot in queues.items():
         rate = rates[cohort]
         slot["throughput"] = rate
+        reader_enabled = (policy["extract_qc"] == "annotate" if cohort == "qc" else
+                          results_consumed if cohort in ("arrival", "backfill") else False)
+        slot["runnable_pending"] = (slot["pending"]
+                                    if enabled and reader_enabled else 0)
+        slot["unread_pending"] = (slot["pending"]
+                                  if cohort in ("arrival", "backfill")
+                                  and not results_consumed else 0)
         reason = ("processing_disabled" if not enabled else
+                  "no_result_reader" if cohort in ("arrival", "backfill")
+                  and not results_consumed else
+                  "qc_disabled" if cohort == "qc" and policy["extract_qc"] != "annotate" else
                   "new_arrivals_not_forecast" if cohort == "arrival" else
                   "unclassified_jobs" if cohort == "unclassified" else
                   "queue_requires_attention" if slot["failed"] or slot["unknown"]
@@ -210,11 +224,15 @@ def pipeline_progress(db, cfg, *, now, checkpoint=lambda: None,
         slot["estimate"] = {
             "status": "unavailable" if reason else "conditional",
             "reason": reason,
-            "seconds": None if reason else slot["pending"] * 3600 / rate["per_hour"],
+            "seconds": None if reason else slot["runnable_pending"] * 3600 / rate["per_hour"],
             "assumptions": ["no_new_jobs", "unchanged_config_and_capacity",
                             "recorded_completion_rate_continues"],
         }
     return {"status": "recorded", "observed_at": now, "enabled": enabled,
+            "semantic_results_consumed": results_consumed,
+            "unread_semantic_pending": sum(slot["unread_pending"]
+                                            for cohort, slot in queues.items()
+                                            if cohort in ("arrival", "backfill")),
             "scope": "stored_jobs_in_configured_projects", "queues": queues,
             "schedule_basis": "next_try_only_not_admission_or_lease",
             "queue_age_basis": "fetch_jobs.created_at",
