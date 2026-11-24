@@ -31,7 +31,10 @@ def audit(event, args):
 sys.addaudithook(audit)
 import _mcs_path
 import extract_llm, extract_llm_source_contract, attachment_inference
-code, sources = attachment_inference._CODE, dict(extract_llm._LOADED_SOURCE_DIGESTS)
+# Use the source set that this checkout actually includes in its attachment token.
+context_only = getattr(sys.modules.get("attachment_extraction"), "_CONTEXT_ONLY_SOURCES", ())
+raw = {key: value for key, value in extract_llm._LOADED_SOURCE_DIGESTS.items() if key not in context_only}
+code, sources = attachment_inference._CODE, raw
 versions = [extract_llm._INFERENCE_VERSION, extract_llm.EXTRACT_VERSION, extract_llm.PATIENT_CONTEXT_VERSION]
 try:
     import attachment_inference_contract
@@ -41,7 +44,7 @@ except ImportError:
 if effective is not None:
     code, sources = effective
 print(json.dumps({'code': code, 'versions': versions, 'sources': sources,
-    'raw': dict(extract_llm._LOADED_SOURCE_DIGESTS),
+    'raw': raw,
     'hold': sorted(getattr(extract_llm_source_contract, '_HOLD_SOURCES', ())),
     'oracle': attachment_inference._contract(json.loads(sys.argv[2]))}))
 '''
