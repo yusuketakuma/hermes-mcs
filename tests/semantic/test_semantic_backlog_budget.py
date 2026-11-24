@@ -69,9 +69,10 @@ def test_only_the_backlog_lane_passes_the_long_reacquire_bound(
                                jev_client=_FakeJev(), llm_fn=_llm,
                                lane=lane, max_jobs=1)
         assert out["done"] == 1
-        # every transport waits at most until the deadline run_due was
-        # given (the backlog pass budget / the tick deadline); the
-        # per-call runtime guard inside the job stays shorter
+        # every transport, and the lock retake after it, waits at most until
+        # the deadline run_due was given (the backlog pass budget / the tick
+        # deadline): a holder outlasting the served job costs only that
+        # job's answer, never the caller's pass
         assert calls and set(calls) == {(expected, deadline)}
     finally:
         db.close()
