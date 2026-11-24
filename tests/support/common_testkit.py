@@ -5,17 +5,27 @@ directory on sys.path, so test files import it as ``common_testkit``."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 
 import pytest
 
 import ledger
 
 _JST = timezone(timedelta(hours=9))
+_recent = (None, "")
 
 
 def recent_posted_at():
-    """ISO timestamp one hour ago in JST, the same instant on any host TZ."""
-    return (datetime.now(_JST) - timedelta(hours=1)).isoformat(timespec="seconds")
+    """ISO timestamp one hour ago in JST, the same instant on any host TZ.
+
+    The clock is read once per test. Posts order by (posted_at, message_id), so
+    two default-stamped messages built on either side of a wall-clock second
+    would otherwise swap places in a thread or a queue, on a slow host only."""
+    global _recent
+    test = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    if _recent[0] != test:
+        _recent = (test, (datetime.now(_JST) - timedelta(hours=1)).isoformat(timespec="seconds"))
+    return _recent[1]
 
 
 def make_ledger(tmp_path, *, data_dir=False):
