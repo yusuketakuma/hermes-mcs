@@ -398,10 +398,8 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         missing = set(info) - set(rolls) - lost_pids
         if missing:
             if view.db.execute(
-                    "SELECT 1 FROM patients p WHERE EXISTS "
-                    "(SELECT 1 FROM messages m WHERE m.project_id=p.project_id) "
-                    "AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE "
-                    "a.kind='patient_rollup' AND a.project_id=p.project_id) LIMIT 1"
+                    "SELECT 1 FROM messages WHERE project_id IN (SELECT value FROM json_each(?)) LIMIT 1",
+                    (json.dumps(sorted(missing)),)
             ).fetchone():
                 raise ValueError("patient_rollup_missing")
             pdir = out_dir / "patients"
@@ -445,19 +443,9 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
         today = _jst(time.time(), "%Y-%m-%d")
-        sig_res = mcs_signals.current_open(view.db, limit=200)
+        sig_res = mcs_signals.current_open(view.db, limit=200, excluded_project_ids=lost_pids)
         if sig_res.get("errors"):
             raise ValueError("signal_state_invalid")
-        if lost_pids:
-            kept = [c for c in sig_res["items"]
-                    if c.get("project_id") not in lost_pids]
-            # A permission-lost patient's open signal cannot be acted on;
-            # the export hides it. Only the fetched window can be filtered —
-            # a truncated read may hide further in-scope signals, so the
-            # total is adjusted only when the whole open set was listed.
-            sig_res = {**sig_res, "items": kept, "returned": len(kept)}
-            if not sig_res.get("truncated"):
-                sig_res["total"] = len(kept)
         model = read_model.read_model(view.db, scope="aggregate")
         _write(out_dir, "meta.md", _meta_md(view, excluded=len(lost_pids)))
         _write(out_dir, "health.md", _health_md(view))

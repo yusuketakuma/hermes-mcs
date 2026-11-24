@@ -733,6 +733,8 @@ def test_permission_lost_missing_rollup_never_blocks_export(env):
     assert (out / "patients/p1.md").exists()
     with sqlite3.connect(snap) as conn:
         _lose_access(conn, "forbidden")
+        # A second, accessible patient with neither a message nor a rollup does not block export.
+        conn.execute("INSERT INTO patients(project_id, fetch_state) VALUES (2, 'ok')")
         conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
     res = brain_export.run(out, snap)
     assert res["patients"] == 0 and res["excluded"] == 1
@@ -779,6 +781,35 @@ def test_permission_loss_exclusion_is_per_patient(env):
     assert "- archived: true" not in (out / "patients/p2.md").read_text()
     assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
     assert [r["project_id"] for r in _jsonl(out) if r["type"] == "signal"] == [2]
+
+
+@pytest.mark.parametrize("visible", [1, 200, 201])
+def test_signal_limit_and_counts_apply_to_visible_patients(env, visible):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("INSERT INTO patients(project_id, fetch_state) VALUES (2, 'forbidden')")
+        signal = json.loads(conn.execute("SELECT content FROM artifacts WHERE kind='signal_v1'").fetchone()[0])
+        # The fixture has one visible signal. All excluded signals precede it in the public list.
+        for pid, count in ((1, visible - 1), (2, 200)):
+            conn.executemany(
+                "INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES ('signal_v1',?,?,?,?)",
+                ((pid, json.dumps({**signal, "project_id": pid, "detected_at": SNAP_TS - i + pid * 1000}),
+                  json.dumps({"key": f"synthetic-{pid}-{i}"}), SNAP_TS) for i in range(count)))
+
+    result = brain_export.run(out, snap)
+    assert result["signals"] == visible and result["excluded"] == 1
+    signals = (out / "signals/latest.md").read_text()
+    assert "open候補なし" not in signals and "| rx_period_expiry | 2 |" not in signals
+    assert signals.count("| rx_period_expiry | 1 |") == min(visible, 200)
+    assert ("truncated:" in signals) == (visible > 200)
+    records = _jsonl(out)
+    listed = [row for row in records if row["type"] == "signal"]
+    assert len(listed) == min(visible, 200) and all(row["project_id"] == 1 for row in listed)
+    assert [row["total"] for row in records if row["type"] == "signals_truncated"] == (
+        [visible] if visible > 200 else [])
+    stats = (out / "stats/latest.md").read_text().splitlines()
+    metric = next(line for line in stats if "mcs.signals.open" in line)
+    assert f"| {visible} | count |" in metric
 
 
 def test_not_a_snapshot(tmp_path):
