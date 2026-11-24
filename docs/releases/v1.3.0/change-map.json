@@ -169,7 +169,7 @@
     "semantic-drain-throughput": {
       "title": "Jevだけで終わる意味解析・QCの滞留を常駐workerがまとめて処理",
       "path": "changes/archive/1.3.0/semantic-drain-throughput.json",
-      "sha256": "b4241672896be0ba6d67a73db6ec6eb6f3b933ba74b18942bb6a3cad97dd2215"
+      "sha256": "802e6a13ac9d467ec952089b8175d08aff1687275a9e5d36ff7c89af1f8e167e"
     }
   }
 }
