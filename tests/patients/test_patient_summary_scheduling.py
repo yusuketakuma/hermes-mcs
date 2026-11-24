@@ -171,7 +171,8 @@ def test_quality_scope_tracks_actual_fact_provenance_without_notification_enforc
     source = {'source': 'chat', 'body_state': 'full', 'body_text': 'synthetic',
               'canonical_context': canonical}
     assert patient_context_quality_receipts._quality_scope_allowed(led.db, 1, {}, [source]) is allowed
-    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 2, {}, [source])
+    # Jev's patient scope never rejects a record: outside it the check is an out_of_scope skip.
+    assert patient_context_quality_receipts._quality_scope_allowed(led.db, 2, {}, [source]) is allowed
     with led.db:
         led.artifact_add_tx('semantic_control', 'paused', project_id=1)
     assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 1, {}, [source])

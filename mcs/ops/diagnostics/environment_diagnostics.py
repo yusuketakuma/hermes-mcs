@@ -302,9 +302,11 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                         "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                         "no_api_key")
     elif sem["mode"] == "off" and _extract_qc_requested(cfg):
+        # an explicit off is never overridden by a key, so only an omitted mode is fixed by one
+        remedy = ("semantic.mode を off 以外に変更してください" if "mode" in cfg["semantic"] else
+                  "TYPESAFE_API_KEYを登録するか、semantic.mode を設定してください")
         warnings.append("抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません。"
-                        "使う場合は semantic.mode を設定するか、TYPESAFE_API_KEYを登録してください。"
-                        "エラーコード: extract_qc_inactive")
+                        f"使う場合は{remedy}。エラーコード: extract_qc_inactive")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
     labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
     if labels:

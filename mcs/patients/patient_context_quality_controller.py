@@ -618,8 +618,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                              and (actual.get('route_provider') or not route['provider']))
     if errors:
         return "deferred", None
-    # Jev cannot be asked: semantic off, or the facility review withholds Jev.
-    jev_off = scfg["mode"] == "off" or scfg["jev_held"]
+    # Jev cannot be asked: semantic off, the patient outside Jev's scope, or the
+    # facility review withholds Jev.
+    out_of_scope = semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(cfg)[0], pid)
+    jev_off = scfg["mode"] == "off" or out_of_scope or scfg["jev_held"]
     optional_quality = local_quality
     if not local_quality and (not cloud_key or jev_off):
         try:
@@ -636,8 +638,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError):
             return "unknown", None
-    if (not cloud_key and not optional_quality or jev_off and not optional_quality
-            or semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(cfg)[0], pid)):
+    if not cloud_key and not optional_quality or jev_off and not optional_quality:
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
         scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
@@ -648,6 +649,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     except (semantic_jev.JevError, ValueError, sqlite3.Error):
         return "deferred", None
     skip_reason = ("disabled" if optional_quality and scfg['mode'] == 'off' else
+                   patient_context_quality_receipts.OUT_OF_SCOPE if out_of_scope else
                    semantic_jev.REVIEW_HELD if scfg["jev_held"] else
                    "not_configured" if not key else
                    "disabled" if scfg["daily_request_budget"] <= 0 else
@@ -694,7 +696,11 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     live_used = jev_usage_today(ledger)
                     live_cap = live_semantic["daily_request_budget"] - math.ceil(
                         live_semantic["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
+                    live_out_of_scope = semantic_policy.jev_scope_excludes(
+                        semantic_policy.jev_scope_policy(live)[0], pid)
                     still_skipped = ((skip_reason == "not_configured" and not live_key)
+                                     or (skip_reason == patient_context_quality_receipts.OUT_OF_SCOPE
+                                         and live_out_of_scope)
                                      or (skip_reason == semantic_jev.REVIEW_HELD and live_semantic["jev_held"])
                                      or (skip_reason == "disabled" and (live_semantic["daily_request_budget"] <= 0
                                          or optional_quality and live_semantic['mode'] == 'off'))
@@ -713,11 +719,12 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             if (patient_context_refresh_state.time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
                     or live_key != key or problems or live_semantic["mode"] == "off" and not optional_quality
                     # a run that asks Jev stops once the live config no longer lets Jev be asked
-                    or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"])
+                    or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"]
+                                                or semantic_policy.jev_scope_excludes(
+                                                    semantic_policy.jev_scope_policy(live)[0], pid))
                     or paused(ledger.db, pid)
                     or cloud_policy.stopped(ledger)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
-                    or semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(live)[0], pid)
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
                 denied = True
                 return False

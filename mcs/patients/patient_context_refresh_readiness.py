@@ -503,7 +503,10 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
             cap = scfg["daily_request_budget"] - math.ceil(
                 scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
             view = SimpleNamespace(db=db)
+            # Outside Jev's patient scope a SKIPPED check stays final (OUT_OF_SCOPE).
             recheck_available = bool(not errs and semantic_policy.jev_available(scfg, key)
+                                     and not semantic_policy.jev_scope_excludes(
+                                         semantic_policy.jev_scope_policy(cfg)[0], pid)
                                      and cap > jev_usage_today(view)
                                      and not semantic_runtime.circuit_open(view))
         except (ValueError, TypeError, sqlite3.Error, semantic_jev.JevError):
@@ -902,6 +905,7 @@ def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
     from mcs_queries import attachment_ocr_coverage, paused
     db = ledger.db
     policy, errors = semantic_policy.runtime_config(cfg)
+    policy = semantic_policy.patient_policy(policy, cfg, pid)
     if (errors or paused(db, pid) or patient_context_refresh_state._out_of_scope(snapshot)
             or snapshot['dependencies'].get('unscoped_gap', not snapshot['dependencies']['complete'])):
         return ()
@@ -958,6 +962,7 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
         if observed_out is not None:
             observed_out["snapshot"] = snapshot
         policy, errors = semantic_policy.runtime_config(cfg)
+        policy = semantic_policy.patient_policy(policy, cfg, pid)
         coverage = snapshot["dependencies"].get("coverage", {})
         repairable = (allow_dependency_repair and coverage.get("terminal") == 0
                       and coverage.get("repairable", 0) > 0
