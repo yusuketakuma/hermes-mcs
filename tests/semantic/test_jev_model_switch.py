@@ -297,3 +297,40 @@ def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
     default = semantic_policy.runtime_config(_cfg("shadow", summary_mode="off", loop_mode="off"))[0]
     assert not semantic_store._valid_primary_assessment(row["content"], row["meta"], row["model"], 1, fp,
                                                         policy, default)
+
+
+def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_path):
+    """A pinned env's pre-switch rows said JEV_MODEL while the policy pinned NEXT:
+    the label cannot be trusted, so the job re-evaluates instead of failing."""
+    import time as clock
+
+    import semantic_drain
+    import semantic_policy
+    import semantic_store
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    from semantic_policy import SCHEMA_VERSION
+    from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+
+    class NextJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            return {**super().evaluate(state, questions, deadline), "model": NEXT}
+
+    cfg = _cfg("shadow", summary_mode="off", loop_mode="off", model=NEXT)
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1)]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": bundle["source_fingerprint"],
+            "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
+            "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION, "schema": SCHEMA_VERSION,
+            "jev_input": semantic_store.assessment_input(bundle, 1, scfg),
+            "technical_status": "error", "jev_requests": 1}
+    db.artifact_add("semantic_assess",
+                    json.dumps({"target_message_id": 1, "verdicts": {}}, ensure_ascii=False),
+                    project_id=1, message_id=1, model=jev.JEV_MODEL, meta=meta)
+    client = NextJev()
+    semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
+                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+    assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0

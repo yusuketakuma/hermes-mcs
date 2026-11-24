@@ -529,6 +529,18 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 prefiltered=(prev["meta"].get("skipped") == "prefilter_no_signal"
                              and semantic_store._verified_prefilter(ledger, pid, mid)))
                 and semantic_store._valid_primary_history(prev["content"], prev["meta"], previous, mid, fp, policy, scfg)))
+            if not valid and prev is not None:
+                # Rows written while JEV_MODEL pinned a different model kept the
+                # env name as their model label; they fail the in-use check but
+                # are not corrupt. Re-evaluate under the model in use instead of
+                # failing the job. A mismatched label never stands for itself.
+                in_use = jev.model_in_use(scfg)
+                if in_use != jev.JEV_MODEL and prev["model"] == jev.JEV_MODEL and semantic_store._valid_primary_assessment(
+                        prev["content"], dict(prev["meta"], model=in_use), in_use,
+                        mid, fp, policy, scfg,
+                        prefiltered=(prev["meta"].get("skipped") == "prefilter_no_signal"
+                                     and semantic_store._verified_prefilter(ledger, pid, mid))):
+                    prev, valid = None, True
         except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
             valid = False
         if not valid:
