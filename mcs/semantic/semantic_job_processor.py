@@ -560,7 +560,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if target_verdicts is None:
                 error = getattr(jev_client, "last_error", None)
                 reason = semantic_audit.jev_skip_reason(error)
-                if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
+                if reason == "daily_budget" and waits_for_jev_quota(scfg, lane, job["kind"]):
                     # _assess_target kept the answers obtained so far on its
                     # wait row; the next quota window asks only the rest.
                     diagnostics["jev_wait"] = reason
@@ -1481,13 +1481,15 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         # back off hourly so a held LLM cannot re-spend the Jev budget
         # every minute
         return "deferred_backoff" if jev_sent() else "deferred"
-    except runtime.RuntimeBudgetShort:
+    except runtime.RuntimeBudgetShort as error:
         # earlier calls of this pass completed and persisted; the next
         # one could not start in the remaining budget — resume next
         # tick from the durable stages without charging an attempt.
         # Distinct from "deferred" so run_due stops the pass: the
         # remaining budget cannot fit another long generation either
         _why(diagnostics, "budget_short")
+        if not jev_sent() and not llm_started:
+            diagnostics["not_sent"] = error.stage
         return "deferred_short"
     except runtime.RuntimeBudget as e:
         _why(diagnostics, f"budget_{e.stage}")

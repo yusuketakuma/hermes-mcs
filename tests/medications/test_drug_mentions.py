@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import sqlite3
+from types import SimpleNamespace
 import time
 
 import pytest
@@ -11,6 +12,18 @@ import drug_mentions
 from medications_testkit import DOCUMENT, _dictionary, store
 
 __all__ = ["store"]
+
+
+def _counting(dictionary, scans):
+    """A dictionary stand-in whose alias table records each scan."""
+
+    class Counted(dict):
+        def values(self):
+            scans.append(1)
+            return super().values()
+
+    return SimpleNamespace(dict_id=dictionary.dict_id, sha256=dictionary.sha256,
+                           entries=Counted(dictionary.entries))
 
 
 def configured(store, tmp_path, document=None, *, active=True):
@@ -156,13 +169,45 @@ def test_candidate_cap_reports_omission_without_selecting_identity(store, tmp_pa
 
 
 def test_caps_and_deadline_never_emit_partial_matches(store, tmp_path, monkeypatch):
-    cfg = configured(store, tmp_path)
+    doc = deepcopy(DOCUMENT)
+    doc["dict_id"] = "fictional-caps"
+    cfg = configured(store, tmp_path, doc)
     deadline = time.monotonic() + 10
     assert drug_mentions.build(store.db, cfg, "キラナ", deadline=time.monotonic() - 1)["status"] == "incomplete"
     monkeypatch.setattr(drug_mentions, "MAX_ALIASES", 1)
     result = drug_mentions.build(store.db, cfg, "キラナ", deadline=deadline)
     assert result["status"] == "incomplete" and result["dictionary"] is None and result["matches"] == []
     assert drug_mentions.validate(result, "キラナ")
+
+
+def test_over_limit_dictionary_is_cached_instead_of_rescanned(store, tmp_path, monkeypatch):
+    doc = deepcopy(DOCUMENT)
+    doc["dict_id"] = "fictional-over-limit"
+    cfg = configured(store, tmp_path, doc)
+    dictionary, _ = drug_map.active_dictionary(store.db, cfg)
+    scans = []
+    wrapped = _counting(dictionary, scans)
+    monkeypatch.setattr(drug_map, "active_dictionary", lambda *args: (wrapped, "active"))
+    monkeypatch.setattr(drug_mentions, "MAX_ALIASES", 1)
+    deadline = time.monotonic() + 10
+    for _ in range(2):
+        result = drug_mentions.build(store.db, cfg, "キラナ", deadline=deadline)
+        assert result["status"] == "incomplete" and drug_mentions.validate(result, "キラナ")
+    assert scans == [1]
+
+
+def test_deadline_interrupted_scan_is_retried_not_cached(store, tmp_path):
+    doc = deepcopy(DOCUMENT)
+    doc["dict_id"] = "fictional-deadline-retry"
+    cfg = configured(store, tmp_path, doc)
+    dictionary, _ = drug_map.active_dictionary(store.db, cfg)
+    scans = []
+    wrapped = _counting(dictionary, scans)
+    deadline = time.monotonic() + 10
+    assert drug_mentions._alias_table(wrapped, time.monotonic() - 1) is None
+    assert drug_mentions._alias_table(wrapped, deadline) is not None
+    assert drug_mentions._alias_table(wrapped, deadline) is not None
+    assert scans == [1, 1]
 
 
 def test_generation_change_discards_prepared_hints(store, tmp_path, monkeypatch):

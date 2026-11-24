@@ -1887,9 +1887,9 @@ def _current_tally(ledger, start, attribute, now):
     if before is not None:
         if before == _tally_precheck(ledger.db, start) and not tally.invalid:
             tally.precheck = before
-        else:
-            # A concurrent write must not attach a fresh stamp to an older total.
-            setattr(ledger, attribute, None)
+        # Otherwise a concurrent write must not attach a fresh stamp to an older total. The
+        # tally itself stays: unstamped, its next use re-verifies the hashed rows in a new
+        # snapshot (through the write-time guard when installed) before extending it.
     return tally
 
 

@@ -549,3 +549,18 @@ def test_patient_policy_turns_semantic_off_only_outside_the_jev_scope():
     assert not errors
     assert semantic_policy.patient_policy(policy, cfg, 1) is policy
     assert semantic_policy.patient_policy(policy, cfg, 2) == {**policy, "mode": "off"}
+
+
+@pytest.mark.parametrize("semantic, key, held, cause", [
+    (None, False, False, "no_key"),
+    (None, True, False, None),
+    (None, True, True, "review_held"),
+    ({"mode": "off"}, True, False, "explicit"),
+    ({"mode": "bogus"}, True, False, "invalid"),
+    ({"mode": "assist", "project_ids": [1]}, False, False, None),
+])
+def test_off_cause_follows_the_semantic_config_decision(semantic, key, held, cause):
+    import semantic_policy
+    cfg = {} if semantic is None else {"semantic": semantic}
+    status = (lambda: {"state": "pending", "auto_enable": False}) if held else _no_review
+    assert semantic_policy.off_cause(cfg, key_present=key, transfer_status=status) == cause

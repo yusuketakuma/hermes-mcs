@@ -97,10 +97,8 @@ def _background_semantic(ledger, stop=None):
     import semantic_drain
     cfg = load_config()
     jev_only = _jev_only_semantic(cfg)
-    # The drain's wall-clock cap is its own: each job keeps its per-job
-    # budget inside it, and a Jev-only job needs only Jev start room.
-    budget = (_JEV_DRAIN_BUDGET_S if jev_only
-              else semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30)
+    # One job's room: its own budget plus the margin to retake the lock and commit.
+    budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
     # Called only when this worker has no carry work: a bounded wait is
     # free capacity the old non-blocking try always missed under a busy
     # lock. Keep room for one job so an acquired lock is never spent on
@@ -117,12 +115,18 @@ def _background_semantic(ledger, stop=None):
     if lock_fd is None:
         return {"skipped": "lock_busy"}
     try:
-        deadline = time.monotonic() + budget
+        now = time.monotonic()
+        # The drain cap only closes the window for STARTING jobs; a job
+        # already in flight keeps its own budget to retake the lock and commit.
+        start_by = now + _JEV_DRAIN_BUDGET_S if jev_only else None
+        deadline = (start_by or now) + budget
         if stop is not None:
             deadline = min(deadline, stop)
+            start_by = None if start_by is None else min(start_by, stop)
         result = {"errors": []}
         out = semantic_drain.run_due(
             ledger, cfg, result, deadline, max_jobs=_JEV_DRAIN_MAX_JOBS if jev_only else 1,
+            start_by=start_by,
             cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog",
             prioritize_patients=cloud_inference.resolve_cloud_settings(cfg)["mode"] == "on")
         out["errors"] = result["errors"]

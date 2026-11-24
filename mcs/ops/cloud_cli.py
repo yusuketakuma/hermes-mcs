@@ -917,7 +917,7 @@ def command(args):
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["refusal"] is None else 1
         if action in ("stop", "resume", "local-rebuild-approve", "context-reset"):
-            from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
+            from writer_lock import code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
                 print("--confirm-human と --reason による人の確認が必要です")
@@ -969,11 +969,9 @@ def command(args):
             path = Path(mcs_util.HOME) / "data" / "ledger.db"
             if path.is_symlink() or not path.is_file():
                 raise ValueError("ledger_unavailable")
-            lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
-            if lock_fd is None:
-                lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
-                    expected_code_stamp=expected_code,
-                    marker_path=str(path.parent / "update_in_progress.marker"))
+            import locked_command
+            lock_fd = locked_command.wait_writer(str(path.parent / "run.lock"),
+                                                 str(path.parent / "update_in_progress.marker"), expected_code)
             if lock_fd is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
