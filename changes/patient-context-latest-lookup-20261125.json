@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストの健全性観測が大きな台帳で観測上限に達する問題を修正",
+  "summary": "doctor の患者コンテキスト観測が observation_limit（unknown）になりにくくなりました。最新行の照合を、患者の新しい履歴を候補ごとに辿る相関副問合せから、同じ種別の現行行を一回だけ集計する方式に変えました。集計結果・表示は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "対象は lane_metrics・品質集計・状態集計の3経路が共有する最新行判定です。",
+    "同じ患者に同じ種別の履歴が多い場合でも、履歴行数に比例した一回の読み取りで済みます。",
+    "観測処理による書き込み・公開の動作には変更ありません。"
+  ],
+  "refs": ["mcs/patients/patient_context_status.py", "mcs/patients/patient_context_refresh_readiness.py"]
+}

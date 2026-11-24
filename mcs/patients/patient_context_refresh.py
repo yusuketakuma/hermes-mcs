@@ -280,6 +280,12 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
                 return None
             ledger.db.commit()
             return content, patient_context_refresh_state._artifact_meta(patient_context_refresh_state.PROGRESS, meta, None)
+        except sqlite3.Error as exc:
+            ledger.db.rollback()
+            # An exhausted writer wait is lock contention, not a read failure.
+            if _locked_sqlite(exc):
+                return None
+            raise
         except BaseException:
             ledger.db.rollback()
             raise
@@ -378,6 +384,11 @@ def _note_generation_denial(observed_out, quota):
         observed_out['generation_reason'], observed_out['unverified_records'] = reason, records
     elif held == reason:
         observed_out['unverified_records'] = max(observed_out['unverified_records'], records)
+
+
+def _locked_sqlite(exc):
+    """Whether ``exc`` is an exhausted lock wait (busy/locked), not a stored-state fault."""
+    return getattr(exc, 'sqlite_errorcode', 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 
 def _raise_if_systemic(unreadable, scanned):
@@ -644,10 +655,14 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
         if observed_out is not None and 'scan_refusal' not in observed_out:
             observed_out['scan_refusal'] = 'scan_interrupted'
         best, selected, covered = {}, None, False
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
         scan_interrupts += 1
         if observed_out is not None:
-            observed_out['scan_refusal'] = 'read_sqlite'
+            # Lock waits and deadline aborts are interrupted scans, not read faults.
+            observed_out['scan_refusal'] = ('read_sqlite'
+                                            if not _locked_sqlite(exc)
+                                            and getattr(exc, 'sqlite_errorcode', 0) & 0xFF != sqlite3.SQLITE_INTERRUPT
+                                            else 'scan_interrupted')
         best, selected, covered = {}, None, False
     except OSError:
         scan_interrupts += 1
@@ -977,8 +992,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 ledger.db.commit()
             # Our scheduling write participates in the same publisher fence as later work.
             frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
-        except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
+        except patient_context_refresh_sources._ScanInterrupted:
             ledger.db.rollback()
+            stats['scan_refusal'] = 'scan_interrupted'
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except sqlite3.Error as exc:
+            ledger.db.rollback()
+            # Lock waits and deadline aborts are interrupted scans, not read faults.
+            stats['scan_refusal'] = ('read_sqlite'
+                                     if not _locked_sqlite(exc)
+                                     and getattr(exc, 'sqlite_errorcode', 0) & 0xFF != sqlite3.SQLITE_INTERRUPT
+                                     else 'scan_interrupted')
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except OSError:
+            ledger.db.rollback()
+            stats['scan_refusal'] = 'read_io'
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         except BaseException:
             ledger.db.rollback()
