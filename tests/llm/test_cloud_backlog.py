@@ -1173,7 +1173,8 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
     import extract_llm
     import mcs_util
     state, _ = carry_worker
-    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4},
+           "extract": {"patient_context": {"enabled": False}}}
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
     item = object()
@@ -1201,6 +1202,38 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert records[-1]['event'] == 'cloud_worker_retired'
     assert records[-1]['reason'] == 'capacity_reduced'
+
+
+@pytest.mark.parametrize("index,context_on,retires", [
+    (3, True, True), (2, True, True),   # the context share takes two of four places back
+    (1, True, False),
+    (3, False, False),                  # with patient context off the whole target stays
+])
+def test_worker_gives_back_the_places_of_the_context_share(carry_worker, monkeypatch, capsys,
+                                                           index, context_on, retires):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4},
+           "extract": {"patient_context": {"enabled": context_on}}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+
+    def extract(ledger, **kwargs):
+        state.events.append("extract")
+        state.alive = False
+        return {"done": 0}
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    with legacy_cloud_routes():
+        backlog.worker(991, index=index)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    if retires:
+        assert state.events == []
+        assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "capacity_reduced"}
+    else:
+        assert state.events == ["extract"]
+        assert "cloud_worker_retired" not in [record["event"] for record in records]
 
 
 def test_worker_settles_paid_carry_before_a_closed_pool_gate_retires_it(carry_worker, monkeypatch, capsys):
@@ -1254,7 +1287,11 @@ def test_low_memory_target_retires_idle_worker_without_work(carry_worker, monkey
 
 def test_memory_target_tolerates_one_resident_worker(carry_worker, monkeypatch):
     import extract_llm
+    import mcs_util
     state, _ = carry_worker
+    # Patient context off: the memory sample alone sets this worker's place.
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {
+        "cloud_llm": {"mode": "on", "project_ids": [1]}, "extract": {"patient_context": {"enabled": False}}})
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: 1)
 
     def extract(*a, **kw):

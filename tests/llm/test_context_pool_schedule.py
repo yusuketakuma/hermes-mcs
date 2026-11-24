@@ -565,6 +565,30 @@ def test_context_child_leaves_one_place_to_an_opened_window(monkeypatch, tmp_pat
         assert names == ["patient_context_pass"] * 3
 
 
+def test_context_child_leaves_its_place_after_a_window_opens_during_its_pass(monkeypatch, tmp_path):
+    events, clock, window = [], SimpleNamespace(now=0.0), [False]
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 2})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+    monkeypatch.setattr(cloud_backlog, "backlog_admits", lambda *a: window[-1])
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 4)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: setattr(clock, "now", clock.now + 60), monotonic=lambda: clock.now))
+
+    def refresh(*args, **kwargs):
+        window.append(True)      # the stored-message window opens while this pass runs
+        return {"status": "complete", "done": 1}
+    monkeypatch.setattr(resident, "_background_context_refresh", refresh)
+    cloud_backlog._context_worker(object(), initial, 1)
+    assert [name for name, _ in events] == ["patient_context_pass", "cloud_worker_retired"]
+    assert events[-1][1] == {"reason": "capacity_reduced"}
+
+
 def test_context_child_exits_when_patient_context_is_switched_off(monkeypatch, tmp_path):
     events, cfg = [], {}
     initial = (False, "synthetic-current")

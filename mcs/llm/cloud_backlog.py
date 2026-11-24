@@ -354,11 +354,12 @@ def _backlog_open(root, cfg, settings, ledger):
         return False
 
 
-def capacity_reduced(index, limit):
-    """Whether an indexed worker is past the pool's memory target; one worker of
-    hysteresis, because its own resident memory is in the sample."""
+def capacity_reduced(index, limit, reserved=0):
+    """Whether an indexed worker is past the pool's memory target less the ``reserved`` places
+    another pool keeps; one worker of hysteresis on the memory sample, because its own resident
+    memory is in it, and none on the exact reserved places."""
     capacity = memory_workers(limit)
-    return index >= min(limit, capacity + bool(capacity))
+    return index >= min(limit, capacity + bool(capacity)) - reserved
 
 
 class CloudBacklogPool:
@@ -650,6 +651,7 @@ def worker(parent, *, index=None, context_only=False):
     import cloud_inference
     import cloud_policy
     import extract_llm
+    import patient_context_refresh
     import semantic_drain
     import semantic_runtime
     import writer_lock
@@ -749,7 +751,11 @@ def worker(parent, *, index=None, context_only=False):
                               else "capacity_reduced" if index >= settings["max_concurrency"] else None)
                     if reason is None and time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        if capacity_reduced(index, settings["max_concurrency"]):
+                        # Patient context comes first in the shared target: workers started
+                        # while it was off give back the places its share now takes.
+                        reserved = (context_workers(settings["max_concurrency"], True)
+                                    if patient_context_refresh.options(cfg)["enabled"] else 0)
+                        if capacity_reduced(index, settings["max_concurrency"], reserved):
                             reason = "capacity_reduced"
                         elif not backlog_admits(HOME, cfg, settings, ledger):
                             # The pool would not start this worker now (a spend hold, no key or
