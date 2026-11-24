@@ -351,6 +351,17 @@ _PROBES = [
 ]
 
 
+def _unevaluated_reason(summary, client) -> str:
+    """Name why a probe went unevaluated, from codes only (never a response body)."""
+    error = getattr(client, "last_error", None)
+    reason = f"reason={summary.get('_claim_audit_reason') or 'unknown'}"
+    if error is not None:
+        reason += f" error={getattr(error, 'kind', type(error).__name__)}"
+        if getattr(error, "detail", ""):
+            reason += f"/{error.detail}"
+    return reason
+
+
 def cmd_detect(args) -> int:
     """Run fixed live probes under the shared MCS per-HTTP budget."""
     key = jev.api_key()
@@ -360,6 +371,7 @@ def cmd_detect(args) -> int:
     with jev.live_client(key, operation="semantic_detect", job_budget=120) as client:
         tp = fp = fn = tn = unevaluated = 0
         for p in _PROBES:
+            client.last_error = None
             findings, evaluated = audit_claims(
                 client, p["bundle"], p["summary"], time.monotonic() + 60)
             rejected = any(f["code"] in ("claim_contradicts",
@@ -382,7 +394,8 @@ def cmd_detect(args) -> int:
             print(f"  {p['name']:20s} expect_reject={p['expect_reject']} "
                   f"-> {'REJECT' if rejected else 'pass'} "
                   f"({[f['code'] for f in findings]}) "
-                  f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}")
+                  f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}"
+                  f"{'' if evaluated else ' ' + _unevaluated_reason(p['summary'], client)}")
     print(f"detection: TP={tp} FP={fp} FN={fn} TN={tn} unevaluated={unevaluated} "
           f"(requests used: {client.requests_made})")
     return 0 if fn == 0 and fp == 0 and unevaluated == 0 else 1

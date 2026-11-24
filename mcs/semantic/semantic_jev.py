@@ -26,7 +26,7 @@ Contract enforced here (spec MCS-REFACTOR-FIRST-20260920 §13):
   state text as data, not commands (prompt-injection boundary, AT-044)
 
 Wire shape (gate G2 passed 2026-09-21 with one synthetic POST and one GET,
-fixed model echo jev-1.13.0 — docs/dev-records/acceptance-map.md; re-check
+fixed model echo jev-1.13.0 — docs/dev-records/acceptance-map.md; jev-1.14.0 since 2026-11; re-check
 with ``--smoke --live`` after a wire change): request {"model","state",
 "questions"} (choice criteria on each question) -> response
 {"model","answers":{qid: {"type": ..., ...}}, "usage":
@@ -58,7 +58,7 @@ from bounded_http import MAX_RESPONSE_BYTES
 # keeps only the Jev-side policy: which endpoints a key may be sent to.
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-JEV_MODEL = "jev-1.13.0"
+JEV_MODEL = "jev-1.14.0"
 DAILY_REQUEST_LIMIT = 10000
 # upper bound of a configured daily_request_budget; config and the live
 # tools must reject the same values, so both read it from here
