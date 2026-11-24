@@ -293,7 +293,8 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
         if restart_intent_active(intent_dir, deadline=until):
             record_writer_refusal("restart_intent_active", "write_lock")
             return None
-        time.sleep(RUN_LOCK_POLL_S)
+        # The last poll falls on the deadline, not a whole interval past it.
+        time.sleep(min(RUN_LOCK_POLL_S, max(0.0, until - time.monotonic())))
         if os.path.lexists(marker_path):
             # An update started: leave now instead of holding a waiting
             # child that its quiesce must see gone (IA-078).
