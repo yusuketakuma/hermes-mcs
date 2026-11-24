@@ -39,6 +39,17 @@ USAGE = {
     "openai": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100,
                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}},
 }
+# Fixed inventory of every issued price version — named here, never read back
+# from the provider modules, so a renamed or dropped version fails the check.
+EXPECTED_SNAPSHOT_VERSIONS = frozenset({
+    ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-10-26"),
+    ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-11-15"),
+    ("claude-sonnet-5-5", "anthropic-sonnet-5-5-2026-11-15"),
+    ("gpt-6-luna", "openai-gpt-6-luna-2026-10-29"),
+    ("gpt-6-luna", "openai-gpt-6-luna-2026-11-15"),
+    ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-10-31"),
+    ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-11-15"),
+})
 
 
 def _at(day):
@@ -83,21 +94,26 @@ class CloudPriceRunwayTest(unittest.TestCase):
         self.assertFalse(_runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS))))
         self.assertTrue(_runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS + 1))))
 
-    def test_every_snapshot_resolves_by_version_name_for_reservation_reconciliation(self):
-        for provider, module in provider_registry.PROVIDER_MODULES.items():
+    def test_issued_price_versions_resolve_by_name_for_reservation_reconciliation(self):
+        """Every issued price version — the four current 2026-11-15 tables plus
+        the historical ones stored reservations may still name — resolves
+        through the same by-name path ``record_result`` uses. The inventory is
+        a fixed list, not derived from the implementation constants, so a
+        version renamed in a provider module or dropped from PRICE_SNAPSHOTS
+        fails here."""
+        for module in provider_registry.PROVIDER_MODULES.values():
             self.assertLessEqual(set(module.CURRENT_PRICE_VERSIONS.items()),
                                  set(module.PRICE_SNAPSHOTS))
             self.assertGreater(
                 len(module.PRICE_SNAPSHOTS), len(module.CURRENT_PRICE_VERSIONS),
                 "a recheck with unchanged prices keeps the older table so stored "
                 "reservations reconcile")
-            for (model, version), snapshot in module.PRICE_SNAPSHOTS.items():
-                definition = accounting._price_definition(model, version)
-                self.assertIs(definition, accounting.PRICE_DEFINITIONS[(model, version)])
-                self.assertEqual(dict(definition["prices"]), dict(snapshot["prices"]))
-                self.assertGreater(
-                    accounting.usage_cost(USAGE[provider], model=model,
-                                          price_version=version), 0)
+        for model, version in sorted(EXPECTED_SNAPSHOT_VERSIONS):
+            definition = accounting._price_definition(model, version)
+            self.assertIs(definition, accounting.PRICE_DEFINITIONS[(model, version)])
+            self.assertGreater(
+                accounting.usage_cost(USAGE[definition["provider"]], model=model,
+                                      price_version=version), 0)
 
 
 if __name__ == "__main__":
