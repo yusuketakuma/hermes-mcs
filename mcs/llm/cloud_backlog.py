@@ -345,6 +345,15 @@ def backlog_admits(root, cfg, settings, ledger):
     return not errors and selection is not None
 
 
+def _backlog_open(root, cfg, settings, ledger):
+    """``backlog_admits`` for the context side: an error there is the stored-message pool's to
+    report, and never stops or retires a context child, so it reads as closed."""
+    try:
+        return backlog_admits(root, cfg, settings, ledger)
+    except Exception:
+        return False
+
+
 def capacity_reduced(index, limit):
     """Whether an indexed worker is past the pool's memory target; one worker of
     hysteresis, because its own resident memory is in the sample."""
@@ -395,11 +404,12 @@ class CloudBacklogPool:
         return max(live, min(self.share, memory)) if self.admitted else live
 
     def _sync(self, cfg, ledger, reserve, starts):
-        self.spawned = 0
         now = time.monotonic()
         if now - self.last_sync < 10:
+            # A throttled pool keeps the starts of its last decision in the shared budget.
             return False
         self.last_sync = now
+        self.spawned = 0
         try:
             self._decide(cfg, ledger, now, reserve, starts)
         except Exception:
@@ -434,7 +444,7 @@ class CloudBacklogPool:
         if self.context_only:
             # A fixed cap whose share the stored-message workers already leave free:
             # no hysteresis, or a pool down to one child of two would never refill.
-            self.share = context_workers(settings["max_concurrency"], backlog_admits(
+            self.share = context_workers(settings["max_concurrency"], _backlog_open(
                 self.root, cfg, settings, ledger))
             target = min(target, self.share)
         elif self.children and target > 0 and abs(target - len(self.children)) <= 1 and not ramping:
@@ -1083,11 +1093,11 @@ def _context_worker(ledger, initial, index):
                     return
                 if index is not None and time.monotonic() - capacity_checked >= 60:
                     capacity_checked = time.monotonic()
-                    # Past the context cap, or past the share a stored-message window that opened
-                    # after this child started leaves it (checked only for a child it can retire).
+                    # Past the share a stored-message window that opened after this child started
+                    # leaves it (checked only for a child it can retire).
                     limit = settings["max_concurrency"]
-                    if (capacity_reduced(index, limit) or index >= CONTEXT_WORKERS_MAX
-                            or index >= context_workers(limit, True) and backlog_admits(HOME, cfg, settings, ledger)):
+                    if (capacity_reduced(index, limit)
+                            or index >= context_workers(limit, True) and _backlog_open(HOME, cfg, settings, ledger)):
                         _event("cloud_worker_retired", reason="capacity_reduced")
                         return
                 if role is None:

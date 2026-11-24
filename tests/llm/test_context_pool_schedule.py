@@ -340,11 +340,11 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
     assert "synthetic-private" not in json.dumps(events)
 
 
-@pytest.mark.parametrize("index,dropped_to,passes", [(0, 1, 3), (1, 1, 3), (1, 0, 1), (0, 0, 1), (2, 10, 0)])
+@pytest.mark.parametrize("index,dropped_to,passes", [(0, 1, 3), (1, 1, 3), (1, 0, 1), (0, 0, 1)])
 def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path, index, dropped_to, passes):
     """Two workers spawned at capacity 10; a drop retires the indices past it (one worker of
     hysteresis, as the backlog workers) at the next 60 s check, after the pass in hand has
-    returned. An index past the context cap of two retires whatever the memory."""
+    returned."""
     events, clock = [], SimpleNamespace(now=0.0)
     capacity = {"value": 10}
     initial = (False, "synthetic-current")
@@ -585,3 +585,25 @@ def test_context_child_exits_when_patient_context_is_switched_off(monkeypatch, t
     monkeypatch.setattr(resident, "_background_context_refresh", refresh)
     cloud_backlog._context_worker(object(), initial, 0)
     assert [name for name, _ in events] == ["patient_context_pass"]
+
+
+def test_a_failing_window_check_never_retires_a_context_child(monkeypatch, tmp_path):
+    events, clock = [], SimpleNamespace(now=0.0)
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 2})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+
+    def broken(*args):
+        raise sqlite3.OperationalError("synthetic")
+    monkeypatch.setattr(cloud_backlog, "backlog_admits", broken)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 3)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: setattr(clock, "now", clock.now + 60), monotonic=lambda: clock.now))
+    monkeypatch.setattr(resident, "_background_context_refresh", lambda *a, **kw: {"status": "complete", "done": 1})
+    cloud_backlog._context_worker(object(), initial, 1)
+    assert [name for name, _ in events] == ["patient_context_pass"] * 3

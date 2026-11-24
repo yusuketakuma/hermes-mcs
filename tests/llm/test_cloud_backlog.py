@@ -1736,6 +1736,21 @@ def test_an_open_window_keeps_one_place_when_the_limit_is_small(tmp_path, monkey
         owner.close()
 
 
+def test_a_failing_window_check_leaves_the_context_children_starting(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+
+    def broken(*args):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(backlog, "backlog_admits", broken)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        with pytest.raises(RuntimeError):
+            owner.sync(_reopened_cfg(4))     # the stored-message pool reports its own error
+        assert len(owner.children) == 2 and not owner.failed and owner.backlog.failed
+    finally:
+        owner.close()
+
+
 def test_pool_starts_at_most_two_children_per_decision(tmp_path, monkeypatch, pool_children):
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
     pool = backlog.CloudBacklogPool(tmp_path)
