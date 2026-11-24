@@ -451,7 +451,14 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
         if not dry:
             _defer_reload(RELOAD_SCRIPT, label, dst, paths=paths)
         return True
-    if agent_loaded(label, paths=paths):
+    loaded = agent_loaded(label, paths=paths)
+    if loaded is None:
+        # A probe that timed out or could not start is "unknown", never proof
+        # of absence: bootstrap over a loaded job fails to apply the new plist,
+        # yet a late `print` answering 0 would still record it as loaded.
+        note(f'常駐処理{label}: 読み込み状態を確認できないため、起動・再読込は行いません')
+        return False
+    if loaded:
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
             lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{uid}/{label}'])
