@@ -1588,7 +1588,8 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     import extract_llm
     (tmp_path / "data").mkdir()
     monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
-    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    # Room for both pools: the context children and the stored-message workers share it.
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(4, limit))
     spawned = []
 
     class Child:
@@ -1629,6 +1630,116 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     finally:
         owner.close()
     assert all(child.stopped for child in spawned)
+
+
+class _PoolChild:
+    """A synthetic child that stays alive until stopped."""
+    spawned = None
+
+    def __init__(self, command, **kw):
+        self.context_only = "--context-only" in command
+        self.stopped = False
+        type(self).spawned.append(self)
+
+    def poll(self):
+        return 0 if self.stopped else None
+
+    def terminate(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _reopened_cfg(limit):
+    return {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic", "max_concurrency": limit,
+                          "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+                          "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+
+
+def _decide_again(owner):
+    owner.last_sync -= 11
+    if owner.backlog is not None:
+        owner.backlog.last_sync -= 11
+
+
+@pytest.fixture
+def pool_children(tmp_path, monkeypatch):
+    import extract_llm
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(backlog, "helper_path", lambda *a, **kw: "/synthetic/helper")
+    spawned = []
+    monkeypatch.setattr(_PoolChild, "spawned", spawned)
+    monkeypatch.setattr(backlog.subprocess, "Popen", _PoolChild)
+    return spawned
+
+
+def test_context_pool_keeps_at_most_two_children(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 8}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(4):
+            owner.sync(cfg)
+            _decide_again(owner)
+        assert len(owner.children) == backlog.CONTEXT_WORKERS_MAX == 2
+        assert all(child.context_only for child in pool_children)
+    finally:
+        owner.close()
+
+
+def test_pool_starts_at_most_two_children_per_decision(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    pool = backlog.CloudBacklogPool(tmp_path)
+    try:
+        counts = []
+        with legacy_cloud_routes():
+            for _ in range(4):
+                pool.sync(_reopened_cfg(6))
+                counts.append(len(pool.children))
+                _decide_again(pool)
+        assert backlog.SPAWN_PER_DECISION == 2
+        assert counts == [2, 4, 6, 6]   # max_concurrency still bounds the pool
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("memory", [1, 2, 3, 5, 8])
+def test_both_pools_of_one_owner_share_one_memory_target(tmp_path, monkeypatch, pool_children, memory):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(memory, limit))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(6):
+            owner.sync(_reopened_cfg(8))
+            assert len(owner.children) + len(owner.backlog.children) <= memory
+            _decide_again(owner)
+        # The owner decides first, so its context children keep their share.
+        assert len(owner.children) == min(memory, 2)
+        assert len(owner.backlog.children) == memory - min(memory, 2)
+        # A context child that exits keeps its share while it restarts:
+        # the stored-message workers never take it.
+        owner.children[0].stopped = True
+        for _ in range(3):
+            _decide_again(owner)
+            owner.sync(_reopened_cfg(8))
+            assert len(owner.children) + len(owner.backlog.children) <= memory
+            assert len(owner.backlog.children) == memory - min(memory, 2)
+    finally:
+        owner.close()
+
+
+def test_stored_message_workers_use_the_whole_target_while_context_is_off(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(4, limit))
+    cfg = {**_reopened_cfg(8), "extract": {"patient_context": {"enabled": False}}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(cfg)
+            _decide_again(owner)
+        assert not owner.children and len(owner.backlog.children) == 4
+    finally:
+        owner.close()
 
 
 def test_pool_resolves_the_log_helper_only_when_it_starts_children(tmp_path, monkeypatch):
@@ -1808,12 +1919,12 @@ def test_pool_sync_reports_recovery_only_after_the_nested_pool_recovers(tmp_path
     owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
     outcomes = iter([RuntimeError("synthetic"), None])
 
-    def decide(cfg, ledger, now):
+    def decide(cfg, ledger, now, reserve):
         item = next(outcomes)
         if item:
             raise item
     monkeypatch.setattr(owner.backlog, "_decide", decide)
-    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now: None)
+    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now, reserve: None)
     with pytest.raises(RuntimeError):
         owner.sync({})
     owner.last_sync -= 11

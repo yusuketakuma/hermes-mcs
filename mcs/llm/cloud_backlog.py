@@ -312,6 +312,16 @@ def memory_workers(limit):
     return 0 if headroom is None else max(0, min(limit, headroom // _WORKER_BYTES))
 
 
+# Context children serialize on the patient selection lock, so more than two only wait on it.
+CONTEXT_WORKERS_MAX = 2
+# Start at most this many children per decision, so their resident memory reaches the next sample.
+SPAWN_PER_DECISION = 2
+
+
+def _live_children(pool):
+    return sum(child.poll() is None for child in pool.children)
+
+
 def capacity_reduced(index, limit):
     """Whether an indexed worker is past the pool's memory target; one worker of
     hysteresis, because its own resident memory is in the sample."""
@@ -332,6 +342,8 @@ class CloudBacklogPool:
         self.lock = None
         self.last_sync = 0.0
         self.failed = False
+        self.ramping = False
+        self.admitted = False
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
@@ -341,24 +353,40 @@ class CloudBacklogPool:
         in a failure streak; a throttled return decided nothing. The owner
         reads this, not ``last_sync``: a nested pool that raised is throttled
         on the next call, and the outer pass alone must not count as recovery."""
-        decided = self.backlog.sync(cfg, ledger=ledger) if self.backlog is not None else False
-        now = time.monotonic()
-        if now - self.last_sync >= 10:
-            self.last_sync = now
-            try:
-                self._decide(cfg, ledger, now)
-            except Exception:
-                self.failed = True
-                raise
-            self.failed = False
-            decided = True
+        # Both pools share one memory target and the context children come first:
+        # the owner decides first, and the stored-message workers get only what
+        # the context pool's share leaves.
+        decided = self._sync(cfg, ledger, None)
+        if self.backlog is not None:
+            decided = self.backlog._sync(cfg, ledger, self._context_share) or decided
         return decided and not (self.failed or (self.backlog is not None and self.backlog.failed))
 
-    def _decide(self, cfg, ledger, now):
+    def _context_share(self, memory):
+        """Workers of a shared memory target of ``memory`` this context pool keeps: its live
+        children, and while it admits at least its full share, so a restart keeps its place."""
+        live = _live_children(self)
+        return max(live, min(CONTEXT_WORKERS_MAX, memory)) if self.admitted else live
+
+    def _sync(self, cfg, ledger, reserve):
+        now = time.monotonic()
+        if now - self.last_sync < 10:
+            return False
+        self.last_sync = now
+        try:
+            self._decide(cfg, ledger, now, reserve)
+        except Exception:
+            self.failed = True
+            raise
+        self.failed = False
+        return True
+
+    def _decide(self, cfg, ledger, now, reserve):
+        """Start children up to the memory target less what ``reserve(memory)`` keeps for another pool."""
         import cloud_inference
         import cloud_policy
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
+        self.admitted = False
         if not self._admits(cfg, settings, ledger):
             # Children retire by policy while the gate is closed: those exits
             # are not crashes and never delay a restart once it reopens.
@@ -369,15 +397,24 @@ class CloudBacklogPool:
             self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))
             if self.lock is None:
                 return
+        self.admitted = True
         self._reap(now)
-        target = memory_workers(settings["max_concurrency"])
+        memory = memory_workers(settings["max_concurrency"])
+        target = max(0, memory - (reserve(memory) if reserve is not None else 0))
         # Keep one worker of hysteresis: its resident memory changes the sample.
-        if self.children and target > 0 and abs(target - len(self.children)) <= 1:
+        # A pool still ramping up was cut short by the per-decision cap, not by the sample.
+        if self.children and target > 0 and abs(target - len(self.children)) <= 1 and not self.ramping:
             target = min(settings["max_concurrency"], len(self.children))
+        self.ramping = False
+        if self.context_only:
+            # A fixed cap, not the memory sample: no hysteresis keeps it from refilling.
+            target = min(target, CONTEXT_WORKERS_MAX)
         if target <= len(self.children) or now < self.retry_at:
             return
         helper = current_helper(self.root, installed=helper_path)
-        for _ in range(max(0, target - len(self.children))):
+        count = target - len(self.children)
+        self.ramping = count > SPAWN_PER_DECISION
+        for _ in range(min(count, SPAWN_PER_DECISION)):
             index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(
                 [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
