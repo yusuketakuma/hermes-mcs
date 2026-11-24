@@ -695,12 +695,44 @@ def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
 def test_services_unknown_launchd_state_is_a_problem_not_loaded(
         monkeypatch, tmp_path):
     """`agent_loaded` answering None must surface as unverifiable, not as
-    `loaded: True` in the service manifest (#352)."""
+    `loaded: True` in the service manifest (#352): nothing is bootstrapped
+    and a previously recorded loaded agent is rewritten as unloaded."""
+    import json
     calls, args = _services_env(monkeypatch, tmp_path)
+    path, previous = _seed_manifest(tmp_path)
+    previous["agents"].append({"label": "ai.mcs.extract-drainer",
+                               "sha256": "stale", "loaded": True})
+    path.write_text(json.dumps(previous))
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda label, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 1
     assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+    saved = json.loads(path.read_text())
+    assert saved["agents"] and not any(a["loaded"] for a in saved["agents"])
+
+
+def test_services_retries_reload_after_an_unknown_probe_recovers(
+        monkeypatch, tmp_path):
+    """A plist written just before an unverifiable probe must not mask the
+    pending reload: the written file is dropped on failure, so once launchd
+    answers again the loaded job's stale settings are replaced (#352)."""
+    label = "ai.mcs.extract-drainer"
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={label})
+    stale = tmp_path / "agents" / f"{label}.plist"
+    stale.parent.mkdir()
+    stale.write_text("synthetic old settings")
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda name, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not stale.exists()
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda name, **_service_kwargs: name == label)
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    uid = mcs_setup.os.getuid()
+    assert ["launchctl", "bootout", f"gui/{uid}/{label}"] in calls
+    assert any(a[:2] == ["launchctl", "bootstrap"]
+               and a[-1].endswith(f"{label}.plist") for a in calls)
 
 
 def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
