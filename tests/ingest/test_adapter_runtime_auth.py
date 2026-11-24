@@ -517,3 +517,100 @@ def test_download_bootstraps_token(monkeypatch, tmp_path):
     dest = tmp_path / "f.bin"
     a.download("https://www.medical-care.net/files/1", str(dest))
     assert calls == ["t" * 32] and dest.read_bytes() == b"x"
+
+
+def test_open_browser_session_journals_chrome_error(monkeypatch, tmp_path):
+    """A chrome/CDP layer failure must reach the run journal with its
+    exception type — state=failed alone crushed the cause of the
+    2026-11-25 outage for hours."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+
+    def broken(*a, **k):
+        raise mcs_contract.BootstrapError("chrome launch timed out")
+    monkeypatch.setattr(a, "_ensure_chrome", broken)
+    assert a.open_browser_session("/synthetic/profile", "/synthetic/chrome") == "failed"
+    assert a.chrome_error == "bootstrap_error: chrome launch timed out"
+
+
+def test_open_browser_session_clears_chrome_facts_each_attempt(
+        monkeypatch, tmp_path):
+    """Journal facts are per-attempt: a later healthy attempt must not
+    carry a previous failure's evidence."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    a.chrome_error = "BootstrapError: old"
+    a.chrome_singleton_lock = True
+    a.keychain_locked = True
+    monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
+    monkeypatch.setattr(a, "_recover_session", lambda: True)
+    assert a.open_browser_session("/synthetic/profile", "/synthetic/chrome") == "ok"
+    assert a.chrome_error == ""
+    assert a.chrome_singleton_lock is False
+    assert a.keychain_locked is False
+
+
+@pytest.mark.parametrize("lock_present,expected", [(True, True), (False, False)])
+def test_ensure_chrome_marks_singleton_lock_without_owned_pids(
+        monkeypatch, tmp_path, lock_present, expected):
+    """CDP down + no attributable Chrome process + a SingletonLock in the
+    profile: the relaunch will be absorbed by an unattributed holder (or
+    a stale lock), so the conflict is journaled. No lock — no fact."""
+    import subprocess
+    a = mcs_adapter.MCSAdapter()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    if lock_present:
+        (profile / "SingletonLock").write_text("synthetic")
+    monkeypatch.setattr(a, "_cdp_up", lambda: False)
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: False)
+    monkeypatch.setattr(a, "_remaining_timeout", lambda maximum: maximum)
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: None)
+    a.chrome_singleton_lock = False
+    with pytest.raises(mcs_contract.BootstrapError):
+        a._ensure_chrome(str(profile), "/synthetic/chrome")
+    assert a.chrome_singleton_lock is expected
+
+
+def test_ensure_chrome_no_singleton_fact_when_chrome_stopped(monkeypatch, tmp_path):
+    """An attributable same-profile Chrome is the normal relaunch path —
+    its lock is not a conflict."""
+    import subprocess
+    a = mcs_adapter.MCSAdapter()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "SingletonLock").write_text("synthetic")
+    monkeypatch.setattr(a, "_cdp_up", lambda: False)
+    monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
+    monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: True)
+    monkeypatch.setattr(a, "_remaining_timeout", lambda maximum: maximum)
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: None)
+    a.chrome_singleton_lock = False
+    with pytest.raises(mcs_contract.BootstrapError):
+        a._ensure_chrome(str(profile), "/synthetic/chrome")
+    assert a.chrome_singleton_lock is False
+
+
+def test_keychain_locked_fact_survives_env_fallback(monkeypatch, tmp_path):
+    """The .env fallback can still log in while the keychain is locked,
+    but the lock also breaks Chrome's cookie decryption — the fact must
+    reach the journal instead of hiding behind the successful login."""
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+
+    def locked(*a, **k):
+        raise mcs_adapter.KeychainLocked("mcs-adapter")
+    monkeypatch.setattr(a, "_keychain_password", locked)
+    monkeypatch.setattr(mcs_authentication, "env_value",
+                        lambda key, **kw: "synthetic-pw")
+    a.keychain_locked = False
+    pw, was_locked = a._login_password()
+    assert pw == "synthetic-pw" and was_locked is True
+    assert a.keychain_locked is True
+
+
+def test_keychain_locked_fact_absent_when_keychain_reads(monkeypatch, tmp_path):
+    a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
+    monkeypatch.setattr(a, "_keychain_password", lambda *a, **k: "synthetic-pw")
+    a.keychain_locked = False
+    pw, was_locked = a._login_password()
+    assert pw == "synthetic-pw" and was_locked is False
+    assert a.keychain_locked is False
