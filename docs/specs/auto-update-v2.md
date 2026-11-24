@@ -4,7 +4,7 @@
 
 本書はパッケージ内の正本章とfield一覧を結合したもの。JSON Schema、interfaces.pyi、合成fixture、98項目の受入JSONもZIPに含む。製品実装・配備は未実施。
 
-実装配線の現状（2026-11-24 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール30個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は9個（`release_auto_consent`/`contract`/`health`/`owner`/`state`/`status`/`transport`/`wire` と `runtime_entry`）、残り21個はW14ドライバ接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` は `None` を返すスタブ、owner の `tick`/`recover_tick` 呼出側は未接続（`AUTO_ELIGIBLE=false`）であり、製品ファイルがtick系を呼ばないことは同テストが別途固定している。
+なお直前の「製品実装・配備は未実施」はこの統合読取り版を作成した 2026-11-10 時点の状態を指す。実装配線の現状（2026-11-24 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール30個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は9個（`release_auto_consent`/`contract`/`health`/`owner`/`state`/`status`/`transport`/`wire` と `runtime_entry`）、残り21個はW14ドライバ接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` は `None` を返すスタブ、owner の `tick`/`recover_tick` 呼出側は未接続（`AUTO_ELIGIBLE=false`）であり、製品ファイルがtick系を呼ばないことは同テストが別途固定している。配備は引き続き未実施である。
 
 ---
 
