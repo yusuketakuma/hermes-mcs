@@ -18,6 +18,8 @@ def test_env_value_empty_line_is_unconfigured(tmp_path, monkeypatch):
     real = tmp_path / "b.env"
     empty.write_text("MY_KEY=\n")
     real.write_text("MY_KEY=real\n")
+    os.chmod(empty, 0o600)
+    os.chmod(real, 0o600)
     monkeypatch.delenv("MY_KEY", raising=False)
     assert mcs_util.env_value("MY_KEY", paths=(str(empty),)) is None
     assert mcs_util.env_value(
@@ -34,6 +36,8 @@ def test_env_value_skips_non_utf8_dotenv(tmp_path, monkeypatch):
     real = tmp_path / "b.env"
     bad.write_bytes(b"OTHER=1\n# \x82\xa0 synthetic\nMY_KEY=v\n")
     real.write_text("MY_KEY=real\n")
+    os.chmod(bad, 0o600)
+    os.chmod(real, 0o600)
     monkeypatch.delenv("MY_KEY", raising=False)
     assert mcs_util.env_value("MY_KEY", paths=(str(bad),)) is None
     assert mcs_util.env_value(
@@ -202,20 +206,61 @@ def test_config_refuses_symlink_and_oversize(tmp_path):
     assert mcs_util.load_config(str(target)) == {"k": 1}
 
 
-def test_writable_config_and_dotenv_are_read_with_one_warning(tmp_path, capsys):
+def test_writable_config_and_dotenv_keep_their_distinct_contracts(tmp_path, capsys):
+    """config.json warns once and still reads (non-secret); a dotenv with
+    weak permissions is never opened for values — it warns once per path
+    and falls back like a missing file, so a loose credential file cannot
+    be picked up silently."""
     cfg = tmp_path / "config.json"
     cfg.write_text('{"k": 2}')
     env = tmp_path / ".env"
     env.write_text("SYNTH_KEY=synthetic-value\n")
     os.chmod(cfg, 0o666)
-    os.chmod(env, 0o620)
+    os.chmod(env, 0o644)
     assert mcs_util.load_config(str(cfg)) == {"k": 2}
     assert mcs_util.load_config(str(cfg)) == {"k": 2}
-    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) == "synthetic-value"
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) is None
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) is None
     err = capsys.readouterr().err
     assert err.count("local_file_permissions_weak (config.json)") == 1
-    assert "local_file_permissions_weak (.env)" in err
+    assert err.count("env_file_not_private (.env)") == 1
     assert "synthetic-value" not in err
+
+
+def test_private_dotenv_modes_and_readers_agree(tmp_path, capsys):
+    """write_env's 0600 file is readable by every reader; each weaker mode
+    is refused by all of them — write→read stays consistent."""
+    import lifecycle_io
+    env = tmp_path / ".env"
+    lifecycle_io.write_env(str(env), {"SYNTH_KEY": "written-value",
+                                    "QUOTED": "with space"})
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) == "written-value"
+    assert mcs_util.private_env_value("SYNTH_KEY", root=tmp_path) == "written-value"
+    assert mcs_util.env_value("QUOTED", paths=[str(env)], check_env=False) == "with space"
+    for mode in (0o644, 0o640, 0o620):
+        os.chmod(env, mode)
+        assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)],
+                                check_env=False) is None, oct(mode)
+    os.chmod(env, 0o600)
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)],
+                            check_env=False) == "written-value"
+    err = capsys.readouterr().err
+    assert "written-value" not in err
+
+
+def test_dotenv_env_and_missing_fallbacks(tmp_path, monkeypatch, capsys):
+    """Order contract: process env wins unless check_env=False; a missing
+    file falls back without any warning."""
+    env = tmp_path / ".env"
+    env.write_text("SYNTH_KEY=file-value\n")
+    os.chmod(env, 0o600)
+    monkeypatch.setenv("SYNTH_KEY", "env-value")
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)]) == "env-value"
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)],
+                            check_env=False) == "file-value"
+    assert mcs_util.env_value("SYNTH_KEY", paths=[str(tmp_path / "absent.env")],
+                            check_env=False) is None
+    assert capsys.readouterr().err == ""
 
 
 def test_dotenv_symlink_is_skipped_like_a_missing_file(tmp_path):
@@ -225,5 +270,6 @@ def test_dotenv_symlink_is_skipped_like_a_missing_file(tmp_path):
     link.symlink_to(real)
     second = tmp_path / "second.env"
     second.write_text("SYNTH_KEY=from-second\n")
+    os.chmod(second, 0o600)
     assert mcs_util.env_value("SYNTH_KEY", paths=[str(link), str(second)],
                               check_env=False) == "from-second"
