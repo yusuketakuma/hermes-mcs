@@ -188,7 +188,8 @@ def test_reseed_after_input_change_returns_hold_to_now(jobs_db, monkeypatch):
     assert row['state'] == 'pending' and row['next_try'] <= time.time()
 
 
-@pytest.mark.parametrize('second_code', ['empty_repair_candidate_binding', 'empty_repair_marker_binding'])
+@pytest.mark.parametrize('second_code', ['empty_repair_candidate_binding', 'empty_repair_marker_binding',
+                                         None])
 def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_code):
     """Through the real summary loop: when both targets of a two-target job
     are held by the empty-repair gate, the hourly wait applies only if each
@@ -200,8 +201,11 @@ def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_
     db = _seeded_two(tmp_path)
     try:
         codes = {1: 'empty_repair_candidate_binding', 2: second_code}
+        real_gate = semantic_job_processor._empty_repair_candidate
 
         def gate(_db, _pid, mid, *args, reason_out=None, **kwargs):
+            if codes[mid] is None:     # the real gate: target 2 publishes and is reused
+                return real_gate(_db, _pid, mid, *args, reason_out=reason_out, **kwargs)
             reason_out['code'] = codes[mid]
             return None, True
 
@@ -228,7 +232,7 @@ def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_
         assert json.loads(row['payload'])['targets'] == [1, 2]
         assert row['state'] == 'pending' and row['attempts'] == 0
         wait = (semantic_drain.NOT_SENT_BACKOFF_S
-                if second_code == 'empty_repair_candidate_binding' else 60)
+                if second_code != 'empty_repair_marker_binding' else 60)
         assert row['next_try'] == row['updated_at'] + wait
     finally:
         db.close()
