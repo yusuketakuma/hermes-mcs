@@ -1206,7 +1206,7 @@ REVIVE_PER_INPUT = 3
 REVIVE_COOLDOWN_S = 6 * 3600
 
 
-def revive_failed(ledger, now: float | None = None) -> dict:
+def revive_failed(ledger, now: float | None = None, *, cfg=None) -> dict:
     """Give exhausted 'failed' semantic jobs one more bounded attempt.
 
     Oldest failures first. The job keeps its generation and accumulated
@@ -1216,6 +1216,12 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     human retry command)."""
     now = time.time() if now is None else now
     out = {"revived": 0, "skipped_cap": 0}
+    if cfg is not None:
+        scfg, errors = runtime_config(cfg)
+        if errors or not primary_verdicts_consumed(scfg):
+            out["skipped_no_result_reader"] = not errors
+            out["skipped_config_invalid"] = bool(errors)
+            return out
     # capped jobs are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible job behind it
     capped = ("(CASE WHEN json_valid(payload) AND "
@@ -1281,10 +1287,10 @@ def main() -> int:
         # made the 6-hourly maintenance report failure whenever a tick or
         # drain held the lock at that moment (2026-10).
         from ledger import Ledger
-        from mcs_util import DB
+        from mcs_util import CONF_PATH, DB
         led = Ledger(DB)
         try:
-            print(json.dumps(revive_failed(led)))
+            print(json.dumps(revive_failed(led, cfg=load_config(CONF_PATH))))
         finally:
             led.close()
         return 0
@@ -1305,11 +1311,11 @@ def main() -> int:
                 time.sleep(min(10, max(0.0, stop - time.monotonic())))
                 continue
             try:
+                cfg = load_config(CONF_PATH)
                 if led is None:
                     led = Ledger(DB)
                     if args.revive_failed:
-                        totals["revive"] = revive_failed(led)
-                cfg = load_config()
+                        totals["revive"] = revive_failed(led, cfg=cfg)
                 # The batch must fit one full job budget so a canonical
                 # generation can complete. A shorter batch can repeatedly
                 # abandon useful work and exhaust the retry allowance of

@@ -13,6 +13,28 @@ import semantic
 from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
 
+def test_revive_failed_does_not_requeue_without_a_result_reader(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        job_id = db.job_add("semantic", 1, 1, payload={"generation": "synthetic"})
+        now = time.time()
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=5,updated_at=? WHERE job_id=?",
+                          (now - semantic_drain.REVIVE_COOLDOWN_S - 1, job_id))
+        before = tuple(db.db.execute(
+            "SELECT state,attempts,payload,next_try,updated_at FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone())
+        out = semantic_drain.revive_failed(
+            db, now, cfg=_cfg("assist", summary_mode="off", loop_mode="off"))
+        after = tuple(db.db.execute(
+            "SELECT state,attempts,payload,next_try,updated_at FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone())
+        assert out["revived"] == 0 and out["skipped_no_result_reader"]
+        assert after == before
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize('case', ['legacy', 'canonical', 'canonical_empty'])
 def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, monkeypatch, case):
     import copy
