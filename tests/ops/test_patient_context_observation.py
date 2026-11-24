@@ -150,6 +150,81 @@ def test_health_patient_context_records_invalid_rows_and_recomputes_old_cache(tm
     ledger.close()
 
 
+def test_latest_scan_lookup_skips_other_kind_rows(tmp_path):
+    """A latest-row check reads only the patient's same-kind artifacts.
+
+    A correlated NOT EXISTS walked every newer artifact of the patient
+    regardless of kind, so the bounded health read of a busy patient timed out
+    (observation_limit) while identical counts were still correct.
+    """
+    import patient_context_status
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'deferred'}),
+                        project_id=1, meta={**meta, 'source_key': 's1'})
+    # Newer artifacts of other kinds must not be visited by the latest check.
+    for _ in range(1500):
+        ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
+    plan = db.execute(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+        + patient_context_status.latest_current_pred(), (context.SCAN, context.SCAN)).fetchall()
+    assert any('idx_artifacts_lookup' in row[3] and 'SEARCH b' in row[3] for row in plan)
+    result, steps = _steps(db, context.lane_metrics)
+    assert result['lanes']['C'] == {'length_stop': 0, 'unsupported': 0, 'other_failure': 0,
+                                    'split': 0, 'repair': 0}
+    assert result['quality']['deferred'] == 1
+    assert steps < 800, steps   # one grouped pass; the rescan plan visited every newer artifact
+    ledger.close()
+
+
+def test_latest_scan_lookup_stays_linear_with_same_kind_history(tmp_path):
+    """The latest-row check is one grouped pass, not a per-candidate rescan.
+
+    Hinting the correlated NOT EXISTS at the same-kind index walks every
+    same-kind row per candidate instead (~25x more VM steps when 600 rows
+    cycle five source keys). The grouped maximum reads the active patients'
+    same-kind rows once, keeping the bounded health read inside its budget in
+    both regimes. Counts are identical either way.
+    """
+    import patient_context_status
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    db.executemany(
+        "INSERT INTO messages(message_id,project_id,body_text,body_state,content_hash) "
+        "VALUES (?,1,'合成','full','h')", [(mid,) for mid in range(1, 602)])
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    # Same-kind history cycling five source keys: only the newest of each counts.
+    for i in range(600):
+        state = 'deferred' if i % 5 == 4 else 'held'
+        ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': state}),
+                            project_id=1, message_id=i + 1,
+                            meta={**meta, 'source_key': 'k%d' % (i % 5)})
+    # A different message can still share a source key and supersede its group.
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'failed'}),
+                        project_id=1, message_id=601, meta={**meta, 'source_key': 'k0'})
+    # Rows without a source key form one group; its newest row wins.
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'unavailable'}),
+                        project_id=1, meta=dict(meta))
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'pending'}),
+                        project_id=1, meta=dict(meta))
+    # Newer artifacts of other kinds must not be visited at all.
+    for _ in range(1500):
+        ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
+    plan = db.execute(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+        + patient_context_status.latest_current_pred(), (context.SCAN, context.SCAN)).fetchall()
+    assert any('idx_artifacts_lookup' in row[3] and 'SEARCH b' in row[3] for row in plan)
+    result, steps = _steps(db, context.lane_metrics)
+    assert result['quality'] == {'none': 0, 'pending': 1, 'deferred': 1, 'held': 3,
+                                 'failed': 1, 'unavailable': 0, 'unknown': 0,
+                                 'budget': 0, 'disabled': 0, 'other': 0}
+    assert steps < 300000, steps   # ~97k for one pass over 600 rows; the rescan plan was 3.49M
+    ledger.close()
+
+
 def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
     """health.json's invalid_rows and doctor's states.invalid_rows see the same latest rows."""
     import patient_context_status
