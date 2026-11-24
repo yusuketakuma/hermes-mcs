@@ -496,6 +496,11 @@ def _v_drug_alias(req, base):
     return validate_operation(req, base)
 
 
+def _v_jev_model(req, base):
+    from jev_model_setup import validate_operation
+    return validate_operation(req, base)
+
+
 def _v_external_transfer(req, base):
     from external_transfer import validate_operation
     return validate_operation(req, base)
@@ -511,6 +516,7 @@ _OPS_VALIDATORS = {
     "ops.patient_context_reset": _v_patient_context_reset,
     "ops.slack_setup_discard": _v_slack_setup_discard,
     "ops.provider_pending_finalize": _v_provider_pending_finalize,
+    "ops.jev_model_set": _v_jev_model,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,

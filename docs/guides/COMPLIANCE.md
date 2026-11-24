@@ -124,7 +124,7 @@ Jev が確認に含まれない場合は、明示した `semantic.mode` をそ�
 （`not_configured` とは区別します）。`enforce` の公開も同じで、Jev の確認を通ったもの（`PASS`）としては扱わず、
 コードによる確認を通った `SKIPPED` として扱います。`mode` を省略した環境の意味解析は Jev のキーで有効になる設定なので、
 確認に Jev が含まれるまで off のままです。患者文脈の品質監査を含む実行中の処理は、確認から Jev が外れると次の Jev
-への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`semantic_bench`・
+への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`mcs_setup.py jev-model` の切替前の確認・`semantic_bench`・
 `semantic_shadow_e2e`）は配布されている完全合成のデータだけを送り患者情報を送らないため、この確認の対象外です
 （Jevの日次上限・`semantic.until` には従います）。ファイル内の `source` などの自己申告では判断せず、`evaluation/` に
 同梱されたケースと完全に一致しない入力は Jev へ送らずに止めます。

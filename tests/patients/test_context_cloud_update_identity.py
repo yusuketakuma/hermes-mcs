@@ -264,12 +264,18 @@ def test_context_deferred_before_the_fix_publishes_without_a_jev_key(runtime, re
     ({'mode': 'assist', 'summary_mode': 'assist', 'project_ids': [2], 'daily_request_budget': 3000},
      'synthetic-jev-key'),
 ])
+@pytest.mark.parametrize('expired', [False, True])
 def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(runtime, real_cloud, monkeypatch,
-                                                                              semantic, jev_key):
+                                                                              semantic, jev_key, expired):
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     cfg['semantic'] = semantic   # cloud covers patient 1, the Jev scope does not
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: jev_key)
+    if expired:
+        # semantic.until has passed: it only refuses new Jev requests, and none is made here
+        def past_until(*_args, **_kwargs):
+            raise semantic_jev.JevError('budget_exceeded', 'semantic_until_expired')
+        monkeypatch.setattr(semantic_runtime, '_jev_window_check', past_until)
     outcomes = []
     for _ in range(30):
         outcomes.append(step(runtime, cfg=cfg, local_admit=lambda: False))

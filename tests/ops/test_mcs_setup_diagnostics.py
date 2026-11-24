@@ -57,7 +57,8 @@ def test_check_warns_when_requested_qc_annotations_cannot_run(monkeypatch, seman
     cfg = {"notify_target": "slack", "semantic": {**semantic, "extract_qc": "annotate"}}
     _, warnings = mcs_setup.check_environment(cfg)
     found = [w for w in warnings if "extract_qc_inactive" in w]
-    assert (remedy in found[0]) if remedy else not found
+    assert (remedy in found[0] and "semantic.project_ids" in found[0]
+            and "daily_request_budget" in found[0]) if remedy else not found
     assert environment_diagnostics.jev_notice(cfg, None) is None
 
 
