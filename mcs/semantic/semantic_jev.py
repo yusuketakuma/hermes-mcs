@@ -39,6 +39,7 @@ import json
 import math
 import os
 import random
+import sqlite3
 import sys
 import time
 from contextlib import closing, contextmanager
@@ -63,6 +64,8 @@ DAILY_REQUEST_LIMIT = 10000
 # upper bound of a configured daily_request_budget; config and the live
 # tools must reject the same values, so both read it from here
 DAILY_REQUEST_BUDGET_MAX = 100000
+# How long a manual live request waits for background writers to release run.lock.
+LIVE_LOCK_WAIT_S = 30.0
 JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 JEV_ALLOWED_ENDPOINTS = frozenset({JEV_ENDPOINT})
 REGISTRY_VERSION = "2026-09-20"
@@ -121,11 +124,27 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
     from ledger import Ledger
     from notify_spool import restore_writer_hold
     from semantic_runtime import manual_usage_reserver
-    from writer_lock import acquire_run_lock, code_stamp
-    lock_fd = acquire_run_lock(str(home / "data" / "run.lock"))
+    from writer_lock import acquire_run_lock, capture_writer_refusal, code_stamp, wait_run_lock
+    lock_path = str(home / "data" / "run.lock")
+    wait_s = min(LIVE_LOCK_WAIT_S, timeout)
+    waited_until = time.monotonic() + wait_s
+    lock_fd = acquire_run_lock(lock_path)
     if lock_fd is None:
-        raise JevError("budget_exceeded", "usage_lock_busy")
+        # Background writers hold the lock briefly but back to back; wait like other CLIs,
+        # never longer than the request's own timeout.
+        with capture_writer_refusal() as refusal:
+            lock_fd = wait_run_lock(lock_path, wait_s=wait_s,
+                                    expected_code_stamp=expected_code_stamp,
+                                    marker_path=str(home / "data" / "update_in_progress.marker"))
+        if lock_fd is None:
+            if refusal["writer_reason"] in ("update_marker_present", "source_generation_changed"):
+                raise JevError("budget_exceeded", "usage_code_changed")
+            raise JevError("budget_exceeded", "usage_lock_busy")
     try:
+        if time.monotonic() > waited_until:
+            # Won only after the request's time was spent: recording usage now
+            # would count a request the caller can no longer send.
+            raise JevError("budget_exceeded", "usage_lock_busy")
         # Ledger construction may migrate: reject stale code before opening it.
         if ((home / "data" / "update_in_progress.marker").exists()
                 or code_stamp() != expected_code_stamp):
@@ -139,19 +158,28 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
             # its run window and cap were read at start; a vanished file is not "no limits"
             raise JevError("budget_exceeded", "semantic_config_unreadable")
         limit = _live_request_budget(home)
-        with closing(Ledger(str(path))) as ledger:
-            reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit,
-                                            config_path=home / "config.json")
-            reserved = reserve(body, timeout)
-            if ((home / "data" / "update_in_progress.marker").exists()
-                    or code_stamp() != expected_code_stamp):
-                raise JevError("budget_exceeded", "usage_code_changed")
-            if restore_writer_hold(str(home / "data")) is not None:
-                raise JevError("budget_exceeded", "usage_restore_in_progress")
-            if _live_request_budget(home) < limit:
-                # A lower cap may arrive while BEGIN waited; keep the reservation but do not send.
-                raise JevError("budget_exceeded", "semantic_daily_budget_changed")
-            return reserved
+        try:
+            with closing(Ledger(str(path))) as ledger:
+                reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit,
+                                                config_path=home / "config.json")
+                reserved = reserve(body, timeout)
+        except sqlite3.OperationalError as error:
+            # Only contention is transient; a read-only or damaged ledger is not retryable.
+            code = getattr(error, "sqlite_errorcode", None)
+            busy = (str(error) in ("database is locked", "database table is locked") if code is None
+                    else code & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED))
+            if not busy:
+                raise JevError("budget_exceeded", "usage_ledger_unavailable") from None
+            raise JevError("budget_exceeded", "usage_ledger_busy", retryable=True) from None
+        if ((home / "data" / "update_in_progress.marker").exists()
+                or code_stamp() != expected_code_stamp):
+            raise JevError("budget_exceeded", "usage_code_changed")
+        if restore_writer_hold(str(home / "data")) is not None:
+            raise JevError("budget_exceeded", "usage_restore_in_progress")
+        if _live_request_budget(home) < limit:
+            # A lower cap may arrive while BEGIN waited; keep the reservation but do not send.
+            raise JevError("budget_exceeded", "semantic_daily_budget_changed")
+        return reserved
     finally:
         os.close(lock_fd)
 

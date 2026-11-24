@@ -251,6 +251,7 @@ def test_blocked_live_reservation_opens_no_ledger_and_sends_nothing(home, monkey
     import writer_lock
     stamp = [123]
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: stamp[0])
+    monkeypatch.setattr(jev, "LIVE_LOCK_WAIT_S", 0.05)
     fd = writer_lock.acquire_run_lock(str(home / "data" / "run.lock")) if blocked == "lock" else None
     try:
         with jev.live_client("synthetic", operation="jev_value", root=str(home),
@@ -270,6 +271,62 @@ def test_blocked_live_reservation_opens_no_ledger_and_sends_nothing(home, monkey
         if fd is not None:
             os.close(fd)
     assert _used(home) == 0
+
+
+def _hold_lock_until_first_poll(home, monkeypatch, on_poll):
+    import os
+    import writer_lock
+    fd = [writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))]
+    def poll(seconds):
+        if fd[0] is not None:
+            on_poll()
+            os.close(fd[0])
+            fd[0] = None
+    monkeypatch.setattr(writer_lock.time, "sleep", poll)
+    return fd
+
+
+def test_live_reservation_waits_for_a_background_writer_to_release(home, monkeypatch):
+    fd = _hold_lock_until_first_poll(home, monkeypatch, lambda: None)
+    with jev.live_client("synthetic", operation="jev_value", root=str(home), post_fn=_answer) as client:
+        _evaluate(client)
+    assert fd[0] is None and _used(home) == 1
+
+
+@pytest.mark.parametrize("change", ["update", "code"])
+def test_update_or_code_change_during_lock_wait_is_code_changed(home, monkeypatch, change):
+    import writer_lock
+    stamp = [123]
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: stamp[0])
+    def on_poll():
+        if change == "update":
+            (home / "data" / "update_in_progress.marker").write_text("synthetic")
+        else:
+            stamp[0] += 1
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("changed code must not send")) as client:
+        fd = _hold_lock_until_first_poll(home, monkeypatch, on_poll)
+        monkeypatch.setattr("ledger.Ledger", lambda *a, **kw: pytest.fail("writer opened after code change"))
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert fd[0] is None and error.value.detail == "usage_code_changed"
+
+
+def test_sqlite_busy_ledger_is_a_retryable_reservation_refusal(home, monkeypatch):
+    import os
+    import sqlite3
+    import writer_lock
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("busy ledger must not send")) as client:
+        monkeypatch.setattr("ledger.Ledger", busy)
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert error.value.detail == "usage_ledger_busy" and error.value.retryable
+    fd = writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))
+    assert fd is not None
+    os.close(fd)
 
 
 def test_restore_hold_while_reserving_keeps_reservation_without_http(home, monkeypatch):
@@ -465,3 +522,38 @@ def test_manual_jev_split_budget_lowered_during_reservation_blocks_post(home, mo
             _evaluate(client)
         assert error.value.detail == 'semantic_daily_budget_changed'
     assert _used(home) == 1
+
+
+def test_non_contention_ledger_error_is_not_retryable(home, monkeypatch):
+    import sqlite3
+    def readonly(*args, **kwargs):
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("unusable ledger must not send")) as client:
+        monkeypatch.setattr("ledger.Ledger", readonly)
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert error.value.detail == "usage_ledger_unavailable" and not error.value.retryable
+
+
+def test_lock_won_after_the_request_time_never_records_usage(home, monkeypatch):
+    import writer_lock
+    holder = writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))
+    real_wait = writer_lock.wait_run_lock
+    def late_wait(path, **kwargs):
+        import os
+        os.close(holder)
+        fd = real_wait(path, **kwargs)
+        monkeypatch.setattr(jev.time, "monotonic", lambda: float("inf"))   # the scheduler woke it late
+        return fd
+    monkeypatch.setattr(writer_lock, "wait_run_lock", late_wait)
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("late lock must not send")) as client:
+        monkeypatch.setattr("ledger.Ledger", lambda *a, **kw: pytest.fail("usage recorded after the wait budget"))
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert error.value.detail == "usage_lock_busy" and _used(home) == 0
+    fd = writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))
+    assert fd is not None
+    import os
+    os.close(fd)
