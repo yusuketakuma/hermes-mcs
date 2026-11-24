@@ -44,24 +44,24 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     by_id = {fact["id"]: fact for fact in facts}
     if len(by_id) != len(facts) or set(identity["fact_ids"]) != set(by_id) or not selected <= set(by_id):
         return "held", None
-    failures, missing, rejected = [], set(), set()
-    receipt_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-    ledger.db.execute("BEGIN")
-    try:
-        if (not current() or not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim)
+
+    def findings(own_writes=0):
+        """Read the audit's answers in the open transaction: a status, or what the repair must fix."""
+        failures, missing, rejected = [], set(), set()
+        if (not current(own_writes) or not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim)
                 or not patient_context_quality_receipts._quality_failed(ledger.db, pid, identity)):
-            return "deferred", None
+            return "deferred"
         ids = identity["fact_ids"]
         for offset in range(0, len(ids), 12):
             if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
-                return "deferred", None
+                return "deferred"
             answers = patient_context_quality_receipts._quality_answers(ledger.db, pid, identity["audit_key"], ids[offset:offset + 12])
             if set(answers) != set(ids[offset:offset + 12]):
-                return "deferred", None
+                return "deferred"
             for fact_id, answer in answers.items():
                 choice = answer["choice"]
                 if choice == "ambiguous":
-                    return "held", None
+                    return "held"
                 if fact_id in selected and choice in ("not_supported", "contradicts"):
                     rejected.add(fact_id)
                     failures.append({"fact_id": fact_id, "code": choice})
@@ -69,11 +69,19 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
                     missing.add(fact_id)
                     failures.append({"fact_id": fact_id, "code": choice})
                 elif choice != ("supports" if fact_id in selected else "omission_ok"):
-                    return "held", None
+                    return "held"
+        return failures, missing, rejected
+    receipt_mark = patient_context_refresh_state.ReadMark(ledger.db)
+    ledger.db.execute("BEGIN")
+    try:
+        found = findings()
     finally:
         ledger.db.rollback()
-    if (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes) != receipt_fence:
+    if isinstance(found, str):
+        return found, None
+    if not receipt_mark.wrote(0):
         return "deferred", None
+    failures, missing, rejected = found
     if not failures or len(missing) > context_selection.MAX_SUMMARY:
         return "held", None
     allowed = selected | missing
@@ -171,8 +179,10 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     def on_reserved(reserving, reservation, artifact_id):
         if reserving is not ledger:
             raise ValueError("patient_summary_quality_source_changed")
+        # The request was built from these findings: after another process's commit they are
+        # read again in the reservation's transaction before the repair is spent.
         return patient_context_quality_receipts._quality_reserve_repair_tx(reserving, pid, identity, claim, current,
-                                           receipt_fence, reservation, artifact_id, owner)
+                                           receipt_mark, lambda: findings(1) == found, reservation, artifact_id, owner)
     def reserve_dispatch(fn):
         if ledger.db.in_transaction or not current():
             raise patient_context_refresh_state.Deferred("patient_summary_quality_source_changed")
@@ -269,6 +279,13 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         os.close(fd)
 
 
+# Why a quality step deferred, for the pass record: which gate, never a value it read.
+DEFERRAL_CODES = frozenset({
+    "cloud_stopped", "semantic_config", "jev_not_asked", "jev_usage_unread", "jev_circuit", "scope",
+    "claim", "jev_client", "retry_wait", "jev_not_evaluated", "inputs_changed", "repair", "cloud_off",
+})
+
+
 # Input-deterministic scan refusals inside a paid repair dispatch: the same
 # bound inputs can never produce a different outcome, so retrying only spends.
 # nightly_* is the pre-rename spelling of the same persisted codes.
@@ -305,7 +322,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
             db, pid, context_plan.source_key(source), repair_key,
             source_sig=context_plan.source_signature(source), source_occurrence=occurrence,
             body_size=source['body_length'])
-    before = (ledger.db.execute('PRAGMA data_version').fetchone()[0], ledger.db.total_changes)
+    read = patient_context_refresh_state.ReadMark(ledger.db)
     ledger.db.execute('BEGIN')
     try:
         if other_spent(ledger.db):
@@ -329,8 +346,16 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
             patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, context_artifacts.quality_binding(route), repair_key, require_complete=False)
     finally:
         ledger.db.rollback()
-    if before != (ledger.db.execute('PRAGMA data_version').fetchone()[0], ledger.db.total_changes):
+    if not read.wrote(0):
         return 'deferred', None
+
+    def repair_inputs_current(db):
+        """Whether the audit evidence the request was built from still reads the same."""
+        try:
+            return patient_context_refresh_sources._source_repair_inputs(db, pid, captured, threshold) == (
+                protected, codes, receipt_sig)
+        except ValueError:
+            return False
     origin = {VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION, 'repair_input_key':repair_key, 'source_key':context_plan.source_key(source),
         'source_sig':context_plan.source_signature(source),
         'original_source_sig':context_plan.original_source_signature(source), 'source_binding':occurrence['source_binding'],
@@ -379,6 +404,9 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         if (owner is not ledger or not owner.db.in_transaction or not current(1)
                 or not patient_context_quality_receipts._quality_owns(owner.db, pid, identity['input_key'], claim)
                 or other_spent(owner.db)
+                # The header and units are read again below; the evidence is read again here
+                # when another process committed since the snapshot above.
+                or read.foreign_commit() and not repair_inputs_current(owner.db)
                 or reservation.get('unit_key') != unit_key or reservation.get('project_id') != pid
                 or reservation.get('message_id') != (source['message_id'] or None)
                 or reservation.get('owner') != {'repair_input_key':repair_key,'unit_key':unit_key}):
@@ -386,8 +414,12 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         actual = patient_context_refresh_sources._source_repair_header(owner.db, pid, repair_key)
         if (header is None) != (actual is None) or header and actual != header:
             raise ValueError('patient_context_source_repair_changed')
-        if any(row['meta']['unit_key'] == unit_key for row in patient_context_refresh_sources._source_repair_units(owner.db, pid, repair_key)):
+        units = patient_context_refresh_sources._source_repair_units(owner.db, pid, repair_key)
+        if any(row['meta']['unit_key'] == unit_key for row in units):
             raise ValueError('patient_context_source_repair_spent')
+        if units != existing_units:
+            # another unit was reserved or completed since the plan above was read
+            raise ValueError('patient_context_source_repair_changed')
         writes = 0
         if actual is None:
             owner.artifact_add_tx(patient_context_refresh_state.SOURCE_REPAIR, json.dumps({'phase':'scanning','cursor':0,'split':0}),
@@ -583,11 +615,12 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
 
 
 def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_mode, base_doc=None, base_meta=None,
-                  source=None, source_candidate_ref=None):
+                  source=None, source_candidate_ref=None, detail_out=None):
     """Audit one bounded page of the current candidate outside DB and run locks.
 
     ``cloud_mode`` is the cloud mode the caller's unit runs under; a repair, which only the cloud
-    makes, is sent only while it is ``on`` and is ``cloud_off`` otherwise."""
+    makes, is sent only while it is ``on`` and is ``cloud_off`` otherwise. ``detail_out`` receives
+    the fixed code of the step that deferred (``DEFERRAL_CODES``), for the pass record only."""
     import extract_llm
     import cloud_policy
     import cloud_client
@@ -599,10 +632,15 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
 
     source_keys = patient_context_refresh_sources._source_scope((base_meta or {}).get('source_scope')) if source is None else None
 
+    def deferred(code, payload=None):
+        if detail_out is not None:
+            detail_out.append(code)
+        return "deferred", payload
+
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if cloud_policy.stopped(ledger):
-        return "deferred", None   # `cloud-llm stop` also stops sends to Jev without sticking after resume
+        return deferred("cloud_stopped")   # `cloud-llm stop` also stops sends to Jev without sticking after resume
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
@@ -617,7 +655,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         local_quality = bool(not actual.get('provider')
                              and (actual.get('route_provider') or not route['provider']))
     if errors:
-        return "deferred", None
+        return deferred("semantic_config")
     # Jev cannot be asked: semantic off, the patient outside Jev's scope, or the
     # facility review withholds Jev.
     out_of_scope = semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(cfg)[0], pid)
@@ -639,7 +677,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 OSError, RecursionError, OverflowError):
             return "unknown", None
     if not cloud_key and not optional_quality or jev_off and not optional_quality:
-        return "deferred", None
+        return deferred("jev_not_asked")
     from semantic_store import jev_usage_today
     # Jev is never asked here (semantic off, or the patient outside Jev's scope):
     # no send deadline, budget or circuit decides, as on an install without Jev.
@@ -653,7 +691,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             semantic_runtime._jev_window_check()
             used = jev_usage_today(ledger)
         except (semantic_jev.JevError, ValueError, sqlite3.Error):
-            return "deferred", None
+            return deferred("jev_usage_unread")
         skip_reason = (semantic_jev.REVIEW_HELD if scfg["jev_held"] else
                        "not_configured" if not key else
                        "disabled" if scfg["daily_request_budget"] <= 0 else
@@ -661,7 +699,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     if no_send is None and semantic_runtime.circuit_open(ledger):
         state = semantic_runtime._circuit_state(ledger)
         if state["failure_class"] not in semantic_runtime._CIRCUIT_FAILURE_CLASSES:
-            return "deferred", None
+            return deferred("jev_circuit")
         skip_reason = skip_reason or "circuit_open"
     assessment = patient_context_refresh_state._quality_assessment(scfg)
     summary = doc.get("summary")
@@ -674,22 +712,42 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                    if source is not None else
                    patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, summary, assessment, display_projection, source_keys=source_keys))
         if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, cfg, initial["sources"]):
-            return "deferred", None
+            return deferred("scope")
     finally:
         ledger.db.rollback()
     identity = initial["identity"]
     denied = False
     fence = [None]
 
+    def inputs_current(live):
+        """Whether this check's own inputs still read as captured, in the open transaction."""
+        if source is None:
+            latest, latest_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
+            if (latest != base_doc if base_doc is not None else
+                    latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
+                return False
+            if base_meta is not None and latest_meta != base_meta:
+                return False
+        patient_context_quality_receipts._quality_integrity(ledger.db, pid)
+        refreshed = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, live, context_plan.source_key(source), assessment,
+                        candidate_ref=source_candidate_ref)
+                     if source is not None else
+                     patient_context_refresh_sources._quality_capture(ledger.db, pid, live, workday_id, summary, assessment, display_projection, source_keys=source_keys))
+        return (refreshed["identity"] == identity
+                and (source is None or refreshed["chunks_sig"] == initial["chunks_sig"])
+                and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live, refreshed["sources"]))
+
     def current(own_writes=0):
+        """Whether the caller may go on: outside a transaction it reads the inputs in its own
+        snapshot; inside one it accepts that read while no other process has committed since,
+        and reads the inputs again otherwise. ``own_writes`` is what the caller wrote since."""
         nonlocal denied
         if denied:
             return False
         owns_read = not ledger.db.in_transaction
         try:
             if owns_read:
-                before_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-                before_changes = ledger.db.total_changes
+                mark = patient_context_refresh_state.ReadMark(ledger.db)
                 ledger.db.execute("BEGIN")
             live = extract_llm.load_config()
             live_key = semantic_jev.api_key()
@@ -736,35 +794,25 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 denied = True
                 return False
             if owns_read:
-                if source is None:
-                    latest, latest_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
-                    if (latest != base_doc if base_doc is not None else
-                            latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
-                        denied = True
-                        return False
-                    if base_meta is not None and latest_meta != base_meta:
-                        denied = True
-                        return False
-                patient_context_quality_receipts._quality_integrity(ledger.db, pid)
-                refreshed = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, live, context_plan.source_key(source), assessment,
-                                candidate_ref=source_candidate_ref)
-                             if source is not None else
-                             patient_context_refresh_sources._quality_capture(ledger.db, pid, live, workday_id, summary, assessment, display_projection, source_keys=source_keys))
-                if (refreshed["identity"] != identity
-                        or source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]
-                        or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live, refreshed["sources"])):
+                if not inputs_current(live):
                     denied = True
                     return False
                 ledger.db.rollback()
-                after_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-                if before_version != after_version or ledger.db.total_changes != before_changes:
+                if not mark.wrote(0):
                     denied = True
                     return False
-                fence[0] = (after_version, before_changes)
-            elif (fence[0] is None or ledger.db.execute("PRAGMA data_version").fetchone()[0] != fence[0][0]
-                  or ledger.db.total_changes != fence[0][1] + own_writes):
+                fence[0] = mark
+            elif fence[0] is None or not fence[0].wrote(own_writes):
                 denied = True
                 return False
+            elif fence[0].foreign_commit():
+                # Another process committed since the inputs were last read. That is not a
+                # change of this check's inputs: read them again in the caller's transaction.
+                # The read writes nothing: a write during it would be hidden by the new mark.
+                if not inputs_current(live) or not fence[0].wrote(own_writes):
+                    denied = True
+                    return False
+                fence[0] = patient_context_refresh_state.ReadMark(ledger.db, own_writes=own_writes)
             return True
         except (ValueError, KeyError, TypeError, OSError):
             denied = True
@@ -781,7 +829,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
 
     claim = patient_context_quality_receipts._quality_claim(ledger, pid, identity["input_key"], deadline, current)
     if claim is None:
-        return "deferred", None
+        return deferred("claim")
     try:
         if not patient_context_quality_receipts._quality_failure_allows_remainder(ledger.db, pid, identity):
             return ("held" if source_candidate_ref is not None else "failed"), identity
@@ -836,7 +884,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
             max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
-            return "deferred", None
+            return deferred("jev_client")
         def seal_not_sent(unsent, reason):
             # committed, but its POST never started: settle it so the page can be asked again
             fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
@@ -872,7 +920,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 return "unknown", identity
             retry = patient_context_quality_receipts._quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose)
             if retry["held"] or retry["next_try"] > patient_context_refresh_state.time.time():
-                return "deferred", identity
+                return deferred("retry_wait", identity)
             candidates = [by_id[fid] for fid in ids] if page is None else None
             sources = ({ (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
                         for fact in candidates } if candidates is not None else None)
@@ -905,23 +953,24 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 failure_class = outcome.get("failure_class", "failed")
                 if failure_class in ("retry", "failed"):
                     patient_context_quality_receipts._quality_record_failure(ledger, pid, identity, claim, page_key, failure_class, current)
-                return "deferred", identity
+                return deferred("jev_not_evaluated", identity)
             return "pending", identity  # one bounded page per tick
         if patient_context_quality_receipts._quality_failed(ledger.db, pid, identity):
             if purpose == "source":
                 if source_candidate_ref is not None:
                     return "held", identity
-                return _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
+                repair_status, ref = _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
                     claim, current, deadline, admit, scfg["match_threshold"], cloud_mode=cloud_mode)
+                return deferred("repair", ref) if repair_status == "deferred" else (repair_status, ref)
             if not current():
-                return "deferred", None
+                return deferred("inputs_changed")
             repair_status, candidate = _quality_repair_candidate(
                 ledger, pid, cfg, workday_id, doc, identity, claim, current, deadline, admit,
                 initial["facts"], assessment, scfg["match_threshold"], initial["state"],
                 cloud_mode=cloud_mode, source_keys=source_keys)
             if repair_status == "candidate":
                 return "candidate", {**candidate, "facts": initial["facts"], "state": initial["state"]}
-            return repair_status, identity
+            return deferred("repair", identity) if repair_status == "deferred" else (repair_status, identity)
         patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))
