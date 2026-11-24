@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "手動のJev操作が背景処理の実行中にすぐ失敗する問題を修正",
+  "summary": "Jevの疎通確認やjev-valueなどの手動コマンドは、背景処理が保存の排他を持っている間も最大30秒（要求のタイムアウトが短ければその長さ）待ってから利用枠を予約します。これまでは1回だけ試して usage_lock_busy で止まっていました。待機中に更新が始まった場合やコードが入れ替わった場合は usage_code_changed で送信せずに止まり、台帳のSQLite書込み待ちが長引いた場合は異常終了の代わりに再試行可能な usage_ledger_busy を返します。日次上限・予算・復元中の確認は従来どおり排他の中で行い、Jevへの通信は排他を外してから行います。",
+  "upgrade": "追加操作は不要です。更新後に手動のJevコマンドを実行すると新しい待機動作になります。設定・既定値・日次上限は変わりません。",
+  "details": [
+    "_reserve_live_usage が run.lock を1回だけ試す代わりに既存の wait_run_lock で待つ。",
+    "待機の上限は LIVE_LOCK_WAIT_S（30秒）と要求のタイムアウトの短い方。",
+    "予約中の sqlite3.OperationalError を JevError('budget_exceeded', 'usage_ledger_busy', retryable=True) に変換する。"
+  ],
+  "refs": ["mcs/semantic/semantic_jev.py"]
+}
