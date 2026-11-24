@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "収集の派生処理の内訳時間を記録する",
+  "summary": "収集の derive 段の中で、リアルタイム抽出（derive_llm）と見守り候補の判定（derive_signals）にかかった秒数も、段別の経過時間に記録します。health.json と実行ログで、derive の時間がどこで使われているかを確認できます。処理の内容と順序は変えていません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更は不要です。",
+  "details": [
+    "stage_elapsed_s に derive_llm と derive_signals を追加する。既存の derive_rules・derive_medications と同じく derive の内訳で、derive の合計にも含まれる。",
+    "derive_llm はロックを手放したモデル呼出しの時間も含む経過時間である。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py"
+  ]
+}
