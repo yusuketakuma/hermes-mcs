@@ -55,7 +55,9 @@ def test_late_result_tally_batches_retained_history(tmp_path, monkeypatch, now, 
         guard_checks = [sql for sql in statements if sql.startswith('SELECT name,sql FROM sqlite_master')]
         # One batch binds the results, and one independently hashes prior bindings.
         assert len(lookups) == 2 * ((count + 899) // 900)
-        assert len(guard_checks) == 2   # one guard state read per batch kind, separate from the lookups
+        # one guard state read per batch kind, separate from the lookups, and one where the
+        # new tally records the guard count its verified rows were hashed under
+        assert len(guard_checks) == 3
         if guard:
             # the guard proves every retained row well-formed: no full json_tree validation pass
             assert checks == [] and indexed == lookups
@@ -64,14 +66,20 @@ def test_late_result_tally_batches_retained_history(tmp_path, monkeypatch, now, 
         assert len(decoded) == 2 * count
 
 
+# guard=True: the write-time guard's unchanged mutation count vouches for the hashed rows,
+# so an unrelated write re-reads none of them; guard=False: the full prefix is hashed once.
+@pytest.mark.parametrize('guard', [True, False])
 @pytest.mark.parametrize('transaction', [False, True])
-def test_unrelated_write_hashes_verified_prefix_only_once(tmp_path, monkeypatch, now, transaction):
+def test_unrelated_write_hashes_verified_prefix_only_once(tmp_path, monkeypatch, now, transaction, guard):
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         reservation = _reserve(ledger)
         with ledger.db:
             for index in range(1, 50):
                 ledger.artifact_add_tx(c.KINDS[0], '{}', project_id=1, model=MODEL,
                     meta={**reservation, 'reservation_id': f'{index:032x}', 'unit_key': str(index)})
+        if not guard:
+            ledger.db.execute('DROP TRIGGER cloud_usage_guard_delete')
+            assert ledger_schema.cloud_usage_guard_state(ledger.db) is None
         original = c._tally(ledger, now)
         ledger.artifact_add('synthetic_observation', '{}')
         statements, hashed = [], []
@@ -93,7 +101,8 @@ def test_unrelated_write_hashes_verified_prefix_only_once(tmp_path, monkeypatch,
                 ledger.db.rollback()
             ledger.db.set_trace_callback(None)
         assert tally is original and not tally.invalid
-        assert len(hashed) == 50
-        assert sum('AND artifact_id<=' in sql for sql in statements) == 1
+        assert len(hashed) == (0 if guard else 50)
+        assert sum('AND artifact_id<=' in sql for sql in statements) == (0 if guard else 1)
+        assert not any('artifact_id BETWEEN' in sql for sql in statements)   # an empty tail reads nothing
         assert sum('WHEN typeof(created_at)' in sql for sql in statements) == 1
         assert tally.precheck is None if transaction else tally.precheck is not None

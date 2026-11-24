@@ -17,7 +17,7 @@ from mcs_util import load_config, strict_json
 from inference_version import (CURRENT_VERSION, is_current,
                                current_meta_pred, read_version, LEGACY_VERSION)
 import semantic_runtime as runtime
-from semantic_policy import (JOB_KIND, QC_JOB_KIND, runtime_config)
+from semantic_policy import (JOB_KIND, QC_JOB_KIND, needs_local_model, runtime_config)
 import semantic_notice
 
 from semantic_reprocess import (
@@ -398,13 +398,40 @@ _LONG_START_S = 60.0
 def _backlog_commit_reserve(scfg: dict) -> float:
     """The commit reserve the job budget affords while a long-output call
     still fits the work window: full from a ~1220 s budget, partial below
-    (220 s at 900 s), never squeezing the long call out."""
+    (220 s at 900 s), never squeezing the long call out. Jobs with no
+    local-model stage make no long call and keep the short-budget timing."""
+    if not needs_local_model(scfg):
+        return 0.0
     budget = float(scfg["job_budget_seconds"])
     return min(BACKLOG_COMMIT_RESERVE_S,
                max(0.0, budget - semantic_transport.LONG_MIN_CALL_S - _LONG_START_S))
 
 
-_BACKLOG_TURN = {"kind": None}
+# Semantic jobs this process's backlog lane served since its last QC job.
+_BACKLOG_TURN = {"since_qc": 0}
+# While both kinds are due, QC takes one of every this many backlog jobs:
+# neither kind starves, and semantic work is not held to half the turns.
+_QC_FAIR_EVERY = 4
+
+
+def _note_backlog_turn(kind) -> None:
+    """Count one served backlog job toward the QC fair share."""
+    _BACKLOG_TURN["since_qc"] = 0 if kind == QC_JOB_KIND else min(
+        _QC_FAIR_EVERY - 1, _BACKLOG_TURN.get("since_qc", 0) + 1)
+
+
+def _fair_backlog_order(semantic_rows, qc_rows) -> list:
+    """Interleave both kinds by the QC fair share; leftover capacity goes to the other kind."""
+    order, sem, qc = [], list(semantic_rows), list(qc_rows)
+    since_qc = _BACKLOG_TURN.get("since_qc", 0)
+    while sem and qc:
+        if since_qc >= _QC_FAIR_EVERY - 1:
+            order.append(qc.pop(0))
+            since_qc = 0
+        else:
+            order.append(sem.pop(0))
+            since_qc += 1
+    return order + sem + qc
 
 
 _JOB_LOCK_BUCKETS = 1024
@@ -542,17 +569,17 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # Re-extraction re-pends QC rows under their old (low) job_id;
             # one job_id order let them win every pass and no semantic job
             # ran for hours (2026-10-10). Each kind keeps oldest-first, and
-            # the kind this worker served last goes second.
+            # the kinds share the window by the QC fair share.
             # QC re-seeding refreshes next_try: its new generation must
             # queue behind QC that was already waiting, despite an old id.
             priority = patient_priority.activity_order_sql('fetch_jobs.project_id') + ', ' if prioritize_patients else ''
-            rows = [row for kind in sorted(
-                        kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
-                    for row in ledger.db.execute(
+            by_kind = {kind: ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
                         + ('' if kind == QC_JOB_KIND else _REPROCESS_LAST_SQL + ', ') + priority + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
-                        (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
+                        (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()
+                       for kind in kinds}
+            rows = _fair_backlog_order(by_kind.get(JOB_KIND, ()), by_kind.get(QC_JOB_KIND, ()))
         # Include extra candidates so another worker's current job cannot
         # hide the next runnable item. Work remains bounded by max_jobs.
         qc_jobs = [j for j in rows if j['kind'] == QC_JOB_KIND]

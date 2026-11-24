@@ -143,7 +143,10 @@ def test_semantic_archived_work_remains_runnable_after_active_work_finishes(led,
 
 
 def test_backlog_retains_overscan_for_each_active_kind(led, monkeypatch):
-    monkeypatch.setattr(semantic_drain, "_BACKLOG_TURN", {"kind": semantic_drain.JOB_KIND})
+    # QC is owed its fair-share turn: it leads, and semantic work follows it
+    # instead of queueing behind the whole QC overscan.
+    monkeypatch.setattr(semantic_drain, "_BACKLOG_TURN",
+                        {"since_qc": semantic_due_selection._QC_FAIR_EVERY - 1})
     monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     max_jobs = 1
     for mid in range(100, 100 + max_jobs + 8):
@@ -155,7 +158,8 @@ def test_backlog_retains_overscan_for_each_active_kind(led, monkeypatch):
         led, "backlog", (semantic_drain.JOB_KIND, semantic_drain.QC_JOB_KIND), True, max_jobs)
     assert len(qc) == max_jobs + 8
     assert len(due) == max_jobs + 9
-    assert due[-1]["message_id"] == 20
+    assert [r["kind"] for r in due[:2]] == [semantic_drain.QC_JOB_KIND, semantic_drain.JOB_KIND]
+    assert due[1]["message_id"] == 20
     assert {r["project_id"] for r in due} == {2}
 
 

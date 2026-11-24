@@ -373,15 +373,10 @@ _COMPLETE_RESULT = re.compile(r"(?:デス|デシタ)?(?:[。、,;；]|$)")
 # (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
 # so words that merely end in them (悪化, 尿素窒素) are no stems.
 _SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)$")
-# Items also reported for urine, CSF or effusions (尿中Ca, 尿TP, 尿沈渣WBC 10-19/HPF):
-# those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
-# The previous items (尿Cr) keep their earlier reading.
+# Items also reported for urine, CSF, effusions, stool or sputum (尿中Ca, 尿TP, 尿沈渣WBC
+# 10-19/HPF): those specimens and qualitative or ranged results (1+, 10-19) are not the
+# blood item. The previous items (尿Cr) keep their earlier reading.
 _SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "calcium", "magnesium"})
-# The specimen may also head the item: 尿検査：, 尿検査結果：, (尿), 【髄液】, 尿検査\n (folding
-# drops spaces and line breaks), so heading words, brackets and delimiters may follow it.
-_OTHER_SPECIMEN = re.compile(fold_surface(
-    r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:結果|所見|データ)?[)\]】>]?(?:にて|で|の|は)?[:・|=]*$"))
-_SPECIMEN_REACH = 16   # characters read before an item for its specimen heading
 _QUALITATIVE_RESULT = re.compile(r"\+")
 # A number followed by a range mark and a digit is one end of a range (2〜4, 4.5から5.0),
 # not a single result of any item. The marks are folded forms: ～ and － fold to ~ and -.
@@ -490,15 +485,136 @@ def _part_of_drug_name(name: str, before: str) -> bool:
             or bool(_SALT_STEM.search(fold_surface(re.split(r"\s", before)[-1]))))
 
 
+def _spaced(evidence, starts: list, ends: list, at: int) -> bool:
+    """Whether a space or a line break dropped by folding precedes folded position ``at``."""
+    return 0 < at < len(starts) and evidence[ends[at - 1]:starts[at]].isspace()
+
+
+# Lab and dose unit spellings (mg also spells Mg): written right after a number, they are its unit.
+_UNIT_SPELLINGS = frozenset({*_LAB_UNITS, "mg", "μg", "mcg", "ml"})
+
+
+def _named_reading_starts(quote: str, evidence, starts: list, ends: list) -> list[tuple[int, str]]:
+    """Folded positions (and names) where a named reading set apart by a space starts,
+    whatever separator follows its name (Cr 0.9, Cr:0.9, Crは0.9); read once per quote."""
+    return [(at, reading[1]) for at in range(1, len(starts))
+            if _spaced(evidence, starts, ends, at) and (reading := _LAB_NEXT_NUMBER.match(quote, at))]
+
+
+def _unit_end(readings: list[tuple[int, str]], at: int, stop: int) -> int:
+    """Where a quoted unit starting at ``at`` ends: before the first named reading in it."""
+    i = bisect.bisect_left(readings, at, key=lambda reading: reading[0])
+    # A unit spelling right after the number is its own unit (10 mg 2), never a next reading.
+    if i < len(readings) and readings[i][0] == at and readings[i][1] in _UNIT_SPELLINGS:
+        i += 1
+    return readings[i][0] if i < len(readings) and readings[i][0] < stop else stop
+
+
+def _word_starts(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
+    """Whether folded position ``at`` starts a clause: after a space, a mark or punctuation, a digit or a particle."""
+    if not at or _spaced(evidence, starts, ends, at):
+        return True
+    before = quote[at - 1]
+    if not ("一" <= before <= "龥" or before == "々" or "ァ" <= before <= "ヺ" or before == "ー" or "a" <= before <= "z"):
+        return True
+    return evidence[starts[at - 1]] in "のでにはがをともへや"   # a hiragana particle (folding makes it katakana)
+
+
+def _specimen_sections(quote: str, evidence, starts: list, ends: list,
+                       lines: list[int]) -> tuple[set, list, list]:
+    """Folded positions a specimen word is glued to, and the spans its headings name."""
+    glued, headings = set(), []   # headings: (start, end, line end or None for the rest of the quote)
+    line_ends = {*lines, len(quote)}
+    at = 0
+    while match := _SECTION_HEADING.search(quote, at):
+        start, end = match.span()
+        at = start + 1   # a word that is no heading is read again from its next character (再検 尿検査)
+        line_start, line_end = _line_span(quote, start, lines)
+        end = min(end, line_end)   # folding joins a delimiter to the next line's bullet (尿：\n・pH)
+        first = bool(_LINE_BULLETS.fullmatch(quote, line_start, start))
+        suffix = (match["suffix"] or "").removeprefix("中").removeprefix("沈渣")
+        # A bare word (尿, 便) must start a word: 排尿, 血尿, 軟便 head nothing. A suffixed
+        # heading (尿検査, 尿所見) or a bracket is one wherever it starts (本日尿検査).
+        bare = bool(match["word"]) and not suffix and quote[start] not in "([【<"
+        # A bare word (尿, 沈渣) must start a clause (after 、。・/; or a particle: 蛋白(1+)、沈渣 WBC);
+        # glued to a word it heads nothing (排尿, 血尿, 軟便, 今朝排便).
+        # A date or time word may be glued before a bare word or a blood heading (本日尿, 本日血液検査).
+        dated = bool((bare or match["blood"]) and _DATE_BEFORE.search(quote, max(line_start, start - 12), start))
+        if (bare or match["blood"]) and not (first or dated or _word_starts(quote, start, evidence, starts, ends)):
+            continue
+        # A bare word that ends its line is a heading only when it stands alone, after a space or
+        # a colon, or after a date or time word (11/20 尿, 本日、尿); after any other clause it
+        # describes (多量の便, 夜間に尿, 食事良好、便).
+        heading_line = not bare or bool(
+            dated or _BARE_HEADING_LINE.fullmatch(quote, line_start, start) or quote[start - 1] == ":"
+            or _spaced(evidence, starts, ends, start))
+        spaced = _spaced(evidence, starts, ends, end)
+        closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] or suffix
+        if match["word"] and not (closed or spaced or end in line_ends) and _LAB_NAME.match(quote, end):
+            glued.add(end)   # 尿TP, 尿中Ca
+            continue
+        if end in line_ends:
+            heading = heading_line   # 11/20 尿検査, 11/20 尿; not 多量の便
+        elif match["particle"]:
+            heading = bool(_LAB_NAME.match(quote, end))   # 尿検査で白血球, not 尿検査は異常なし
+        elif bare and match["delimiter"] and match["delimiter"][0] in "、,":
+            heading = False   # a list of words (尿、便; 多量の便、WBC …), not a heading (尿：)
+        else:
+            # After a bare word or a description (尿：, 便の性状：) only a lab item is a result.
+            result = (_LAB_RESULT if bare or suffix in _DESCRIPTIONS else _SECTION_RESULT).match(quote, end, line_end)
+            # The item word is one source word: folding joins 淡黄色 白血球 30 into one.
+            heading = bool((closed or spaced) and result and not any(
+                _spaced(evidence, starts, ends, pos) for pos in range(end + 1, result.end(1))))
+        if heading:
+            at = end
+            # A heading that starts its line (after marks, a date or a time word: 11/20 尿検査：pH 6.0)
+            # or ends it names the following lines; one after prose names its own line only.
+            open_ended = end in line_ends or bool(_LINE_LEAD.fullmatch(quote, line_start, start))
+            headings.append((start, end, None if open_ended else line_end, bool(match["word"])))
+    blank = [at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2]
+    opened, closed_at = [], []
+    for i, (start, end, line_end, specimen) in enumerate(headings):
+        if not specimen:
+            continue
+        stop = min(len(quote) if line_end is None else line_end,
+                   headings[i + 1][0] if i + 1 < len(headings) else len(quote))
+        # A blank line ends the section once one of its results has been read.
+        seen = _first_result(quote, end, stop, lines)
+        after = bisect.bisect_right(blank, seen) if seen is not None else len(blank)
+        if after < len(blank):
+            stop = min(stop, blank[after])
+        opened.append(end)
+        closed_at.append(stop)
+    return glued, opened, closed_at
+
+
+def _first_result(quote: str, at: int, stop: int, lines: list[int]) -> int | None:
+    """Where the first result between ``at`` and ``stop`` starts, read line by line (folding
+    joins lines, and pH 6.0 / Mg 2.0mg/dL on two lines is no 6.0mg dose)."""
+    while at < stop:
+        line_end = min(stop, _line_span(quote, at, lines)[1])
+        if result := _SECTION_RESULT.search(quote, at, line_end):
+            return result.start()
+        at = line_end if line_end > at else at + 1
+    return None
+
+
+def _in_specimen_section(sections: tuple[set, list, list], at: int) -> bool:
+    """Whether a specimen word is glued to folded position ``at`` or one of its headings names it."""
+    glued, opened, closed = sections
+    section = bisect.bisect_right(opened, at) - 1
+    return at in glued or (section >= 0 and at < closed[section])
+
+
 def _other_reading(analyte: str | None, quote: str, match: re.Match,
-                   evidence: str, starts: list, lines: list[int]) -> bool:
+                   evidence: str, starts: list, lines: list[int], specimen_sections) -> bool:
     """A name match that belongs to a drug, another specimen or another sense of the spelling."""
     name = match.group("name")
     at = match.start("name")
-    # Bounded windows: a salt stem or a specimen word is a few characters long.
+    # Bounded window: a salt stem is a few characters long.
     if at < len(starts) and _part_of_drug_name(name, evidence[max(0, starts[at] - 16):starts[at]]):
         return True
-    if analyte in _SPECIMEN_SHARED_ITEMS and _OTHER_SPECIMEN.search(quote, max(0, at - _SPECIMEN_REACH), at):
+    if analyte in _SPECIMEN_SHARED_ITEMS and _in_specimen_section(specimen_sections, at):
         return True
     other_sense = _OTHER_SENSE_CLAUSE.get(analyte)
     return bool(other_sense and other_sense.search(_clause_at(quote, at, lines)))
@@ -514,8 +630,9 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 # else (塩化, 維持液, ロスバスタチン, 朝夕, 適宜, 分2, 1錠, 4→2) keeps it a candidate.
 # The words are folded once, like the quote they are matched on.
 _READING_UNIT = "|".join(re.escape(u) for u in sorted(_LAB_UNITS, key=len, reverse=True))
-_READING = (r"(?:" + _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
-            + r"|[ァ-ヺー]++|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
+_LAB_SPELLINGS = _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
+_READING = (r"(?:" + _LAB_SPELLINGS
+            + rf"|[ァ-ヺー]++|[a-z]+(?:[0-9]+(?!{_READING_UNIT})[a-z]+)*[0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
             + rf"(?:{_READING_UNIT})?")
 # The lab section headings of medical_document._HEADINGS (labs_vitals, course_and_labs),
 # repeated here so the validator's decisions do not import the OCR module; a test keeps
@@ -526,16 +643,78 @@ _LAB_HEADER = "|".join((
     r"(?:血液|生化学?|電解質|定期|本日|今日|今回)?(?:採血|検査|測定)(?:結果|値|データ|所見)?",
     r"電解質|生化学?|緊急値|本日|今日|今回",
 ))
+# Each word of a layout is read once and kept (an atomic group, repeated possessively):
+# a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
+# every split of a run of readings that ends in an unknown word. Alternatives that
+# start alike are therefore listed longest first (低下 before 低).
 _LAB_PREFIX = re.compile(fold_surface(
-    r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*"
-    rf"(?:[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
-    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*"))
+    r"(?>[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*+"
+    rf"(?>[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
+    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*+"))
 _LAB_TAIL = re.compile(fold_surface(
-    rf"(?:[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
-    r"|[でとにがはも]?(?:高値|低値|高め|低め|高|低|↑+|↓+|high|low|上昇|低下|改善|悪化|横ばい|不変"
+    rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    r"|[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
-    r"|でした|です|だった|である)*"))
+    r"|でした|です|だった|である)*+"))
+# A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
+# that item only (尿TP, 尿中Ca). With a closed suffix (検査, 検査の結果, 定性, 一般, 生化学,
+# 穿刺, 所見, の性状, データ, 検体 ...) or a bracket it is a heading wherever it starts, even
+# glued to the word before it (本日尿検査); a bare word (尿, 沈渣) must start a clause (after a
+# space, punctuation, a mark, a digit or a particle, or a date or time word: 蛋白(1+)、沈渣,
+# 本日尿; not 排尿, 血尿, 軟便). A heading ends its line (a bare word then stands alone on it,
+# after a bullet, a colon, a space or a date or time word: 11/20 尿, 本日、尿; not 多量の便), or
+# is followed by a delimiter (for a bare word not 、: 尿、便 is a list), a bracket or a space and a
+# result, or by a particle and a lab name (尿検査で白血球). After a bare word or a description (の性状, 所見, 検体, データ)
+# only a lab item with its value is a result: 尿：淡黄色 6回, 便の性状：泥状 3回 head nothing.
+# A section names every result, across line breaks and sentence ends, up to a blood heading
+# (血液検査, 採血, 血算, CBC, 末梢血, 血清, 生化学, also after a date or time word: 本日血液検査),
+# another specimen heading, or a blank line that follows a result of the section (a dose or a
+# count such as 1錠 or 6回 is none). A heading that starts its line (after marks, a date or a
+# time word: 11/20 尿検査：pH 6.0) names the following lines; one after prose that a result
+# follows names the rest of its line only. Statements (尿検査は異常なし) and other notes
+# (再検査, 本日測定, 【看護師より】) head nothing and end nothing.
+_SPECIMEN_WORDS = ("カテ尿|導尿|採尿|自然尿|新鮮尿|部分尿|スポット尿|随時尿|早朝尿|中間尿|蓄尿|検尿|検便"
+                   "|尿|沈渣|髄液|胸水|腹水|便|喀痰")
+_SPECIMEN_SUFFIX = ("(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査"
+                    "|生化学検査|検査|の結果|定性|一般|生化学|穿刺液?|の性状|性状|所見|データ|結果|検体)?")
+_BLOOD_HEADING = ("(?:血液|生化学?|電解質|定期|本日|今日|今回)?採血(?:の結果|結果|データ)?"
+                  "|(?:血液|生化学?|電解質)(?:一般|検査|測定)?(?:結果|値|データ|所見)?|血算|血清|末梢血|静脈血|cbc")
+_SECTION_HEADING = re.compile(
+    rf"[(\[【<]?(?:(?P<word>{fold_surface(_SPECIMEN_WORDS)})"
+    rf"(?P<suffix>{fold_surface(_SPECIMEN_SUFFIX)})"
+    rf"|(?P<blood>{fold_surface(_BLOOD_HEADING)}))"
+    rf"(?:\([^()]{{0,16}}\))?(?P<close>[)\]】>]?)(?P<desu>{fold_surface('(?:です|でした)。?')})?"
+    rf"(?P<particle>{fold_surface('にて|では|で|の|は')})?(?P<delimiter>[:・|=、,;]*)")
+_DESCRIPTIONS = frozenset(fold_surface(d) for d in ("の性状", "性状", "所見", "データ", "結果", "の結果", "検体"))
+# A date or a time word glued before a bare specimen word names when it was taken (本日尿,
+# 11/20 尿, 外来で尿); other words before it describe it (多量の便, 夜間に尿, トイレで便).
+_WHEN = (r"(?:(?:[0-9]{2,4}[/.年-])?[0-9]{1,2}[/.月][0-9]{1,2}日?"
+         r"|本日|今日|昨日|今朝|今回|前回|先週|先月|入院時|外来|来院時|受診時|初診時|訪問時|退院時|術前|定期|至急|追加"
+         r"|午前|午後|当院|他院|前医|当日|翌日|同日)")
+_DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は|、)?$"))
+# Only marks, digits, brackets and a bracketed tag may stand before a bare specimen word on
+# its line (・尿, ①尿, A.尿, 【結果】尿).
+_BARE_HEADING_LINE = re.compile(r"(?>【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*+")
+# What may stand before a heading that starts its line: marks, bracketed tags, and dates or time
+# words in any form (11/20, 11月20日, 11/20の, 本日の), each read once.
+_LINE_LEAD = re.compile(
+    fold_surface(rf"(?>{_WHEN}(?:にて|の|で|に|は|、)?|") + r"【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*+")
+_LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
+_LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
+# A result: an item word followed by a number, a qualitative mark or a closed qualitative word
+# ending its statement (pH 6.0, pH 6.0., 比重 1.015, 蛋白(1+), 赤血球 5個/HPF, 白血球 陰性,
+# 潜血 陰性です; not 陰性疑い, 陰性か確認中). A dose or a count (1錠, 6回, 10 mg) is none; a
+# unit spelling followed by a separator is the next item (pH 6.0 Mg:2.0). Each word is tried
+# from its first character only, so a long word costs its length once.
+_RESULT_NUMBER = fold_surface(
+    r"(?:値|は|:|=)*(?:\(?[+±-]|\(?[0-9]+(?:\.[0-9]+)?"
+    r"(?![0-9]|\.[0-9]|錠|回|本|個(?!/)|包|袋|滴|枚|カプセル|(?:mg|μg|mcg)(?![/:=値は])|日)"
+    r"|(?:陰性|陽性|正常|異常なし)(?=$|[、,。;:/)]|(?:です|でした|だった|である)(?:$|[、,。])))")
+_SECTION_RESULT = re.compile(fold_surface(
+    rf"({_LAB_SPELLINGS}|(?<![a-z0-9])[a-z][a-z0-9]*|(?<![ァ-ヺー])[ァ-ヺー]++|[一-龥]{{1,6}})") + _RESULT_NUMBER)
+# After a bare specimen word (尿 WBC 30) only a lab item is a result: 尿 量 500ml is a note.
+_LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
@@ -669,16 +848,27 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     ambiguous = False
     row_end = -1
     folded_value = fold_surface(raw_value)
+    specimen_sections = (_specimen_sections(quote, evidence, starts, ends, lines)
+                         if analyte in _SPECIMEN_SHARED_ITEMS else None)
+    named_readings = None   # read once, when a quoted unit first needs cutting
     for match in re.finditer(pattern, quote):
         if len(readings) > 1:
             break
         if (_glued_to_a_word(quote, match.start("name"), evidence, starts, ends)
-                or _other_reading(analyte, quote, match, evidence, starts, lines)):
+                or _other_reading(analyte, quote, match, evidence, starts, lines, specimen_sections)):
             continue
         # Positions, not slices: each match costs only its own surroundings.
         if number is not None:
-            # The number and its unit end with their source line (カリウム 4.0\nCr 0.9).
-            result = _QUOTED_RESULT.match(quote, match.end(), _line_span(quote, match.start(), lines)[1])
+            # The number and its unit end with their source line (カリウム 4.0\nCr 0.9) or where
+            # the next named reading starts after a space (カリウム 4.0mEq/L Cr 0.9).
+            _, line_end = _line_span(quote, match.start(), lines)
+            result = _QUOTED_RESULT.match(quote, match.end(), line_end)
+            if result and result[2]:
+                if named_readings is None:
+                    named_readings = _named_reading_starts(quote, evidence, starts, ends)
+                cut = _unit_end(named_readings, result.start(2), result.end())
+                if cut < result.end():
+                    result = _QUOTED_RESULT.match(quote, match.end(), cut)
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(quote, result.end()))):
@@ -689,20 +879,18 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                     continue
                 unit_matches = ((_LAB_UNITS.get(quoted, quoted) == normalized_unit) if unit_key
                                 else not quoted or quoted in allowed_units)
-                _, line_end = _line_span(quote, match.start(), lines)
                 if result.end() > row_end:
                     tail_end = _LAB_RESULT_END.search(quote, result.end(), line_end)
                     row_end = tail_end.start() if tail_end else line_end
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.fullmatch(quote, result.end(), row_end):
                     readings.append((match, row_end))
-                elif unit_matches or (unit_key and quoted.startswith(unit_key)):
+                elif unit_matches:
                     # Folding drops column whitespace. Verify the boundary in the original text.
-                    unit_end = result.end() if unit_matches else result.start(2) + len(unit_key)
+                    unit_end = result.end()
                     if (unit_end < line_end and _LAB_NEXT_NUMBER.match(quote, unit_end)
-                            and evidence[ends[unit_end - 1]:starts[unit_end]].isspace()):
-                        repeats = any(
-                            item[1] in names and evidence[ends[item.start() - 1]:starts[item.start()]].isspace()
-                            for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
+                            and _spaced(evidence, starts, ends, unit_end)):
+                        repeats = any(item[1] in names and _spaced(evidence, starts, ends, item.start())
+                                      for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
                         if repeats:
                             ambiguous = True
                             break

@@ -20,7 +20,8 @@ from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, is_c
 import semantic_jev as jev
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS,
                              KIND_FACTS_V2, KIND_LOOP, KIND_LOOP_EVENT, KIND_SUMMARY, KIND_USAGE,
-                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, policy_fingerprint)
+                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, needs_local_model,
+                             policy_fingerprint)
 
 
 def _member(row) -> dict:
@@ -155,6 +156,25 @@ def jev_state(bundle: dict, target_id: int) -> dict | None:
                        "sender": target["sender"],
                        "text": target["body_original"]},
             "context": ctx}
+
+
+def primary_questions(scfg: dict) -> dict:
+    """Every active primary proposition as the question Jev is asked."""
+    return {name: jev.noul_question(p["instructions"], p["true"], p["false"])
+            for name, p in jev.active_propositions(scfg).items()}
+
+
+def assessment_input(bundle: dict, target_id: int, scfg: dict) -> str | None:
+    """Identity of what a primary assessment sends to Jev for one target.
+
+    The thread fingerprint also covers stored fields Jev never receives
+    (reply counts, attachment download state, sender display names). This
+    names only the request itself: the target, its context and the questions."""
+    state = jev_state(bundle, target_id)
+    if state is None:
+        return None
+    return payload_hash({VERSION_KEY: CURRENT_VERSION, "model": jev.JEV_MODEL,
+                         "state": state, "questions": primary_questions(scfg)})
 
 
 def producer_current(kind: str, row_model, meta: dict) -> bool:
@@ -474,6 +494,26 @@ def _valid_primary_history(content, meta, previous, mid, fp, policy, scfg):
                 or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
             return False
     return True
+
+
+def _carried_primary_assessment(rows, mid, policy, scfg, jev_input):
+    """The complete primary assessment of this exact Jev input under another source fingerprint, or None.
+
+    The newest row recorded for the input decides: an incomplete, invalidated
+    or otherwise unusable one is never bypassed for an older answer."""
+    if jev_input is None:
+        return None
+    for stored in rows:
+        content, meta = loads_dict(stored['content']), loads_dict(stored['meta'])
+        if (meta is None or meta.get('fact_id') is not None
+                or meta.get('jev_input') != jev_input or meta.get('policy_fingerprint') != policy):
+            continue
+        if (content is not None and meta.get('technical_status') == 'complete' and content.get('verdicts')
+                and _valid_primary_assessment(content, meta, stored['model'], mid,
+                                              meta.get('fingerprint'), policy, scfg)):
+            return {'content': content, 'meta': meta}
+        return None
+    return None
 
 
 def _reprocess_job_payload(ledger, row, project_id, root):
@@ -896,7 +936,7 @@ def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None, observ
     if bundle is None:
         return 'held'
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
-    if scfg['summary_mode'] == 'off' and scfg['loop_mode'] == 'off':
+    if not needs_local_model(scfg):
         return _classification_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(), bundle, fp, policy)
     if scfg['summary_mode'] == 'off':
         return _loop_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(),
