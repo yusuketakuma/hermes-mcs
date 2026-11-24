@@ -344,7 +344,12 @@ def stage_derive(ledger, result, deadline, cfg=None,
         if invalid:
             result["drug_map"]["status"] = "invalid"
         elif result["drug_map"]["status"] == "partial":
-            result["errors"].append("drug_map: partial")
+            # a cut that moved the cursor resumes next tick like any other
+            # deadline cut; a cut that examined nothing is a real stall
+            if result["drug_map"].get("progressed"):
+                _defer_stage(result, "derive_medications")
+            else:
+                result["errors"].append("drug_map: no_progress")
     except Exception as e:
         result["errors"].append(f"drug_map: {type(e).__name__}")
 

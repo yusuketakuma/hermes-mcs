@@ -48,7 +48,7 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
         assert clock[0] < deadline < 270
         seen.append("medications")
         clock[0] = deadline
-        return {"done": 0, "pids": [], "status": "partial"}
+        return {"done": 0, "pids": [], "status": "partial", "progressed": True}
 
     def llm(ledger, **kwargs):
         assert seen == ["rules"]
@@ -83,7 +83,8 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
         result = {"errors": [], "realtime_ids": [1]}
         run_check.stage_derive(ledger, result, 300, {})
         assert seen == ["rules", "llm", "medications", "rollup", "signals"]
-        assert result["errors"] == ["drug_map: partial"]
+        assert result["errors"] == ["deadline_deferred:derive_medications"]
+        assert result["deferred_stages"] == ["derive_medications"]
         assert set(result["stage_elapsed_s"]) >= {"derive_rules", "derive_medications"}
     finally:
         ledger.close()

@@ -7,6 +7,7 @@ import pytest
 
 import drug_map
 import extract
+import health_report
 import mcs_config
 import mcs_signals
 import notify_views
@@ -131,16 +132,34 @@ def test_dictionary_config_requires_absolute_path_and_pin():
         assert mcs_config._drug_map_config(value) is not None
 
 
-def test_deadline_cut_derive_is_reported_as_error(tmp_path, monkeypatch):
+def _stage_drug_map(tmp_path, monkeypatch, derived):
     monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
     monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
-    monkeypatch.setattr(drug_map, "derive", lambda *args, **kwargs: {
-        "status": "partial", "done": 0, "pids": []})
+    monkeypatch.setattr(drug_map, "derive", lambda *args, **kwargs: derived)
     db = _ledger(tmp_path)
     try:
         result = {"errors": []}
         run_check.stage_derive(db, result, 100, {}, llm_budget_cap=0)
-        assert "drug_map: partial" in result["errors"]
+        return result, health_report.build_health(db.db, result, "partial", cfg={})
     finally:
         db.close()
+
+
+def test_deadline_cut_derive_with_progress_is_deferred(tmp_path, monkeypatch):
+    result, health = _stage_drug_map(tmp_path, monkeypatch, {
+        "status": "partial", "done": 0, "pids": [], "progressed": True})
+    assert result["errors"] == ["deadline_deferred:derive_medications"]
+    assert result["deferred_stages"] == ["derive_medications"]
+    assert "stage_errors" not in health["state_reasons"]
+    categories = health["collection_diagnostics"]["errors"]["categories"]
+    assert {k: v for k, v in categories.items() if v} == {"deferred": 1}
+
+
+def test_deadline_cut_derive_without_progress_is_reported_as_error(tmp_path, monkeypatch):
+    result, health = _stage_drug_map(tmp_path, monkeypatch, {
+        "status": "partial", "done": 0, "pids": [], "progressed": False})
+    assert result["errors"] == ["drug_map: no_progress"]
+    assert "deferred_stages" not in result
+    assert "stage_errors" in health["state_reasons"]
+    assert health["overall"] == "degraded"
