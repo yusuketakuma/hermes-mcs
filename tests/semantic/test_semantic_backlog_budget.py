@@ -932,8 +932,9 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
     import json
 
     from extract_testkit import _hash, _ledger, _message, _v2_artifact
+    import extract_llm_engine
     import extract_llm_local_rebuild as local_rebuild
-    from test_local_rebuild_execution import _approved
+    from test_local_rebuild_execution import _approved, _no_cloud_unit
 
     db = _ledger(tmp_path)
     real_close = db.close
@@ -945,8 +946,11 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
     errors = []
     pass_count = [0]
     try:
-        unit = _approved(db, monkeypatch)               # approved unit (mid 1)
-        tag = local_rebuild.tag(unit)
+        _approved(db, monkeypatch)                      # approved unit (mid 1)
+        _no_cloud_unit(monkeypatch)
+        monkeypatch.setattr(extract_llm_engine, '_llm_call',
+                            lambda prompt, **_kw: {'symptoms': [],
+                                                   'summary': '合成本文'})
         db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")
                           for mid in (9, 11)])
         db.ensure_patient(2)
@@ -988,7 +992,8 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                 {"kind": "semantic", "status": "done"}]}
 
         def select_and_complete(ledger, **kwargs):
-            extra = {key: True for key in ("archived_first", "fair_oldest")
+            extra = {key: True for key in ("archived_first", "fair_oldest",
+                                           "approved_first")
                      if kwargs.get(key)}
             rows, fresh_selected = extract_llm._select_pending(
                 ledger, kwargs["limit"], kwargs["admitted_ids"],
@@ -996,12 +1001,21 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
             try:
                 if rows:
                     row = dict(rows[0])
+                    if row["message_id"] == 1:
+                        # the approved unit goes through the real runner:
+                        # real claim, real local rebuild, real adopted final
+                        report = extract_llm_runner.run_pending(
+                            ledger, limit=1, budget_s=30, approved_first=True)
+                        seen.append(1)
+                        turn_kind.append("oldest" if kwargs["oldest_first"]
+                                         else "normal")
+                        turn_fresh.append(fresh_selected)
+                        return {"done": report["done"], "failed": 0,
+                                "left": 1, "selected": len(rows)}
                     own_lease = extract_llm._claim(ledger, row)
                     if own_lease is not None:
                         mid = row["message_id"]
                         meta = {"summary": "synthetic current"}
-                        if mid == 1:                    # adoption: tagged final
-                            meta["local_rebuild"] = tag
                         _v2_artifact(ledger, mid, _hash(ledger, mid), meta,
                                      project_id=row["project_id"])
                         extract_llm._release(ledger, row, own_lease)
@@ -1031,6 +1045,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         assert seen[0] == 1                            # approved unit goes first
         approved_turn = turn_fresh[0]
         assert approved_turn == 0                      # re-extraction, not fresh
+        assert local_rebuild.permit(db, 1, 1) == local_rebuild.ADOPTED
         normal_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
                         if mid in range(100, 106) and kind == "normal"]
         assert normal_fresh and all(f == 1 for f in normal_fresh)

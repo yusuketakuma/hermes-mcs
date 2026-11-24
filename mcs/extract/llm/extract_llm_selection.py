@@ -562,7 +562,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
                     cloud_only: bool = False, deadline: float | None = None,
-                    exclude_ids=None) -> tuple[list, int | None]:
+                    exclude_ids=None, approved_first: bool = False) -> tuple[list, int | None]:
     deadline = deadline if cloud_only else None
     reader = None
     owner = ledger
@@ -597,6 +597,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                 archived_first=archived_first, fair_oldest=fair_oldest,
                 prioritize_patients=prioritize_patients, cloud_only=cloud_only,
                 receipt_check=receipt_check, deadline=deadline,
+                approved_first=approved_first,
                 **({"exclude_ids": exclude_ids} if exclude_ids else {}))
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
@@ -634,7 +635,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          oldest_first: bool, *, archived_first: bool = False,
                          fair_oldest: bool = False, prioritize_patients: bool = False,
                          cloud_only: bool = False, receipt_check=None,
-                         deadline: float | None = None, exclude_ids=None) -> tuple[list, int | None]:
+                         deadline: float | None = None, exclude_ids=None,
+                         approved_first: bool = False) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -866,18 +868,31 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
     # An approved local rebuild is pending backlog but must not wait behind
-    # it: the approval grants a local attempt, so the unit takes the first
-    # slots of the pass. The same eligibility, admission, claim-lease and
-    # retry gates apply — only the posted_at order is lifted. Unapproved
-    # messages are never in the set, adopted units fail pending_pred, and a
-    # held or proof-changed unit is refused in prepare under its own verdict.
-    if not cloud_only and rebuilds:
-        priority_ids = sorted({mid for _pid, mid in rebuilds})
+    # it on the drainer's normal passes: the approval grants a local attempt,
+    # so a unit the permit re-proof still marks ACTIVE takes the first slots
+    # of the pass when the caller opts in. The same eligibility, admission,
+    # claim-lease and retry gates apply — only the posted_at order is lifted.
+    # Dedicated turns keep their own selection (the caller leaves this off
+    # for oldest/fair/archive or recent-only windows, the structure exempts
+    # oldest/archive passes too, and the non-background paths never pass
+    # it); an adopted, proof-changed or unverified unit waits in normal
+    # order and prepare's own verdict handles it there.
+    if (approved_first and not cloud_only and not oldest_first
+            and not archived_first and rebuilds):
+        priority_ids = sorted(mid for (pid, mid), unit in rebuilds.items()
+                              if local_rebuild.permit(ledger, pid, mid,
+                                                      approvals=rebuilds)
+                              == local_rebuild.ACTIVE)
         selected = _select(None, limit - len(rows), None,
                            scope=" AND m.message_id IN (SELECT value FROM json_each(?))",
-                           scope_params=[json.dumps(priority_ids)])
+                           scope_params=[json.dumps(priority_ids)]) if priority_ids else []
         if selected:
             rows += selected
+            if fresh_selected is not None:
+                fresh_selected += ledger.db.execute(
+                    "SELECT COUNT(*) FROM messages m WHERE m.message_id IN "
+                    "(SELECT value FROM json_each(?)) AND " + _FRESH_SQL,
+                    (json.dumps([r["message_id"] for r in selected]),)).fetchone()[0]
             adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
             adm_params.append(json.dumps(sorted({r["message_id"] for r in selected})))
     # Active patients normally precede archived ones; the resident's

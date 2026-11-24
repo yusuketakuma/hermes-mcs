@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import functools
 import time
@@ -103,10 +104,7 @@ def _priority_admitted(ledger, admitted):
     try:
         import extract_llm_local_rebuild as local_rebuild
         recent |= {mid for _pid, mid in local_rebuild.approved_units(ledger.db)}
-    except Exception:
-        # A hint read that fails in any way must never stop the drainer loop:
-        # the turn just falls back to the recent-only window, and prepare's
-        # own approvals lookup still grants nothing on a broken table.
+    except sqlite3.Error:
         pass
     return recent if admitted is None else admitted & recent
 
@@ -763,6 +761,7 @@ def _main() -> int:
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm,
+                                    approved_first=not oldest_turn and not semantic_priority,
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)

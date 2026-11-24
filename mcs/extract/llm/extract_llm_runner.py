@@ -344,7 +344,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 archived_first: bool = False,
                 fair_oldest: bool = False, allow_cloud: bool = True,
                 background: bool = False, cloud_only: bool = False,
-                prioritize_patients: bool = False, run_lock_fd: int | None = None) -> dict:
+                prioritize_patients: bool = False, run_lock_fd: int | None = None,
+                approved_first: bool = False) -> dict:
     """Extract up to `limit` pending/stale messages with bounded inference.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -431,6 +432,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                                archived_first=archived_first,
                                                fair_oldest=fair_oldest, cloud_only=cloud_only,
                                                prioritize_patients=prioritize_patients,
+                                               approved_first=approved_first,
                                                **({'deadline': deadline} if cloud_only else {}))
     except _CloudSelectionIncomplete as error:
         return {"done": carry_settled['done'], "failed": 0, "left": None,
@@ -538,7 +540,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         candidates, extra_fresh = _select_pending(
             ledger, limit, admitted_ids, shard, oldest_first,
             archived_first=archived_first, fair_oldest=fair_oldest,
-            prioritize_patients=prioritize_patients, exclude_ids=seen)
+            prioritize_patients=prioritize_patients, exclude_ids=seen,
+            approved_first=approved_first)
         if not candidates:
             break
         if any(row["message_id"] in seen for row in candidates):
