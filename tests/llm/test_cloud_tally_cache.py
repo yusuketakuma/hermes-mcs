@@ -692,8 +692,9 @@ def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(
 
 @pytest.mark.parametrize('guard', [True, False])
 def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now, guard):
-    """A reservation's in-transaction check verifies the prefix once: by the write-time
-    guard's unchanged count plus the unguarded tail, or by one full re-hash without it."""
+    """A reservation's in-transaction check verifies the prefix: by the write-time guard's
+    unchanged count (the pre-check before the transaction already hashed the appended row,
+    so the tail is empty), or by one full re-hash without the guard."""
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         _reserve(ledger)
         c._tally(ledger, now)
@@ -709,7 +710,8 @@ def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now, 
             ledger.db.set_trace_callback(None)
         begin = statements.index('BEGIN IMMEDIATE')
         assert sum('AND artifact_id<=' in sql for sql in statements[begin:]) == (0 if guard else 1)
-        assert sum('AND artifact_id BETWEEN' in sql for sql in statements[begin:]) == (1 if guard else 0)
+        assert not any('artifact_id BETWEEN' in sql for sql in statements[begin:])
+        assert any('FROM cloud_usage_guard' in sql for sql in statements[begin:]) is guard
         tally = c._tally(ledger, now)
         assert tally.prefix == tally.fingerprint(ledger, now)
 
@@ -799,3 +801,10 @@ def test_rolled_back_row_whose_id_is_reused_is_hashed_again(tmp_path, now, perio
         tally = _read(ledger, period, now)
         assert tally.total == 2 * reserved and len(tally.open) == 2
         assert tally.prefix == tally.fingerprint(ledger, now)
+
+
+def test_guarded_tail_reads_a_primary_key_range(tmp_path):
+    # The tail must never walk the period through the kind/created_at index.
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        plan = ledger.db.execute('EXPLAIN QUERY PLAN ' + c._GUARDED_TAIL_SQL, (1, 2, 0)).fetchall()
+        assert [row[3] for row in plan] == ['SEARCH artifacts USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)']

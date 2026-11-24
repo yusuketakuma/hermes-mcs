@@ -103,6 +103,6 @@ def test_unrelated_write_hashes_verified_prefix_only_once(tmp_path, monkeypatch,
         assert tally is original and not tally.invalid
         assert len(hashed) == (0 if guard else 50)
         assert sum('AND artifact_id<=' in sql for sql in statements) == (0 if guard else 1)
-        assert sum('AND artifact_id BETWEEN' in sql for sql in statements) == (1 if guard else 0)
+        assert not any('artifact_id BETWEEN' in sql for sql in statements)   # an empty tail reads nothing
         assert sum('WHEN typeof(created_at)' in sql for sql in statements) == 1
         assert tally.precheck is None if transaction else tally.precheck is not None

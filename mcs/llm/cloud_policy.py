@@ -1734,14 +1734,13 @@ class _Tally:
         guarded, mutations = self._guarded, _guard_mutations(ledger.db)
         if guarded is not None and mutations == guarded[0] and guarded[1] <= self.last_id:
             digest = guarded[2].copy()
-            with closing(ledger.db.execute(
-                "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
-                f"FROM {_accounting_order_source(ledger.db)} "
-                "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
-                "AND artifact_id BETWEEN ? AND ? ORDER BY artifact_id",
-                (self.month, guarded[1] + 1, self.last_id))) as rows:
-                for row in rows:
-                    _hash_row(digest, row)
+            if guarded[1] < self.last_id:
+                # The tail is a range of the primary key: read it by rowid, never by
+                # the kind/created_at index that would walk the whole period.
+                with closing(ledger.db.execute(_GUARDED_TAIL_SQL,
+                                               (guarded[1] + 1, self.last_id, self.month))) as rows:
+                    for row in rows:
+                        _hash_row(digest, row)
             if self._with_prior(digest.copy(), ledger, now) == self.prefix:
                 self._main, self._main_id = digest, self.last_id
                 return True
@@ -1840,6 +1839,12 @@ class _Tally:
                 self.prefix = self.fingerprint(ledger, now)
         self._mark_guarded(ledger)
         self.checked_at = now
+
+
+_GUARDED_TAIL_SQL = (
+    "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts NOT INDEXED "
+    "WHERE artifact_id BETWEEN ? AND ? AND kind IN ('cloud_usage_reserve','cloud_usage_result') "
+    "AND created_at>=? ORDER BY artifact_id")
 
 
 def _guard_mutations(db):
