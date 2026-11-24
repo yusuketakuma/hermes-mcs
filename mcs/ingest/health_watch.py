@@ -1211,7 +1211,7 @@ _REASON_JA = {
                               f"（直しただけでは消えません。{_COMPLIANCE_GUIDE}）"),
     "external_transfer_unreadable": ("施設の外部AI確認記録（external_transfer.json）を読み取れない、または見つからないため、"
                                      "外部AIとJevへの送信をすべて止めています",
-                                     "記録は削除しないでください（削除しても送信は再開しません）。"
+                                     "記録は削除しないでください。"
                                      "MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、確認待ちの内容にしてから"
                                      f"{_ACKNOWLEDGE} で確認を記録し直す（{_COMPLIANCE_GUIDE}）"),
     CONFIG_BLOCKED: ("設定を確認できず、自動復旧を止めています",
