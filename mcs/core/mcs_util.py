@@ -266,7 +266,7 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
         except (OSError, ValueError):
             if path not in _env_unusable_warned:
                 _env_unusable_warned.add(path)
-                print(f"mcs: env_file_not_private ({os.path.basename(path)})",
+                print(f"mcs: local_file_permissions_weak ({os.path.basename(path)})",
                       file=sys.stderr)
             continue
         # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one

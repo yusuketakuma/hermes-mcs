@@ -4,6 +4,7 @@ import mcs_contract
 import json
 import os
 import mcs_util
+import pytest
 import sys
 import time
 import mcs_adapter
@@ -223,29 +224,49 @@ def test_writable_config_and_dotenv_keep_their_distinct_contracts(tmp_path, caps
     assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) is None
     err = capsys.readouterr().err
     assert err.count("local_file_permissions_weak (config.json)") == 1
-    assert err.count("env_file_not_private (.env)") == 1
+    assert err.count("local_file_permissions_weak (.env)") == 1
     assert "synthetic-value" not in err
 
 
 def test_private_dotenv_modes_and_readers_agree(tmp_path, capsys):
-    """write_env's 0600 file is readable by every reader; each weaker mode
-    is refused by all of them — write→read stays consistent."""
+    """One write_env file feeds all three private readers — env_value,
+    private_env_value and the standalone token lookup — and each refuses a
+    weaker mode under its own existing contract. The strict reader wants
+    exactly 0600 (0400 fails it too), the others any owner-only mode."""
     import lifecycle_io
+    import mcs_standalone.config as standalone_config
     env = tmp_path / ".env"
-    lifecycle_io.write_env(str(env), {"SYNTH_KEY": "written-value",
+    lifecycle_io.write_env(str(env), {"DISCORD_BOT_TOKEN": "synthetic-token-123",
                                     "QUOTED": "with space"})
-    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)], check_env=False) == "written-value"
-    assert mcs_util.private_env_value("SYNTH_KEY", root=tmp_path) == "written-value"
+    assert mcs_util.env_value("DISCORD_BOT_TOKEN", paths=[str(env)],
+                            check_env=False) == "synthetic-token-123"
+    assert mcs_util.private_env_value("DISCORD_BOT_TOKEN", root=tmp_path) == "synthetic-token-123"
+    assert standalone_config.tokens(tmp_path, "discord") == {
+        "DISCORD_BOT_TOKEN": "synthetic-token-123"}
     assert mcs_util.env_value("QUOTED", paths=[str(env)], check_env=False) == "with space"
     for mode in (0o644, 0o640, 0o620):
         os.chmod(env, mode)
-        assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)],
+        assert mcs_util.env_value("DISCORD_BOT_TOKEN", paths=[str(env)],
                                 check_env=False) is None, oct(mode)
+        assert mcs_util.private_env_value("DISCORD_BOT_TOKEN", root=tmp_path) is None
+        with pytest.raises(standalone_config.ConfigError):
+            standalone_config.tokens(tmp_path, "discord")
+    os.chmod(env, 0o400)
+    assert mcs_util.env_value("DISCORD_BOT_TOKEN", paths=[str(env)],
+                            check_env=False) == "synthetic-token-123"
+    assert standalone_config.tokens(tmp_path, "discord") == {
+        "DISCORD_BOT_TOKEN": "synthetic-token-123"}
+    assert mcs_util.private_env_value("DISCORD_BOT_TOKEN", root=tmp_path) is None
+    assert mcs_util.private_env_problem("DISCORD_BOT_TOKEN", root=tmp_path) \
+        == "env_file_mode_not_0600"
     os.chmod(env, 0o600)
-    assert mcs_util.env_value("SYNTH_KEY", paths=[str(env)],
-                            check_env=False) == "written-value"
+    assert mcs_util.env_value("DISCORD_BOT_TOKEN", paths=[str(env)],
+                            check_env=False) == "synthetic-token-123"
+    assert mcs_util.private_env_value("DISCORD_BOT_TOKEN", root=tmp_path) == "synthetic-token-123"
+    assert standalone_config.tokens(tmp_path, "discord") == {
+        "DISCORD_BOT_TOKEN": "synthetic-token-123"}
     err = capsys.readouterr().err
-    assert "written-value" not in err
+    assert "synthetic-token-123" not in err
 
 
 def test_dotenv_env_and_missing_fallbacks(tmp_path, monkeypatch, capsys):
