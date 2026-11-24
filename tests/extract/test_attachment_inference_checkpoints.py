@@ -173,3 +173,35 @@ def test_recent_patient_priority_alternates_with_history_and_deferred_does_not_s
     before = len(attempted)
     worker.run_pending(ledger, cfg, stage='local', deadline=worker.time.monotonic() - 1)
     assert len(attempted) == before
+
+
+
+def test_multi_chunk_deadline_deferral_reports_the_engine_reason(page_store, monkeypatch):
+    ledger, cfg, key, calls, _, answers = page_store
+    lines = [f'本人の血圧12{i}/8{i}です。\n' for i in range(4)]
+    body = ''.join(lines)
+    _long_page(ledger, key, body)
+    monkeypatch.setattr(worker.extract_llm, '_CHUNK_SIZE', len(lines[0]))
+    assert len(worker.extract_llm.plan_chunks(body, len(lines[0]))) == 4
+    answers['local'] = {'symptoms': []}  # every chunk keeps its vital hint gap
+    clock = [1000.0]
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    original = worker.extract_llm.local_llm.chat
+    def slow(prompt, **kwargs):
+        response = original(prompt, **kwargs)
+        clock[0] += 100
+        return response
+    monkeypatch.setattr(worker.extract_llm.local_llm, 'chat', slow)
+    monkeypatch.setattr(worker.extract_llm.local_llm, 'admitted_chat', lambda client, prompt, **kw: slow(prompt, **kw))
+    result = worker.run_pending(ledger, cfg, stage='local', deadline=clock[0] + 300)
+    assert len(calls) == 3
+    assert result['deferred'] == 1 and result['defer_reasons'] == {'llm_deadline': 1}
+    assert worker.current(ledger.db, 1, key, cfg=cfg) is None
+
+
+def test_a_reason_left_before_the_page_call_does_not_explain_its_deferral(page_store, monkeypatch):
+    ledger, cfg, *_ = page_store
+    worker.extract_llm._CALL_NOTES.defer_reason = 'busy'
+    monkeypatch.setattr(worker.extract_llm, 'llm_extract', lambda *a, **kw: worker.extract_llm._DEFERRED)
+    result = worker.run_pending(ledger, cfg, stage='local')
+    assert result['deferred'] == 1 and result['defer_reasons'] == {'unclassified': 1}
