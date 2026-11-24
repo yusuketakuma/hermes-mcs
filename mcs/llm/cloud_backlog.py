@@ -874,6 +874,7 @@ _SCAN_REFUSALS = frozenset({
     "scan_interrupted", "read_sqlite", "read_io",
     "invalid_bookmark", "invalid_source",
 })
+_SCAN_SQLITE_ERROR = re.compile(r"SQLITE_[A-Z_]{1,40}|unclassified")
 
 
 _REFILL_STOP_CODES = frozenset({"sqlite_error", "os_error", "value_error", "type_error", "key_error",
@@ -926,6 +927,11 @@ def _context_pass_observation(result):
     refusal = result.get("scan_refusal")
     if refusal is not None:
         record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
+    # A read_sqlite refusal's standard SQLite error name only, never its message.
+    sqlite_error = result.get("scan_sqlite_error")
+    if sqlite_error is not None:
+        record["scan_sqlite_error"] = (sqlite_error if type(sqlite_error) is str
+                                       and _SCAN_SQLITE_ERROR.fullmatch(sqlite_error) else "unclassified")
     # The first skipped patient's registered code or exception type name only.
     skipped = result.get("skip_patient_code")
     if skipped is not None:

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストの走査の時間切れを正しく記録",
+  "summary": "患者コンテキストの候補の読取りが走査の時間上限で止まった周回を、読取りの失敗（read_sqlite）ではなく走査の中断（scan_interrupted）として記録します。上限前の中断とそのほかの SQLite の失敗は従来どおり read_sqlite とし、クラウド処理の記録に SQLite の標準のエラー名（scan_sqlite_error）を残します。走査・選択・保存・再試行間隔の判定は変わりません。",
+  "upgrade": "通常の更新手順で Hermes gateway と抽出の常駐処理（独立実行では mcs_standalone）を再起動してください。設定の変更は不要です。このブランチのほかの変更と同じく添付抽出の契約に含まれる cloud_backlog.py を変えるため、添付OCRが有効な環境では保存済みの添付抽出結果が1回再処理の対象になり、クラウド再抽出が有効なら既存の対象と予算の範囲で再送が起こり得ます。fact_source が shadow なら意味解析と品質確認をやり直し、canonical なら更新後の候補で比較・承認をやり直してください（それまで semantic は設定不一致で止まります）。既定の legacy 構成では影響はありません。",
+  "details": [
+    "候補の読取りが SQLite の中断で止まったとき、その読取りの時間上限を過ぎている場合だけ走査の中断（scan_interrupted、理由 patient_context_scan_incomplete）とします。上限より前の中断とそのほかの SQLite の失敗は従来どおり read_sqlite です。",
+    "read_sqlite の周回は、クラウド処理の記録（patient_context_pass）に SQLite の標準のエラー名（SQLITE_BUSY など）を scan_sqlite_error として残します。その形でない値は unclassified とし、エラーの本文・患者を特定する情報は残さず、DB にも保存しません。走査・選択・保存・再試行間隔の判定は変わりません。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_backlog.py",
+    "mcs/patients/patient_context_refresh_sources.py",
+    "mcs/patients/patient_context_refresh.py"
+  ]
+}

@@ -317,6 +317,15 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
             raise
 
 
+_SQLITE_ERROR_NAME = re.compile(r'SQLITE_[A-Z_]{1,40}')
+
+
+def _sqlite_error_name(exc):
+    """The standard SQLite error name of a failed scan read, or ``unclassified``; never its text."""
+    name = getattr(exc, 'sqlite_errorname', None)
+    return name if type(name) is str and _SQLITE_ERROR_NAME.fullmatch(name) else 'unclassified'
+
+
 def _scan_covered(db, seen):
     return db.execute('SELECT 1 FROM patients WHERE project_id>0 AND project_id NOT IN '
                       '(SELECT value FROM json_each(?)) ORDER BY project_id LIMIT 1',
@@ -676,10 +685,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
         if observed_out is not None and 'scan_refusal' not in observed_out:
             observed_out['scan_refusal'] = 'scan_interrupted'
         best, selected, covered = {}, None, False
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
         scan_interrupts += 1
         if observed_out is not None:
             observed_out['scan_refusal'] = 'read_sqlite'
+            observed_out['scan_sqlite_error'] = _sqlite_error_name(exc)
         best, selected, covered = {}, None, False
     except OSError:
         scan_interrupts += 1
@@ -934,7 +944,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
         stats.update({key: scan_observed[key] for key in _SCAN_COUNTER_KEYS if key in scan_observed})
-        for key in ('scan_refusal', 'skip_patient_code', 'generation_reason', 'unverified_records'):
+        for key in ('scan_refusal', 'scan_sqlite_error', 'skip_patient_code', 'generation_reason',
+                    'unverified_records'):
             if scan_observed.get(key) is not None:
                 stats[key] = scan_observed[key]
         if 'selection_refusal' in scan_observed:

@@ -276,6 +276,25 @@ def test_context_pass_omits_absent_scan_refusal():
     assert "scan_refusal" not in record
 
 
+@pytest.mark.parametrize("name", ["SQLITE_BUSY", "SQLITE_INTERRUPT", "SQLITE_IOERR_SHORT_READ", "unclassified"])
+def test_context_pass_reports_a_standard_scan_sqlite_error_name(name):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "scan_refusal": "read_sqlite", "scan_sqlite_error": name})
+    assert record["scan_refusal"] == "read_sqlite" and record["scan_sqlite_error"] == name
+
+
+@pytest.mark.parametrize("value", ["database is locked", "sqlite_busy", "SQLITE_", "SQLITE_BUSY ",
+                                   "SQLITE_" + "X" * 41, "合成の未知理由", 5, True, ["SQLITE_BUSY"]])
+def test_context_pass_rejects_any_other_scan_sqlite_error(value):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_sqlite_error": value})
+    assert record["scan_sqlite_error"] == "unclassified"
+
+
+def test_context_pass_omits_an_absent_scan_sqlite_error():
+    assert "scan_sqlite_error" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "scan_refusal": "read_sqlite"})
+
+
 @pytest.mark.parametrize("key,value", [
     ("waiting", 17), ("waiting", -1), ("waiting", True), ("waiting", 1.5), ("waiting", "3"),
     ("scan_reads", 17), ("scan_reads", -1), ("scan_interrupts", 2), ("scan_interrupts", True),
