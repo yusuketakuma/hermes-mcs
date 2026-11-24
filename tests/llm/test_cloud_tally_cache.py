@@ -59,10 +59,19 @@ def test_unchanged_precheck_avoids_accounting_scans(tmp_path, now, period):
         assert expected.precheck is not None
 
 
-def test_reservation_rechecks_inside_transaction_and_obeys_new_caps(tmp_path, now):
+def _drop_usage_guard(ledger):
+    with ledger.db:
+        ledger.db.execute('DROP TRIGGER cloud_usage_guard_update')
+    assert c._guard_mutations(ledger.db) is None
+
+
+@pytest.mark.parametrize('guard', [True, False])
+def test_reservation_rechecks_inside_transaction_and_obeys_new_caps(tmp_path, now, guard):
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         _reserve(ledger)
         c._tally(ledger)
+        if not guard:
+            _drop_usage_guard(ledger)
         statements = []
         ledger.db.set_trace_callback(statements.append)
         try:
@@ -71,7 +80,11 @@ def test_reservation_rechecks_inside_transaction_and_obeys_new_caps(tmp_path, no
         finally:
             ledger.db.set_trace_callback(None)
         assert 'BEGIN IMMEDIATE' in statements
-        assert any('AND artifact_id<=' in sql for sql in statements)
+        inside = statements[statements.index('BEGIN IMMEDIATE'):]
+        # The installed write-time guard proves the hashed rows unchanged inside the
+        # writer transaction; without it the same transaction re-hashes them.
+        assert any('FROM cloud_usage_guard' in sql for sql in inside) if guard else True
+        assert any('AND artifact_id<=' in sql for sql in inside) is not guard
         assert ledger._cloud_usage_tally.precheck is None
         assert len(ledger.artifacts(c.KINDS[0])) == 1
 
@@ -429,18 +442,20 @@ def test_mutation_between_fingerprint_and_update_uses_one_snapshot(tmp_path, mon
         _reserve(ledger)
         original = _read(ledger, period, now)
         ledger.artifact_add('synthetic_observation', '{}')
-        fingerprint = c._Tally.fingerprint
+        # The verification (the guarded tail check or the full fingerprint) has passed
+        # when another writer commits a change, before update() reads appended rows.
+        unchanged = c._Tally.unchanged
         committed = []
 
         def changed(tally, owner, current):
-            result = fingerprint(tally, owner, current)
+            result = unchanged(tally, owner, current)
             if not committed:
                 committed.append(True)
                 with closing(sqlite3.connect(path)) as writer, writer:
                     writer.execute('UPDATE artifacts SET project_id=2 WHERE kind=?', (c.KINDS[0],))
             return result
 
-        monkeypatch.setattr(c._Tally, 'fingerprint', changed)
+        monkeypatch.setattr(c._Tally, 'unchanged', changed)
         snapshot = _read(ledger, period, now)
         assert committed and snapshot is original and not snapshot.invalid and snapshot.total > 0
         attribute = '_cloud_usage_tally' if period == 'month' else '_cloud_window_tally'
@@ -652,10 +667,14 @@ def test_incremental_tally_streams_and_closes_rows(tmp_path, now, interrupted):
         assert not ledger.db.in_transaction
 
 
-def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(tmp_path, now):
-    """One full history read per verification: appended rows extend the verified state."""
+@pytest.mark.parametrize('guard', [True, False])
+def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(tmp_path, now, guard):
+    """At most one full history read per verification: appended rows extend the verified
+    state, and the installed write-time guard leaves even that read out."""
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         _reserve(ledger)
+        if not guard:
+            _drop_usage_guard(ledger)
         first = c._tally(ledger)
         first_total = first.total
         _reserve(ledger, unit='appended')
@@ -666,16 +685,20 @@ def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(
         finally:
             ledger.db.set_trace_callback(None)
         assert second.total == 2 * first_total
-        assert sum('AND artifact_id<=' in sql for sql in statements) == 1
+        assert sum('AND artifact_id<=' in sql for sql in statements) == (0 if guard else 1)
         # The extended digest equals a fresh full fingerprint of the same rows.
         assert second.prefix == second.fingerprint(ledger, now)
 
 
-def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now):
-    """A reservation's in-transaction check keeps the full prefix verification, but only once."""
+@pytest.mark.parametrize('guard', [True, False])
+def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now, guard):
+    """A reservation's in-transaction check verifies the prefix once: by the write-time
+    guard's unchanged count plus the unguarded tail, or by one full re-hash without it."""
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         _reserve(ledger)
         c._tally(ledger, now)
+        if not guard:
+            _drop_usage_guard(ledger)
         # a row the cached tally has not seen yet, as when another reservation landed meanwhile
         _reserve(ledger, unit='appended-before')
         statements = []
@@ -685,7 +708,8 @@ def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now):
         finally:
             ledger.db.set_trace_callback(None)
         begin = statements.index('BEGIN IMMEDIATE')
-        assert sum('AND artifact_id<=' in sql for sql in statements[begin:]) == 1
+        assert sum('AND artifact_id<=' in sql for sql in statements[begin:]) == (0 if guard else 1)
+        assert sum('AND artifact_id BETWEEN' in sql for sql in statements[begin:]) == (1 if guard else 0)
         tally = c._tally(ledger, now)
         assert tally.prefix == tally.fingerprint(ledger, now)
 
@@ -752,3 +776,26 @@ def test_rolled_back_cheap_result_restores_the_reserved_maximum(tmp_path, now, p
             ledger.db.rollback()
         assert _read(ledger, period, now).total == reserved
         assert _accounting_rows(ledger) == rows      # the reservation stays unresolved, nothing written
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+def test_rolled_back_row_whose_id_is_reused_is_hashed_again(tmp_path, now, period):
+    # Rows a rollback removed leave the guard count unchanged, and SQLite may give their id to
+    # the next row; the guarded check still re-hashes every row tallied after its boundary.
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = _reserve(ledger)
+        reserved = _read(ledger, period, now).total
+        ledger.db.execute('BEGIN IMMEDIATE')
+        try:
+            rolled = ledger.artifact_add_tx(c.KINDS[1], '{}', project_id=1, model=MODEL,
+                                            meta=_cheap_result_meta(reservation))
+            assert _read(ledger, period, now).total < reserved
+        finally:
+            ledger.db.rollback()
+        with ledger.db:
+            reused = ledger.artifact_add_tx('synthetic_observation', '{}')
+            ledger.db.execute('UPDATE artifacts SET artifact_id=? WHERE artifact_id=?', (rolled, reused))
+        _reserve(ledger, unit='after-reuse')
+        tally = _read(ledger, period, now)
+        assert tally.total == 2 * reserved and len(tally.open) == 2
+        assert tally.prefix == tally.fingerprint(ledger, now)
