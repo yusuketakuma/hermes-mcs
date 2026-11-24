@@ -655,7 +655,7 @@ def worker(parent, *, index=None, context_only=False):
     import writer_lock
     from writer_lock import acquire_run_lock
     from ledger import Ledger
-    from mcs_util import DB, CONF_PATH, ProviderSettingsUnreadable, load_config
+    from mcs_util import DB, CONF_PATH, HOME, ProviderSettingsUnreadable, load_config
     initial = writer_lock.updater_state()
     phase = 0
     ocr_turn = True
@@ -744,16 +744,20 @@ def worker(parent, *, index=None, context_only=False):
                                  and cloud_policy.route_open("semantic_backlog", settings))
                 routes_open = extract_open or semantic_open
                 if index is not None:
-                    retire = (settings["mode"] != "on" or not routes_open
-                              or index >= settings["max_concurrency"])
-                    if time.monotonic() - capacity_checked >= 60:
+                    reason = ("cloud_mode_off" if settings["mode"] != "on"
+                              else "cloud_route_closed" if not routes_open
+                              else "capacity_reduced" if index >= settings["max_concurrency"] else None)
+                    if reason is None and time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        retire = retire or capacity_reduced(index, settings["max_concurrency"])
-                    if retire:
-                        _event("cloud_worker_retired", reason=(
-                            "cloud_mode_off" if settings["mode"] != "on"
-                            else "cloud_route_closed" if not routes_open
-                            else "capacity_reduced"))
+                        if capacity_reduced(index, settings["max_concurrency"]):
+                            reason = "capacity_reduced"
+                        elif not backlog_admits(HOME, cfg, settings, ledger):
+                            # The pool would not start this worker now (a spend hold, no key or
+                            # profile): its paid carry is settled above, so it gives its place in
+                            # the shared target back, and the pool starts it again once it admits.
+                            reason = "cloud_blocked"
+                    if reason is not None:
+                        _event("cloud_worker_retired", reason=reason)
                         return
                 if routes_open and not (semantic_open if phase % 2 else extract_open):
                     phase += 1

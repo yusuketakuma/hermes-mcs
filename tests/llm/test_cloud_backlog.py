@@ -12,6 +12,7 @@ import semantic_reprocess
 import os
 import json
 import sqlite3
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -482,6 +483,8 @@ def carry_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "Ledger", lambda *a: fake_ledger)
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: state.memory)
     monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
+    # The pool gate (key, profile, budget) admits unless a test closes it.
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: True)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
     monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
@@ -1198,6 +1201,43 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert records[-1]['event'] == 'cloud_worker_retired'
     assert records[-1]['reason'] == 'capacity_reduced'
+
+
+def test_worker_settles_paid_carry_before_a_closed_pool_gate_retires_it(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    clock = iter(range(0, 10 ** 6, 61))     # every gate check is due
+    monkeypatch.setattr(backlog, "time", SimpleNamespace(
+        monotonic=lambda: float(next(clock)), sleep=lambda _: None, time=time.time))
+    gate = [True]
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: gate[-1])
+    item = object()
+
+    def extract(ledger, **kwargs):
+        state.events.append("extract")
+        gate.append(False)                   # a spend hold starts during this unit
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kwargs):
+        state.events.append("settle")
+        carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    with legacy_cloud_routes():
+        backlog.worker(991, index=0)
+    assert state.events == ["extract", "settle"] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_blocked"}
 
 
 @pytest.mark.parametrize("capacity,index", [(0, 0), (1, 2)])
@@ -2074,6 +2114,27 @@ def test_indexed_worker_retires_when_the_window_is_open_but_the_route_is_not(car
     assert state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_route_closed"}
+
+
+def test_indexed_worker_gives_its_place_back_while_its_pool_would_not_start_it(carry_worker, monkeypatch, capsys):
+    # A spend hold inside an open window: the worker settles nothing more and leaves the
+    # shared target to the context children; its pool starts it again once it admits.
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    window = {"cloud_llm": {**_CONTEXT_ONLY_WINDOW["cloud_llm"], "routes": ["patient_context", "reextract"]}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: window)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    gate = []
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: gate.append(a[1] is window) or False)
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **kw: pytest.fail("a closed pool gate admitted extract"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    backlog.worker(991, index=0)
+    assert gate == [True] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_blocked"}
 
 
 def test_no_backlog_worker_spawns_while_the_window_is_open_but_the_route_is_not(tmp_path, monkeypatch):
