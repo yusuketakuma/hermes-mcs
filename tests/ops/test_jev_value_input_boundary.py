@@ -79,7 +79,7 @@ def test_copied_synthetic_subset_preserves_evaluation_and_report(tmp_path, monke
     source.write_text(json.dumps({"cases": cases}))
     calls = _isolate(monkeypatch)
     assert mcs_setup.main(["jev-value", "--cases", str(source), "--out", str(out)]) == 0
-    assert calls == ["config", "credentials", "client", ("evaluate", cases, {"deadline_s": 120.0})]
+    assert calls == ["credentials", "client", ("evaluate", cases, {"deadline_s": 120.0})]
     assert json.loads(out.read_text())["label_provenance"] == {"human": 0, "synthetic": 1}
 
 
