@@ -1,15 +1,15 @@
 {
   "category": "fixed",
   "title": "Jev を導入していない環境と Jev の対象外の患者で、外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
-  "summary": "外部AIが作った患者コンテキストが、Jev のキーや semantic の設定がない環境、または Jev の対象外（semantic.project_ids の外）の患者で、Jev の品質確認を待ち続けて公開されませんでした。これらは確認を未実施（disabled または out_of_scope）として記録して公開します。外部AIの受領記録の検証は従来どおりです。キーがないだけの環境では check が警告せず「情報: Jev: 未導入」を1行表示します。",
-  "upgrade": "追加操作は不要です。更新後、確認待ちになっていた患者は次の再試行で確認を未実施として記録し、公開に進みます。semantic.project_ids の外の患者は Jev の確認なしで公開されます（semantic.until の期限が過ぎていても同じ）。例外として、以前に Jev の品質確認で不合格の記録がある患者は、対象外にしても確認なしでは公開せず、従来どおり保留します。対象内の患者で Jev が使える場合は、従来どおり Jev の確認を待ちます。",
+  "summary": "Jev が未導入または対象外の患者でも、外部AIの患者コンテキストを確認未実施として安全に公開できるようになります。v1.3.0 では QA_VERSION を1から2へ更新するため、旧PASSは新しい版の確認として再利用されず、背景再確認まで概要が一時的に非表示になります。",
+  "upgrade": "通常の更新手順に含まれるサービス再起動は必要ですが、患者ごとの手動操作や設定変更は不要です。resident worker の背景コンテキスト処理が再判定を自動で進めます。QA_VERSION 1→2 の適用後も旧PASS記録は削除されませんが、新しい版のPASSとしては扱われないため、再判定の完了まで患者概要が一時的に非表示になります。Jev対象内でJevが利用可能な患者は新しいPASSの記録後に表示が戻ります。Jev対象外の患者はJevを送らず、sourceとsummaryの両方に SKIPPED(out_of_scope) を記録して表示が戻ります。過去に品質不合格の記録がある患者は対象外でも確認なしの公開へ切り替えず保留します。回復時間はワーカーの稼働・処理順・Jevの利用可否に依存し、所要時間は保証しません。",
   "details": [
     "Jev を呼べるか（意味解析が有効・キーあり・施設の確認で保留されていない・1日の上限が0より大きい）の判定を semantic_policy.jev_available に集約し、患者コンテキストの再確認判定から使う。",
     "Jev の対象患者の判定を semantic_policy.jev_scope_policy / jev_scope_excludes に集約し、キーの有無で変えない。明示の mode=off だけが対象範囲を適用せず、mode を省略した場合はキーがなくても project_ids を適用する。",
     "対象外の患者は Jev のない環境と同じに扱い、品質確認を out_of_scope の SKIPPED として記録して公開する（所有者の決定 2026-11-24）。読取り準備でもその患者の意味解析を待たず、Jev が使えても再確認しない。公開・閲覧時の照合は対象範囲で記録を拒否しない。",
     "意味解析が無効のとき、受領記録を検証できた外部AIの要約も、ローカルで作った要約と同じく確認を未実施（disabled）として記録できるようにする（実行中の再確認でも同じ条件を使う）。",
     "品質確認の途中でキーが変わったことを検出するため、キーの値そのものではなくハッシュを保持して比較する。",
-    "QA_VERSION は上げない。答えの解釈と PASS の受入れ規則は変えておらず、対象外の患者には以前は記録が作られなかった。対象から外した患者の以前の PASS による公開版は表示が続く。",
+    "この候補では受入れ規則の変更に合わせて QA_VERSION を1から2へ更新する。旧PASSは保存されるが、新しい識別値には一致しないため、再判定まで患者概要は非表示となる。合成記録の検証では、Jev対象内は新しいPASS、対象外はJev要求なしのsource/summary SKIPPED(out_of_scope)で表示が回復した。PASSの安全判定は変更していない。",
     "semantic.extract_qc=annotate なのに意味解析が無効な環境では、mcs_setup.py check が警告する（extract_qc_inactive）。対処は semantic_policy.off_cause が semantic_config と同じ判定から返す理由で分ける。明示の mode=off ならキーがなければその登録・mode の変更・semantic.project_ids・1以上の日次予算を、施設の確認で保留中ならキーの再登録ではなく Jev を含む確認の記録を、キーがないだけならキーの登録を、設定の誤りならその修正を案内する。",
     "Jev に送らない経路（意味解析が無効、または対象外）は、semantic.until の期限・1日の上限・回路の状態より先に決め、記録の保存直前にも対象外であることを確かめ直す。以前の不合格の記録がある患者を確認なしに切り替えない規則は、全ての未実施の理由で従来どおり。"
   ],
@@ -18,6 +18,7 @@
     "mcs/patients/patient_context_quality_controller.py",
     "mcs/patients/patient_context_quality_receipts.py",
     "mcs/patients/patient_context_refresh.py",
+    "mcs/extract/llm/extract_llm_resident.py",
     "mcs/patients/patient_context_refresh_readiness.py",
     "mcs/ops/diagnostics/environment_diagnostics.py",
     "mcs/ops/mcs_setup.py",
