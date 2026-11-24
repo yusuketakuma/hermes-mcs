@@ -818,7 +818,7 @@ _CHANGE_RECORD_KEYS = frozenset({"version", "operation", "saved_at", "origin", "
                                  "files", "authority", "limits", "changed"})
 _STAGE_NAME = re.compile(r"\.provider-settings-stage-([0-9a-f]{32})")
 _SAVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00")
-_TIME_TEXT = re.compile(r"[0-9TZ:+.\- ]{10,64}")
+_TIME_TEXT = re.compile(r"[0-9TtZz:+.\- ]{10,64}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _BUDGET_FIELDS = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
 _JEV_LIMITS = ("daily_request_budget", "until")

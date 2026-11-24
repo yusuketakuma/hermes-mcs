@@ -1828,3 +1828,14 @@ def test_reader_opens_only_the_newest_stages_and_reports_a_save_in_progress(tmp_
     assert [name for name in opened if name.startswith(".provider-settings-stage-")] == [older.name]
     private_json(tmp_path / "data" / ".provider-settings-pending.json", {"synthetic": True})
     assert settings.change_records(tmp_path, 1)["save_in_progress"] is True
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("2026-11-25t12:00:00+00:00", "2026-11-25t12:00:00+00:00"),   # a separator until_epoch accepts
+    ("2026-11-25T12:00:00Z", "2026-11-25T12:00:00Z"),
+    ("not a time at all", settings.INVALID),
+    ("2026-13-45T99:00:00+00:00", settings.INVALID),
+])
+def test_record_keeps_every_time_until_epoch_accepts(value, expected):
+    assert settings._limit_value(value) == expected
+    assert settings._stored_limit_ok(expected)
