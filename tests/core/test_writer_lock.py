@@ -122,6 +122,20 @@ def test_wait_leaves_without_trying_the_lock_once_an_update_marker_appears(tmp_p
     assert len(trials) == 1 and clock[0] < 1
 
 
+def test_short_wait_polls_once_at_its_deadline_not_past_it(tmp_path, monkeypatch):
+    """A wait shorter than one poll still tries the lock, at the deadline rather than a whole poll late."""
+    clock = [0.0]
+    trials = []
+    monkeypatch.setattr(writer_lock.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(writer_lock.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock', lambda path: trials.append(clock[0]))
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        assert writer_lock.wait_run_lock(str(tmp_path / 'run.lock'), wait_s=0.1,
+                                         expected_code_stamp=1, marker_path=str(tmp_path / 'marker')) is None
+    assert trials == [pytest.approx(0.1)]
+    assert diagnostic == {'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock'}
+
+
 def test_wait_expiry_reports_actual_lock_refusal_without_replacing_outer_capture(tmp_path, monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(writer_lock.time, 'monotonic', lambda: clock[0])
