@@ -78,6 +78,16 @@ def test_non_event_dates_never_establish_event_date(role):
     assert event['document_time_known'] is False
 
 
+def test_real_parser_zero_date_is_classified_as_time_unknown():
+    parsed = referral_document.project([{'page': 1, 'text':
+        '紹介状\n現病歴：2026年00月00日 合成所見'}])
+    payload = {'events': parsed['events'], 'documents': [], 'coverage': {}}
+    event, = views.timeline({'items': []}, documents=payload)['document_events']
+    assert parsed['events'][0]['time_state'] == 'ambiguous'
+    assert event['document_time_known'] is False
+    assert event['event_date_text'] is None
+
+
 def test_real_parser_keeps_correction_in_the_dated_timeline_record():
     parsed = referral_document.project([{'page': 1, 'text':
         '紹介状\n現病歴：2026年 病名A。これは誤記で、病名Aは否定された。'}])

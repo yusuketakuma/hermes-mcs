@@ -135,6 +135,29 @@ def test_reply_and_stamp_coexist_without_deadline_or_completion_inference(
     assert store.db.execute("SELECT status FROM requests").fetchone()[0] == "open"
 
 
+@pytest.mark.parametrize(("field_error", "status_key"), [
+    ("mentions_invalid", "mentions_status"),
+    ("is_bookmarked_invalid", "bookmark_status"),
+    ("is_pinned_invalid", "pin_status"),
+])
+def test_field_only_error_publishes_fresh_stamp_observation(store, tmp_path, field_error, status_key):
+    # Given: an observed empty capture, then a refresh with a valid stamp
+    # reaction plus one unrelated invalid metadata field.
+    _post(store, sender=22, reactions=[])
+    fresh = _norm_message({"id": 1, "comment": "fully synthetic request",
+                           "user": {"id": 22}, "reactions": _reaction()}, 1)
+    fresh.metadata_errors = [field_error]
+    store.save_metadata_shadow(fresh, publish=True)
+    # When: rendering the published capture through the real snapshot API.
+    metadata = _evidence(store, tmp_path)["message_metadata"]
+    stamp = metadata["response_observation"]["self_reaction"]
+    # Then: the fresh reaction reaches the display target; the unrelated
+    # field failure stays visible per-field and never marks the fetch failed.
+    assert stamp["state"] == "observed" and stamp["types"] == ["completed"]
+    assert metadata["reactions_status"] == "observed"
+    assert metadata[status_key] == "invalid" and metadata["last_error"] is None
+
+
 def test_removed_reaction_and_failed_refresh_do_not_resurrect_completed_stamp(store, tmp_path, monkeypatch):
     # Given: an old completed reaction, then an explicitly observed empty capture.
     _post(store, sender=22, reactions=_reaction())
