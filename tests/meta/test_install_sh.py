@@ -456,7 +456,7 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     assert "lineworks_adapter" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)
-    assert "requirements-standalone.txt" in text
+    assert "requirements-standalone.lock --require-hashes" in text
     assert "hermes-agent" not in text
     assert "venv-hermes" not in text
     assert not (home / ".hermes").exists()

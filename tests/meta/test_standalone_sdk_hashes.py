@@ -29,7 +29,13 @@ def test_install_refuses_a_download_that_is_not_in_the_hashed_list():
     assert installs == ['uv pip install --python "$VENV_PY" -r "$REQUIREMENTS_LOCK" --require-hashes',
                         '"$VENV_PY" -m pip install -r "$REQUIREMENTS_LOCK" --require-hashes']
     preflight = (ROOT / "mcs/ops/update_preflight.py").read_text()
-    # a tag or a rollback that changes either file is never applied without install.sh
+    # a tag that changes either file is never applied without install.sh; a rollback looks at the pins alone
     assert ('_STANDALONE_SDK_FILES = ("deployment/requirements-standalone.txt", '
             '"deployment/requirements-standalone.lock")') in preflight
-    assert preflight.count("*_STANDALONE_SDK_FILES") == 2
+    assert preflight.count("*_STANDALONE_SDK_FILES") == 1 and preflight.count("_STANDALONE_SDK_FILES[0]") == 1
+
+
+def test_the_witness_of_the_transfer_record_is_ignored_like_the_record():
+    # ~/.mcs is both the checkout and the runtime home; an untracked file there holds managed updates.
+    ignored = (ROOT / ".gitignore").read_text().splitlines()
+    assert "external_transfer.json" in ignored and "external_transfer.required" in ignored

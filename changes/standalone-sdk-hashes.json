@@ -1,7 +1,7 @@
 {
   "category": "changed",
   "title": "独立接続の SDK を SHA256 と照合して導入",
-  "summary": "`install.sh` は Slack・Discord の SDK と依存13個を、ハッシュ付きの一覧 `deployment/requirements-standalone.lock` から `--require-hashes` で導入します。記録と中身が違う配布物は導入しません。版は従来の `requirements-standalone.txt` と同じです。",
+  "summary": "`install.sh` は Slack・Discord の SDK とその依存（合わせて13個）を、ハッシュ付きの一覧 `deployment/requirements-standalone.lock` から `--require-hashes` で導入します。記録と中身が違う配布物は導入しません。版は従来の `requirements-standalone.txt` と同じです。",
   "upgrade": "追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。Hermes モードには影響しません。",
   "details": [
     "SDK の版を上げるときは、ファイル先頭のコマンドでハッシュ付きの一覧を作り直す。2つの一覧の版が違うとテストが失敗する。"

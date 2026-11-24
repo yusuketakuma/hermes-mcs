@@ -535,3 +535,11 @@ def test_a_room_is_named_in_plain_digits_so_the_access_record_names_the_same_roo
         chat.response(snapshot, {1, 10}, "timeline", "project=" + project)
     assert chat.read_subject("timeline", "project=" + project) == (None, [], False)
     assert chat.read_subject("timeline", "project=1") == (1, [1], False)
+
+
+def test_a_view_that_does_not_exist_is_refused_before_the_room_is_checked(snapshot):
+    # Otherwise a refused room would be recorded under whatever view name the request carried.
+    with pytest.raises(ValueError, match="unknown_view"):
+        chat.response(snapshot, {1}, "synthetic_view", "project=2")
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "timeline", "project=2")

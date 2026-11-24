@@ -348,8 +348,9 @@ def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
     if isinstance(migration, dict) and isinstance(migration.get("backup_path"), str) \
             and os.path.lexists(migration["backup_path"]):
         return None                     # _restore_runtime renames the pre-update venv (old pins) back
+    # The kept venv is compatible when the pinned versions are the same; hashes alone change nothing in it.
     if hermes or _git(["diff", "--quiet", str(entry.get("prev_sha")), "HEAD", "--",
-                       *_STANDALONE_SDK_FILES]).returncode == 0:
+                       _STANDALONE_SDK_FILES[0]]).returncode == 0:
         return None
     return "standalone_sdk_rollback_unsupported"
 

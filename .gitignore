@@ -5,6 +5,7 @@ token_cache.json
 config.json
 config.json.*
 external_transfer.json
+external_transfer.required
 .install-options-migration.pending
 .install-options-migration.reconcile.*
 # Interrupted private configuration writes may leave these staging files.

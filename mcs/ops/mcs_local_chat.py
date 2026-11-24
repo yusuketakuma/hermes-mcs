@@ -41,6 +41,11 @@ FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "homecare.css": ("homecare.css", "text/css; charset=utf-8")}
 
 
+# The views of one patient's room; local_chat_view serves the last six through read().
+ROOM_ROUTES = frozenset({"counts", "registered", "sources", "brief", "panel", "context",
+                         "timeline", "search", "thread", "senders", "attachments", "evidence"})
+
+
 def _one(params, name, default=None):
     values = params.pop(name, [default])
     if len(values) != 1:
@@ -69,6 +74,8 @@ def response(snapshot, allowed, route, query):
             raise ValueError("bad_arguments")
         return local_chat_view.sections() if route == "sections" else local_chat_view.drugs(text)
     if route != "patients":
+        if route not in ROOM_ROUTES:
+            raise ValueError("unknown_view")    # before the room check, so a refusal is recorded under a real view
         # Plain ASCII digits only, so the room that is read is always the room read_subject records.
         if not (project and project.isascii() and project.isdigit()):
             raise ValueError("bad_arguments")
