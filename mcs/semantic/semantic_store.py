@@ -157,6 +157,25 @@ def jev_state(bundle: dict, target_id: int) -> dict | None:
             "context": ctx}
 
 
+def primary_questions(scfg: dict) -> dict:
+    """Every active primary proposition as the question Jev is asked."""
+    return {name: jev.noul_question(p["instructions"], p["true"], p["false"])
+            for name, p in jev.active_propositions(scfg).items()}
+
+
+def assessment_input(bundle: dict, target_id: int, scfg: dict) -> str | None:
+    """Identity of what a primary assessment sends to Jev for one target.
+
+    The thread fingerprint also covers stored fields Jev never receives
+    (reply counts, attachment download state, sender display names). This
+    names only the request itself: the target, its context and the questions."""
+    state = jev_state(bundle, target_id)
+    if state is None:
+        return None
+    return payload_hash({VERSION_KEY: CURRENT_VERSION, "model": jev.JEV_MODEL,
+                         "state": state, "questions": primary_questions(scfg)})
+
+
 def producer_current(kind: str, row_model, meta: dict) -> bool:
     """Whether the local model still accepts this row's producer (cloud rows always do)."""
     if kind not in LOCAL_MODEL_GATED_KINDS:
@@ -474,6 +493,26 @@ def _valid_primary_history(content, meta, previous, mid, fp, policy, scfg):
                 or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
             return False
     return True
+
+
+def _carried_primary_assessment(rows, mid, policy, scfg, jev_input):
+    """The complete primary assessment of this exact Jev input under another source fingerprint, or None.
+
+    The newest row recorded for the input decides: an incomplete, invalidated
+    or otherwise unusable one is never bypassed for an older answer."""
+    if jev_input is None:
+        return None
+    for stored in rows:
+        content, meta = loads_dict(stored['content']), loads_dict(stored['meta'])
+        if (meta is None or meta.get('fact_id') is not None
+                or meta.get('jev_input') != jev_input or meta.get('policy_fingerprint') != policy):
+            continue
+        if (content is not None and meta.get('technical_status') == 'complete' and content.get('verdicts')
+                and _valid_primary_assessment(content, meta, stored['model'], mid,
+                                              meta.get('fingerprint'), policy, scfg)):
+            return {'content': content, 'meta': meta}
+        return None
+    return None
 
 
 def _reprocess_job_payload(ledger, row, project_id, root):
