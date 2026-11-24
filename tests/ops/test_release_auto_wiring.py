@@ -1,7 +1,7 @@
 """v3 module wiring census: name the wired and the waiting release-auto modules.
 
-A ``v3`` module is a non-test ``.py`` file whose module docstring opens with
-``v3``. ``scripts/development/release_publish.py`` is the publisher entry
+A ``v3`` module is a non-test ``.py`` file whose module docstring's first
+line contains ``v3``. ``scripts/development/release_publish.py`` is the publisher entry
 point itself (W11 CLI), not a module awaiting wiring, so it is pinned in
 ``V3_ENTRIES`` instead of the module census.
 
