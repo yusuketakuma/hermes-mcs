@@ -137,7 +137,10 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: ${{ steps.pr.outputs.prompt }}
+          # git and python3 are listed by subcommand: no tag, remote, config or -c, and a push only of the
+          # checked-out branch. This narrows what injected text can ask for; the tests it may run are still
+          # code, so tags are protected by the v* ruleset (docs/development/AUTOMATION.md), not by this list.
           claude_args: >-
             --max-turns 40
-            --allowedTools "Bash(gh run list:*),Bash(gh run view:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh pr comment:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*),Edit,Write,Read,Glob,Grep"
-            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。直すのは CI の失敗の原因か、結ばれた Issue の受入条件の範囲のレビュー指摘だけ。テストの削除・skip・閾値の緩和・CI 設定の変更で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"
+            --allowedTools "Bash(gh run list:*),Bash(gh run view:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh pr comment:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(git ls-files:*),Bash(git grep:*),Bash(git add:*),Bash(git commit:*),Bash(git mv:*),Bash(git rm:*),Bash(git restore:*),Bash(git stash:*),Bash(git push origin HEAD),Bash(git push -u origin HEAD),Bash(ruff:*),Bash(python3 ci/gates.py:*),Bash(python3 ci/mine_gates.py:*),Bash(python3 scripts/development/update_readme.py:*),Bash(scripts/run_tests.sh:*),Edit,Write,Read,Glob,Grep"
+            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。直すのは CI の失敗の原因か、結ばれた Issue の受入条件の範囲のレビュー指摘だけ。テストの削除・skip・閾値の緩和・CI 設定の変更で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。push は git push origin HEAD だけを使う。"

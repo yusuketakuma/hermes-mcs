@@ -17,6 +17,7 @@ import _mcs_path  # noqa: F401
 from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
 from mcs_util import ProviderSettingsUnreadable
 from mcs_view import View
+import access_log
 import local_chat_view
 import homecare_api
 import homecare_catalog
@@ -97,6 +98,18 @@ def response(snapshot, allowed, route, query):
         view.close()
 
 
+def read_subject(route, query, result=None):
+    """``(project_id, patient ids, searched)`` of an MCS read, for its access record: the room the request
+    names or, for the patient list, every room the answer showed, and whether it carried a search term."""
+    params = parse_qs(query, max_num_fields=10)
+    searched = bool(params.get("q"))
+    if route == "patients":
+        return None, [row["project_id"] for row in (result or {}).get("items", ())], searched
+    asked = params.get("project", [])
+    project = int(asked[0]) if len(asked) == 1 and asked[0].isascii() and asked[0].isdigit() else None
+    return project, [] if project is None else [project], searched
+
+
 def mcs_patients(snapshot, allowed):
     view = View(snapshot)
     try:
@@ -136,13 +149,17 @@ def resident_user(server, login):
 
 class ChatServer(ThreadingHTTPServer):
     """Serves one launch: on this computer behind a per-launch capability URL, or resident behind
-    ``tailscale serve`` (``tailnet_host``), where each request is a registered staff member's Tailscale login."""
+    ``tailscale serve`` (``tailnet_host``), where each request is a registered staff member's Tailscale login
+    and every MCS read is first written to the access log under ``access_log_dir`` (the site's data directory)."""
 
     def __init__(self, snapshot, allowed, port=0, homecare=None, modules=("pharmacy",), route_settings=None,
-                 tailnet_host=None):
-        if tailnet_host is not None and (homecare is None or not port or not TAILNET_HOST.match(tailnet_host)):
-            raise ValueError("resident mode needs a home-care ledger, a fixed port and a *.ts.net name")
+                 tailnet_host=None, access_log_dir=None):
+        if tailnet_host is not None and (homecare is None or not port or not TAILNET_HOST.match(tailnet_host)
+                                         or access_log_dir is None):
+            raise ValueError("resident mode needs a home-care ledger, a fixed port, a *.ts.net name and "
+                             "an access log directory")
         self.tailnet_host = tailnet_host
+        self.access_log_dir = None if access_log_dir is None else Path(access_log_dir)
         self.snapshot = Path(snapshot)
         self.allowed = None if allowed is None else frozenset(allowed)
         self.token = secrets.token_urlsafe(32)
@@ -235,6 +252,20 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return None
         return route, parts.query
 
+    def _recorded(self, route, query, result=None, outcome="ok"):
+        """Whether this MCS read may be answered: a resident read is first appended to the access log under the
+        Tailscale login (no names, query text or bodies), and one that cannot be recorded is withheld."""
+        if not self.server.tailnet_host:
+            return True
+        try:
+            project, patients, searched = read_subject(route, query, result)
+            access_log.record(self.server.access_log_dir, via="local_chat", actor=f"tailscale:{self.login}",
+                              op="view", kind=route, project_id=project, patients=patients, outcome=outcome,
+                              query=searched)
+        except (access_log.AccessLogError, OSError, ValueError):
+            return False
+        return True
+
     def _json(self, status, data):
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json")
 
@@ -257,24 +288,34 @@ class ChatHandler(BaseHTTPRequestHandler):
         elif route.startswith("api/hc/"):
             self._homecare("GET", route[7:], query)
         elif route.startswith("api/"):
-            try:
-                result = response(self.server.snapshot, self.server.allowed, route[4:], query)
-            except ValueError as exc:
-                code = str(exc)
-                # Only fixed, non-clinical codes reach the browser.
-                code = code if code in {"cursor_scope_or_generation_changed", "project_not_allowed",
-                                        "bad_search_filter", "search_cursor_invalid",
-                                        "search_query_empty"} else "bad_request"
-                self._json(400, {"error": code})
-            except ProviderSettingsUnreadable:
-                # The settings file exists but cannot be read: not the same as "not configured".
-                self._send(503, b'{"error":"config_unreadable"}', "application/json")
-            except (OSError, sqlite3.Error):
-                self._send(503, b'{"error":"snapshot_unavailable"}', "application/json")
-            else:
-                self._json(200, result)
+            self._mcs(route[4:], query)
         else:
             self._send(404)
+
+    def _mcs(self, route, query):
+        try:
+            result = response(self.server.snapshot, self.server.allowed, route, query)
+        except ValueError as exc:
+            code = str(exc)
+            # Only fixed, non-clinical codes reach the browser.
+            code = code if code in {"cursor_scope_or_generation_changed", "project_not_allowed",
+                                    "bad_search_filter", "search_cursor_invalid",
+                                    "search_query_empty"} else "bad_request"
+            if code == "project_not_allowed":
+                # A refused room is worth a record too; the refusal itself never depends on it.
+                self._recorded(route, query, outcome=code)
+            self._json(400, {"error": code})
+        except ProviderSettingsUnreadable:
+            # The settings file exists but cannot be read: not the same as "not configured".
+            self._send(503, b'{"error":"config_unreadable"}', "application/json")
+        except (OSError, sqlite3.Error):
+            self._send(503, b'{"error":"snapshot_unavailable"}', "application/json")
+        else:
+            # The catalogue routes carry no patient record.
+            if route in ("sections", "drugs") or self._recorded(route, query, result):
+                self._json(200, result)
+            else:
+                self._send(503, b'{"error":"access_log_unavailable"}', "application/json")
 
     def do_POST(self):
         found = self._route(write=True)
@@ -325,7 +366,8 @@ def resident_argv(cfg, root):
         raise ValueError("remote_access_not_configured")
     argv = ["--snapshot", str(Path(root) / "data" / "snapshots" / "ledger-snapshot.db"), "--all-patients",
             "--homecare-db", str(homecare_store.default_path(root)),
-            "--port", str(remote.get("port", REMOTE_ACCESS_PORT)), "--tailnet-host", remote["tailnet_host"]]
+            "--port", str(remote.get("port", REMOTE_ACCESS_PORT)), "--tailnet-host", remote["tailnet_host"],
+            "--access-log-dir", str(Path(root) / "data")]
     return argv + (["--route-settings", remote["route_settings"]] if "route_settings" in remote else [])
 
 
@@ -355,10 +397,16 @@ def main(argv=None):
                         help="Private JSON (chmod 600) enabling visit routes; sends addresses only, when asked")
     parser.add_argument("--tailnet-host", metavar="NAME.ts.net",
                         help="Resident mode behind `tailscale serve` on this name: staff sign in with their Tailscale "
-                             "login (needs --homecare-db and a fixed --port)")
+                             "login (needs --homecare-db, a fixed --port and --access-log-dir)")
+    parser.add_argument("--access-log-dir", type=Path,
+                        help="The site's data directory, where --tailnet-host records who read which patient "
+                             "(the access_log/ that `mcs_compliance.py` reviews)")
     args = parser.parse_args(argv)
-    if args.tailnet_host and (not args.homecare_db or not args.port or not TAILNET_HOST.match(args.tailnet_host)):
-        parser.error("--tailnet-host needs --homecare-db, a fixed --port and a *.ts.net name")
+    if args.tailnet_host and (not args.homecare_db or not args.port or not TAILNET_HOST.match(args.tailnet_host)
+                              or not args.access_log_dir):
+        parser.error("--tailnet-host needs --homecare-db, a fixed --port, a *.ts.net name and --access-log-dir")
+    if args.access_log_dir and not args.tailnet_host:
+        parser.error("--access-log-dir is for --tailnet-host")
     if args.project and any(pid <= 0 for pid in args.project) or not 0 <= args.port <= 65535:
         parser.error("invalid project or port")
     try:
@@ -375,7 +423,7 @@ def main(argv=None):
     try:
         server = ChatServer(args.snapshot, args.project, args.port, homecare=args.homecare_db,
                             modules=args.homecare_module or ("pharmacy",), route_settings=routes,
-                            tailnet_host=args.tailnet_host)
+                            tailnet_host=args.tailnet_host, access_log_dir=args.access_log_dir)
     except (OSError, sqlite3.Error, RuntimeError):
         parser.exit(2, "Home-care database unavailable; no server started.\n")
     with server:

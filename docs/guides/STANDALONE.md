@@ -52,6 +52,7 @@ $PY -m mcs_standalone status
 MCSの収集前にはChromeのログインとCDPポート`:9333`も準備します。[導入ガイドの動作確認](INSTALLATION.md#a-5-動作確認)の冒頭を確認し、同節のHermes用Pythonを使う例では上の`$PY`に読み替えます。収集・通知・既読化の確認は、許可した範囲で行います。
 
 installerはHermesを取得・設定せず、独立venvへ[公式SDKの固定バージョン](../../deployment/requirements-standalone.txt)を導入します。
+導入は[SHA256付きの一覧](../../deployment/requirements-standalone.lock)と照合し、記録と中身が違う配布物は導入しません。
 ローカルLLM、独立host、repo外の復旧watchdogも登録します。
 ウィザードはMCSのログイン、配信先、操作・閲覧範囲と非表示の秘密入力を案内します。
 既存値は保持されます。認証情報不足のまま起動成功と扱いません。

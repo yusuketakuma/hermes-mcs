@@ -153,7 +153,8 @@ def test_resident_arguments_come_from_the_saved_settings(tmp_path):
         mcs_local_chat.resident_argv({"remote_access": {}}, tmp_path)
     argv = mcs_local_chat.resident_argv({"remote_access": {"tailnet_host": HOST}}, tmp_path)
     assert argv == ["--snapshot", str(tmp_path / "data/snapshots/ledger-snapshot.db"), "--all-patients",
-                    "--homecare-db", str(tmp_path / "data/homecare.db"), "--port", "8770", "--tailnet-host", HOST]
+                    "--homecare-db", str(tmp_path / "data/homecare.db"), "--port", "8770", "--tailnet-host", HOST,
+                    "--access-log-dir", str(tmp_path / "data")]
     routed = mcs_local_chat.resident_argv(
         {"remote_access": {"tailnet_host": HOST, "port": 9000, "route_settings": "/private/route.json"}}, tmp_path)
     assert routed[routed.index("--port") + 1] == "9000" and routed[-2:] == ["--route-settings", "/private/route.json"]

@@ -52,7 +52,7 @@
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
   cancellation に限定する
 - `runtime_mode=standalone` では `adapters/{slack,discord}/standalone.py` が
-  `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`）で
+  `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`。導入は `requirements-standalone.lock` の SHA256 と照合）で
   Slack/Discord に接続する。トークンはroot配下の私有JSON（優先）または `.env`（0600）からのみ読み、
   SDK は関数内で import、起動時に proxy 環境変数を除去、メンションは無効化
   （Slackの独立CLI本文はプレーンテキスト）、テキスト送信先は `notify_target` /
@@ -81,7 +81,7 @@
 - `brain_export.py` は患者名・病名・要約・薬剤等の PHI を含む Markdown を
   ローカル出力する。出力後の知識ストア同期・LLM 利用は別のデータ経路であり、
   エクスポート実行だけではそれらの外部送信を許可したことにならない
-- Slack・Discord・LINE WORKS の `/mcs` 操作は、回答前に操作者・操作・患者ID・結果を
+- Slack・Discord・LINE WORKS の `/mcs` 操作と、ローカル患者画面の常駐モードでの MCS の記録の閲覧は、回答前に操作者・操作・患者ID・結果を
   ハッシュ連鎖の閲覧記録 `data/access_log/` へ追記する。検索語・本文・患者名は記録しない。
   記録できない閲覧は回答しない
 - 人承認操作（依頼登録・更新、シグナル却下、閾値変更、更新適用・ロールバック・

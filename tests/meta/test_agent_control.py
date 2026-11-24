@@ -703,3 +703,20 @@ def test_merge_ready_runs_only_on_default_branch_events_and_dots_may_assign():
     assert "vars.DOTS_ACTOR != '' && github.event.sender.login == vars.DOTS_ACTOR" in issues_branch
     assert "DOTS_ACTOR" not in comment_branch and "github.event.sender.login == github.repository_owner" in comment_branch
     assert '"$control" labeler --sender "$SENDER" --owner "$OWNER" --dots-actor "${DOTS:-}"' in claude
+
+
+def test_the_writing_claude_runs_list_git_and_python_by_subcommand():
+    for name in ("agent-claude.yml", "agent-claude-repair.yml"):
+        text = (ROOT / ".github/workflows" / name).read_text()
+        tools = re.search(r'--allowedTools "([^"]+)"', text).group(1).split(",")
+        git = [tool for tool in tools if tool.startswith("Bash(git")]
+        # no blanket git or python3: a tag, a remote, a config change or -c is not on the list
+        assert "Bash(git:*)" not in tools and "Bash(python3:*)" not in tools, name
+        assert not [tool for tool in git if re.match(r"Bash\(git (tag|remote|config|-c|clone|fetch|update-ref)", tool)], name
+        # the only push is the checked-out branch, spelled exactly (no refspec can follow)
+        assert [tool for tool in git if "push" in tool] == ["Bash(git push origin HEAD)", "Bash(git push -u origin HEAD)"], name
+        assert [tool for tool in tools if tool.startswith("Bash(python3")] == [
+            "Bash(python3 ci/gates.py:*)", "Bash(python3 ci/mine_gates.py:*)",
+            "Bash(python3 scripts/development/update_readme.py:*)"], name
+        assert "git push origin HEAD だけ" in text, name
+    assert "refs/tags/v*" in (ROOT / "docs/development/AUTOMATION.md").read_text()
