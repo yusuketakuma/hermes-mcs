@@ -21,6 +21,11 @@
       "path": "changes/archive/1.3.0/cloud-tally-keep-unstamped.json",
       "sha256": "891056e0c141f37f042f7dd839bb70bf07dbf986e9b3b39520987f053fdcfe81"
     },
+    "cloud-unresolved-reselect-20261124": {
+      "title": "クラウド再抽出が同じ持ち越し投稿を繰り返し選定する問題を修正",
+      "path": "changes/archive/1.3.0/cloud-unresolved-reselect-20261124.json",
+      "sha256": "37d3b791dbf546f4ee8b29308522034ed01c77610125b7da389f80ad7bea3771"
+    },
     "core-module-folders": {
       "title": "mcs/core/ の補助モジュールを役割別のフォルダへ移動",
       "path": "changes/archive/1.3.0/core-module-folders.json",
@@ -35,6 +40,11 @@
       "title": "日次サマリーに処方期限の近い患者の一覧を追加",
       "path": "changes/archive/1.3.0/digest-rx-period-list.json",
       "sha256": "d69626fad2a44cc505c0901d1ccb5cb2f1544405ec34b2ec311a48dead4af8ff"
+    },
+    "drug-alias-over-limit-cache": {
+      "title": "別名数が上限を超える薬名辞書でヒント生成が毎回全走査する問題を修正",
+      "path": "changes/archive/1.3.0/drug-alias-over-limit-cache.json",
+      "sha256": "4bd28e660c886991cc1825cc872ae2790faf59d9157a7eca096690ff3f962136"
     },
     "drug-catalog": {
       "title": "在宅記録などから使う医薬品の検索・照会の共通入口を追加",
@@ -104,7 +114,7 @@
     "jev-model-switch": {
       "title": "Jevの新しいモデルを知らせ、確認に合格したときだけコマンドで切り替える",
       "path": "changes/archive/1.3.0/jev-model-switch.json",
-      "sha256": "af5660f56c9baf5123b7adbbe16fd1201e81645f31eaf60575206cfd66baeca9"
+      "sha256": "f69763a98bcfafa60f95289e16947adb472f9892ecc5f3432f557edd89d901a4"
     },
     "jev-optional": {
       "title": "Jev を導入していない環境と Jev の対象外の患者で、外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
@@ -115,6 +125,11 @@
       "title": "検査値の判定で、検体の節・続く検査値の単位・長い行での停止を修正",
       "path": "changes/archive/1.3.0/lab-reading-redos-and-specimen-scope.json",
       "sha256": "e74effdde2350a1e7e991965628cf2159200136504d3fdf3e72b4b19683220ad"
+    },
+    "launchd-unknown-agent-state": {
+      "title": "launchctl の状態を確認できない常駐処理を未読込として起動する問題を修正",
+      "path": "changes/archive/1.3.0/launchd-unknown-agent-state.json",
+      "sha256": "ea3d6b4ba4585f6f1c55a90db5417b6830a3fcbfb8cdc7106304a4c48490e843"
     },
     "local-chat-mcs-coverage": {
       "title": "ローカルの患者画面へMCSから取得した情報を漏れなく渡す",

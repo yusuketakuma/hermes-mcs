@@ -1,7 +1,7 @@
 {
  "sections": {
   "demos": {
-   "notes": "2026-11-24、未公開1.3.0候補: 既存の画面集・推論フロー図の導線を保持する。v1.3.0の説明図（homecare-drug-search-v130）は合成の説明図であり、実画面・測定結果の証拠とはしない。PNGは980x420@2x描画を1372x588相当へ縮小して文字欠落・重なりを確認済み。画像添付と到達・表示確認は公開時に行う。",
+   "notes": "2026-11-24、未公開1.3.0候補: 画面例の導線と合成説明図を維持。37件化で画面挙動に影響する追加はなく、図は主要機能の説明に限定し、実画面・測定結果の証拠とはしない。PNGの描画・文字重なりを確認済み。公開時の画像添付・到達確認は未実施。",
    "sources": [
     "README.md",
     "docs/screenshots/slack-gallery/README.md",
@@ -36,11 +36,12 @@
     "docs/releases/v1.3.0/homecare-drug-search-v130.svg",
     "docs/releases/v1.3.0/homecare-drug-search-v130.png",
     "docs/releases/v1.3.0/visual-source.json",
-    "docs/releases/VISUAL_PREPARATION.md"
+    "docs/releases/VISUAL_PREPARATION.md",
+    "docs/releases/v1.3.0/README.md"
    ]
   },
   "docs": {
-   "notes": "2026-11-24、未公開1.3.0候補: 34件の集約とQA_VERSION 1→2の表示影響を反映し、変更後は公開本文に比較表・説明図PNGを含めた。Jev無効時のdisabledと、Jev有効で対象範囲外の場合のout_of_scopeを区別した。",
+   "notes": "2026-11-24、未公開1.3.0候補: 37件の記録、12/8/17の分類、生成CHANGELOG・README・公開本文・対応表を照合した。#365のモデル固定・canonical再評価/再承認・承認receiptと設定保存の再実行手順を、更新済みJev記録と受入票へ反映。Software Factoryの患者コンテキスト改善は対象未特定で追補待ち。",
    "sources": [
     "README.md",
     "docs/development/RELEASE_NOTES.md",
@@ -106,11 +107,16 @@
     "changes/archive/1.3.0/jev-optional.json",
     "mcs/extract/llm/extract_llm_resident.py",
     "CHANGELOG.md",
-    "docs/releases/v1.3.0/release-summary-1.3.0.md"
+    "docs/releases/v1.3.0/release-summary-1.3.0.md",
+    "docs/releases/v1.3.0/release-notes-1.3.0.md",
+    "changes/archive/1.3.0/jev-model-switch.json",
+    "changes/archive/1.3.0/launchd-unknown-agent-state.json",
+    "changes/archive/1.3.0/drug-alias-over-limit-cache.json",
+    "changes/archive/1.3.0/cloud-unresolved-reselect-20261124.json"
    ]
   },
   "features": {
-   "notes": "2026-11-24、未公開1.3.0候補: 在宅ケアの患者台帳（患者・職員・ケアチーム・訪問歴・処方歴・訪問ルート）、医薬品検索・照会の共通入口、添付文書改訂・マスター差分からの患者横断検索、薬局→医師の照会返答待ちアラート、日次サマリーの処方期限一覧、ローカル患者画面のMCS情報引き渡しを変更記録と照合した。QA_VERSION 1→2はPASS規則を変えず旧PASSを現行版へ流用しない版更新で、背景再判定まで概要が一時非表示となる合成実測を受入票に記録した。",
+   "notes": "2026-11-24、未公開1.3.0候補: 37件（新機能12・改善8・不具合修正17）の記録と実装を照合した。在宅ケア台帳、医薬品検索・患者横断検索、照会アラート、Jev 1.14.0とモデル切替の説明を確認。常駐処理の状態不明時の起動抑止、上限超過薬名辞書の再走査抑止、条件不変なクラウド行の再選定抑止を追加記録へ反映した。Software Factoryの患者コンテキスト改善は対象未特定・実装中のため、この37件の候補には含めず、対象確認後の追補事項として管理する。",
    "sources": [
     "README.md",
     "mcs/llm/cloud_inference.py",
@@ -198,11 +204,14 @@
     "changes/archive/1.3.0/local-chat-patient-views.json",
     "changes/archive/1.3.0/jev-optional.json",
     "mcs/extract/llm/extract_llm_resident.py",
-    "docs/releases/v1.3.0/changelog-1.3.0.md"
+    "docs/releases/v1.3.0/changelog-1.3.0.md",
+    "changes/archive/1.3.0/launchd-unknown-agent-state.json",
+    "changes/archive/1.3.0/drug-alias-over-limit-cache.json",
+    "changes/archive/1.3.0/cloud-unresolved-reselect-20261124.json"
    ]
   },
   "quickstart": {
-   "notes": "2026-11-24、未公開1.3.0候補: 新規導入が設定保存前に止まっても同じコマンドの再実行で続きから進める修正、Hermes経由の新規導入がHermes初回起動待ちで必ず止まる問題の修正を変更記録とinstall経路へ照合した。QA_VERSION更新には通常のサービス再起動が必要だが、患者ごとの操作は不要で、常駐workerが背景再判定する。再起動後の実進行・回復時間は未検証。",
+   "notes": "2026-11-24、未公開1.3.0候補: 新規導入の再開・Hermes初回起動待ちの修正を既存記録と照合。Jev切替は確認合格時の人承認コマンドのみで、canonical環境は更新後に再評価・再承認が必要。QA_VERSION 1→2の概要一時非表示と背景再判定は合成probeで確認したが、実サービス再起動後の進行・回復時間は未検証。",
    "sources": [
     "README.md",
     "install.sh",
@@ -270,11 +279,14 @@
     "changes/archive/1.3.0/install-hermes-first-run.json",
     "changes/archive/1.3.0/jev-optional.json",
     "mcs/extract/llm/extract_llm_resident.py",
-    "docs/releases/v1.3.0/ACCEPTANCE_1.3.0.md"
+    "docs/releases/v1.3.0/ACCEPTANCE_1.3.0.md",
+    "docs/guides/ANTHROPIC.md",
+    "changes/archive/1.3.0/jev-model-switch.json",
+    "mcs/ops/setup/jev_model_setup.py"
    ]
   },
   "safety": {
-   "notes": "2026-11-24、未公開1.3.0候補: 外部送信の既定OFF・人承認・予算・未取得と観測0件の区別を維持する。在宅ケア台帳・バックアップ・常駐モード・薬剤照会は内部保存・表示の追加で外部送信経路を追加しない。QA_VERSION 1→2でも旧PASSの保存と不合格時の安全な保留を維持し、旧PASSを現行版として再利用しない。対象外の合成ケースはJev送信なしのSKIPPEDで表示が戻った。例外は訪問ルート: 明示的に使うと住所を国土地理院の住所検索へ送り座標化し、座標を openrouteservice へ送って訪問順を並べる（氏名・ID・メモ・電話番号は送らない）。利用は所有者だけが読める私有設定ファイルに openrouteservice キーと起点住所を置いたときだけで、既定OFF。Jev切替は確認合格時のコマンド経由のみ。同梱医薬品マスターは公式download menuの最新版20261112（19,324件、令和8年11月12日）と一致を2026-11-24に確認。有効化は要オペレーター承認で未実施。",
+   "notes": "2026-11-24、未公開1.3.0候補: 外部送信の許可・人承認・予算の境界を維持。Jev一覧取得は送信直前にも利用許可を確認し、モデルを候補/承認記録に束縛。canonical中の切替を拒否し、再評価・再承認を要求する。医薬品masterは20261112・19,324件と公式menuを照合済みで、有効化はfalse・担当者承認必須。実機適用は未実施。",
    "sources": [
     "README.md",
     "SECURITY.md",
@@ -350,7 +362,10 @@
     "resources/drug-master/20261112/manifest.json",
     "changes/archive/1.3.0/jev-optional.json",
     "mcs/extract/llm/extract_llm_resident.py",
-    "docs/releases/v1.3.0/ACCEPTANCE_1.3.0.md"
+    "docs/releases/v1.3.0/ACCEPTANCE_1.3.0.md",
+    "mcs/ops/setup/jev_model_setup.py",
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/semantic_runtime.py"
    ]
   }
  },

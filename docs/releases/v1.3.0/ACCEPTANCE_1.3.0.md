@@ -5,28 +5,29 @@
 ## 版番号の提案記録
 
 - 比較元（直近の公開済み版）: タグ `v1.2.1` = `4a97288dd74f356c8bb2f7191721819f0a1fdaf3`（CHANGELOG の v1.2.1 節と照合済み）。本番反映SHAはこの記録では確認していない。
-- 対象SHA: QA_VERSION の合成probeは過去の候補 `27f2619` で実施。Issue #198の範囲限定独立QAは候補 `6845138a8c027f2a68cc7290650497434573c3fd` を対象に実施。今回の文書追補はコードを変更しないため、このQAの対象コードは変わりませんが、PRの最終HEADとCIは文書push後に別途照合します。
+- 対象SHA: QA_VERSIONの合成probeは過去の候補 `27f2619`、Issue #198の範囲限定独立QAは候補 `6845138a8c027f2a68cc7290650497434573c3fd` で実施。PR #365の最終head `d71f58d936265aeff973d1bc5f348f367c4dd086` はmainへマージ済みで、merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` を現在の候補へ取り込み済み。37件の資料更新後のPR #357 headと必須CIはpush後に再確認する。
 - 推奨番号: `1.3.0`（機能アップデート版）。最大区分は MINOR。
-- 根拠: 未リリース変更記録34件の内訳が 新機能12・改善8・不具合修正14。12件の `added` 記録は互換な機能追加（在宅ケア台帳・医薬品検索共通入口・患者横断検索・Jev要求内訳表示など）。根拠path: `changes/archive/1.3.0/` 各記録と `docs/releases/v1.3.0/change-map.json`。非互換な CLI/JSON/設定/保存データの変更は記録に無い。内部改善の件数・行数・schema番号は区分の代理に使っていない。
+- 根拠: 未リリース変更記録37件の内訳は新機能12・改善8・不具合修正17。#352/#358の常駐処理誤起動防止、#356の薬名辞書再走査防止、#359のクラウド再処理防止を含む。#365は既存のJevモデル切替記録を更新したもので、件数を増やしていない。非互換なCLI/JSON/設定/保存データの変更は記録に無い。内部改善の件数・行数・schema番号は区分の代理に使っていない。
 - 互換性・必要な操作: 保存済みPASSは削除しませんが、`QA_VERSION` 1→2で旧PASSは現行版の確認として再利用されず、背景再判定まで概要が一時的に非表示になります。通常の更新手順に含まれるサービス再起動・設定確認と、薬剤マスターのオペレーター承認（配布のみで有効化は別承認）は従来どおり必要です。QA_VERSION は内部の版マーカーで、担当者が手動変更する操作ではありません。患者ごとの追加操作は不要で、稼働中のresident workerが背景再判定を進めます。
-- 未確認事項: タグ `v1.3.0` 作成・GitHub Release 公開・説明図PNGのasset添付と到達確認、本番適用・常駐サービス再起動、対象SHAでのCI最終run。
+- 未確認事項: PR #357最終headに対する必須CI、Software Factoryの患者コンテキスト改善の対象・実装完了、実機の対象端末/本番適用先/接続権限の同一性、ローカル取込・適用・本人の実使用、tag `v1.3.0`・GitHub ReleaseとPNG assetの到達確認。
 
 ## 今回の対象
 
-- v1.2.1（タグ 2026-11-22）以降の変更記録34件を `changes/archive/1.3.0/` へ収録。機能アップデート版として番号 `1.3.0` を指定（所有者 2026-11-24）。
-- 内訳: 新機能12件（在宅ケア台帳・職員・ケアチーム・訪問歴・処方歴・訪問ルート・常駐モード・ローカルバックアップ対象・医薬品検索共通入口・患者横断検索・照会返答待ちアラート・日次サマリー処方期限一覧・Jev要求内訳表示・ローカル患者画面の表示とMCS引き渡し）、改善8件（Jev 1.14.0・モジュール整理・QC再抽出・意味解析まとめ処理など）、不具合修正14件（書込みロック待ち・意味解析滞留・費用集計・導入途中停止・照会待ちなど）。
+- v1.2.1（タグ 2026-11-22）以降の変更記録37件を `changes/archive/1.3.0/` へ収録。機能アップデート版として番号 `1.3.0` を指定（所有者 2026-11-24）。
+- 内訳: 新機能12件（在宅ケア台帳・職員・ケアチーム・訪問歴・処方歴・訪問ルート・常駐モード・ローカルバックアップ対象・医薬品検索共通入口・患者横断検索・照会返答待ちアラート・日次サマリー処方期限一覧・Jev要求内訳表示・ローカル患者画面の表示とMCS引き渡し）、改善8件（Jev 1.14.0・モジュール整理・QC再抽出・意味解析まとめ処理など）、不具合修正17件（既存14件に#352/#358・#356・#359を追加）。
 - CHANGELOG の v1.3.0 節と公開Release本文を生成し、同じ比較表・説明図PNGを掲載。README のリリース案内も生成。図は合成の説明図で実画面ではない旨を記載し、公開URLの到達・Release画面での表示は未確認（tag/asset未公開）。公開本文は上限内。
-- 説明図の来歴とhashは `visual-source.json`（PNG 1960×840 の sha256 記録済み）、34件の対応表は `change-map.json`。
+- 説明図の来歴とhashは `visual-source.json`（PNG 1960×840 の sha256 記録済み）、37件の対応表は `change-map.json`。
+- Software Factoryで進行中という患者コンテキスト改善は、対象未特定・実装中のため現候補に含めていない。Yusukeが対象を確認した後、実装完了分を別途追加し、変更記録と検証範囲を更新する。
 - `docs/development/readme-review.json` を 1.3.0 へ更新し、README本文の見直し結果を記録済み。
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象は `devin/release-1.3.0-prep` ブランチの作業ツリー（base: origin/main `bbcb846a`、HEAD `f4b35f7`）。実行日は 2026-11-24（JST）。
+対象はPR #357の `devin/release-1.3.0-prep` ブランチ。main merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` と37件の変更記録を含みます。最終head SHAと必須CIはこの資料更新をpushした後にPR上で確認します。実行日は2026-11-24（JST）。
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
-- `release_notes.py build --version 1.3.0 --date 2026-11-24`: 生成成功（archive移動・CHANGELOG・README更新・changelog-1.3.0.md）。
-- `release_notes.py export --version 1.3.0`: 本文・タイトル出力成功。`release-notes-1.3.0.md`・`release-title-1.3.0.txt` に収録（本文 107,596 byte、上限内）。
-- `update_readme.py`: README 生成ブロック再生成済み（release・modules・signals・stats・cli）。
+- `release_notes.py build --version 1.3.0 --date 2026-11-24`: 既存版を上書きしないようcleanな一時worktreeで生成。候補側で更新済みの `jev-optional.json` と `semantic-drain-throughput.json` を用い、archive 37件がPR作業ツリーと完全一致することを確認。
+- `release_notes.py export --version 1.3.0`: 本文・タイトル出力成功。`release-notes-1.3.0.md`・`release-title-1.3.0.txt` に収録（本文113,640 byte、上限内）。
+- `update_readme.py`: README生成ブロックは生成済み状態と一致（release・modules・signals・stats・cli）。
 - `readme_release.py --check`: 合格。
 - `check_drug_master_bundle.py`: 同梱 bundle は公式最新版 20261112（MHLW download menu の医薬品マスター最終更新日・令和8年11月12日・19,324件との一致を 2026-11-24 に確認）。有効化は要オペレーター承認で未実施。
 - `scripts/run_tests.sh tests/release/`: 合格（59 tests + 128 subtests、2026-11-24 実測）。
@@ -70,25 +71,19 @@
 
 ## 未実行・残条件
 
-- PR #357のCI（候補SHA `6845138a8c027f2a68cc7290650497434573c3fd`）: 2026-11-24時点で16成功・0失敗・2 pending（`pytest-linux (4)`、`merge-gate`）、4 skipped。文書追補後のPR HEADについてCIを再照合する。
-- 独立レビュー（Devin Review）: PR に付く見込み。指摘があれば対応を記録する。
-- tag `v1.3.0` の作成・GitHub Release の公開・説明図 PNG の release asset 添付と到達・表示確認: 未実施。本文中の画像URLは公開後に照合が必要。
-- 新規導入の受入（fresh-install ワークフロー相当）: 未実施（上記）。
-- 本番適用・常駐サービスの再起動: 未実施。「更新時の注意」に記載の再起動条件は公開後の適用時に従う。
-- QA_VERSION切替後の実際の再判定所要時間、サービス再起動後の自動進行、実画面での復帰は未検証。合成probeの対象に既存の品質不合格記録はなく、そのケースの再試験も未実施。
-- Issue #198: 上記の範囲限定QAで機能正確性の一部は確認済みですが、Issueはopen/reopenedのままです。除外した性能・LLM候補生成等を含むIssue全体の受入とは区別します。
-- リリース範囲: `changes/drug-alias-over-limit-cache.json`（#356）、`changes/launchd-unknown-agent-state.json`（#352）、`changes/cloud-unresolved-reselect-20261124.json` は未アーカイブです。一方、候補SHAは最新mainを含むため、これらのソース変更もタグに入ります。34件の記録だけを対象とする従来の説明と実際の候補ツリーに差があり、v1.3.0への収録境界を確定するまで実機適用・公開を保留します。
-- PR #350/#365の候補差分: PR #365は未マージで候補に含まれません。候補と#365の差分・関連コードから、次の4点を分けて確認しました。
-  - モデル記録: 候補のJev成果物・使用量記録は`jev.JEV_MODEL`を記録します。非既定`semantic.model`を選択した場合に実モデルと表示・記録がずれる残件です。
-  - 外部通信許可: 候補はモデル一覧取得前に利用可否を確認しますが、予約後・送信直前の再確認はありません。確認後に設定や許可が変わるとGETが続く可能性があり、既定モデルの環境でも起こり得ます。
-  - 承認範囲: 候補の`candidate_fingerprint`は選択モデルを含まず、切替処理にも`fact_source=canonical`の拒否がありません。canonicalの承認済み証跡とモデルを結び付けられず、切替後に旧証跡が再利用される可能性があります。初期値が既定モデルかどうかだけでは判定できません。
-  - 中断時の記録: 候補は切替設定を保存してから承認receiptをcommitします。間でプロセスが中断すると、設定変更とreceiptが不一致になる可能性があり、非既定モデル利用の有無にかかわらず切替操作が対象です。
-  これらは静的な候補差分の確認であり、実機設定や実サービスでの検証ではありません。対象設定は調査していません。通信許可・承認範囲・中断時の回復確認が終わるまで取込・適用を保留します。
-- 公式医薬品マスター: 2026-11-24に[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)を再確認しました。令和8年度版の医薬品マスターは2026-11-12更新・19,324件で、同梱manifestのedition `20261112`・rows `19324` と一致します。`check_drug_master_bundle.py` も成功し、同梱archive/CSVとmanifestのhash一致、`activation: false`、オペレーター承認必須、`conversion_held: terms_unconfirmed` を確認しました。公式archive自体の再ダウンロードはしていません。
-- ローカル取込・本番適用・利用者試用: Local Handsの接続設定のみ行い、端末の走査・変更はしていません。対象リポジトリ／本番適用先の同一性確認、取込、適用、通常サービス再起動は未実施です。rollbackは既存更新ツールと事前backupを使う手順を合成環境で確認していますが、実機では未実施です。適用時は更新前backupを確認し、問題があれば`"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`を使います。schema変更に伴うDB復元では別途人の承認が必要な場合があり、コードだけを戻す操作で代用しません。
-- tag `v1.3.0` 作成・GitHub Release公開は、Yusukeの実使用後の明示OKまで行いません。
+- PR #357の最終headに対する必須CI: 37件の資料更新をpushした後、正確なhead SHAのrequired checksを確認する。旧候補 `6845138a...` の16成功・2 pending結果や、別PRの成功を統合候補のCIとして流用しない。
+- 既存の3修正PRの証跡: #358（常駐処理）は最終head `d60fd48b4` で関連テストとCI 24件成功、#356（薬名辞書）はCI 21成功・0失敗・9 skip、#359（クラウド再処理）はCI 22成功・0失敗・8 skip。これらは各PRのheadに対する既存証跡で、37件を含む#357候補のCI成功の代替ではない。
+- PR #365統合: 最終head `d71f58d936265aeff973d1bc5f348f367c4dd086` はmain merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` に取り込まれ、候補ツリーに含む。既存PR CIは24成功・0失敗・0 pending・9 skip。関連対象テスト135件は最終headと変更記録の記述差1行の `8d74b2724` で合格。旧モデル名の誤ラベル評価を使用中モデルで再評価する回帰テストも追加済み。
+- #365のDevin Review: 最終headのレビュー結果コメントは5件の自動修正を記録。成果物・使用記録のモデル整合、送信直前の許可再確認、canonical切替拒否とモデル束縛、receipt先行保存と同じcommand-idの再実行、canonical再評価・再承認手順をコード・記録・ガイドで確認した。旧モデルQCジョブは`config_generation`と実行時guardで送信/書込み前に停止するとのレビュー回答があり、既定の役割として扱う。親ディレクトリfsyncの失敗を注入した耐久性試験は既存証跡で確認できず、読取り可能性と永続性を分けた実機検証も未実施。
+- Issue #198の限定QAは旧候補 `6845138a...` で実施。#365から同候補までのコード差分は`mcs/core/`、`mcs/ops/`、`mcs/semantic/`と対応テストに限られ、QA対象の抽出処理 `mcs/extract/` は変更されていない。薬用量・検査値・検体・単位に関する範囲限定結果は対象経路に引き続き関係するが、IssueはopenのままでありIssue全体・release全体の合格ではない。
+- Software Factoryの患者コンテキスト改善: 対象PR/Issue/SHAは未特定。0%表示は調査中の意味で、#366は別件との連絡を受けた。追加分はYusukeの対象特定と実装完了を待ち、現在の37件とは別に記録・検証する。最終収録範囲は未確定。
+- 新規導入の受入（fresh-installワークフロー相当）: 未実施。
+- QA_VERSION切替後の実際の再判定所要時間、サービス再起動後の自動進行、実画面での復帰は未検証。合成probeは再判定処理を直接進めており、サービス監督を含む統合動作や不合格記録の再試験はしていない。
+- 公式医薬品マスター: 2026-11-24に[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)を確認。令和8年度版は2026-11-12更新・19,324件で、manifestのedition `20261112`・rows `19324` と一致。`check_drug_master_bundle.py`も成功し、同梱hash一致、`activation: false`、オペレーター承認必須、`conversion_held: terms_unconfirmed`を確認した。公式archive自体は再ダウンロードしていない。
+- ローカル取込・本番適用・利用者試用: Local Handsの接続設定のみ行い、端末の走査・変更はしていない。対象リポジトリ・本番適用先・権限の同一性確認、取込、適用、サービス再起動は未実施。rollback手順は合成環境の既存更新ツールと事前backupで確認したが、実機では未実施。
+- tag `v1.3.0`・GitHub Release公開は、実機適用後にYusukeがしばらく使用し、本人が明示的に承認するまで行わない。
 
 ## 参照
 
 - 変更の要点と収録物: [README.md](README.md)
-- 全34件の対応表: [change-map.json](change-map.json)
+- 全37件の対応表: [change-map.json](change-map.json)
