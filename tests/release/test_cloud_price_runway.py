@@ -44,11 +44,15 @@ USAGE = {
 EXPECTED_SNAPSHOT_VERSIONS = frozenset({
     ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-10-26"),
     ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-11-15"),
+    ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-11-24"),
     ("claude-sonnet-5-5", "anthropic-sonnet-5-5-2026-11-15"),
+    ("claude-sonnet-5-5", "anthropic-sonnet-5-5-2026-11-24"),
     ("gpt-6-luna", "openai-gpt-6-luna-2026-10-29"),
     ("gpt-6-luna", "openai-gpt-6-luna-2026-11-15"),
+    ("gpt-6-luna", "openai-gpt-6-luna-2026-11-24"),
     ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-10-31"),
     ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-11-15"),
+    ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-11-24"),
 })
 
 
@@ -95,7 +99,7 @@ class CloudPriceRunwayTest(unittest.TestCase):
         self.assertTrue(_runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS + 1))))
 
     def test_issued_price_versions_resolve_by_name_for_reservation_reconciliation(self):
-        """Every issued price version — the four current 2026-11-15 tables plus
+        """Every issued price version — the four current 2026-11-24 tables plus
         the historical ones stored reservations may still name — resolves
         through the same by-name path ``record_result`` uses. The inventory is
         a fixed list, not derived from the implementation constants, so a
