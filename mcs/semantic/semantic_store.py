@@ -20,7 +20,8 @@ from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, is_c
 import semantic_jev as jev
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS,
                              KIND_FACTS_V2, KIND_LOOP, KIND_LOOP_EVENT, KIND_SUMMARY, KIND_USAGE,
-                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, policy_fingerprint)
+                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, needs_local_model,
+                             policy_fingerprint)
 
 
 def _member(row) -> dict:
@@ -935,7 +936,7 @@ def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None, observ
     if bundle is None:
         return 'held'
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
-    if scfg['summary_mode'] == 'off' and scfg['loop_mode'] == 'off':
+    if not needs_local_model(scfg):
         return _classification_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(), bundle, fp, policy)
     if scfg['summary_mode'] == 'off':
         return _loop_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(),

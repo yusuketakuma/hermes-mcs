@@ -129,10 +129,11 @@ def test_jev_receipt_is_committed_before_unlocked_transport(tmp_path, monkeypatc
         db.close()
 
 
-def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monkeypatch):
+def test_backlog_fair_share_so_reseeded_qc_cannot_starve_semantic(tmp_path, monkeypatch):
     """2026-10-10: re-extraction re-pends old QC rows under their original
     (low) job_id; in plain job_id order they won every backlog pass and no
-    semantic job ran for hours. The backlog lane alternates kinds."""
+    semantic job ran for hours. The backlog lane gives QC a bounded fair
+    share instead: one of every _QC_FAIR_EVERY single-job passes."""
     db = _seeded(tmp_path)
     db.db.execute("UPDATE fetch_jobs SET job_id=100 WHERE kind='semantic'")
     db.db.execute(
@@ -142,7 +143,7 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
         (dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     seen = []
-    monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+    monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'since_qc': 0})
     monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a, **k: 0)
     # 'stale' leaves both rows pending, as a QC re-pend does
@@ -151,11 +152,11 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
     monkeypatch.setattr(semantic_qc, '_process_qc_job',
                         lambda *a, **k: seen.append('extract_qc') or 'stale')
     try:
-        for _ in range(3):
+        for _ in range(5):
             semantic_drain.run_due(db, _cfg(extract_qc='annotate'), {'errors': []},
                              time.monotonic() + 480, jev_client=_FakeJev(),
                              llm_fn=_llm, max_jobs=1, lane='backlog')
-        assert seen == ['semantic', 'extract_qc', 'semantic']
+        assert seen == ['semantic', 'semantic', 'semantic', 'extract_qc', 'semantic']
     finally:
         db.close()
 

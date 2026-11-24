@@ -154,6 +154,7 @@ from semantic_due_selection import (
     BACKLOG_COMMIT_RESERVE_S as BACKLOG_COMMIT_RESERVE_S,
     _LONG_START_S as _LONG_START_S,
     _BACKLOG_TURN as _BACKLOG_TURN,
+    _note_backlog_turn as _note_backlog_turn,
     _JOB_LOCK_BUCKETS as _JOB_LOCK_BUCKETS,
     _cloud_selection_lock as _cloud_selection_lock,
     _cloud_selection_progress as _cloud_selection_progress,
@@ -180,7 +181,8 @@ import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_publication as v4
 from semantic_policy import (BACKLOG_BUDGET_RESERVE, JOB_KIND, KIND_POLICY, KIND_USAGE,
-                             QC_JOB_KIND, policy_fingerprint, runtime_config)
+                             QC_JOB_KIND, needs_local_model, policy_fingerprint, runtime_config,
+                             waits_for_jev_quota)
 import semantic_notice
 from semantic_store import jev_usage_today
 
@@ -236,6 +238,10 @@ _REPROCESS_JOB_MAX_BYTES = semantic_store._REPROCESS_JOB_MAX_BYTES
 # runs both on every pass, so the backlog copy is only a freshness backstop
 # and must not cost a slice of lock time per job.
 _BACKLOG_INVALIDATE_S = 600.0
+# Room a job whose calls all go to Jev needs to start (QC and classification-only semantic).
+_JEV_START_RESERVE_S = 15.0
+# Jev skips that pass with the quota day or the Jev circuit, not settings.
+_JEV_WAIT_SKIPS = ("daily_budget", "backlog_reserved", "circuit_open")
 # Per-pass cap for the inference reprocess keyset walk: it is resumable by
 # cursor, so a short slice each drain still advances it without letting one
 # pass consume the window the model jobs and the snapshot tail need.
@@ -380,8 +386,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception as e:
             result["errors"].append(f"semantic_reproject: {type(e).__name__}")
         out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
+    # Jobs with no local-model stage (QC, classification-only semantic)
+    # never call the endpoint this breaker guards.
     circuit_s = llm_availability.circuit_open_s(ledger.db)
-    if circuit_s and not cloud_only:
+    if circuit_s and not cloud_only and needs_local_model(scfg):
         out["circuit_open_s"] = round(circuit_s)
         _hold_tail()
         return out
@@ -770,9 +778,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # generation and a retry attempt before any useful progress.
             # Only start one when a call can plausibly fit, using the same
             # reserve applied to follow-up calls. Further stages defer
-            # via BudgetShort without charging an attempt. Trailing QC
-            # rows use their separate start floor.
-            floor = deadline - (15.0 if job["kind"] == QC_JOB_KIND else
+            # via BudgetShort without charging an attempt. QC rows and
+            # semantic jobs without a local-model stage need room for Jev
+            # requests only, so they use the short Jev start floor.
+            jev_only_job = job["kind"] == QC_JOB_KIND or not needs_local_model(scfg)
+            floor = deadline - (_JEV_START_RESERVE_S if jev_only_job else
                                 min(runtime.LLM_CALL_RESERVE_S,
                                     float(scfg["job_budget_seconds"]) * 2 / 3))
             if lane == "backlog":
@@ -831,6 +841,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
                 if hasattr(jev_client, "job_budget"):
                     jev_client.job_budget = scfg["job_budget_seconds"]
+            if job_skip in _JEV_WAIT_SKIPS and waits_for_jev_quota(scfg, lane):
+                # A Jev-only backlog job would complete with nothing but a
+                # skipped assessment: leave it due for the next quota window
+                # and end the pass, which cannot spend Jev either.
+                _defer_note(out, job_skip)
+                break
             if job_skip is not None:
                 try:
                     if errors:
@@ -882,7 +898,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if job["job_id"] == mutation.get("turn_job_id"):
                 consumed_turns[mutation.get("turn_key", "turn")] = mutation["turn"]
             if lane == "backlog":
-                _BACKLOG_TURN["kind"] = job["kind"]
+                _note_backlog_turn(job["kind"])
             # One client serves every job: an earlier job's error must not
             # classify a job that never called Jev as a permanent failure.
             if hasattr(jev_client, "last_error"):
@@ -1027,6 +1043,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if _apply_job_status(ledger, token, limit, status, budget_short, out,
                                  free_hold=free_hold and isinstance(targets, list)
                                  and len(targets) == 1):
+                break
+            if diagnostics.get("jev_wait"):
+                # the quota ran out inside this job: no later job can call Jev
+                out["budget_exhausted"] = True
                 break
             # A free hold with no new work must not starve independent due jobs.
             if free_hold:
