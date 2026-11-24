@@ -83,6 +83,16 @@
 - ローカル取込・本番適用・利用者試用: Local Handsの接続設定のみ行い、端末の走査・変更はしていない。対象リポジトリ・本番適用先・権限の同一性確認、取込、適用、サービス再起動は未実施。rollback手順は合成環境の既存更新ツールと事前backupで確認したが、実機では未実施。
 - tag `v1.3.0`・GitHub Release公開は、実機適用後にYusukeがしばらく使用し、本人が明示的に承認するまで行わない。
 
+## 最新レビューの資料・証跡対応とtriage状態
+
+- 対象: PR #357 head `21561f51c05f2535c699078f80a9a0092bfe5ed3` に対するDevin Review `pr-review-job-37119e02329f4248a11eee1298345c80` の未処理5件。資料・証跡の対応と、Devin Review上の判定登録は別の状態として扱う。
+- 公開本文の比較表・説明図なし: CHANGELOGに比較表とRelease添付URLを追加し、export本文にも反映。
+- Jev取得失敗時の表示説明: `mcs_setup.py check` の通知と、引数なし `mcs_setup.py jev-model` のJSON出力をCHANGELOG・版別詳細で区別。
+- Jev一覧取得条件: 施設確認でJevが許可されている条件を変更記録・更新時の注意へ追記。
+- 34件/37件の不一致: 現行PR本文と受入票は37件（12/8/17）に統一。レビュー指摘は旧PR本文に対するもの。
+- 公式ZIP照合: 2026-11-24に再取得し、archive・CSVのbyte数/SHA256とmember名がmanifestに一致することを上記「公式医薬品マスター」に記録。
+- Devin Review上の5件の判定登録: 未登録。登録操作はHTTP 403で拒否され、PRのtriage担当は旧Release Manager側のセッションと確認された。代理判定・承認・ゲート変更は行っていない。
+
 ## 参照
 
 - 変更の要点と収録物: [README.md](README.md)

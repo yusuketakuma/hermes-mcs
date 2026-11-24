@@ -114,7 +114,7 @@
     "jev-model-switch": {
       "title": "Jevの新しいモデルを知らせ、確認に合格したときだけコマンドで切り替える",
       "path": "changes/archive/1.3.0/jev-model-switch.json",
-      "sha256": "4acd2c3bfa212b1e27a801aed8adf71d4d1a870cd2e9606769845e547e7a9f98"
+      "sha256": "6eff6ff0e80a48d6fa250b7dc8229829624eb1a9429bacf89f065546c84dac54"
     },
     "jev-optional": {
       "title": "Jev を導入していない環境と Jev の対象外の患者で、外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
