@@ -6,6 +6,7 @@
   "details": [
     "走査の進捗書込み（BEGIN IMMEDIATE）が busy/locked で待ち切れた場合は、読取障害ではなく中断された走査（scan_interrupted）として扱います。",
     "候補読取り側の sqlite3.Error は errorcode で分類します。busy/locked・中断は scan_interrupted、それ以外だけが read_sqlite です。",
+    "候補を選んだ後の引受け書込みが sqlite3.Error で止まった場合も同じ分類で理由を記録します（これまでは理由なしで scan_incomplete にまとまっていました）。OSの入出力失敗は従来どおり read_io です。",
     "記録に使う拒否コードの集合は変えていません（添付解析の指紋に含まれるファイルに触れないため、既存の scan_interrupted/read_sqlite を使い回します）。"
   ],
   "refs": [

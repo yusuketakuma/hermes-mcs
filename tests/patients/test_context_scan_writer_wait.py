@@ -47,7 +47,7 @@ def test_contended_begin_immediate_is_interrupted_not_read_failure(runtime, monk
     """A BEGIN IMMEDIATE that outlives its bounded wait is lock contention, an
     interrupted scan — never a read_sqlite fault. Covers both writer waits:
     the bookmark persist and the selected-unit claim."""
-    ledger, _, _ = runtime
+    ledger, _, calls = runtime
     seed(ledger, mid=1, pid=1)
     ledger.db.execute('PRAGMA busy_timeout=2000')
     path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
@@ -66,11 +66,12 @@ def test_contended_begin_immediate_is_interrupted_not_read_failure(runtime, monk
         else:
             monkeypatch.setattr(refresh, '_select_patient', select_then_lock)
         result = step(runtime, seconds=refresh.COMMIT_MARGIN + 0.12)
-        assert result['status'] == 'deferred'
-        assert result.get('scan_refusal') != 'read_sqlite'
+        assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+        assert result['scan_refusal'] == 'scan_interrupted'
+        assert other.in_transaction and not ledger.db.in_transaction
+        assert calls == []
         if stage == 'bookmark':
             assert result['scanned'] == 0 and result['scan_interrupts'] == 1
-            assert result['scan_refusal'] == 'scan_interrupted'
     finally:
         other.rollback()
         other.close()

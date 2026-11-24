@@ -992,8 +992,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 ledger.db.commit()
             # Our scheduling write participates in the same publisher fence as later work.
             frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
-        except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
+        except patient_context_refresh_sources._ScanInterrupted:
             ledger.db.rollback()
+            stats['scan_refusal'] = 'scan_interrupted'
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except sqlite3.Error as exc:
+            ledger.db.rollback()
+            # Lock waits and deadline aborts are interrupted scans, not read faults.
+            stats['scan_refusal'] = ('read_sqlite'
+                                     if not _locked_sqlite(exc)
+                                     and getattr(exc, 'sqlite_errorcode', 0) & 0xFF != sqlite3.SQLITE_INTERRUPT
+                                     else 'scan_interrupted')
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except OSError:
+            ledger.db.rollback()
+            stats['scan_refusal'] = 'read_io'
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         except BaseException:
             ledger.db.rollback()
