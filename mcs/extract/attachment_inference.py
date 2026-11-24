@@ -255,7 +255,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if memory_code is not None:
         return _defer_result(counts, memory_code if stage == 'local' else None)
     root = attachment_ocr._data_root(ledger)
-    scope = upgrade_scope.resolve(cfg)
+    scope = upgrade_scope.intersect(upgrade_scope.resolve(cfg), upgrade_scope.live())
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
         return _defer_result(counts, 'inference_lock_busy' if stage == 'local' else None)

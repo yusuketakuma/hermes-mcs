@@ -21,6 +21,7 @@ from test_ledger_audit import _database
 import drug_map
 import rollup
 import mcs_repair
+import upgrade_scope
 from inference_version import CURRENT_VERSION, VERSION_KEY
 
 NONCE = "00000000-0000-4000-8000-000000000013"
@@ -210,6 +211,78 @@ def test_plan_aggregates_evidenced_candidates_without_private_values(world):
     assert result["groups"]["attachment_reasons"] == {"unknown": 1}
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
     assert _hash(snapshot) == before
+
+
+def test_stale_v1_counts_split_scope_held_version_drift(world):
+    """A closed upgrade scope moves version-drifted earlier-generation rows out
+    of rebuild candidates; hash drift is always a candidate."""
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO messages(message_id,project_id,body_state,content_hash,updated_seen) "
+                      "VALUES(102,1,'full','synthetic-hash',10)")
+    drift = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                        "rule_version": RULE_VERSION - 1})
+    edited = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "old",
+                         "rule_version": RULE_VERSION})
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,102,'{}',?,200)", (drift,))
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)", (edited,))
+    # An older body artifact for the same held post does not put that post
+    # back into the runnable count. The rule CLI also selects the message once.
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,102,'{}',?,100)", (edited,))
+    counts = repair.plan(snapshot, nonce=NONCE, scope=upgrade_scope.OPEN)["counts"]
+    assert counts["stale_v1_messages"] == 2
+    assert counts["stale_v1_messages_outside_scope"] == 0
+    counts = repair.plan(snapshot, nonce=NONCE, scope=upgrade_scope.parse("none"))["counts"]
+    assert counts["stale_v1_messages"] == 1
+    assert counts["stale_v1_messages_outside_scope"] == 1
+
+
+def test_plan_revalidates_under_the_stored_scope_after_the_setting_changes(independent):
+    """The scope resolved at plan time is saved with the plan, so a live
+    setting change mid-repair can neither strand the audit trail nor make
+    before/after counts disagree on an unchanged snapshot."""
+    world = independent
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)",
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                         "rule_version": RULE_VERSION - 1}),))
+    world["backup"].write_bytes(snapshot.read_bytes())  # the backup tracks the snapshot
+    saved = repair.plan(snapshot, nonce=NONCE, scope=upgrade_scope.parse("none"))
+    assert saved["upgrade_scope"] == {"mode": "none"}
+    assert saved["counts"]["stale_v1_messages"] == 0
+    repair._validate_plan(saved, snapshot, NONCE, saved["plan_digest"], scope=upgrade_scope.OPEN)
+    repair.record(saved, snapshot, snapshot, world["log"], nonce=NONCE,
+                  plan_digest=saved["plan_digest"], stage="backup", status="observed",
+                  confirm_human=True, reason="operator_observation",
+                  operator_sha256=OPERATOR, code_version="1.0.13",
+                  backup_db=world["backup"], backup_sha256=saved["snapshot_sha256"])
+    entry = json.loads(world["log"].read_text(encoding="utf-8").splitlines()[0])
+    # The live "all" scope would count the drift row again; the stored scope wins.
+    assert entry["after"]["stale_v1_messages"] == 0
+    assert entry["after"]["stale_v1_messages_outside_scope"] == 1
+
+
+def test_scoped_cli_keeps_ids_private_and_verifies_the_supplied_set(world, tmp_path, capsys):
+    settings = {"extract": {"upgrade_scope": {"project_ids": [753164219, 3]}}}
+    path = tmp_path / "synthetic.json"
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    assert repair.main(["plan", "--snapshot", str(world["snapshot"]), "--scope-config", str(path),
+                        "--nonce", NONCE]) == 0
+    raw = capsys.readouterr().out
+    assert "project_id" not in raw and "753164219" not in raw
+    value = json.loads(raw)
+    assert value["upgrade_scope"]["mode"] == "projects"
+    digest = value["plan_digest"]
+    scope = upgrade_scope.resolve(settings)
+    assert repair._validate_plan(value, world["snapshot"], NONCE, digest, scope) == scope
+    with pytest.raises(ValueError, match="plan_scope_required"):
+        repair._validate_plan(value, world["snapshot"], NONCE, digest)
+    with pytest.raises(ValueError, match="plan_tampered_or_snapshot_changed"):
+        repair._validate_plan(value, world["snapshot"], NONCE, digest,
+                              upgrade_scope.parse({"project_ids": [3]}))
 
 
 def test_old_supported_columns_remain_unknown(world):

@@ -393,7 +393,7 @@ _OTHER_SENSE_CLAUSE = {
 _CLAUSE_END = re.compile(r"[。、;]")
 # A closed affirmative form is required unless a separate named reading follows.
 _LAB_NUMBER_CLOSED_TAIL = re.compile(
-    r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常|[↑↓]+|報告シ(?:マス|マシタ))?"
+    r"ヲ(?:測定|検査)シマシタ|(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常|[↑↓]+|報告シ(?:マス|マシタ))?"
     r"(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\)|\(前回[0-9]+(?:\.[0-9]+)?(?:[a-zμ%/]+)?\))?$")
 _LAB_NEXT_NUMBER = re.compile(
     r"(" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
