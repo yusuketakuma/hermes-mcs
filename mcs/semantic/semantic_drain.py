@@ -558,6 +558,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if not verdicts_read:
         out["unread_semantic_pending"] = out["pending_by_kind"].get(JOB_KIND, 0)
     if not kinds:
+        out["left"] = 0
         _hold_tail()
         return out
     # arrival-descended seeds outrank import/replay seeds: a deep
