@@ -1085,7 +1085,7 @@ def test_semantic_late_lock_retake_leaves_the_tick_running(tmp_path, monkeypatch
     clock = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     _sem_setup(monkeypatch, tmp_path)
-    cfg = _cfg("shadow", summary_mode="off")
+    cfg = _cfg("shadow", summary_mode="shadow", loop_mode="off")
     conf = tmp_path / "config.json"
     conf.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(run_check, "CONF_PATH", str(conf))

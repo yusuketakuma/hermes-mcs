@@ -667,7 +667,7 @@ def test_card_cleanup_failure_is_unknown_and_attributed_to_cleanup(stored, monke
     assert not stored.in_transaction
 
 
-SEMANTIC_ON = {"semantic": {"mode": "shadow", "loop_mode": "shadow", "project_ids": []}}
+SEMANTIC_ON = {"semantic": {"mode": "shadow", "project_ids": [], "summary_mode": "shadow"}}
 
 
 def _semantic_job(db, mid, payload):

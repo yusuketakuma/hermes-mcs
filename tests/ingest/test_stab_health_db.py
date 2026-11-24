@@ -16,7 +16,7 @@ import run_check
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from ingest_testkit import _ledger, _message
 
-ON = {"semantic": {"mode": "shadow", "loop_mode": "shadow", "project_ids": []}}
+ON = {"semantic": {"mode": "shadow", "project_ids": [], "summary_mode": "shadow"}}
 H = 3600
 
 
