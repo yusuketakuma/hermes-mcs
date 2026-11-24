@@ -515,6 +515,43 @@ def test_superseded_hold_claim_waits_the_revive_interval(routed):
     assert claim and claim["next_try"] > time.time() + 5 * 3600
 
 
+def test_corrected_post_is_not_hidden_by_the_superseded_hold(routed):
+    """A post corrected during the hold is not stuck until the revive
+    interval: the claim binds the claim-time content hash, so a different
+    body is re-selected, re-evaluated once, and re-held under a new claim."""
+    ledger, *_ = routed
+    row, frame = _frozen(ledger, body=_multi_piece_body())
+    _persist(ledger, row, frame, _old_context(row, frame))
+    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert first["defer_reasons"]["prepare_context_load_superseded"] == 1
+    claim = _superseded_claim(ledger, row)
+    assert claim and claim["next_try"] > time.time() + 5 * 3600
+
+    held, _ = worker._select_pending(ledger, 1, None, None, False)
+    assert held == []
+
+    corrected = _multi_piece_body() + "\n合成の訂正を追加する。"
+    digest = hashlib.sha256(corrected.encode()).hexdigest()
+    with ledger.db:
+        ledger.db.execute(
+            "UPDATE messages SET body_text=?, content_hash=? WHERE message_id=?",
+            (corrected, digest, row["message_id"]))
+    # the stale claim does not hide the corrected body: it is re-selected and
+    # re-evaluated instead of waiting out the revive interval
+    rows, _ = worker._select_pending(ledger, 1, None, None, False)
+    assert [r["message_id"] for r in rows] == [row["message_id"]]
+    # and the stale claim is taken over: the new claim binds the new body
+    lease = extract_llm_runner._claim(ledger, dict(rows[0]), 60)
+    assert lease is not None
+    claim = ledger.db.execute(
+        "SELECT json_extract(payload,'$.hash') AS h FROM fetch_jobs "
+        "WHERE kind='extract_claim' AND project_id=? AND message_id=?",
+        (row["project_id"], row["message_id"])).fetchone()
+    assert claim["h"] == digest
+    hidden, _ = worker._select_pending(ledger, 1, None, None, False)
+    assert hidden == []
+
+
 def test_superseded_hold_shortens_when_the_pending_set_changes(routed):
     """The long wait is conditional: it lasts only while every collectible
     pending record still binds a retired generation."""
