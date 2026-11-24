@@ -935,6 +935,11 @@ def _context_pass_observation(result):
     if generation is not None:
         record["generation_reason"] = (generation if type(generation) is str
                                        and generation in _CONTEXT_PASS_REASONS else "unclassified")
+    # The fixed gate that stopped a quality check; the patient-context module owns the codes.
+    detail = result.get("quality_detail")
+    if detail is not None:
+        import patient_context_refresh_state
+        record["quality_detail"] = patient_context_refresh_state.bounded_quality_detail(detail)
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered

@@ -138,6 +138,35 @@ def test_context_pass_reports_only_fixed_bounded_diagnostics():
         "status": "complete", "done": 0}
 
 
+@pytest.mark.parametrize("detail", [
+    "witness_mismatch", "save_policy_changed", "patient_summary_quality_lock",
+    "patient_summary_quality_source_changed", "RuntimeStale", "OperationalError",
+])
+def test_context_pass_reports_a_fixed_quality_detail(detail):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "done": 0, "reason": "summary_quality_unavailable:RuntimeStale", "quality_detail": detail})
+    assert record == {"status": "deferred", "done": 0, "reason": "summary_quality_unavailable", "quality_detail": detail}
+
+
+@pytest.mark.parametrize("detail", [
+    "synthetic_unregistered_gate", "合成の未知の理由", "A" * 76 + "Error", 1, True, ["deadline"], {"code": "deadline"},
+    "synthetic-private patient", "deadline ",
+])
+def test_context_pass_rejects_any_other_quality_detail(detail):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "done": 0, "quality_detail": detail})
+    assert record == {"status": "source_changed", "done": 0, "quality_detail": "unclassified"}
+
+
+def test_context_pass_omits_an_absent_quality_detail():
+    for result in ({"status": "deferred", "reason": "source_quality_pending"},
+                   {"status": "deferred", "reason": "source_quality_pending", "quality_detail": None}):
+        assert "quality_detail" not in cloud_backlog._context_pass_observation(result)
+    record = cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "done": 0, "quality_detail": "save_receipt_invalid"})
+    assert record == {"status": "source_changed", "done": 0, "quality_detail": "save_receipt_invalid"}
+
+
 @pytest.mark.parametrize("reason", [
     "source_quality_unavailable:RuntimeStale",
     "source_quality_unavailable:patient_context_audit_mismatch",

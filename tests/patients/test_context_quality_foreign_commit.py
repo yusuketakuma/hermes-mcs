@@ -89,6 +89,75 @@ def test_quality_read_rejects_a_change_during_the_initial_snapshot(tmp_path):
         assert not led.db.in_transaction
 
 
+def test_quality_read_names_an_unexpected_own_write(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+        _other_process(led)
+        _, current = _observe_patient(led)
+        led.db.execute("INSERT INTO synthetic_other_work VALUES (2)")
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            assert not current()
+        assert detail["code"] == "own_write_mismatch"
+        led.db.rollback()
+
+
+def test_quality_read_names_a_witness_that_no_longer_matches(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+
+        def read(reader):
+            row = reader.db.execute("SELECT probe_mid FROM patients WHERE project_id=1").fetchone()
+            _other_process(led, "UPDATE patients SET probe_mid=? WHERE project_id=1", (7,))
+            return row
+
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
+                patient_context_quality_receipts._quality_read(led, time.monotonic() + 60, read)
+        assert detail["code"] == "witness_mismatch"
+        # a later replay of a sealed read that sees the change names the same gate
+        _, current = patient_context_quality_receipts._quality_read(led, time.monotonic() + 60,
+            lambda reader: reader.db.execute("SELECT probe_mid FROM patients WHERE project_id=1").fetchone())
+        _other_process(led, "UPDATE patients SET probe_mid=? WHERE project_id=1", (8,))
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            assert not current()
+        assert detail["code"] == "witness_mismatch"
+
+
+def test_quality_read_names_an_unwitnessed_version_change(tmp_path, monkeypatch):
+    import patient_readiness_witness
+
+    class Unrecordable:
+        def __init__(self, _db):
+            pass
+
+        def __enter__(self):
+            error = sqlite3.DatabaseError("synthetic statement outside the allowlist")
+            error.sqlite_errorcode = sqlite3.SQLITE_AUTH
+            raise error
+
+        def __exit__(self, *_exc):
+            return False
+
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+        monkeypatch.setattr(patient_readiness_witness, "Recording", Unrecordable)
+        value, current = _observe_patient(led)
+        assert tuple(value) == (1,) and current()
+        _other_process(led)
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            assert not current()
+        assert detail["code"] == "version_unwitnessed"
+
+
+def test_quality_detail_keeps_the_first_gate_and_is_dropped_outside_a_capture():
+    patient_context_refresh_state.record_quality_detail("deadline")
+    with patient_context_refresh_state.capture_quality_detail() as detail:
+        patient_context_refresh_state.record_quality_detail("witness_mismatch")
+        patient_context_refresh_state.record_quality_detail("deadline")
+    patient_context_refresh_state.record_quality_detail("claim_lost")
+    assert detail == {"code": "witness_mismatch"}
+
+
 def test_quality_pass_survives_unrelated_commits_but_not_a_lost_answer(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     try:
@@ -146,8 +215,10 @@ def test_summary_audit_stops_when_another_process_changes_the_audited_summary(qu
     _commit_at_every_lock(
         monkeypatch, led, "UPDATE artifacts SET content=json_set(content,'$.summary',json('[]')) "
         "WHERE kind=? AND project_id=1", (patient_context_refresh_state.KIND,))
-    with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
-        _summary_step(led, clock, cfg, doc)
+    with patient_context_refresh_state.capture_quality_detail() as detail:
+        with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
+            _summary_step(led, clock, cfg, doc)
+    assert detail["code"] == "witness_mismatch"
     assert not sends and not led.artifacts("semantic_usage")
     assert not led.db.in_transaction
 
