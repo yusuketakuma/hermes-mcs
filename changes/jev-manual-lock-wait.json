@@ -7,9 +7,12 @@
     "_reserve_live_usage が run.lock を1回だけ試す代わりに既存の wait_run_lock で待つ。",
     "待機の上限は LIVE_LOCK_WAIT_S（30秒）と要求のタイムアウトの短い方。",
     "予約中の sqlite3.OperationalError を JevError('budget_exceeded', 'usage_ledger_busy', retryable=True) に変換する。",
-    "日次上限・予算・復元中の確認は従来どおり排他の中で行い、Jevへの通信は排他を外してから行います。"
+    "日次上限・予算・復元中の確認は従来どおり排他の中で行い、Jevへの通信は排他を外してから行います。",
+    "共通の wait_run_lock は待ち時間の上限を超えてからロックを取らない（眠る長さを残り時間までにし、起きた後に期限を確かめる）。期限後に取ったロックで利用枠だけを記録して送らない事態を防ぐ。",
+    "台帳エラーのうち再試行可能な usage_ledger_busy にするのは SQLITE_BUSY・SQLITE_LOCKED だけで、読取り専用などそれ以外は usage_ledger_unavailable（再試行なし）。"
   ],
   "refs": [
+    "mcs/core/writer_lock.py",
     "mcs/semantic/semantic_jev.py"
   ]
 }

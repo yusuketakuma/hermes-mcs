@@ -522,3 +522,15 @@ def test_manual_jev_split_budget_lowered_during_reservation_blocks_post(home, mo
             _evaluate(client)
         assert error.value.detail == 'semantic_daily_budget_changed'
     assert _used(home) == 1
+
+
+def test_non_contention_ledger_error_is_not_retryable(home, monkeypatch):
+    import sqlite3
+    def readonly(*args, **kwargs):
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("unusable ledger must not send")) as client:
+        monkeypatch.setattr("ledger.Ledger", readonly)
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert error.value.detail == "usage_ledger_unavailable" and not error.value.retryable

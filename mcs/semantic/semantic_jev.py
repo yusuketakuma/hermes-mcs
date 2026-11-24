@@ -157,8 +157,13 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
                 reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit,
                                                 config_path=home / "config.json")
                 reserved = reserve(body, timeout)
-        except sqlite3.OperationalError:
-            # Another connection kept the SQLite write lock past the busy timeout.
+        except sqlite3.OperationalError as error:
+            # Only contention is transient; a read-only or damaged ledger is not retryable.
+            code = getattr(error, "sqlite_errorcode", None)
+            busy = (str(error) in ("database is locked", "database table is locked") if code is None
+                    else code & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED))
+            if not busy:
+                raise JevError("budget_exceeded", "usage_ledger_unavailable") from None
             raise JevError("budget_exceeded", "usage_ledger_busy", retryable=True) from None
         if ((home / "data" / "update_in_progress.marker").exists()
                 or code_stamp() != expected_code_stamp):
