@@ -164,6 +164,7 @@ from semantic_drain_accounting import (
     _defer_note as _defer_note,
     _apply_job_status as _apply_job_status,
     _free_hold as _free_hold,
+    _hold_waits_for_input as _hold_waits_for_input,
     _observation as _observation,
     _persist_drain_accounting as _persist_drain_accounting,
 )
@@ -669,7 +670,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                             _repair_pl, runtime.execution_generation(scfg))):
                     if repair_attempted:
                         hold_job(job, mutation,
-                                 'semantic: execution_repair_deferred')
+                                 'semantic_repair_deferred')
                         continue
                     _fresh = ledger.db.execute(
                         'SELECT * FROM fetch_jobs WHERE job_id=?',
@@ -685,7 +686,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                     _repair_pl,
                                     runtime.execution_generation(scfg))):
                             hold_job(job, mutation,
-                                     'semantic: execution_repair_deferred')
+                                     'semantic_repair_deferred')
                             continue
                     else:
                         try:
@@ -1020,13 +1021,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 counts[reason] = counts.get(reason, 0) + 1
             free_hold = _free_hold(job, lane, cloud_only, status, diagnostics,
                                    used, llm_s, job_progressed)
-            # _why keeps only the first cause: a later target of a multi-target
-            # job may wait on a resource without a code, so only a single-target
-            # hold is known to be deterministic enough for the hourly wait.
-            targets = runtime.parse_payload(job).get('targets')
+            # Only a hold known to wait on an input change takes the hourly
+            # wait; a multi-target one needs every target's own cause.
             if _apply_job_status(ledger, token, limit, status, budget_short, out,
-                                 free_hold=free_hold and isinstance(targets, list)
-                                 and len(targets) == 1):
+                                 free_hold=free_hold
+                                 and _hold_waits_for_input(job, diagnostics)):
                 break
             # A free hold with no new work must not starve independent due jobs.
             if free_hold:

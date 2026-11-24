@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "意味チェックの再修復待ちで監視が劣化しないようにし、決定的な保留で再処理が止まる問題を修正",
+  "summary": "実行世代が古い意味チェックのジョブを1回の処理で1件ずつ修復する設計上の順番待ちは、時間切れの先送りと同じ「延期」に分類され、それだけでは監視状態が劣化（stage_errors）になりません。実行記録は従来どおり partial のまま残ります。また、複数の投稿を対象とするジョブが入力の変化を待つだけの保留（再修復候補の束縛不一致など）になったとき、すべての対象が同じ決定的な理由で保留されたと確認できれば、単一対象のジョブと同じく1時間待ってから再選択します。これまでは1分ごとに戻って背景処理の枠を埋め、通知なしの再処理ジョブが何日も処理されないことがありました。",
+  "upgrade": "Hermes gateway の再起動が必要です（独立実行では常駐プロセスの再起動）。再起動するまで旧コードのまま動きます。設定の変更は不要です。",
+  "details": [
+    "1回の処理で修復を1件に限ったことによる保留は、errors と hold_reasons に semantic_repair_deferred として記録する（従来は semantic: execution_repair_deferred）。収集診断ではこの理由を deferred に分類する。",
+    "修復の確認不能・修復失敗・実行契約の確認不能・ペイロード保留・取込保留（semantic: execution_repair_unverified など）は従来どおり監視を劣化させる。",
+    "保留の判定は対象ごとの最初の理由を記録して行う。1件でも理由の記録がない待ち、資源待ち、未完了の監査、送信できなかった呼出しがある複数対象のジョブは、従来どおり1分後に再試行する。",
+    "1時間の待機は入力の変化による再投入で解除される。世代の確認、利用量の予約、ジョブの排他は変更しない。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_drain_accounting.py",
+    "mcs/semantic/semantic_job_processor.py",
+    "mcs/semantic/semantic_summary_stages.py",
+    "mcs/ingest/collection_diagnostics.py"
+  ]
+}

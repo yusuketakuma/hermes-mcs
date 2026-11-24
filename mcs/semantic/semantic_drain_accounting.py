@@ -80,6 +80,23 @@ def _free_hold(job, lane, cloud_only: bool, status, diagnostics: dict,
             and used == 0 and llm_s == 0 and not progressed)
 
 
+def _hold_waits_for_input(job, diagnostics: dict) -> bool:
+    """True when a free hold is known to wait on an input change only.
+
+    ``code`` keeps just the first cause, so for a multi-target job a later
+    target might wait on a resource without a code. Such a job qualifies
+    only when the processor accounted for every target and each held one
+    carries a deterministic cause of its own (``held_target_codes``)."""
+    targets = runtime.parse_payload(job).get('targets')
+    if not isinstance(targets, list) or not targets:
+        return False
+    if len(targets) == 1:
+        return True
+    held = diagnostics.get('held_target_codes')
+    return (isinstance(held, dict) and bool(held)
+            and all(code in _FREE_HOLD_CODES for code in held.values()))
+
+
 def _apply_job_status(ledger, token, limit: int, status: str,
                       budget_short: bool, out: dict,
                       free_hold: bool = False) -> bool:
