@@ -2,6 +2,7 @@
 
 Synthetic only: temp ledger, no model or Jev access."""
 import patient_context_refresh_readiness as readiness
+import semantic_intake_hold as intake_hold
 import semantic_policy
 import semantic_store
 from test_patient_context_refresh import CFG, _raw_proof, runtime, seed
@@ -50,3 +51,30 @@ def test_a_reader_waits_on_the_pending_job_again(runtime):
     state, ready = _ready(runtime, _cfg(loop_mode='shadow', threshold_mode='calibrated',
                                         calibration_version='synthetic-test-v1'))
     assert state not in ('current', 'current_skipped') and ready is False
+
+
+def test_confirmed_hold_release_allows_context_without_a_result_reader(runtime):
+    import os
+    from writer_lock import acquire_run_lock
+
+    led, _, _ = runtime
+    _pending_semantic_job(led)
+    with led.db:
+        intake_hold.hold_tx(led, 1, 1, [1],
+                            {'source': 'history_import', 'notification_free': True},
+                            source_generation=led._semantic_source_generation(1, 1))
+    plan = intake_hold.prepare_release(led, 1, 1)
+    db_path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    fd = acquire_run_lock(os.path.join(os.path.dirname(db_path), 'run.lock'))
+    assert fd is not None
+    try:
+        result = intake_hold.release_root(
+            led, 1, 1, expected_job_sha256=plan['job_sha256'],
+            expected_hold_epoch=plan['hold_epoch'],
+            expected_snapshot_sha256=plan['snapshot_sha256'],
+            cfg=_cfg(), run_lock_fd=fd)
+    finally:
+        os.close(fd)
+    assert result['released'] == 1
+    assert not intake_hold.has_held_root(led.db, 1, 1)
+    assert _ready(runtime, _cfg()) == ('current', True)
