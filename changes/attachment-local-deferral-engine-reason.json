@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "添付ページのローカル解析の保留理由が「原因未特定」になる問題を修正",
+  "summary": "添付ページのローカル解析が処理期限の超過などで保留されたとき、健康レポートでは原因が「未特定」と表示されていました。そのページの解析処理自体が保留を返したときは、その処理が記録した固定の理由（処理期限の超過、処理枠の空き待ち、ローカルLLMの未到達など）を保留の原因として表示するようにしました。結果を返したのに保存できなかった場合と、理由が記録されなかった場合は、従来どおり「未特定」と表示します。解析・保存・既読化の条件は変わりません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要で、次の添付OCRの実行から保留理由の表示が変わります。",
+  "details": [
+    "attachment_inference はページごとの llm_extract の前に保留理由を消し、戻り値が保留のときだけ、その呼出しが残した理由を llm_* の固定コードにして local_deferred_reasons に数える。",
+    "attachment_inference_deferral の原因コードに llm_* を加え、health_watch に対応する表示文を加えた。処理中に観測した理由（local_llm_defer_reasons）の扱いは変えない。",
+    "品質修復を待って保留した場合も、解析の処理は「処理期限の超過」として記録する。この2つは区別しない。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_inference.py",
+    "mcs/extract/attachment_inference_deferral.py",
+    "mcs/ingest/health_watch.py"
+  ]
+}

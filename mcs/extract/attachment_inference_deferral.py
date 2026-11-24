@@ -2,8 +2,10 @@
 
 The local page run reports the fixed code from the gate that actually stopped
 it, with integer counts only: never patient data, paths or exception text, and
-never a post-hoc lock or resource re-probe. ``unclassified`` means no fixed
-gate cause was proven for that deferral, not that nothing was wrong.
+never a post-hoc lock or resource re-probe. A page extraction that returned the
+deferred sentinel reports the ``llm_*`` code the stopping engine path recorded
+for that same call. ``unclassified`` means no fixed gate cause was proven for
+that deferral, not that nothing was wrong.
 """
 from __future__ import annotations
 
@@ -11,9 +13,10 @@ UNCLASSIFIED = "unclassified"
 
 # Fixed defer reasons the shared local extraction call records on its
 # per-thread notes while a page run is processed. Only these exact codes may
-# reach the status record, and only as call observations — an observed reason
-# is not proof that it caused the hold (a successful call can record one on
-# an optional repair path), so it never joins the cause breakdown.
+# reach the status record. A reason observed across a whole run is not proof
+# that it caused the hold (a successful call can record one on an optional
+# repair path), so the drain keeps it as an observation; only the reason left
+# by the one page call that itself returned the deferred sentinel is a cause.
 _LLM_DEFER_REASONS = frozenset({
     "admission", "busy", "checkpoint_unverified", "circuit_open",
     "currentness_unverified", "deadline", "endpoint_down", "not_sent",
@@ -55,6 +58,8 @@ LOCAL_DEFER_REASONS = (
     "memory_low",           # memory headroom below the shared reserve at admission
     "inference_lock_busy",  # another process held the page-inference lock at admission
     "local_stage_error",    # the local stage raised; the job records it as a failure
+    # the page extraction itself returned the deferred sentinel with this engine reason
+    *sorted(_LLM_STATUS_CODES),
 )
 KNOWN = frozenset((*LOCAL_DEFER_REASONS, UNCLASSIFIED))
 
