@@ -145,7 +145,27 @@ def receipt_state(receipt) -> str:
     except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         return "unverified"
     change = receipt["jev_model"]
-    return "published" if current == change["after"] else "unpublished" if current == change["before"] else "superseded"
+    if current == change["after"]:
+        return "published"
+    if current != change["before"]:
+        return "superseded"
+    # current still names ``before``: unpublished only while this receipt is the
+    # newest applied switch. A later switch (e.g. back to the default) means a
+    # rerun would publish a superseded model, so it is not offered as pending.
+    try:
+        from contextlib import closing
+        import locked_command
+        from ledger import LedgerReader
+        path = locked_command.ledger_path()
+        newest = None
+        if path.is_file():
+            with closing(LedgerReader(str(path))) as reader:
+                newest = _newest(reader.db)
+    except (OSError, ValueError, RecursionError, sqlite3.Error):
+        newest = None
+    if newest is not None and newest.get("command_id") != receipt.get("command_id"):
+        return "superseded"
+    return "unpublished"
 
 
 def _stored_receipt(command_id):
