@@ -19,6 +19,9 @@ def test_watchdog_exits_wedged_child_with_a_bounded_parent_timeout(tmp_path):
     database = tmp_path / "synthetic.db"
     data = tmp_path / "data"
     data.mkdir()
+    # The one-second watchdog covers the child's open and begin_run; creating the
+    # schema here keeps a slow first migration on a loaded host out of that bound.
+    Ledger(str(database)).close()
     # the same order as run_check.main: evidence, watchdog, begin_run, bind
     script = (
         "import sys,time,threading\n"
