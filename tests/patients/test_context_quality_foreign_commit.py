@@ -171,6 +171,28 @@ def test_summary_audit_still_stops_when_another_process_changes_inputs(
     assert not sends and not led.db.in_transaction
 
 
+@pytest.mark.parametrize("sql,statement", [
+    # A column merely named updated_seen is not the confirmed whole-row read:
+    # the aliased body stays signed.
+    ("SELECT body_text AS updated_seen FROM messages WHERE message_id=1",
+     "UPDATE messages SET body_text='synthetic-rewritten' WHERE message_id=1"),
+    # Reading the stamp directly keeps it signed like any other input.
+    ("SELECT updated_seen FROM messages WHERE message_id=1",
+     "UPDATE messages SET updated_seen=COALESCE(updated_seen,0)+1 WHERE message_id=1"),
+    # Any whole-row read outside the confirmed shapes keeps it signed too.
+    ("SELECT * FROM messages WHERE message_id=1",
+     "UPDATE messages SET updated_seen=COALESCE(updated_seen,0)+1 WHERE message_id=1"),
+])
+def test_quality_read_signs_updated_seen_outside_the_confirmed_reads(tmp_path, sql, statement):
+    with closing(_ledger(tmp_path)) as led:
+        seed(led)
+        _, current = patient_context_quality_receipts._quality_read(
+            led, time.monotonic() + 60,
+            lambda reader: reader.db.execute(sql).fetchone())
+        _other_process(led, statement)
+        assert not current()
+
+
 def test_summary_audit_passes_while_another_process_keeps_committing(quality_owner, monkeypatch):
     led, clock, cfg, doc, sends, _ = quality_owner
     commits = _commit_at_every_lock(monkeypatch, led)
