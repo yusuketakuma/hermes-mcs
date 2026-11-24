@@ -137,15 +137,18 @@ def notice(current: str, state: dict | None) -> str | None:
     reported as "up to date"."""
     if state is None:
         return None
+    if state["error"] is not None:
+        older = newer_models(state["models"], current)
+        stale_hint = (f"なお前回の一覧には使用中より新しい版 {older[0]} があります。"
+                      if older else "")
+        return (f"Jev: 新しいモデルの有無を確認できませんでした（{state['error']}）。"
+                f"使用中: {current}。翌日以降の確認で再度問い合わせます" + stale_hint)
     newer = newer_models(state["models"], current)
     if newer:
         return (f"Jev: 新しいモデル {newer[0]} を利用できます（使用中: {current}）。自動では切り替えません。"
                 f"切り替える場合は `python3 mcs/ops/mcs_setup.py jev-model --to {newer[0]} --confirm-human "
                 "--reason '理由'` を実行します（合成データの確認に合格したときだけ切り替わり、"
                 "完了済みの意味解析は新しいモデルでやり直されます）")
-    if state["error"] is not None:
-        return (f"Jev: 新しいモデルの有無を確認できませんでした（{state['error']}）。"
-                f"使用中: {current}。翌日以降の確認で再度問い合わせます")
     if not state["models"]:
         return (f"Jev: モデル一覧に固定版のIDが含まれず、新しいモデルの有無を確認できませんでした（使用中: {current}）")
     return None
