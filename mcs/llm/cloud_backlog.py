@@ -322,6 +322,29 @@ def _live_children(pool):
     return sum(child.poll() is None for child in pool.children)
 
 
+def context_workers(limit, backlog_open):
+    """Context children ``max_concurrency`` allows: at most two, and one fewer while a
+    stored-message window is open, so its workers keep at least one place when the limit is small."""
+    return min(CONTEXT_WORKERS_MAX, limit - 1 if backlog_open and limit > 1 else limit)
+
+
+def backlog_admits(root, cfg, settings, ledger):
+    """Whether a reopened stored-message window, its key and its profile let backlog workers run."""
+    import cloud_policy
+    if settings["mode"] != "on":
+        return False
+    extract_open = cloud_policy.reextract_planned(settings)
+    semantic_open = ("semantic_backlog" in settings["routes"]
+                     and cloud_policy.semantic_backlog_window(settings))
+    if not (extract_open or semantic_open) or not cloud_policy.selected_key(root):
+        # Existing workers settle paid carry before retiring.
+        return False
+    selection, errors = cloud_policy.resolve_profile(
+        cfg, route="reextract" if extract_open else "semantic_backlog",
+        purpose="backlog", root=root, ledger=ledger, ordered=True)
+    return not errors and selection is not None
+
+
 def capacity_reduced(index, limit):
     """Whether an indexed worker is past the pool's memory target; one worker of
     hysteresis, because its own resident memory is in the sample."""
@@ -344,6 +367,8 @@ class CloudBacklogPool:
         self.failed = False
         self.ramping = False
         self.admitted = False
+        self.spawned = 0
+        self.share = CONTEXT_WORKERS_MAX
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
@@ -356,32 +381,36 @@ class CloudBacklogPool:
         # Both pools share one memory target and the context children come first:
         # the owner decides first, and the stored-message workers get only what
         # the context pool's share leaves.
-        decided = self._sync(cfg, ledger, None)
+        # One per-decision start budget covers both pools.
+        decided = self._sync(cfg, ledger, None, SPAWN_PER_DECISION)
         if self.backlog is not None:
-            decided = self.backlog._sync(cfg, ledger, self._context_share) or decided
+            decided = self.backlog._sync(cfg, ledger, self._context_share,
+                                         SPAWN_PER_DECISION - self.spawned) or decided
         return decided and not (self.failed or (self.backlog is not None and self.backlog.failed))
 
     def _context_share(self, memory):
         """Workers of a shared memory target of ``memory`` this context pool keeps: its live
         children, and while it admits at least its full share, so a restart keeps its place."""
         live = _live_children(self)
-        return max(live, min(CONTEXT_WORKERS_MAX, memory)) if self.admitted else live
+        return max(live, min(self.share, memory)) if self.admitted else live
 
-    def _sync(self, cfg, ledger, reserve):
+    def _sync(self, cfg, ledger, reserve, starts):
+        self.spawned = 0
         now = time.monotonic()
         if now - self.last_sync < 10:
             return False
         self.last_sync = now
         try:
-            self._decide(cfg, ledger, now, reserve)
+            self._decide(cfg, ledger, now, reserve, starts)
         except Exception:
             self.failed = True
             raise
         self.failed = False
         return True
 
-    def _decide(self, cfg, ledger, now, reserve):
-        """Start children up to the memory target less what ``reserve(memory)`` keeps for another pool."""
+    def _decide(self, cfg, ledger, now, reserve, starts):
+        """Start up to ``starts`` children toward the memory target less what ``reserve(memory)``
+        keeps for another pool."""
         import cloud_inference
         import cloud_policy
         settings = cloud_inference.resolve_cloud_settings(cfg)
@@ -405,7 +434,9 @@ class CloudBacklogPool:
         if self.context_only:
             # A fixed cap whose share the stored-message workers already leave free:
             # no hysteresis, or a pool down to one child of two would never refill.
-            target = min(target, CONTEXT_WORKERS_MAX)
+            self.share = context_workers(settings["max_concurrency"], backlog_admits(
+                self.root, cfg, settings, ledger))
+            target = min(target, self.share)
         elif self.children and target > 0 and abs(target - len(self.children)) <= 1 and not ramping:
             # Keep one worker of hysteresis: its resident memory changes the sample.
             # A pool still ramping up was cut short by the per-decision cap, not by the sample.
@@ -414,8 +445,8 @@ class CloudBacklogPool:
             return
         helper = current_helper(self.root, installed=helper_path)
         count = target - len(self.children)
-        self.ramping = count > SPAWN_PER_DECISION
-        for _ in range(min(count, SPAWN_PER_DECISION)):
+        self.ramping = count > starts
+        for _ in range(max(0, min(count, starts))):
             index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(
                 [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
@@ -426,10 +457,10 @@ class CloudBacklogPool:
             self.children.append(child)
             self.indices[child] = index
             self.started[child] = now
+            self.spawned += 1
 
     def _admits(self, cfg, settings, ledger):
         """Return whether mode, routes, key, profile and budget let this pool start children."""
-        import cloud_policy
         if settings["mode"] != "on":
             # Workers retire at the idle boundary after paid carry is settled.
             return False
@@ -439,21 +470,8 @@ class CloudBacklogPool:
                 return False
             # Cloud availability is decided inside run_due. A missing key or
             # a spend hold must not hide its existing local fallback/recovery.
-        else:
-            extract_open = cloud_policy.reextract_planned(settings)
-            semantic_open = ("semantic_backlog" in settings["routes"]
-                             and cloud_policy.semantic_backlog_window(settings))
-            if not (extract_open or semantic_open):
-                # Existing workers settle paid carry before retiring.
-                return False
-            if not cloud_policy.selected_key(self.root):
-                return False
-            selection, errors = cloud_policy.resolve_profile(
-                cfg, route="reextract" if extract_open else "semantic_backlog",
-                purpose="backlog", root=self.root, ledger=ledger, ordered=True)
-            if errors or selection is None:
-                return False
-        return True
+            return True
+        return backlog_admits(self.root, cfg, settings, ledger)
 
     def _reap(self, now):
         """Forget exited children; a child that exits right after starting backs off its restart."""
@@ -1038,6 +1056,7 @@ def _context_worker(ledger, initial, index):
     import cloud_inference
     import extract_llm_resident
     import local_llm
+    import patient_context_refresh
     import writer_lock
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
@@ -1057,12 +1076,18 @@ def _context_worker(ledger, initial, index):
                 waiting["code"] = None
                 settings = cloud_inference.resolve_cloud_settings(cfg)
                 _note_provider(provider_seen, settings)
+                # Patient context switched off frees this child's place in the shared target.
                 if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
+                        or not patient_context_refresh.options(cfg)["enabled"]
                         or not extract_llm_resident._context_memory_available()):
                     return
                 if index is not None and time.monotonic() - capacity_checked >= 60:
                     capacity_checked = time.monotonic()
-                    if capacity_reduced(index, settings["max_concurrency"]):
+                    # Past the context cap, or past the share a stored-message window that opened
+                    # after this child started leaves it (checked only for a child it can retire).
+                    limit = settings["max_concurrency"]
+                    if (capacity_reduced(index, limit) or index >= CONTEXT_WORKERS_MAX
+                            or index >= context_workers(limit, True) and backlog_admits(HOME, cfg, settings, ledger)):
                         _event("cloud_worker_retired", reason="capacity_reduced")
                         return
                 if role is None:

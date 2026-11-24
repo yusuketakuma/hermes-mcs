@@ -1706,6 +1706,36 @@ def test_context_pool_refills_its_second_child_with_room_for_two(tmp_path, monke
         owner.close()
 
 
+def test_both_pools_share_one_start_budget_per_decision(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        started = []
+        for _ in range(4):
+            before = len(pool_children)
+            owner.sync(_reopened_cfg(8))
+            started.append(len(pool_children) - before)
+            _decide_again(owner)
+        assert started == [2, 2, 2, 2]   # never two per pool in one decision
+        assert len(owner.children) == 2 and len(owner.backlog.children) == 6
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("limit,context,stored", [(1, 1, 0), (2, 1, 1), (3, 2, 1), (4, 2, 2)])
+def test_an_open_window_keeps_one_place_when_the_limit_is_small(tmp_path, monkeypatch, pool_children,
+                                                               limit, context, stored):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(4):
+            owner.sync(_reopened_cfg(limit))
+            _decide_again(owner)
+        assert (len(owner.children), len(owner.backlog.children)) == (context, stored)
+    finally:
+        owner.close()
+
+
 def test_pool_starts_at_most_two_children_per_decision(tmp_path, monkeypatch, pool_children):
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
     pool = backlog.CloudBacklogPool(tmp_path)
@@ -1936,12 +1966,12 @@ def test_pool_sync_reports_recovery_only_after_the_nested_pool_recovers(tmp_path
     owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
     outcomes = iter([RuntimeError("synthetic"), None])
 
-    def decide(cfg, ledger, now, reserve):
+    def decide(cfg, ledger, now, reserve, starts):
         item = next(outcomes)
         if item:
             raise item
     monkeypatch.setattr(owner.backlog, "_decide", decide)
-    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now, reserve: None)
+    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now, reserve, starts: None)
     with pytest.raises(RuntimeError):
         owner.sync({})
     owner.last_sync -= 11
