@@ -43,7 +43,7 @@ from types import SimpleNamespace
 import sys
 import time
 from datetime import datetime, timezone
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every subdir holding .py files, at any depth, as an import root
@@ -247,41 +247,8 @@ def _optional_work_deadline(ledger, result, deadline: float) -> float:
     return work_deadline
 
 
-def stage_derive(ledger, result, deadline, cfg=None,
-                 llm_budget_cap: float = 90, run_lock_fd=None):
-    """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
-
-    The rule pass supplies pattern-based hints before LLM extraction.
-    Each phase leaves time for downstream clinical work. Medication
-    mapping uses this tick's latest extraction before rollups and signals.
-    The LLM pass also mints extract_v1 when the rule pass has not."""
-    def transaction_pending():
-        _require_closed_transaction(ledger, result)
-
-    transaction_pending()
-    # Keep the existing run cap and verification policy. Derived work yields
-    # early enough for size-based snapshot validation (unless this run's
-    # publish is held by the interval) and the existing tail.
-    work_deadline = _optional_work_deadline(ledger, result, deadline)
-    try:
-        import extract
-        import upgrade_scope
-        # Leave a fair share for medication mapping, rollups and signals.
-        rule_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 2
-        # The host extract.upgrade_scope, read as the LLM selection reads it,
-        # keeps a closed scope's earlier rule versions; open passes "" (query unchanged).
-        rule_scope = upgrade_scope.selection_sql(upgrade_scope.live(), "rule")
-        ex = _run_stage(result, "derive_rules", work_deadline,
-                        lambda: extract.run_pending(ledger, deadline=rule_deadline, scope_sql=rule_scope),
-                        required=True)
-        result["extracted"] = ex["done"]
-        result["extracted_pids"] = ex["pids"]
-        if ex.get("reconcile_error") is not None:
-            result["errors"].append("intervention_reconcile_failed")
-    except Exception as e:
-        result["errors"].append(f"extract: {type(e).__name__}")
-
-    transaction_pending()
+def _derive_realtime_llm(ledger, result, work_deadline, cfg, llm_budget_cap, run_lock_fd):
+    """Give this tick's realtime arrivals the bounded local LLM slice."""
     try:
         import extract_llm
         remain = work_deadline - time.monotonic()
@@ -323,6 +290,45 @@ def stage_derive(ledger, result, deadline, cfg=None,
                     result["errors"].append("extract_llm: extract_stale_gc_failed")
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
+
+
+def stage_derive(ledger, result, deadline, cfg=None,
+                 llm_budget_cap: float = 90, run_lock_fd=None):
+    """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
+
+    The rule pass supplies pattern-based hints before LLM extraction.
+    Each phase leaves time for downstream clinical work. Medication
+    mapping uses this tick's latest extraction before rollups and signals.
+    The LLM pass also mints extract_v1 when the rule pass has not."""
+    def transaction_pending():
+        _require_closed_transaction(ledger, result)
+
+    transaction_pending()
+    # Keep the existing run cap and verification policy. Derived work yields
+    # early enough for size-based snapshot validation (unless this run's
+    # publish is held by the interval) and the existing tail.
+    work_deadline = _optional_work_deadline(ledger, result, deadline)
+    try:
+        import extract
+        import upgrade_scope
+        # Leave a fair share for medication mapping, rollups and signals.
+        rule_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 2
+        # The host extract.upgrade_scope, read as the LLM selection reads it,
+        # keeps a closed scope's earlier rule versions; open passes "" (query unchanged).
+        rule_scope = upgrade_scope.selection_sql(upgrade_scope.live(), "rule")
+        ex = _run_stage(result, "derive_rules", work_deadline,
+                        lambda: extract.run_pending(ledger, deadline=rule_deadline, scope_sql=rule_scope),
+                        required=True)
+        result["extracted"] = ex["done"]
+        result["extracted_pids"] = ex["pids"]
+        if ex.get("reconcile_error") is not None:
+            result["errors"].append("intervention_reconcile_failed")
+    except Exception as e:
+        result["errors"].append(f"extract: {type(e).__name__}")
+
+    transaction_pending()
+    with _stage_timer(result, "derive_llm", work_deadline):
+        _derive_realtime_llm(ledger, result, work_deadline, cfg, llm_budget_cap, run_lock_fd)
 
     transaction_pending()
     try:
@@ -427,8 +433,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
     # artifacts; notify intents only when config signals.notify is set
     try:
         import mcs_signals
-        result["signals"] = mcs_signals.evaluate(
-            ledger, cfg or _config(), deadline=work_deadline)
+        with _stage_timer(result, "derive_signals", work_deadline):
+            result["signals"] = mcs_signals.evaluate(
+                ledger, cfg or _config(), deadline=work_deadline)
         result["errors"].extend(
             f"signals: {e}" for e in result["signals"].get("errors") or [])
         if result["signals"].get("detectors_deferred"):
@@ -1414,17 +1421,13 @@ def _defer_stage(result, name):
         errors.append(entry)
 
 
-def _run_stage(result, name, deadline, function, *args, required=False, **kwargs):
-    """Measure a stage and defer optional work once the run budget is spent."""
-    started = time.monotonic()
-    if started >= deadline and not required:
-        _defer_stage(result, name)
-        return None
+@contextmanager
+def _stage_timer(result, name, deadline, started=None):
+    """Record one stage's elapsed seconds and the run summary on exit."""
+    if started is None:
+        started = time.monotonic()
     try:
-        return function(*args, **kwargs)
-    except BaseException as e:
-        collection_diagnostics.mark_stage(e, name)
-        raise
+        yield
     finally:
         finished = time.monotonic()
         durations = result.setdefault("stage_elapsed_s", {})
@@ -1434,6 +1437,20 @@ def _run_stage(result, name, deadline, function, *args, required=False, **kwargs
             "overshoot_s": round(max(0, finished - deadline), 3),
             "slowest_stage": max(durations, key=durations.get),
         }
+
+
+def _run_stage(result, name, deadline, function, *args, required=False, **kwargs):
+    """Measure a stage and defer optional work once the run budget is spent."""
+    started = time.monotonic()
+    if started >= deadline and not required:
+        _defer_stage(result, name)
+        return None
+    with _stage_timer(result, name, deadline, started):
+        try:
+            return function(*args, **kwargs)
+        except BaseException as e:
+            collection_diagnostics.mark_stage(e, name)
+            raise
 
 
 def _not_started(args, lock_started):

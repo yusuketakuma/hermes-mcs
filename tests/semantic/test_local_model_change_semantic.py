@@ -12,8 +12,10 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _ledger, _message, _patient
 
 # bundle_fingerprint of _MEMBER at the shipped defaults, pinned before the
-# local model left the fingerprint (hash compatibility for existing rows).
-GOLDEN_FINGERPRINT = "cc4eadccb4ee04101e0353af4cfceec31c68c8cfb1c19b1b732bd93b0add7e10"
+# local model left the fingerprint (hash compatibility for existing rows);
+# re-pinned when the Jev model moved to jev-1.14.0 (a model bump invalidates
+# prior results by design, INV-15).
+GOLDEN_FINGERPRINT = "2291c22d8cbe159fb5fbf8462adaf952630ae7f050aba5e329db9044d5da3ae3"
 _MEMBER = {"project_id": 1, "message_id": 1, "parent_id": None, "revision": "r1", "source_occurrence": 1,
            "posted_at": "2026-09-19T00:00:00+09:00", "occurred_at": None,
            "sender": {"id": 1, "type": "user", "profession": ""},
