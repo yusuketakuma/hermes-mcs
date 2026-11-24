@@ -196,7 +196,7 @@ def test_workflow_keeps_the_scanning_job_read_only():
     assert 'plan=$(python3 ci/agent_scan.py plan' in scan_job and "if: steps.plan.outputs.areas != ''" in scan_job
     assert 'cron: "40 */2 * * *"' in scan_job and "fetch-depth: 300" in scan_job
     assert "gh api --paginate --slurp" in scan_job
-    assert "anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe" in scan_job
+    assert "anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc" in scan_job
     assert "issues: write" in file_job and "contents" not in file_job
     assert "vars.AUTOMATION_ENABLED == 'true'" in file_job
     assert f'--label "{scan.SCAN_LABEL}" --label "{scan.TRIAGE_LABEL}"' in file_job

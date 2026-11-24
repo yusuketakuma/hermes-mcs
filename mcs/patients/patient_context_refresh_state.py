@@ -108,31 +108,6 @@ class Deferred(Exception):
     """Admission or remaining time is unavailable; no attempt is charged to the unit."""
 
 
-class ReadMark:
-    """Where this connection stood before a read made outside the writer lock.
-
-    ``PRAGMA data_version`` changes when any other process commits anything to the ledger, so
-    a changed value does not say that the inputs of the read changed. A writer that relies on
-    the read refuses this connection's own unexpected writes (``wrote``) and, when another
-    process committed since the mark (``foreign_commit``), repeats the read inside its own
-    transaction, where no other process can commit. Take the mark before the read begins: a
-    commit that lands during the read then also counts as one after it."""
-    __slots__ = ("db", "version", "changes")
-
-    def __init__(self, db, *, own_writes=0):
-        self.db = db
-        self.version = db.execute("PRAGMA data_version").fetchone()[0]
-        self.changes = db.total_changes - own_writes
-
-    def wrote(self, count=0):
-        """Whether this connection wrote exactly ``count`` rows since the mark."""
-        return self.db.total_changes == self.changes + count
-
-    def foreign_commit(self):
-        """Whether another process committed since the mark; constant inside one transaction."""
-        return self.db.execute("PRAGMA data_version").fetchone()[0] != self.version
-
-
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()

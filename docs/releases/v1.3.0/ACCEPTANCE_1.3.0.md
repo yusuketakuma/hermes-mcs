@@ -27,7 +27,7 @@
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
 - `release_notes.py build --version 1.3.0 --date 2026-11-24`: 既存版を上書きしないようcleanな一時worktreeで生成。候補側で更新済みの `jev-optional.json` と `semantic-drain-throughput.json` を用い、archive 37件がPR作業ツリーと完全一致することを確認。
-- `release_notes.py export --version 1.3.0` で出力した本文とタイトルは `release-notes-1.3.0.md` と `release-title-1.3.0.txt` に収録。本文は37件をまとめた `21561f51c` で113,640バイト、Jevの説明を修正した `c0c2dd137` で114,939バイト。どちらも公開本文の上限内です。
+- `release_notes.py export --version 1.3.0` で出力した本文とタイトルは `release-notes-1.3.0.md` と `release-title-1.3.0.txt` に収録しています。公開本文は37件をまとめた `21561f51c` で113,640バイト、Jevの説明を修正した `c0c2dd137` で114,939バイト、抽出QCの説明を統合した `64d3e62f9` で115,091バイトです。いずれも公開本文の上限内です。
 - `update_readme.py`: README生成ブロックは生成済み状態と一致（release・modules・signals・stats・cli）。
 - `readme_release.py --check`: 合格。
 - `check_drug_master_bundle.py`: 同梱 bundle は公式最新版 20261112（MHLW download menu の医薬品マスター最終更新日・令和8年11月12日・19,324件との一致を 2026-11-24 に確認）。有効化は要オペレーター承認で未実施。

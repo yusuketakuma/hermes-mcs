@@ -47,56 +47,46 @@ def _commit_at_every_lock(monkeypatch, led, statement=None, params=(), *, when=l
     return commits
 
 
-def test_read_mark_tells_another_process_from_this_connection(tmp_path):
-    led = _ledger(tmp_path)
-    try:
-        led.db.execute("CREATE TABLE synthetic_own_work(n INTEGER)")
-        led.db.commit()
-        mark = patient_context_refresh_state.ReadMark(led.db)
-        assert mark.wrote(0) and not mark.foreign_commit()
+def _observe_patient(led):
+    return patient_context_quality_receipts._quality_read(led, time.monotonic() + 60,
+        lambda reader: reader.db.execute("SELECT project_id FROM patients WHERE project_id=1").fetchone())
+
+
+def test_quality_read_rejects_an_unexpected_write_on_its_own_connection(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+        _, current = _observe_patient(led)
         _other_process(led)
-        assert mark.foreign_commit() and mark.wrote(0)
-        fresh = patient_context_refresh_state.ReadMark(led.db)
-        led.db.execute("INSERT INTO synthetic_own_work VALUES (1)")
-        led.db.commit()
-        assert not fresh.foreign_commit() and fresh.wrote(1) and not fresh.wrote(0)
-        rebased = patient_context_refresh_state.ReadMark(led.db, own_writes=1)
-        assert not rebased.wrote(0) and rebased.wrote(1)
-    finally:
-        led.close()
+        assert current()
+        led.db.execute("INSERT INTO synthetic_other_work VALUES (2)")
+        assert not current() and current(1)
 
 
-def test_read_mark_is_constant_inside_the_writer_transaction(tmp_path):
-    led = _ledger(tmp_path)
-    try:
-        mark = patient_context_refresh_state.ReadMark(led.db)
+def test_quality_read_rechecks_the_writer_snapshot(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+        _, current = _observe_patient(led)
         _other_process(led)
         led.db.execute("BEGIN IMMEDIATE")
         try:
-            assert mark.foreign_commit()
-            inside = patient_context_refresh_state.ReadMark(led.db)
-            assert not inside.foreign_commit()
+            assert current() and led.db.in_transaction
+            assert current() and led.db.in_transaction
         finally:
             led.db.rollback()
-    finally:
-        led.close()
 
 
-def test_read_mark_sees_a_commit_that_lands_during_its_own_read(tmp_path):
-    led = _ledger(tmp_path)
-    try:
-        mark = patient_context_refresh_state.ReadMark(led.db)
-        led.db.execute("BEGIN")
-        try:
-            led.db.execute("SELECT COUNT(*) FROM patients").fetchone()
-            _other_process(led)
-            # the open snapshot keeps its version: the commit shows once the read ends
-            assert not mark.foreign_commit()
-        finally:
-            led.db.rollback()
-        assert mark.foreign_commit() and mark.wrote(0)
-    finally:
-        led.close()
+def test_quality_read_rejects_a_change_during_the_initial_snapshot(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.ensure_patient(1)
+
+        def read(reader):
+            row = reader.db.execute("SELECT probe_mid FROM patients WHERE project_id=1").fetchone()
+            _other_process(led, "UPDATE patients SET probe_mid=? WHERE project_id=1", (7,))
+            return row
+
+        with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
+            patient_context_quality_receipts._quality_read(led, time.monotonic() + 60, read)
+        assert not led.db.in_transaction
 
 
 def test_quality_pass_survives_unrelated_commits_but_not_a_lost_answer(tmp_path, monkeypatch):
@@ -117,7 +107,7 @@ def test_quality_pass_survives_unrelated_commits_but_not_a_lost_answer(tmp_path,
         lost = _commit_at_every_lock(
             monkeypatch, led, "DELETE FROM artifacts WHERE kind=? AND json_extract(meta,'$.fact_id')=?",
             (patient_context_refresh_state.QUALITY, "e" * 64))
-        with pytest.raises(ValueError, match="patient_summary_quality_incomplete"):
+        with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
             patient_context_quality_receipts._quality_mark_pass(led, 1, identity, claim, {"c" * 64}, lambda *_: True, 0.9)
         assert lost and not patient_context_quality_receipts._quality_passed(led.db, 1, identity)
         assert not led.db.in_transaction

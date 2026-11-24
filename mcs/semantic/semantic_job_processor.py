@@ -731,6 +731,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     held_empty_targets = set()
     for mid, facts in facts_by_target.items():
         semantic_transport.set_inference_target(mid, "summary")
+        diagnostics["target"] = mid
         if scfg["summary_mode"] == "off":
             continue
         existing = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
@@ -1188,7 +1189,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         "jev_skip_reason": jev_skip if status == "SKIPPED" else None,
                         "jev_requests": (audit_client.requests_made - req0)
                         if audit_client else 0}
+    diagnostics.pop("target", None)
     if incomplete:
+        target_codes = diagnostics.get("target_codes") or {}
+        if (held_empty_targets and set(results) | held_empty_targets == set(all_targets)
+                and all(r["status"] in ("PASS", "NEEDS_REVIEW", "SKIPPED") for r in results.values())
+                and all(mid in target_codes for mid in held_empty_targets)
+                and not hard_fail and not retryable_failure and not_sent is None):
+            # Every target either finished or was held with its own cause:
+            # the drain can judge a multi-target hold from these codes.
+            diagnostics["held_target_codes"] = {mid: target_codes[mid] for mid in held_empty_targets}
         if results:
             try:
                 guard("partial_promote")

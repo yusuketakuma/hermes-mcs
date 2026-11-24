@@ -3,6 +3,18 @@ import pytest
 import clinical_values
 
 
+@pytest.mark.parametrize("quote", [
+    "Cr 1.2mg/dL以上です。", "Cr 1.2mg/dL未満です。", "Cr 1.2mg/dLを超えました。",
+    "Cr 1.2mg/dLではありません。", "Cr 1.2mg/dLではない。", "Cr 1.2mg/dL疑いです。",
+    "Cr 1.2mg/dL程度です。", "Cr>1.2mg/dLです。", "Cr 1.2mg/dLかもしれません。",
+])
+def test_numeric_quote_suffix_with_comparison_or_denial_stays_a_candidate(quote):
+    # A comparison, denial or hedge glued after the number+unit never confirms.
+    candidate = clinical_values.lab_candidate("Cr", "1.2", "mg/dL", quote)
+    assert candidate["confirmation"] == "unverified"
+    assert candidate["value"] == "1.2" and candidate["evidence"] == quote
+
+
 @pytest.mark.parametrize("name,value,quote", [
     ("カリウム", "4.1", "カリウム4.1錠を内服しました。"),
     ("HbA1c", "7.2", "HbA1c 7.2‰です。"),

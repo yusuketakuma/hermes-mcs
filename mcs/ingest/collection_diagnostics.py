@@ -100,7 +100,8 @@ _CODES = {
     **dict.fromkeys(("rate_limited", "rate_limit"), "rate_limit"),
     **dict.fromkeys(("deadline_exceeded", "timeout", "worker_timeout", "budget_exhausted"),
                     "deadline"),
-    "deadline_deferred": "deferred",
+    # a designed queue wait that heals itself next pass, not a fault
+    **dict.fromkeys(("deadline_deferred", "semantic_repair_deferred"), "deferred"),
     "rollup_source_changed": "reevaluate",
     **dict.fromkeys(("http_error", "network_error", "connection_error", "worker_failed"),
                     "network"),

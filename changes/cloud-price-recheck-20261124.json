@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "クラウド4モデルの料金を再確認し、確認期限を12月24日に更新",
+  "summary": "Claude Haiku 5.5、Claude Sonnet 5.5、GPT-6 Luna、GPT-6.1 Sol の公式料金を2026年11月24日に確認しました。入力・出力・キャッシュ・長文の単価と適用条件は前回と同じです。新しい送信には11月24日版の料金表を使い、すでに予約した処理は予約時の料金表で精算します。",
+  "upgrade": "設定変更は不要です。更新後の料金表は2026年12月24日まで有効です。期限切れの際は従来どおり新しい送信を止めます。",
+  "details": [],
+  "refs": [
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/providers/openai_client.py",
+    "docs/guides/ANTHROPIC.md"
+  ]
+}

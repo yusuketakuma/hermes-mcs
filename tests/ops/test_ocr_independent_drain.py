@@ -337,6 +337,7 @@ def test_real_publisher_defers_on_busy_publication_lock(real_job, monkeypatch):
         result = mcs_ocr.run(CFG)
         assert result['reason'] == 'snapshot_deferred'
         assert result['snapshot_failure']['reason'] == 'snapshot_lock_busy'
+        assert result['snapshot_timing']['defer_reason'] == 'publication_lock_busy'
         assert not os.path.exists(os.path.join(out_dir, 'ledger-snapshot.db'))
     finally:
         os.close(fd)

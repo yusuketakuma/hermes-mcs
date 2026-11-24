@@ -537,5 +537,7 @@ def test_health_counts_the_long_held_approved_units(routed, monkeypatch):
     _paid(ledger, monkeypatch, 2, result=False)
     old(ledger, 1)
     monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
-    worker.run_pending(ledger, limit=1, budget_s=180)
+    # the resident passes approved_first on its normal turns; a plain call
+    # keeps the regular order now and would pick the backlog row
+    worker.run_pending(ledger, limit=1, budget_s=180, approved_first=True)
     assert local_rebuild.health_counts(ledger.db)['held_long'] == 1

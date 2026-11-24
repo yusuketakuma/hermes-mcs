@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import sqlite3
 import patient_context_artifacts as context_artifacts
 from mcs_util import loads_dict, strict_json, valid_hash
 from inference_version import VERSION_KEY, current_meta_pred, read_version
@@ -57,6 +58,76 @@ def _profiled_summary_repair_exists(db, pid, input_key):
                 and meta.get('profile') is not None):
             return True
     return False
+
+
+def _quality_read(ledger, deadline, read):
+    """Seal the observed rows, keeping the original version fence for unrecordable reads."""
+    from patient_context_refresh_sources import _candidate_reader, _scan_writer_wait
+    from patient_readiness_witness import Recording
+
+    db = ledger.db
+    if db.in_transaction:
+        raise RuntimeError("patient_summary_transaction_active")
+    clock = patient_context_refresh_state.time.monotonic
+    changes = db.total_changes
+    witness = None
+    if db.execute("PRAGMA database_list").fetchone()[2]:
+        try:
+            with _candidate_reader(ledger, deadline) as reader:
+                with Recording(reader.db) as recording:
+                    value = read(reader)
+                    witness = recording.seal()
+        except sqlite3.DatabaseError as error:
+            if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_AUTH:
+                raise
+            # An SQL operation outside the recorder's allowlist uses the original read.
+    db.execute("BEGIN")
+    try:
+        version = db.execute("PRAGMA data_version").fetchone()[0]
+        if clock() >= deadline:
+            raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
+        if witness is None:
+            value = read(ledger)
+        elif not witness.matches(db, deadline, clock):
+            # The separately opened path must describe the writer's own database.
+            raise ValueError("patient_summary_quality_source_changed")
+    finally:
+        db.rollback()
+
+    def matches(own_writes=0):
+        nonlocal version
+        if clock() >= deadline or db.total_changes != changes + own_writes:
+            return False
+        if db.execute("PRAGMA data_version").fetchone()[0] == version:
+            return clock() < deadline
+        if witness is None:
+            return False
+        # Replay just the SQL observations. Outside a writer, try a fresh read first.
+        # Only a commit during that replay needs a reserved snapshot to make progress.
+        borrowed = db.in_transaction
+        for begin in ("BEGIN", "BEGIN IMMEDIATE"):
+            if not borrowed:
+                if begin == "BEGIN IMMEDIATE":
+                    until = min(deadline, clock() + _QUALITY_LOCK_WAIT_S + patient_context_refresh_state.COMMIT_MARGIN)
+                    with _scan_writer_wait(db, until):
+                        db.execute(begin)
+                else:
+                    db.execute(begin)
+            try:
+                seen = db.execute("PRAGMA data_version").fetchone()[0]
+                if not witness.matches(db, deadline, clock):
+                    return False
+            finally:
+                if not borrowed:
+                    db.rollback()
+            if clock() >= deadline or db.total_changes != changes + own_writes:
+                return False
+            if borrowed or db.execute("PRAGMA data_version").fetchone()[0] == seen:
+                version = seen
+                return clock() < deadline
+        return False
+
+    return value, matches
 
 
 _QUALITY_LOCK_WAIT_S = 60
@@ -257,36 +328,25 @@ def _quality_skip_receipt(db, pid, identity, selected, threshold):
     return content
 
 
-def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, threshold, reason):
+def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, threshold, reason, *, deadline=math.inf):
     """Persist a bounded skip only while the source, scope and owner remain current."""
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
-
-    def receipts():
-        if not _quality_skip_evidence(ledger.db, pid, identity, selected, threshold):
+    def read(reader):
+        if not _quality_skip_evidence(reader.db, pid, identity, selected, threshold):
             raise ValueError("patient_summary_quality_unresolved_request")
-        return _quality_skip_receipt(ledger.db, pid, identity, selected, threshold)
-    # Validate the receipts in a read snapshot first, so that a skip that cannot be recorded
-    # never waits for the writer lock.
-    mark = patient_context_refresh_state.ReadMark(ledger.db)
-    ledger.db.execute("BEGIN")
-    try:
-        prior = receipts()
-    finally:
-        ledger.db.rollback()
-    if not mark.wrote(0):
-        raise ValueError("patient_summary_quality_source_changed")
-    fd = _acquire(current=current)
+        return _quality_skip_receipt(reader.db, pid, identity, selected, threshold)
+
+    prior, matches = _quality_read(ledger, deadline, read)
+    fd = _acquire(current=current, deadline=deadline)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
             if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
-                    or not mark.wrote(0)):
+                    or not matches()):
                 raise ValueError("patient_summary_quality_source_changed")
-            if mark.foreign_commit():
-                prior = receipts()
             writes = 0
             if prior is None:
                 # A malformed or duplicate existing receipt is never replaced.
@@ -448,50 +508,43 @@ def _quality_pass_present(db, pid, identity):
                       (patient_context_refresh_state._quality_kind(patient_context_refresh_state.QUALITY_PASS, identity), pid, identity["audit_key"])).fetchone() is not None
 
 
-def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold, *, descriptor=None):
+def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold, *, descriptor=None, deadline=math.inf):
     import semantic_runtime
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
+    # Validate the entire receipt set in a read snapshot, never under the
+    # writer lock. The caller's current() fence is checked again in the
+    # following writer transaction, including any intervening own writes.
     purpose = identity.get("purpose", "summary")
 
-    def receipts():
-        if semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, identity["fact_ids"], purpose=purpose):
+    def read(reader):
+        if semantic_runtime.patient_summary_request_problem(reader.db, pid, identity, identity["fact_ids"], purpose=purpose):
             raise ValueError("patient_summary_quality_unresolved_request")
         for start in range(0, len(identity["fact_ids"]), 12):
             ids = identity["fact_ids"][start:start + 12]
-            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
+            answers = _quality_answers(reader.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if set(answers) != set(ids) or any(
                     answers[fid]["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected_ids)
                     for fid in ids):
                 raise ValueError("patient_summary_quality_incomplete")
-        content = _quality_pass_content(ledger.db, pid, identity, threshold=threshold, descriptor=descriptor)
-        if content is None:
+        pass_content = _quality_pass_content(reader.db, pid, identity, threshold=threshold, descriptor=descriptor)
+        if pass_content is None:
             raise ValueError("patient_source_quality_receipt_missing")
-        return content
-    # Validate the entire receipt set in a read snapshot first, so that the writer lock is
-    # held for it only when another process committed in between. The caller's current()
-    # is checked again in the writer transaction, including any intervening own writes.
-    mark = patient_context_refresh_state.ReadMark(ledger.db)
-    ledger.db.execute("BEGIN")
-    try:
-        pass_content = receipts()
-    finally:
-        ledger.db.rollback()
-    if not mark.wrote(0):
-        raise ValueError("patient_summary_quality_source_changed")
-    fd = _acquire(current=current)
+        return pass_content
+
+    pass_content, matches = _quality_read(ledger, deadline, read)
+    fd = _acquire(current=current, deadline=deadline)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
             if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
-                    or _quality_failed(ledger.db, pid, identity) or not mark.wrote(0)):
+                    or _quality_failed(ledger.db, pid, identity)
+                    or not matches()):
                 raise ValueError("patient_summary_quality_source_changed")
-            if mark.foreign_commit():
-                pass_content = receipts()
             writes = 0
             if not _quality_passed(ledger.db, pid, identity, expected=pass_content):
                 prior = (ledger.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
@@ -599,12 +652,9 @@ def _quality_record_failure(ledger, pid, identity, claim, page_key, failure_clas
         os.close(fd)
 
 
-def _quality_reserve_repair_tx(ledger, pid, identity, claim, current, receipt_mark, receipts_current,
+def _quality_reserve_repair_tx(ledger, pid, identity, claim, current, receipt_fence,
                                reservation, artifact_id, owner):
-    """Consume the repair in its monetary reservation's existing transaction.
-
-    ``receipt_mark`` was taken before the audit's answers were read for the request;
-    ``receipts_current()`` reads them again here when another process committed since."""
+    """Consume the repair in its monetary reservation's existing transaction."""
     if not ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if (not current(1) or not _quality_owns(ledger.db, pid, identity["input_key"], claim)
@@ -613,8 +663,7 @@ def _quality_reserve_repair_tx(ledger, pid, identity, claim, current, receipt_ma
             or reservation.get("unit_key") != "summary_quality_repair"
             or reservation.get("owner") != owner):
         raise ValueError("patient_summary_quality_source_changed")
-    if (not receipt_mark.wrote(1)
-            or receipt_mark.foreign_commit() and not receipts_current()
+    if (not receipt_fence(1)
             or _quality_repair_spent(ledger.db, pid, identity["input_key"])
             or _other_summary_repair_spent(ledger.db, pid, identity)):
         raise ValueError("patient_summary_quality_source_changed")

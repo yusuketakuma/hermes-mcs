@@ -23,10 +23,10 @@ def jobs_db(tmp_path):
     db.close()
 
 
-def _job(db, mid, targets=None):
+def _job(db, mid, targets=None, **extra):
     now = time.time() - 10
     payload = {VERSION_KEY: CURRENT_VERSION, "targets": targets or [mid],
-               "eligible": True, "generation": f"g{mid}"}
+               "eligible": True, "generation": f"g{mid}", **extra}
     with db.db:
         return db.db.execute(
             "INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,"
@@ -39,7 +39,8 @@ def _row(db, job_id):
     return db.db.execute("SELECT * FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
 
 
-def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, model=False):
+def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, model=False,
+               held_codes=None):
     # Only the processor's result contract is injected; selection, slot
     # accounting and the generation-fenced transitions stay real.
     served = []
@@ -53,6 +54,10 @@ def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, mod
         if model:
             llm_fn('synthetic scheduler control')
         kw['diagnostics']['not_sent'] = not_sent
+        if held_codes is not None:
+            targets = runtime.parse_payload(job)['targets']
+            kw['diagnostics']['held_target_codes'] = {
+                t: held_codes for t in targets}
         return 'deferred'
 
     monkeypatch.setattr(semantic_drain, '_process_job', process)
@@ -108,6 +113,55 @@ def test_multi_target_free_hold_hands_slot_on_but_keeps_minute(jobs_db, monkeypa
     assert row['next_try'] == row['updated_at'] + 60
 
 
+@pytest.mark.parametrize('held_codes', ['empty_repair_candidate_binding', 'audit_empty_unverified'])
+def test_multi_target_hold_of_every_target_waits_an_hour(jobs_db, monkeypatch, held_codes):
+    held = _job(jobs_db, 100, targets=[100, 101])
+    _job(jobs_db, 999)
+    served = _processor(monkeypatch, code=held_codes, held_codes=held_codes)
+    _run(jobs_db)
+    assert served == [100, 999]
+    row = _row(jobs_db, held)
+    assert row['state'] == 'pending' and row['attempts'] == 0
+    assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
+
+
+def test_multi_target_hold_with_a_non_deterministic_target_keeps_minute(jobs_db, monkeypatch):
+    held = _job(jobs_db, 100, targets=[100, 101])
+    _processor(monkeypatch, code='empty_repair_candidate_binding',
+               held_codes='empty_repair_marker_binding')
+    _run(jobs_db)
+    row = _row(jobs_db, held)
+    assert row['next_try'] == row['updated_at'] + 60
+
+
+def test_multi_target_binding_holds_no_longer_starve_reprocess_rows(jobs_db, monkeypatch):
+    """Live shape: more deterministic multi-target holds than one backlog
+    pass scans (max_jobs=1 inspects 16 rows), with a notification-free
+    reprocess row ordered last. Before the fix each hold came back after
+    60 s, so every later pass rescanned the same holds and the reprocess
+    row never ran."""
+    holds = [_job(jobs_db, mid, targets=[mid, mid + 1000])
+             for mid in range(100, 120)]
+    reprocess = _job(jobs_db, 999, reprocess_only=True, notification_free=True)
+    served = _processor(monkeypatch, code='empty_repair_candidate_binding',
+                        held_codes='empty_repair_candidate_binding')
+    _run(jobs_db)
+    assert 999 not in served and len(served) == 16
+    with jobs_db.db:
+        # more than the one-minute retry, less than the hourly wait
+        jobs_db.db.execute("UPDATE fetch_jobs SET next_try=next_try-120,"
+                           " updated_at=updated_at-120 WHERE kind='semantic'")
+    del served[:]
+    out = _run(jobs_db)
+    assert served == [116, 117, 118, 119, 999]
+    assert out['done'] == 1
+    assert _row(jobs_db, reprocess)['state'] == 'done'
+    for job_id in holds:
+        row = _row(jobs_db, job_id)
+        assert row['state'] == 'pending' and row['attempts'] == 0
+        assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
+
+
 def test_realtime_lane_free_hold_is_unchanged(jobs_db, monkeypatch):
     held = _job(jobs_db, 100)
     served = _processor(monkeypatch)
@@ -132,3 +186,53 @@ def test_reseed_after_input_change_returns_hold_to_now(jobs_db, monkeypatch):
     jobs_db.semantic_seed(1, [100], {"source": "synthetic"})
     row = _row(jobs_db, job_id)
     assert row['state'] == 'pending' and row['next_try'] <= time.time()
+
+
+@pytest.mark.parametrize('second_code', ['empty_repair_candidate_binding', 'empty_repair_marker_binding',
+                                         None])
+def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_code):
+    """Through the real summary loop: when both targets of a two-target job
+    are held by the empty-repair gate, the hourly wait applies only if each
+    target's own cause is deterministic. Only the gate verdict is injected."""
+    import semantic_job_processor
+    import semantic_transport
+    from semantic_testkit import _PassJev, _canonical_cfg, _llm_v2, _seeded_two
+    monkeypatch.setattr(semantic_transport, "_LLM_FAILURE", None)
+    db = _seeded_two(tmp_path)
+    try:
+        codes = {1: 'empty_repair_candidate_binding', 2: second_code}
+        real_gate = semantic_job_processor._empty_repair_candidate
+
+        def gate(_db, _pid, mid, *args, reason_out=None, **kwargs):
+            if codes[mid] is None:     # the real gate: target 2 publishes and is reused
+                return real_gate(_db, _pid, mid, *args, reason_out=reason_out, **kwargs)
+            reason_out['code'] = codes[mid]
+            return None, True
+
+        monkeypatch.setattr(semantic_job_processor, '_empty_repair_candidate', gate)
+
+        def llm(prompt):
+            semantic_transport._record_inference("local")
+            return _llm_v2(prompt)
+
+        def run():
+            with db.db:
+                db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            return semantic_drain.run_due(db, _canonical_cfg(), {"errors": []},
+                                          time.monotonic() + 300, jev_client=_PassJev(),
+                                          llm_fn=llm, lane='backlog', max_jobs=1)
+        # the first passes write the facts and stage receipts (progress);
+        # the steady state that repeats for days writes nothing
+        run()
+        run()
+        out = run()
+        assert out['progressed'] == 0 and out['deferred'] == 1
+        assert out['defer_reasons'] == {'empty_repair_candidate_binding': 1}
+        row = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert json.loads(row['payload'])['targets'] == [1, 2]
+        assert row['state'] == 'pending' and row['attempts'] == 0
+        wait = (semantic_drain.NOT_SENT_BACKOFF_S
+                if second_code != 'empty_repair_marker_binding' else 60)
+        assert row['next_try'] == row['updated_at'] + wait
+    finally:
+        db.close()

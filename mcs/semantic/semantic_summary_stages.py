@@ -57,9 +57,13 @@ def _job_diagnostics() -> dict:
 
 def _why(diagnostics: dict, code: str) -> bool:
     """Record ``code`` unless an earlier cause already did; returns True
-    so a flag assignment can carry its reason."""
+    so a flag assignment can carry its reason. While a target is being
+    served (``diagnostics["target"]``), its own first cause is kept too."""
     if diagnostics["code"] is None:
         diagnostics["code"] = code
+    target = diagnostics.get("target")
+    if target is not None:
+        diagnostics.setdefault("target_codes", {}).setdefault(target, code)
     return True
 
 

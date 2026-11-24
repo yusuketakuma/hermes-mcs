@@ -381,6 +381,88 @@ def test_publish_writes_capture_failure_does_not(db):
     assert dump_except_metadata(db) == before
 
 
+@pytest.mark.parametrize("field_error", [
+    "mentions_invalid", "is_bookmarked_invalid", "is_pinned_invalid"])
+def test_field_only_error_still_publishes_valid_reactions(db, field_error):
+    save(db, message(reactions=[]))
+    refreshed = message(reactions=reactions(good=2))
+    refreshed.metadata_errors = [field_error]
+    db.save_metadata_shadow(refreshed, publish=True)
+    metadata = get_message_metadata(db.db, 1)
+    assert metadata["reactions"] == reactions(good=2)
+    assert metadata["reactions_status"] == "observed"
+    # The partial error stays visible per-field and is not a fetch failure.
+    status_key = {"mentions_invalid": "mentions_status",
+                  "is_bookmarked_invalid": "bookmark_status",
+                  "is_pinned_invalid": "pin_status"}[field_error]
+    assert metadata[status_key] == "invalid" and metadata["last_error"] is None
+    row = db.db.execute("SELECT last_error FROM message_metadata "
+                        "WHERE message_id=1 AND source='capture'").fetchone()
+    assert row["last_error"] == field_error
+
+
+@pytest.mark.parametrize("errors", [
+    ["reactions_invalid"], ["network_error"],
+    ["mentions_invalid", "reactions_invalid"], ["mentions_invalid", "unknown_kind"]])
+def test_non_field_errors_never_publish(db, errors):
+    save(db, message(reactions=[]))
+    refreshed = message(reactions=reactions(good=2))
+    refreshed.metadata_errors = errors
+    db.save_metadata_shadow(refreshed, publish=True)
+    metadata = get_message_metadata(db.db, 1)
+    assert metadata["reactions"] == [] and metadata["reactions_status"] == "observed"
+    shadow = db.db.execute("SELECT last_error FROM message_metadata "
+                           "WHERE message_id=1 AND source='shadow'").fetchone()
+    assert shadow["last_error"] == ",".join(errors)
+
+
+def test_field_only_publish_keeps_actor_fetch_eligible(db):
+    save(db, message(reactions=[]))
+    refreshed = message(reactions=reactions(good=1))
+    refreshed.metadata_errors = ["mentions_invalid"]
+    db.save_metadata_shadow(refreshed, publish=True)
+    # capture and shadow both carry the partial error: the post is still
+    # picked for an actor walk instead of silently dropping out.
+    assert [r["message_id"] for r in stamp_read.reaction_actor_targets(db.db)] == [1]
+    db.save_reaction_actors(1, ok(5)["actors"], True)
+    newer = message(reactions=reactions(good=2))
+    newer.metadata_errors = ["is_pinned_invalid"]
+    db.save_metadata_shadow(newer, publish=True)
+    # the partial-error publish still counts as a reactions change.
+    assert reaction_actor_summary(db.db, 1)["state"] == "stale"
+
+
+@pytest.mark.parametrize(("stored", "eligible"), [
+    ("mentions_invalid,is_pinned_invalid", True),
+    ("mentions_invalid,reactions_invalid", False),
+    ('mentions_invalid,"unexpected"', False),
+    ("mentions_invalid\0other", False),
+    (b"mentions_invalid", False),
+])
+def test_actor_scan_requires_valid_stored_error_codes(db, stored, eligible):
+    save(db, message(reactions=reactions(good=1)))
+    db.db.execute("UPDATE message_metadata SET last_error=? WHERE message_id=1", (stored,))
+    assert bool(stamp_read.reaction_actor_targets(db.db)) is eligible
+
+
+def test_publish_stage_counts_field_only_errors(db):
+    save(db, message(reactions=[]))
+
+    def partial(pid, mid):
+        m = message(mid, reactions=reactions(good=1))
+        m.metadata_errors = ["mentions_invalid"]
+        return m
+
+    adapter = SimpleNamespace(set_deadline=lambda d: None,
+                              fetch_message_metadata=partial)
+    result = {"errors": []}
+    stage_metadata_shadow(adapter, db, result, time.monotonic() + 60, publish=True)
+    stats = result["metadata_shadow"]
+    assert stats["published"] == 1
+    assert stats["errors"] == [{"message_id": 1, "kind": "schema_error"}]
+    assert get_message_metadata(db.db, 1)["reactions"][0]["count"] == 1
+
+
 @pytest.mark.parametrize(("cfg", "publish", "actors"), [
     ({"metadata_shadow": True}, False, False),
     ({"metadata_shadow": True, "metadata_refresh_publish": True}, True, False),

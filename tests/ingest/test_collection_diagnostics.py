@@ -211,7 +211,7 @@ PRODUCER_CODES = [
     ("discovery: patient_write_failed:OSError archived:none", "storage"),
     ("health_write_failed: OSError", "storage"), ("code_changed", "runtime"),
     ("extract: ValueError", "postprocess"), ("extract_llm: TimeoutError", "postprocess"),
-    ("drug_map: partial", "postprocess"), ("rollup: KeyError", "postprocess"),
+    ("drug_map: no_progress", "postprocess"), ("rollup: KeyError", "postprocess"),
     ("signals: request_aging:KeyError", "postprocess"), ("cmd:OSError", "command"),
     ("restore_reconcile:OSError", "command"), ("cmd_sweep:OSError", "command"),
     ("snapshot_publish_failed", "runtime"), ("config: semantic_not_object", "config"),
@@ -229,6 +229,11 @@ PRODUCER_CODES = [
     ("self_profile: OSError", "auxiliary"), ("cmd_int: OSError", "command"),
     ("stamps: RuntimeError", "command"), ("cmd_int_tail: RuntimeError", "command"),
     ("rollup_source_changed", "reevaluate"),
+    ("semantic_repair_deferred", "deferred"),
+    # real semantic holds stay unclassified faults and keep degrading health
+    ("semantic: execution_repair_unverified", "other"), ("semantic: execution_repair_error", "other"),
+    ("semantic: execution_contract_unverified", "other"), ("semantic: job_payload_held", "other"),
+    ("semantic: intake_held", "other"),
 ]
 
 

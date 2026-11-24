@@ -230,7 +230,9 @@ def test_init_reuses_a_hermes_token_only_with_consent(monkeypatch, tmp_path):
     monkeypatch.setattr(setup_integration, "ENV_PATH", str(env))
     hermes = tmp_path / "home" / ".hermes"
     hermes.mkdir(parents=True)
-    (hermes / ".env").write_text("DISCORD_BOT_TOKEN=from-hermes\n")
+    hermes_env = hermes / ".env"
+    hermes_env.write_text("DISCORD_BOT_TOKEN=from-hermes\n")
+    hermes_env.chmod(0o600)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda *a: "")
