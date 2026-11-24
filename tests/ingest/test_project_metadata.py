@@ -205,6 +205,35 @@ def test_out_of_range_number_records_failure_without_losing_complete_artifact(
     assert not payload["complete"]
 
 
+def test_cli_busy_lock_never_opens_writer_or_adapter(tmp_path, monkeypatch, capsys):
+    import os
+    import ledger
+    import mcs_adapter
+    import project_metadata
+    import writer_lock
+
+    database = tmp_path / "synthetic.db"
+    database.write_bytes(b"synthetic, never opened")
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "run.lock"))
+    assert lock_fd is not None
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("writer and adapter must not be opened while lock is busy")
+
+    monkeypatch.setattr(ledger, "Ledger", forbidden)
+    monkeypatch.setattr(mcs_adapter, "MCSAdapter", forbidden)
+    try:
+        assert project_metadata.main([
+            "sync", "--database", str(database), "--project-id", "1",
+            "--dataset", "medication_periods", "--read-only-get",
+            "--token-cache", str(tmp_path / "synthetic-cache"),
+        ]) == 1
+    finally:
+        os.close(lock_fd)
+    assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "run_lock_busy"}
+    assert database.read_bytes() == b"synthetic, never opened"
+
+
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt, SystemExit])
 def test_cli_writer_close_failure_still_releases_owned_run_lock(tmp_path, monkeypatch, failure):
     import errno
