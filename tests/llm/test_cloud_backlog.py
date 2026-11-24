@@ -1689,6 +1689,23 @@ def test_context_pool_keeps_at_most_two_children(tmp_path, monkeypatch, pool_chi
         owner.close()
 
 
+def test_context_pool_refills_its_second_child_with_room_for_two(tmp_path, monkeypatch, pool_children):
+    # One child of two with room for exactly two is not a borderline sample to hold.
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    monkeypatch.setattr(backlog, "_QUICK_EXIT_S", 0)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 8}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        owner.sync(cfg)
+        assert len(owner.children) == 2
+        owner.children[0].stopped = True
+        _decide_again(owner)
+        owner.sync(cfg)
+        assert len(owner.children) == 2 and len(pool_children) == 3
+    finally:
+        owner.close()
+
+
 def test_pool_starts_at_most_two_children_per_decision(tmp_path, monkeypatch, pool_children):
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
     pool = backlog.CloudBacklogPool(tmp_path)

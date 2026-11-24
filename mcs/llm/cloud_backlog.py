@@ -387,6 +387,7 @@ class CloudBacklogPool:
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
         self.admitted = False
+        ramping, self.ramping = self.ramping, False
         if not self._admits(cfg, settings, ledger):
             # Children retire by policy while the gate is closed: those exits
             # are not crashes and never delay a restart once it reopens.
@@ -401,14 +402,14 @@ class CloudBacklogPool:
         self._reap(now)
         memory = memory_workers(settings["max_concurrency"])
         target = max(0, memory - (reserve(memory) if reserve is not None else 0))
-        # Keep one worker of hysteresis: its resident memory changes the sample.
-        # A pool still ramping up was cut short by the per-decision cap, not by the sample.
-        if self.children and target > 0 and abs(target - len(self.children)) <= 1 and not self.ramping:
-            target = min(settings["max_concurrency"], len(self.children))
-        self.ramping = False
         if self.context_only:
-            # A fixed cap, not the memory sample: no hysteresis keeps it from refilling.
+            # A fixed cap whose share the stored-message workers already leave free:
+            # no hysteresis, or a pool down to one child of two would never refill.
             target = min(target, CONTEXT_WORKERS_MAX)
+        elif self.children and target > 0 and abs(target - len(self.children)) <= 1 and not ramping:
+            # Keep one worker of hysteresis: its resident memory changes the sample.
+            # A pool still ramping up was cut short by the per-decision cap, not by the sample.
+            target = min(settings["max_concurrency"], len(self.children))
         if target <= len(self.children) or now < self.retry_at:
             return
         helper = current_helper(self.root, installed=helper_path)
