@@ -398,7 +398,7 @@ def test_control_cli_refuses_ledger_open_without_current_exclusive_owner(world, 
     os.close(fd)
 
 
-def test_control_cli_waits_boundedly_for_owner_and_rechecks_code(world, monkeypatch):
+def test_control_cli_waits_boundedly_for_owner_and_rechecks_code(world, monkeypatch, capsys):
     import writer_lock
     root, _, _ = world
     acquire = writer_lock.acquire_run_lock
@@ -412,9 +412,10 @@ def test_control_cli_waits_boundedly_for_owner_and_rechecks_code(world, monkeypa
 
     monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
     assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
-    import locked_command
-    assert waits == [{"wait_s": locked_command.WAIT_SECONDS, "expected_code_stamp": 123,
+    # long enough to outlast one collection tick's hold, not the old 5 seconds
+    assert waits == [{"wait_s": 180.0, "expected_code_stamp": 123,
                       "marker_path": str(root / "data" / "update_in_progress.marker")}]
+    assert "最大180秒待ちます" in capsys.readouterr().err
     fd = acquire(str(root / "data" / "run.lock"))
     assert fd is not None
     os.close(fd)
