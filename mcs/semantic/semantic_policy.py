@@ -303,9 +303,14 @@ def runtime_review_held(cfg: dict, *, root=None) -> bool:
                        lambda: external_transfer.status(root))
 
 
-def needs_local_model(scfg: dict) -> bool:
-    """Whether a semantic job has a fact, loop or summary stage after its Jev assessment."""
-    return scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off"
+def primary_verdicts_consumed(scfg: dict) -> bool:
+    """Whether a feature reads semantic job results: only summaries and loops use them.
+
+    Those are also the only stages after the Jev assessment, and the only
+    ones that call the local model. Without such a reader no semantic job is
+    queued, re-queued or run and patient context never waits on one;
+    extraction QC keeps its own lane."""
+    return scfg["mode"] != "off" and (scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off")
 
 
 def waits_for_jev_quota(scfg: dict, lane) -> bool:
@@ -313,7 +318,7 @@ def waits_for_jev_quota(scfg: dict, lane) -> bool:
 
     A backlog job with no local-model stage would complete with nothing but a
     skipped assessment, so it waits for the next quota window."""
-    return lane == "backlog" and not needs_local_model(scfg)
+    return lane == "backlog" and not primary_verdicts_consumed(scfg)
 
 
 def policy_fingerprint(scfg: dict) -> str:

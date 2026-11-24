@@ -181,7 +181,7 @@ import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_publication as v4
 from semantic_policy import (BACKLOG_BUDGET_RESERVE, JOB_KIND, KIND_POLICY, KIND_USAGE,
-                             QC_JOB_KIND, needs_local_model, policy_fingerprint, runtime_config,
+                             QC_JOB_KIND, primary_verdicts_consumed, policy_fingerprint, runtime_config,
                              waits_for_jev_quota)
 import semantic_notice
 from semantic_store import jev_usage_today
@@ -386,10 +386,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception as e:
             result["errors"].append(f"semantic_reproject: {type(e).__name__}")
         out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
-    # Jobs with no local-model stage (QC, classification-only semantic)
-    # never call the endpoint this breaker guards.
+    # Without a reader of semantic results only QC runs, which never calls
+    # the endpoint this breaker guards.
     circuit_s = llm_availability.circuit_open_s(ledger.db)
-    if circuit_s and not cloud_only and needs_local_model(scfg):
+    if circuit_s and not cloud_only and primary_verdicts_consumed(scfg):
         out["circuit_open_s"] = round(circuit_s)
         _hold_tail()
         return out
@@ -525,7 +525,15 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception:
             result["errors"].append("semantic: qc_seed_failed")
     qc_active = scfg["extract_qc"] == "annotate"
-    kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
+    # Semantic jobs whose results no feature reads are never run: they stay
+    # pending, unchanged, and become due again once a reader is enabled.
+    verdicts_read = primary_verdicts_consumed(scfg)
+    kinds = (JOB_KIND,) * verdicts_read + (QC_JOB_KIND,) * qc_active
+    if not verdicts_read:
+        out["unread_semantic_pending"] = out["pending_by_kind"].get(JOB_KIND, 0)
+    if not kinds:
+        _hold_tail()
+        return out
     # arrival-descended seeds outrank import/replay seeds: a deep
     # backfill must never starve a fresh notification's evaluation
     # (§19.1's existing-work-first ordering applied inside the queue
@@ -781,7 +789,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # via BudgetShort without charging an attempt. QC rows and
             # semantic jobs without a local-model stage need room for Jev
             # requests only, so they use the short Jev start floor.
-            jev_only_job = job["kind"] == QC_JOB_KIND or not needs_local_model(scfg)
+            jev_only_job = job["kind"] == QC_JOB_KIND or not primary_verdicts_consumed(scfg)
             floor = deadline - (_JEV_START_RESERVE_S if jev_only_job else
                                 min(runtime.LLM_CALL_RESERVE_S,
                                     float(scfg["job_budget_seconds"]) * 2 / 3))

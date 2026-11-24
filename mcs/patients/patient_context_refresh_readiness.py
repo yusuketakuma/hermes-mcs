@@ -823,8 +823,10 @@ def _message_ready_scoped(ledger, row, cfg, policy, *, deadline, attachment_mode
     if semantic_intake_hold.has_held_root(db, pid, root) or semantic_intake_hold.has_unstored_root(db, pid, root):
         return False
     empty = row['body_state'] == 'deleted' or row['body_state'] == 'full' and row['body_text'] == ''
-    # Nonempty summary-enabled members carry their own bound audit proof below.
-    if policy['mode'] != 'off' and (policy['summary_mode'] == 'off' or empty) and db.execute(
+    # Nonempty summary-enabled members carry their own bound audit proof below;
+    # without a reader of the job results no semantic job is waited on.
+    consumed = semantic_policy.primary_verdicts_consumed(policy)
+    if consumed and (policy['summary_mode'] == 'off' or empty) and db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=? AND state!='done' LIMIT 1",
             (semantic_policy.JOB_KIND, pid, root)).fetchone():
         return False
@@ -856,7 +858,7 @@ def _message_ready_scoped(ledger, row, cfg, policy, *, deadline, attachment_mode
             return False
         if not selected_artifact_proof_valid(db, selected['artifact_id'], material=True):
             return False
-        if policy['mode'] == 'off':
+        if not consumed:
             return True
         state = semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
             **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {}))
@@ -877,7 +879,7 @@ def _message_ready_scoped(ledger, row, cfg, policy, *, deadline, attachment_mode
         return (semantic_store.current_artifact(
             db, semantic_policy.KIND_AUDIT, mid, bundle['source_fingerprint'], policy_fp) is None
             or semantic_store.local_redo_pending(db, mid, bundle['source_fingerprint'], policy_fp))
-    if policy['mode'] == 'off':
+    if not consumed:
         return _raw_extraction_current(db, row, cfg)[0]
     return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
         **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
