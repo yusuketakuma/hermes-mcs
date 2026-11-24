@@ -77,30 +77,42 @@ def test_expected_answers_for_the_named_cases(db):
     assert answers["later_success_clears"] is None
 
 
-# The bounded read, spelled out so the plan test examines exactly what jev_block_reason sends.
-BOUNDED = ("SELECT json_extract(meta,'$.error_kind') FROM artifacts NOT INDEXED "
-           "WHERE kind='semantic_assess' AND json_valid(meta) AND artifact_id>=("
-           "SELECT artifact_id FROM artifacts INDEXED BY idx_artifacts_kind_created "
-           "WHERE kind='semantic_assess' AND json_valid(meta) ORDER BY created_at DESC LIMIT 1) "
-           "ORDER BY artifact_id DESC LIMIT 1")
+def test_only_a_completed_qc_with_a_recorded_jev_request_clears_the_previous_block(db):
+    _add(db, "semantic_assess", BLOCKED, 300)
+    for kind, meta in [
+        ("extract_qc", '{"qc":"done"}'),
+        ("extract_qc", '{"qc":"done","jev_requests":0}'),
+        ("extract_qc", '{"qc":"done","jev_requests":true}'),
+        ("extract_qc", '{"qc":"done","jev_requests":"1"}'),
+        ("extract_qc", '{"qc":"unevaluated","jev_requests":1}'),
+        ("extract_qc", "{broken"),
+        ("extract_qc_skipped", '{"qc":"done","jev_requests":1}'),
+        ("extract_qc_wait", '{"qc":"done","jev_requests":1}'),
+    ]:
+        _add(db, kind, meta, 400)
+        assert health_report.jev_block_reason(db.db) == "payment_required"
+    _add(db, "extract_qc", '{"qc":"done","jev_requests":1}', 200)
+    assert health_report.jev_block_reason(db.db) is None
+    _add(db, "semantic_assess", '{"technical_status":"error","error_kind":"auth_error"}', 100)
+    assert health_report.jev_block_reason(db.db) == "auth_error"
 
 
-def _sent(db):
+def _sent_query(db):
     statements = []
     db.db.set_trace_callback(statements.append)
     try:
         health_report.jev_block_reason(db.db)
     finally:
         db.db.set_trace_callback(None)
-    return statements
+    query, = statements
+    return query
 
 
 def test_plan_reads_by_index_and_id_without_a_temporary_sort(db):
     for row in SCENARIOS["many_other_kinds_after"]:
         _add(db, *row)
     db.db.commit()
-    assert _sent(db) == [BOUNDED]
-    plan = " | ".join(row[3] for row in db.db.execute("EXPLAIN QUERY PLAN " + BOUNDED))
+    plan = " | ".join(row[3] for row in db.db.execute("EXPLAIN QUERY PLAN " + _sent_query(db)))
     assert "idx_artifacts_kind_created" in plan and "INTEGER PRIMARY KEY" in plan
     assert "TEMP B-TREE" not in plan
 
@@ -128,7 +140,7 @@ def test_worst_shapes_stay_bounded_by_the_rows_above_the_candidate(db):
         _add(db, "extract_llm", OK, 9001.0 + index)
     db.db.commit()
     full = _steps(db, ORACLE)
-    current = _steps(db, BOUNDED)
+    current = _steps(db, _sent_query(db))
     assert health_report.jev_block_reason(db.db) == "payment_required" == _expected(db)
     assert current * 20 < full
     # the reverse worst shape: the newest-by-time row has the smallest id, so the scan
