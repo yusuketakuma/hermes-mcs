@@ -2,11 +2,11 @@
  "artifacts": [
   {
    "path": "docs/releases/v1.3.0/homecare-drug-search-v130.svg",
-   "sha256": "2186fc484bd7e1b6f99412a52a9057453099a45457b62139057103886e650368"
+   "sha256": "301312a8bbd8a9e1761802eda9e2c7eeb990183613f860514c5443ffdf7cdf5f"
   },
   {
    "path": "docs/releases/v1.3.0/homecare-drug-search-v130.png",
-   "sha256": "64431b1ae6f98f53466ba84c4a58cf204c9ae50c66215a71ae7b211bfa895ce7"
+   "sha256": "f9a6f3f564feea56f533fd6f3f41fdcb8275b73a60f2fe11f290426fb862df50"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
