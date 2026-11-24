@@ -583,8 +583,9 @@ def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypat
     ([5, 0], False, True, 2, True),
     ([5, 5, 5], True, True, 3, True),
     ([5, 5, 5], False, False, 3, True),
-    # exit 0 is not proof: the label must answer `print` afterwards
-    ([0], False, False, 1, False),
+    # exit 0 is not proof: the label must answer `print` afterwards — an
+    # unverifiable post-check is None, never a confirmed failure
+    ([0], False, None, 1, False),
 ])
 def test_agent_reconcile_retries_transient_bootstrap(
         monkeypatch, outcomes, late, ok, boots, loads):
@@ -655,6 +656,175 @@ def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch)
     assert kw["start_new_session"]
     # the waiter never boots out again: a host loaded meanwhile must survive
     assert "bootout" not in service_management.AWAIT_RELOAD_SCRIPT
+
+
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
+        monkeypatch, print_code):
+    """A `launchctl print` that times out (124) or cannot start (127) is
+    "unknown", never "absent": reconcile must not bootstrap. Over a loaded
+    job, bootstrap fails to apply the new plist yet a late `print` answering
+    0 would still be recorded as `loaded: True` in the manifest (#352)."""
+    import subprocess
+    from types import SimpleNamespace
+    seen, probes = [], {"n": 0}
+
+    def fake_run(argv, **kwargs):
+        verb = argv[1]
+        seen.append(verb)
+        rc = 0
+        if verb == "print":
+            probes["n"] += 1
+            rc = print_code if probes["n"] == 1 else 0
+        elif verb == "bootstrap":
+            rc = 5                  # already loaded: Input/output error
+        return subprocess.CompletedProcess(argv, rc, "", "synthetic")
+
+    sleeps, notes = [], []
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
+    monkeypatch.setattr(service_management, "time",
+                        SimpleNamespace(time=service_management.time.time,
+                                        sleep=sleeps.append))
+    assert service_management.agent_reconcile(
+        'ai.mcs.x', '/p.plist', notes.append, False,
+        paths=mcs_setup._service_paths()) is False
+    assert "bootstrap" not in seen and "bootout" not in seen
+    assert seen == ["print"]
+    assert any("確認できない" in n for n in notes)
+
+
+@pytest.mark.parametrize("preexisting", [True, False])
+def test_converge_agent_reverts_the_plist_when_probe_is_unknown(
+        monkeypatch, tmp_path, preexisting):
+    """An unverifiable probe after writing a changed plist restores the
+    on-disk settings so the stale loaded job stays visible (changed=True)
+    on the next run — and keeps its launchd registration for next login."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    if preexisting:
+        dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: None)
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    if preexisting:
+        assert dst.read_text() == "old settings"
+    else:
+        assert not dst.exists()
+    assert manifest["agents"][0]["loaded"] is False
+
+
+def test_converge_agent_keeps_the_plist_when_bootstrap_verify_is_unknown(
+        monkeypatch, tmp_path):
+    """A bootstrap that ran but whose final probe flaked keeps the new
+    plist: a loaded job already runs those settings, and the absent case
+    is retried by `not agent_loaded` on the next run."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(service_management, 'launchd_bootstrap',
+                        lambda *a, **k: service_management.BOOTSTRAP_UNVERIFIED)
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    assert dst.read_text() == "new settings"
+    assert manifest["agents"][0]["loaded"] is False
+
+
+def test_converge_agent_reverts_the_plist_when_launchd_refuses_it(
+        monkeypatch, tmp_path):
+    """A plist launchd rejected can never start the job — leaving it on
+    disk only fails again at next login, so the previous settings go
+    back."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(service_management, 'launchd_bootstrap',
+                        lambda *a, **k: "Bootstrap failed: 5: Input/output error")
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    assert dst.read_text() == "old settings"
+    assert manifest["agents"][0]["loaded"] is False
+
+
+def test_services_unknown_launchd_state_is_a_problem_not_loaded(
+        monkeypatch, tmp_path):
+    """`agent_loaded` answering None must surface as unverifiable, not as
+    `loaded: True` in the service manifest (#352): nothing is bootstrapped,
+    and when other sections changed the saved record marks every agent
+    unloaded."""
+    import json
+    calls, args = _services_env(monkeypatch, tmp_path)
+    path, previous = _seed_manifest(tmp_path)
+    previous["agents"].append({"label": "ai.mcs.extract-drainer",
+                               "sha256": "stale", "loaded": True})
+    path.write_text(json.dumps(previous))
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+    saved = json.loads(path.read_text())
+    assert saved["agents"] and not any(a["loaded"] for a in saved["agents"])
+
+
+def test_services_unknown_launchd_state_keeps_the_previous_manifest(
+        monkeypatch, tmp_path):
+    """When nothing else changed, a failed run saves no service manifest at
+    all (#352): the previous record is left on disk byte-for-byte."""
+    import json
+    calls, args = _services_env(monkeypatch, tmp_path,
+                                cron_entries=_desired_cron_entries())
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"] = _desired_cron_entries()
+    previous["agents"].append({"label": "ai.mcs.extract-drainer",
+                               "sha256": "stale", "loaded": True})
+    path.write_text(json.dumps(previous))
+    before = path.read_bytes()
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+    assert path.read_bytes() == before
+
+
+def test_services_retries_reload_after_an_unknown_probe_recovers(
+        monkeypatch, tmp_path):
+    """A plist written just before an unverifiable probe must not mask the
+    pending reload: the written file is dropped on failure, so once launchd
+    answers again the loaded job's stale settings are replaced (#352)."""
+    label = "ai.mcs.extract-drainer"
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={label})
+    stale = tmp_path / "agents" / f"{label}.plist"
+    stale.parent.mkdir()
+    stale.write_text("synthetic old settings")
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda name, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    # the written plist is reverted so the running job's registration stays
+    assert stale.read_text() == "synthetic old settings"
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda name, **_service_kwargs: name == label)
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    uid = mcs_setup.os.getuid()
+    assert ["launchctl", "bootout", f"gui/{uid}/{label}"] in calls
+    assert any(a[:2] == ["launchctl", "bootstrap"]
+               and a[-1].endswith(f"{label}.plist") for a in calls)
 
 
 def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
