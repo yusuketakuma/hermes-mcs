@@ -69,7 +69,7 @@ ERR_JA = {
     "stamp_not_allowed": "MCSスタンプは設定された担当者だけが操作できます。",
     "stamp_target_changed": "対象の投稿かスタンプの状態が変わりました。最新のカードからやり直してください。",
     "stamp_target_invalid": "このカードにはスタンプを付けられる投稿がありません。",
-    "stamp_result_unknown": "この投稿には結果を確認中のスタンプ操作があります。確認は通常1時間以内に終わります。急ぐ場合はMCSの画面で操作してください。",
+    "stamp_result_unknown": forms.STAMP_RESULT_PENDING,
     "stamp_witness_capacity": "この投稿のスタンプ操作の記録が上限に達しました。管理者に連絡してください。",
     "stamp_restore_hold": "データの復元を確認中のため、スタンプ操作を一時停止しています。",
     "stamp_witness_invalid": "スタンプ操作の記録を確認できないため停止しました。管理者に連絡してください。",
@@ -79,7 +79,7 @@ ERR_JA = {
     "stamp_operation_invalid": "選んだ操作はこの投稿では実行できません（取消するスタンプがありません）。",
     "stamp_account_mismatch": "MCSのログイン中のアカウントが設定と一致しないため送信しませんでした。",
     "stamp_server_rejected": "MCSがスタンプ操作を受け付けませんでした。MCSの画面で状態を確認してください。",
-    "stamp_reconcile_expired": "送信から1時間たってもMCSで反映を確認できなかったため、この操作を終了しました（再送はしていません）。必要な場合はもう一度操作してください。",
+    "stamp_reconcile_expired": "送信から1時間以上たった時点で、MCS上の自分のスタンプが操作どおりの状態になっていなかったため、この操作を終了しました。再送はしていません。必要な場合はもう一度操作してください。",
     "stamp_receipt_invalid": "承認の記録を確認できないため送信しませんでした。",
 }
 # a dispatch exception may land before or after the commit: say neither
@@ -92,7 +92,7 @@ RECEIPT_TEXT = "受け付けました。結果は反映後に表示されます�
 # Admission is not completion: only a fresh MCS readback says confirmed.
 STAMP_STATE_TEXT = {
     "queued": "MCSスタンプを受け付けました。MCSでの反映を確認中です（自動では再送しません）。",
-    "unknown": "MCSスタンプの送信結果を確認中です。自動では再送しません。1時間たっても反映を確認できない場合は、この操作を終了します。",
+    "unknown": "MCSスタンプの送信結果を確認中です。自動では再送しません。MCSから自分のスタンプの状態を取得できない間は、1時間を過ぎても確認を続けます。",
     "confirmed": "MCSスタンプを反映しました（MCSで確認済み）。",
 }
 STAMP_REJECTED_TEXT = "MCSスタンプを反映できませんでした。最新のカードで状態を確認してください。"
