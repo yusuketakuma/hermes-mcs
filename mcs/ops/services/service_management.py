@@ -566,6 +566,12 @@ def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths, st
     loaded = True
     if changed or stale or not agent_loaded(label, paths=paths):
         loaded = agent_reconcile(label, dst, note, dry, paths=paths)
+        if not loaded and changed and not dry:
+            # A written-but-not-reloaded plist reads as current next run
+            # (changed=False) while the loaded job still runs its old settings:
+            # drop it so the pending reload stays visible and retries.
+            with suppress(OSError):
+                os.unlink(dst)
     else:
         note(f'常駐処理{label}: 読み込み済みです')
     manifest['agents'].append({'label': label, 'sha256': contract.content_digest(body), 'loaded': loaded})
