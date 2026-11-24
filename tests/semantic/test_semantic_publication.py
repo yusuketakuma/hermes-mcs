@@ -26,7 +26,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import current_fact_pred
 from semantic_policy import KIND_FACT_REPAIR
 from semantic_projection import PROJECTION_VERSION
-from semantic_testkit import (_AuditFailJev, _drain, _ledger,
+from semantic_testkit import (_AuditFailJev, _cfg, _drain, _ledger,
                               _message, _PassJev, _patient, _seeded_two)
 
 NOW = time.time()
@@ -550,11 +550,11 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         assert tuple(db.db.execute(
             "SELECT project_id,message_id FROM artifacts WHERE kind=?",
             (cohort.KIND_V4_COHORT,)).fetchone()) == (None, None)
-        res = cohort.run_cohort(db, "c2", now=NOW)
+        res = cohort.run_cohort(db, "c2", now=NOW, cfg=_cfg())
         assert res["scheduled"] == 2          # ceiling respected
         # item receipts bound the cursor — re-running doesn't re-seed
         cohort.mark_item_done(db, "c2", 1, "converted")
-        res2 = cohort.run_cohort(db, "c2", now=NOW)
+        res2 = cohort.run_cohort(db, "c2", now=NOW, cfg=_cfg())
         assert res2["scheduled"] == 0
         jobs = db.db.execute(
             "SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'"
@@ -563,11 +563,30 @@ def test_cohort_schedules_bounded_and_restart_safe(tmp_path):
         # A terminal job cannot be revived by rerunning the cohort.
         db.db.execute("UPDATE fetch_jobs SET state='failed'")
         db.db.commit()
-        assert cohort.run_cohort(db, "c2", now=NOW)["scheduled"] == 0
+        assert cohort.run_cohort(db, "c2", now=NOW, cfg=_cfg())["scheduled"] == 0
         assert {r[0] for r in db.db.execute(
             "SELECT state FROM fetch_jobs")} == {"failed"}
-        assert cohort.run_cohort(db, "c2", now=NOW + 7200)["error"] == \
+        assert cohort.run_cohort(db, "c2", now=NOW + 7200, cfg=_cfg())["error"] == \
             "cohort_expired"
+    finally:
+        db.close()
+
+
+def test_cohort_does_not_schedule_when_no_feature_reads_verdicts(tmp_path):
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body="synthetic")], project_id=1)
+    try:
+        digest = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
+        cohort.declare_cohort(db, "unread", [{"message_id": 1, "content_hash": digest}],
+                              {"items": 1}, NOW + 3600)
+        missing_config = cohort.run_cohort(db, "unread", now=NOW)
+        assert missing_config["error"] == "config_not_supplied"
+        assert missing_config["scheduled"] == 0
+        cfg = _cfg("assist", summary_mode="off", loop_mode="off")
+        result = cohort.run_cohort(db, "unread", now=NOW, cfg=cfg)
+        assert result["error"] == "no_result_reader" and result["scheduled"] == 0
+        assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 0
     finally:
         db.close()
 
@@ -760,7 +779,7 @@ def test_cohort_never_dispatches_without_enforceable_token_budget(tmp_path):
         h = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
         cohort.declare_cohort(db, "bounded", [{"message_id": 1, "content_hash": h}],
                          {"calls": 4, "tokens": 1000}, NOW + 3600)
-        cohort.run_cohort(db, "bounded", now=NOW)
+        cohort.run_cohort(db, "bounded", now=NOW, cfg=_cfg())
         job = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
         cfg = semantic_config({"semantic": {"mode": "shadow",
                                              "project_ids": [1]}})[0]
@@ -801,15 +820,15 @@ def test_cohort_reservation_rolls_back_with_job_and_survives_reopen(tmp_path,
         with monkeypatch.context() as patch:
             patch.setattr(db, "artifact_add_tx", fail_receipt)
             with pytest.raises(OSError):
-                cohort.run_cohort(db, "atomic", NOW)
+                cohort.run_cohort(db, "atomic", NOW, cfg=_cfg())
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
         assert cohort.cohort_items_done(db.db, "atomic") == {}
-        assert cohort.run_cohort(db, "atomic", NOW)["scheduled"] == 1
+        assert cohort.run_cohort(db, "atomic", NOW, cfg=_cfg())["scheduled"] == 1
     finally:
         db.close()
     db = _ledger(tmp_path)
     try:
-        assert cohort.run_cohort(db, "atomic", NOW + 100)["scheduled"] == 0
+        assert cohort.run_cohort(db, "atomic", NOW + 100, cfg=_cfg())["scheduled"] == 0
         assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 1
     finally:
         db.close()
@@ -826,7 +845,7 @@ def test_cohort_binds_dependency_closure_and_rejects_duplicate_targets(tmp_path)
         cohort.declare_cohort(db, "context", [item], {}, NOW + 3600)
         # The target body is unchanged, but its dependency closure moved.
         db.save_messages([_message(2, parent=1, body="synthetic reply")], project_id=1)
-        result = cohort.run_cohort(db, "context", NOW)
+        result = cohort.run_cohort(db, "context", NOW, cfg=_cfg())
         assert result["scheduled"] == 0 and result["remaining"] == 0
         assert cohort.cohort_items_done(db.db, "context")[1]["reason"] == "source_changed"
         before = [tuple(row) for row in db.db.execute("SELECT * FROM artifacts")]
@@ -867,7 +886,7 @@ def test_cohort_read_helpers_borrow_connection_and_preserve_pending_transaction(
         assert cohort.cohort_items_done(db.db, "synthetic-borrowed")[1]["action"] == "scheduled"
         assert db.db.in_transaction
         with pytest.raises(ValueError, match="cohort_transaction_active"):
-            cohort.run_cohort(db, "synthetic-borrowed", NOW)
+            cohort.run_cohort(db, "synthetic-borrowed", NOW, cfg=_cfg())
         assert db.db.in_transaction
         db.db.rollback()
         assert cohort.cohort_document(db.db, "synthetic-borrowed") is None

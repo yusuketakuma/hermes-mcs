@@ -80,9 +80,9 @@ _JEV_DRAIN_IDLE_S = 60.0
 
 
 def _jev_only_semantic(cfg) -> bool:
-    """Whether due semantic and QC jobs need Jev alone, from the resolved semantic config."""
+    """Whether the due work needs Jev alone: no feature reads semantic job results, so only QC runs."""
     scfg = semantic_policy.runtime_config(cfg)[0]
-    return scfg["mode"] != "off" and not semantic_policy.needs_local_model(scfg)
+    return scfg["mode"] != "off" and not semantic_policy.primary_verdicts_consumed(scfg)
 
 
 def _recent_arrivals(ledger) -> set:

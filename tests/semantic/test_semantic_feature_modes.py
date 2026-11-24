@@ -6,16 +6,18 @@ import time
 from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
 
 
-def test_classification_only_does_not_generate_summary_or_loops(tmp_path):
+def test_without_summary_or_loops_no_semantic_job_runs(tmp_path):
     db = _seeded(tmp_path)
     calls = []
     try:
         cfg = {"semantic": {"mode": "shadow", "daily_request_budget": 50, "project_ids": [1]}}
+        client = _FakeJev()
         out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
-                              jev_client=_FakeJev(), llm_fn=lambda p: calls.append(p))
-        assert out["done"] == 1
-        assert db.artifacts("semantic_assess", message_id=1)
-        assert not calls
+                              jev_client=client, llm_fn=lambda p: calls.append(p))
+        # nothing reads the results: the job stays queued and no request is made
+        assert out["done"] == 0 and out["unread_semantic_pending"] == 1
+        assert not db.artifacts("semantic_assess", message_id=1)
+        assert not calls and client.requests_made == 0
         assert not db.artifacts("semantic_summary", message_id=1)
         assert not db.artifacts("loop_candidate", project_id=1)
         db.semantic_seed(1, [1], {"source": "replay"})

@@ -91,17 +91,23 @@ def test_optional_proposition_verdicts_bind_the_active_set(runtime):
         "WHERE m.message_id=1").fetchone()
     led.db.execute("UPDATE fetch_jobs SET state='done' WHERE state != 'done'")
     led.db.commit()
-    assert semantic_drain._reprocess_target_state(led, row, on) == 'current'
+    def state(scfg):
+        # the primary-assessment evidence loop mode builds on (semantic_store._loop_only_state)
+        return semantic_store._classification_only_state(
+            led, row, scfg, semantic_store.load_config(), bundle, bundle['source_fingerprint'],
+            semantic_policy.policy_fingerprint(scfg))
+
+    assert state(on) == 'current'
     # required-only history cannot satisfy an enabled installation, and the
     # wider row cannot satisfy a disabled one either
-    assert semantic_drain._reprocess_target_state(led, row, off) == 'held'
+    assert state(off) == 'held'
     verdicts, flag = semantic_drain._assess_target(
         led, off, bundle, client, 1, 1, bundle['source_fingerprint'],
         semantic_policy.policy_fingerprint(off), None,
         time.monotonic() + 60, diagnostics={})
     assert flag is None and set(verdicts) == set(jev.PROPOSITIONS)
-    assert semantic_drain._reprocess_target_state(led, row, off) == 'current'
-    assert semantic_drain._reprocess_target_state(led, row, on) == 'current'
+    assert state(off) == 'current'
+    assert state(on) == 'current'
 
 
 def test_proposition_quality_report_counts_only_current_active_rows(runtime):

@@ -343,11 +343,13 @@ class LedgerSemanticSourcesMixin:
                           origin: dict, *, invalidated_roots: set | None = None,
                           _source_generation: str | None = None,
                           _eligible_ids: set | None = None):
-        """Durable semantic-eval seeding — caller holds `with self.db` so
-        job creation commits (or rolls back) with the message and notify
-        intent that triggered it (INV-06, spec §18.1). Keyed by thread
-        ROOT so one job covers a post plus its replies; a new arrival on
-        an evaluated thread revives the job as a new input generation."""
+        """Durably seed semantic work after the caller checks for a result reader.
+
+        Caller holds `with self.db` so job creation commits (or rolls back)
+        with its message and notify intent (INV-06, spec §18.1). This low-level
+        method has no config and does not decide whether semantic results are
+        consumed. Jobs are keyed by thread root so one job covers a post plus
+        its replies; a new arrival on an evaluated thread revives the job."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
         import semantic_intake_hold
         import semantic_notice
