@@ -5,6 +5,7 @@ approval checks share this policy boundary with runtime and offline callers."""
 from __future__ import annotations
 
 from mcs_util import payload_hash, until_epoch
+import provider_settings
 import semantic_jev as jev
 
 SCHEMA_VERSION = "2026-09-20"
@@ -179,7 +180,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
             and (threshold_mode != "calibrated" or not calibration)):
         errors.append("config: semantic_calibration_required")
     if "model" in block:
-        if block["model"] != jev.JEV_MODEL:
+        if not provider_settings.jev_model_pin_ok(block["model"], jev.JEV_MODEL):
             errors.append("config: semantic_model_invalid")
             out["mode"] = "off"
         out["model"] = jev.JEV_MODEL
