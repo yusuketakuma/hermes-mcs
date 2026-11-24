@@ -866,7 +866,8 @@ def _limit_value(value):
         # the record carries no settings text, and every accepted separator stays comparable.
         try:
             until_epoch(value)
-            return datetime.fromisoformat(value).isoformat()
+            # The same Z rule as until_epoch: updater helpers on Python 3.10 reject Z.
+            return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value).isoformat()
         except (TypeError, ValueError, OverflowError):
             return INVALID
     return INVALID
