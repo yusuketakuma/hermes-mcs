@@ -229,6 +229,11 @@ PRODUCER_CODES = [
     ("self_profile: OSError", "auxiliary"), ("cmd_int: OSError", "command"),
     ("stamps: RuntimeError", "command"), ("cmd_int_tail: RuntimeError", "command"),
     ("rollup_source_changed", "reevaluate"),
+    ("semantic_repair_deferred", "deferred"),
+    # real semantic holds stay unclassified faults and keep degrading health
+    ("semantic: execution_repair_unverified", "other"), ("semantic: execution_repair_error", "other"),
+    ("semantic: execution_contract_unverified", "other"), ("semantic: job_payload_held", "other"),
+    ("semantic: intake_held", "other"),
 ]
 
 
