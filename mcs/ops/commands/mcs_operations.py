@@ -688,6 +688,9 @@ def replay_tx(db, req: dict, receipt: dict, filesystem_changes) -> None:
     if req.get("cmd") == "ops.external_transfer_acknowledge":
         from external_transfer import replay_tx as acknowledge_replay_tx
         acknowledge_replay_tx(getattr(db, "db", db), receipt, filesystem_changes)
+    elif req.get("cmd") == "ops.jev_model_set":
+        from jev_model_setup import replay_tx as jev_model_replay_tx
+        jev_model_replay_tx(db, receipt, filesystem_changes)
 
 
 def apply_tx(db, req: dict, now: float | None = None, *,

@@ -79,7 +79,7 @@ def _cached_details(db, project_id, target_id, source_fp, policy_fp,
 
 
 def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
-                    fact_id, dimension, choice, confidence) -> None:
+                    fact_id, dimension, choice, confidence, *, model=None) -> None:
     if ledger is None:
         return
     content = {
@@ -102,7 +102,7 @@ def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
     import semantic_jev as jev
     ledger.artifact_add(
         KIND_ASSESS, json.dumps(content, ensure_ascii=False),
-        project_id=project_id, message_id=target_id, model=jev.JEV_MODEL,
+        project_id=project_id, message_id=target_id, model=model or jev.JEV_MODEL,
         meta=meta)
 
 
@@ -332,7 +332,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                                     kind="protocol_error")
                     return _result(details, findings, False, "technical")
                 _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
-                                fact_id, dimension, choice, confidence)
+                                fact_id, dimension, choice, confidence, model=jev.model_in_use(scfg))
                 answers[dimension] = {"choice": choice, "confidence": confidence}
                 details[fact_id][dimension] = choice
         for dimension in jev.MED_DETAIL_QUESTIONS:

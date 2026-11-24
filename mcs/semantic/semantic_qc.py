@@ -383,7 +383,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             drop_wait()
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
                 meta={VERSION_KEY: CURRENT_VERSION, "hash": art[1],
                       "extract_version": extract_llm.EXTRACT_VERSION,
                       "source_artifact_id": art[2],

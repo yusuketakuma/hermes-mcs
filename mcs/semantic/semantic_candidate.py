@@ -260,13 +260,16 @@ def _fingerprint(cfg: dict, omitted_extract: tuple) -> str:
     import extract_schema
     import extract_validation
     import local_llm
+    import semantic_jev
     import semantic_policy
     loaded_sources = loaded_source_contract()
     sem = dict(cfg.get('semantic') or {})
     # Explicit/default spelling must identify the same deployed candidate.
     defaults, _ = semantic_policy.semantic_config({})
-    # A stored Jev model pin is validated to name the fixed model (semantic_config).
+    # The resolved Jev model, so an approval never carries over to another model:
+    # no pin, the default and a retired pin all name the code default.
     defaults.update({key: value for key, value in sem.items() if key != 'model'})
+    defaults['model'] = semantic_jev.resolve_model(sem.get('model')) or semantic_jev.JEV_MODEL
     defaults.pop('fact_source_gate', None)
     defaults.pop('fact_source_evidence', None)
     defaults.pop('fact_source_approval', None)
