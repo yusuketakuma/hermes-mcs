@@ -40,7 +40,7 @@
    ]
   },
   "docs": {
-   "notes": "2026-11-24、未公開1.3.0候補: 未リリース34件をchanges/archive/1.3.0へ集約し、CHANGELOGの1.3.0節・READMEのGENERATED:release・版別資料（対応表・説明図・受入準備票）を生成した。本文は在宅ケア台帳と医薬品検索・照会、Jev更新を先に示し、QA_VERSION 1→2で旧PASSが一時的に表示へ使われない影響、背景再判定と復帰条件、未検証範囲を受入票に追記した。",
+   "notes": "2026-11-24、未公開1.3.0候補: 34件の集約とQA_VERSION 1→2の表示影響を反映し、変更後は公開本文に比較表・説明図PNGを含めた。Jev無効時のdisabledと、Jev有効で対象範囲外の場合のout_of_scopeを区別した。",
    "sources": [
     "README.md",
     "docs/development/RELEASE_NOTES.md",
@@ -105,7 +105,8 @@
     "docs/releases/v1.3.0/ACCEPTANCE_1.3.0.md",
     "changes/archive/1.3.0/jev-optional.json",
     "mcs/extract/llm/extract_llm_resident.py",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "docs/releases/v1.3.0/release-summary-1.3.0.md"
    ]
   },
   "features": {

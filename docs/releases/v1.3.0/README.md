@@ -7,6 +7,7 @@ v1.3.0は、ローカルの患者画面に在宅ケアの患者台帳・職員�
 ## 収録内容
 
 - [release-notes-1.3.0.md](release-notes-1.3.0.md)・[release-title-1.3.0.txt](release-title-1.3.0.txt): CHANGELOGの1.3.0節からexportした公開本文とタイトル。
+- [release-summary-1.3.0.md](release-summary-1.3.0.md): 公開本文の比較表・説明図を含む要約原稿。
 - [changelog-1.3.0.md](changelog-1.3.0.md): 全変更項目を写した版別詳細ファイル（1MB未満を生成時に検査）。
 - [change-map.json](change-map.json): archive 34件全件のタイトル・保存先・SHA256対応表。
 - homecare-drug-search-v130（SVG・PNG）: 合成の説明図1点。実画面・測定結果ではありません。来歴・hash・描画確認は [visual-source.json](visual-source.json)。

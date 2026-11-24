@@ -109,7 +109,7 @@
     "jev-optional": {
       "title": "Jev を導入していない環境と Jev の対象外の患者で、外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
       "path": "changes/archive/1.3.0/jev-optional.json",
-      "sha256": "e53584f21bff1a112bf380be5971457980db8ef481abb6a6fecb52a21455d4c2"
+      "sha256": "46facdbc177f5e1fa9b619cefc414fc54a397c4d23212ccb18ea05c5f2eef16f"
     },
     "lab-reading-redos-and-specimen-scope": {
       "title": "検査値の判定で、検体の節・続く検査値の単位・長い行での停止を修正",
