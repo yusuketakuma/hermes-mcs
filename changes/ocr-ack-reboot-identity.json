@@ -7,7 +7,9 @@
     "attachment_ocr_ack.database_identity は st_ino だけを証明に含める。従来は st_dev と st_ino を含めていたため、再起動や再マウントで st_dev が変わるだけで、保存済みの受付が現在の証明と一致しなくなっていた。",
     "extract_llm_local_rebuild は計画と承認記録の形式（[st_dev, st_ino]）を変えず、照合では inode だけを比べる。",
     "mcs_ocr の実行が排出処理の前に断られた場合（busy・gateway_restart_pending・writer_busy・restart_yield）は、attachment_ocr_status.json を書き換えず、断られた理由は標準出力と終了コードだけに残す。状態ファイルが一度も作られていない環境では、最初の実行が始まるまで attachment_ocr_status_missing のままになる。",
-    "処理を始めた後の writer_blocked・restart_yield など、件数を伴う結果は従来どおり状態ファイルに書く。"
+    "処理を始めた後の writer_blocked・restart_yield など、件数を伴う結果は従来どおり状態ファイルに書く。",
+    "無効と判定されていた間に長期保留へ回ったローカル再抽出は、承認が有効に戻っても長期保留（最大6時間）が切れるまで再開しない。",
+    "処理を始める前に更新中で断られた writer_blocked の回は、従来どおり状態ファイルを書く。"
   ],
   "refs": [
     "mcs/extract/attachment_ocr_ack.py",
