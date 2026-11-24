@@ -259,13 +259,24 @@ def test_context_deferred_before_the_fix_publishes_without_a_jev_key(runtime, re
 
 
 
+def _write_past_jev_deadline(monkeypatch, tmp_path):
+    """Point the live config at one whose semantic.until has passed; the real deadline check reads it."""
+    import mcs_util
+    conf = tmp_path / 'config.json'
+    conf.write_text(json.dumps({'semantic': {'until': '2000-01-01T00:00:00+09:00'}}))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(conf))
+    with pytest.raises(semantic_jev.JevError, match='budget_exceeded') as raised:
+        semantic_runtime._jev_window_check()
+    assert raised.value.detail == 'semantic_until_expired'
+
+
 @pytest.mark.parametrize('semantic, jev_key', [
     ({'project_ids': [2]}, None),   # setup may save a scope without a mode
     ({'mode': 'assist', 'summary_mode': 'assist', 'project_ids': [2], 'daily_request_budget': 3000},
      'synthetic-jev-key'),
 ])
 @pytest.mark.parametrize('expired', [False, True])
-def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(runtime, real_cloud, monkeypatch,
+def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(runtime, real_cloud, monkeypatch, tmp_path,
                                                                               semantic, jev_key, expired):
     ledger, _, _ = runtime
     cfg, posts = real_cloud
@@ -273,9 +284,7 @@ def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(run
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: jev_key)
     if expired:
         # semantic.until has passed: it only refuses new Jev requests, and none is made here
-        def past_until(*_args, **_kwargs):
-            raise semantic_jev.JevError('budget_exceeded', 'semantic_until_expired')
-        monkeypatch.setattr(semantic_runtime, '_jev_window_check', past_until)
+        _write_past_jev_deadline(monkeypatch, tmp_path)
     outcomes = []
     for _ in range(30):
         outcomes.append(step(runtime, cfg=cfg, local_admit=lambda: False))
@@ -294,16 +303,14 @@ def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(run
     assert not any(pending.values())   # an out-of-scope skip is final, even with Jev available
 
 
-def test_an_in_scope_patient_past_the_jev_deadline_is_neither_sent_nor_skipped(runtime, real_cloud, monkeypatch):
+def test_an_in_scope_patient_past_the_jev_deadline_is_neither_sent_nor_skipped(runtime, real_cloud, monkeypatch, tmp_path):
     """The control for the out-of-scope case: an expired semantic.until still holds an in-scope patient."""
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     assert cfg['semantic']['project_ids'] == [1]   # the fixture's Jev scope covers the cloud patient
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: 'synthetic-jev-key')
 
-    def past_until(*_args, **_kwargs):
-        raise semantic_jev.JevError('budget_exceeded', 'semantic_until_expired')
-    monkeypatch.setattr(semantic_runtime, '_jev_window_check', past_until)
+    _write_past_jev_deadline(monkeypatch, tmp_path)
     outcomes = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(20)]
     assert posts and not ledger.synthetic_jev_requests
     assert 'source_quality_deferred' in {result.get('reason') for result in outcomes}
