@@ -35,6 +35,10 @@ _TOKEN = re.compile(r"[0-9a-f]{32}")
 # Bounded publish backoff: n-th failed publication waits 60s * 2**(n-1), capped.
 PUBLISH_BACKOFF_BASE_S = 60
 PUBLISH_BACKOFF_CAP_S = 3600
+# Reconciliation is GET-only and ends one hour after the send attempt; records
+# written before attempt timestamps existed get the same hour from the first
+# post-upgrade check that can save the field.
+RECONCILE_EXPIRE_S = 3600
 # SQL mirror of _publish_state's due rule: rows predating retry bookkeeping are
 # due from creation; corrupt due values are due now rather than hidden forever.
 _PUBLISH_DUE = ("CASE WHEN json_type(content,'$.publish_next_at') IN ('integer','real') "
@@ -585,12 +589,21 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         raise
     desired = req.get("reaction_type") if req["op"] == "add" else None
     path = scope / (req["command_id"] + ".json")
+    attempted_at = prior.get("attempted_at") if prior else None
+    if type(attempted_at) not in (int, float) or not math.isfinite(attempted_at):
+        attempted_at = now
     witness = {"command_id": req["command_id"], "payload_hash": digest,
                "namespace": namespace, "scope": [req[k] for k in ("project_id", "message_id", "mcs_user_id")],
-               "state": "started"}
+               "state": "started", "attempted_at": attempted_at}
+    outcome_error = None
     if prior is not None:
         # Even after DB rollback, an attempted operation is reconciled by GET only.
-        state = "confirmed" if actual == desired else "unknown"
+        if actual == desired:
+            state = "confirmed"
+        elif now - attempted_at >= RECONCILE_EXPIRE_S:
+            state, outcome_error = "rejected", "stamp_reconcile_expired"
+        else:
+            state = "unknown"
     elif actual == desired:
         state = "confirmed"
     else:
@@ -618,13 +631,13 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
                 state = "confirmed"
             elif refused and actual == req["expected_own"]["type"]:
                 # Refused and read back unchanged: terminal, so the post is not locked forever.
-                state = "rejected"
+                state, outcome_error = "rejected", "stamp_server_rejected"
             else:
                 state = "unknown"
         except Exception:
             state = "unknown"
     witness["state"] = state
-    witness["error"] = "stamp_server_rejected" if state == "rejected" else None
+    witness["error"] = outcome_error
     if prior is None and not path.exists():
         publish_new_bytes(path, canonical(witness))
     else:

@@ -878,3 +878,126 @@ def test_unresolved_stamp_state_never_requests_a_reselection_refresh(scene, monk
     monkeypatch.setattr(notify_cards, "rerender_message_cards", lambda *a, **k: pytest.fail("must not refresh"))
     result = {"outcome": "rejected", "error": code}
     assert stamp_write.refresh_rejected(scene[0], _command(scene), result, scene[1], NOW) == result
+
+
+def _make_unknown(scene, failure=None):
+    """Queue a command and land it in unknown after one ambiguous attempt."""
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    scene[3].failure = failure or TimeoutError("synthetic ambiguous response")
+    assert _drain(scene)["unknown"] == 1
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+    scene[3].failure = None
+    return request
+
+
+def test_unknown_attempt_ends_rejected_one_hour_after_the_send_attempt(scene, monkeypatch):
+    import notify_cards
+    from adapters.common import text
+    request = _command(scene)
+    other = _command(scene, serial=701, kind="accepted")
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    # A new human-approved command on the same post stays blocked while unknown.
+    assert _apply(scene, other)["outcome"] == "rejected"
+    assert _apply(scene, other)["error"] == "stamp_result_unknown"
+    scene[3].failure = TimeoutError("synthetic ambiguous response")
+    assert _drain(scene)["unknown"] == 1
+    scene[3].failure = None
+    monkeypatch.setattr(time, "time", lambda: NOW + 3599)
+    assert _drain(scene)["unknown"] == 1
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+    refreshed = []
+    render = notify_cards.rerender_message_cards
+    monkeypatch.setattr(notify_cards, "rerender_message_cards",
+                        lambda *a, **k: refreshed.append(a[2:4]) or render(*a, **k))
+    monkeypatch.setattr(time, "time", lambda: NOW + 3600)
+    assert _drain(scene)["rejected"] == 1
+    receipt = _receipt(scene, request)
+    assert (receipt["stamp_state"], receipt["stamp_error"]) == ("rejected", "stamp_reconcile_expired")
+    assert scene[3].posts == [(100, "viewed", False)]   # GET-only: never a second POST
+    assert refreshed == [(1, 100)]                       # terminal result redraws the card once
+    assert text.ja(receipt) == text.ERR_JA["stamp_reconcile_expired"]
+    row = scene[0].db.execute("SELECT content FROM artifacts WHERE kind=? AND json_extract(meta,'$.command_id')=?",
+                              (stamp_write.KIND, request["command_id"])).fetchone()
+    assert json.loads(row[0])["result_published"] is True   # terminal evidence recorded once
+    _drain(scene)
+    assert len(refreshed) == 1                            # settled rows stop republishing
+    assert scene[3].posts == [(100, "viewed", False)]
+    # The post is unlocked: a new human-approved command is accepted again.
+    assert _apply(scene, _command(scene, serial=702))["stamp_state"] == "queued"
+
+
+def test_reconcile_clock_runs_from_the_first_attempt_not_each_check(scene, monkeypatch):
+    request = _make_unknown(scene)
+    monkeypatch.setattr(time, "time", lambda: NOW + 3000)
+    assert _drain(scene)["unknown"] == 1              # this check must not restart the clock
+    monkeypatch.setattr(time, "time", lambda: NOW + 3600)
+    assert _drain(scene)["rejected"] == 1             # one hour from the attempt, not the check
+    assert _receipt(scene, request)["stamp_error"] == "stamp_reconcile_expired"
+
+
+def test_matching_readback_confirms_even_past_the_expiry_bound(scene, monkeypatch):
+    request = _make_unknown(scene)
+    scene[3].own = "viewed"
+    monkeypatch.setattr(time, "time", lambda: NOW + 7200)
+    assert _drain(scene)["confirmed"] == 1            # a matching GET settles it at any age
+    assert _receipt(scene, request)["stamp_state"] == "confirmed"
+
+
+def test_failed_checks_and_refusals_stay_held_past_the_expiry_bound(scene, monkeypatch):
+    request = _make_unknown(scene)
+    monkeypatch.setattr(time, "time", lambda: NOW + 7200)
+    ledger, cfg, root, api, _ = scene
+    cfg2 = dict(cfg, stamps={**cfg["stamps"], "account_user_id": 78})
+    assert stamp_write.drain(ledger, api, cfg2, root, time.monotonic() + 60)["held"] == 1
+    assert _receipt(scene, request)["stamp_state"] == "unknown"      # account mismatch: held
+    import notify_spool
+    notify_spool.mark_restored(str(root))
+    try:
+        assert _drain(scene)["held"] == 1            # restore pending: held
+    finally:
+        notify_spool.clear_restore_pending(str(root))
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+    def broken_get(pid, mid, *, parent_id):
+        raise TimeoutError("synthetic get failure")
+    monkeypatch.setattr(api, "fetch_message_metadata", broken_get)
+    assert _drain(scene)["held"] == 1                # GET failure: held, never rejected
+    assert _receipt(scene, request)["stamp_state"] == "unknown"
+    assert scene[3].posts == [(100, "viewed", False)]
+
+
+def test_legacy_unknown_without_attempt_time_gets_a_fresh_grace_hour(scene, monkeypatch):
+    request = _make_unknown(scene)
+    scope = scene[2] / "stamp_operations" / "1-100-77"
+    path = scope / (request["command_id"] + ".json")
+    record = json.loads(path.read_text())
+    del record["attempted_at"]                          # a record from before the field existed
+    path.write_text(json.dumps(record))
+    monkeypatch.setattr(time, "time", lambda: NOW + 7200)
+    assert _drain(scene)["unknown"] == 1              # grace starts at the first new check
+    record = json.loads(path.read_text())
+    assert record["attempted_at"] == NOW + 7200       # backfilled once, then kept fixed
+    monkeypatch.setattr(time, "time", lambda: NOW + 7200 + 3599)
+    assert _drain(scene)["unknown"] == 1
+    monkeypatch.setattr(time, "time", lambda: NOW + 7200 + 3600)
+    assert _drain(scene)["rejected"] == 1
+    assert _receipt(scene, request)["stamp_error"] == "stamp_reconcile_expired"
+
+
+def test_crash_restore_reconciles_from_the_real_attempt_time(scene, monkeypatch):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    ledger = scene[0]
+    original = ledger.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=?",
+                                 (stamp_write.KIND,)).fetchone()
+    scene[3].failure = TimeoutError("synthetic ambiguous response")
+    assert _drain(scene)["unknown"] == 1
+    # Rollback like a crash after the attempt: row returns to queued, witness survives.
+    ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                      (original["content"], original["artifact_id"]))
+    ledger.db.commit()
+    scene[3].failure = None
+    monkeypatch.setattr(time, "time", lambda: NOW + 3601)
+    assert _drain(scene)["rejected"] == 1   # the kept witness time ends it without a fresh hour
+    assert _receipt(scene, request)["stamp_error"] == "stamp_reconcile_expired"
+    assert scene[3].posts == [(100, "viewed", False)]
