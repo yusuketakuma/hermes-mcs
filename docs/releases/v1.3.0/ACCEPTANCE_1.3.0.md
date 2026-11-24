@@ -5,7 +5,7 @@
 ## 版番号の提案記録
 
 - 比較元（直近の公開済み版）: タグ `v1.2.1` = `4a97288dd74f356c8bb2f7191721819f0a1fdaf3`（CHANGELOG の v1.2.1 節と照合済み）。本番反映SHAはこの記録では確認していない。
-- 対象SHA: QA_VERSIONの合成probeは過去の候補 `27f2619`、Issue #198の範囲限定独立QAは候補 `6845138a8c027f2a68cc7290650497434573c3fd` で実施。PR #365の最終head `d71f58d936265aeff973d1bc5f348f367c4dd086` はmainへマージ済みで、merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` を現在の候補へ取り込み済み。37件の資料更新後のPR #357 headと必須CIはpush後に再確認する。
+- 対象SHA: QA_VERSIONの合成probeは過去の候補 `27f2619`、Issue #198の範囲限定独立QAは候補 `6845138a8c027f2a68cc7290650497434573c3fd` で実施。PR #365の最終head `d71f58d936265aeff973d1bc5f348f367c4dd086` はmain merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` に含まれます。37件更新後のPR #357 head `21561f51c05f2535c699078f80a9a0092bfe5ed3` では確認時点でCI 21成功・0失敗・1 pending（merge-gate）・10 skip。レビュー追補後は新しいheadで再確認する。
 - 推奨番号: `1.3.0`（機能アップデート版）。最大区分は MINOR。
 - 根拠: 未リリース変更記録37件の内訳は新機能12・改善8・不具合修正17。#352/#358の常駐処理誤起動防止、#356の薬名辞書再走査防止、#359のクラウド再処理防止を含む。#365は既存のJevモデル切替記録を更新したもので、件数を増やしていない。非互換なCLI/JSON/設定/保存データの変更は記録に無い。内部改善の件数・行数・schema番号は区分の代理に使っていない。
 - 互換性・必要な操作: 保存済みPASSは削除しませんが、`QA_VERSION` 1→2で旧PASSは現行版の確認として再利用されず、背景再判定まで概要が一時的に非表示になります。通常の更新手順に含まれるサービス再起動・設定確認と、薬剤マスターのオペレーター承認（配布のみで有効化は別承認）は従来どおり必要です。QA_VERSION は内部の版マーカーで、担当者が手動変更する操作ではありません。患者ごとの追加操作は不要で、稼働中のresident workerが背景再判定を進めます。
@@ -79,7 +79,7 @@
 - Software Factoryの患者コンテキスト改善: 対象PR/Issue/SHAは未特定。0%表示は調査中の意味で、#366は別件との連絡を受けた。追加分はYusukeの対象特定と実装完了を待ち、現在の37件とは別に記録・検証する。最終収録範囲は未確定。
 - 新規導入の受入（fresh-installワークフロー相当）: 未実施。
 - QA_VERSION切替後の実際の再判定所要時間、サービス再起動後の自動進行、実画面での復帰は未検証。合成probeは再判定処理を直接進めており、サービス監督を含む統合動作や不合格記録の再試験はしていない。
-- 公式医薬品マスター: 2026-11-24に[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)を確認。令和8年度版は2026-11-12更新・19,324件で、manifestのedition `20261112`・rows `19324` と一致。`check_drug_master_bundle.py`も成功し、同梱hash一致、`activation: false`、オペレーター承認必須、`conversion_held: terms_unconfirmed`を確認した。公式archive自体は再ダウンロードしていない。
+- 公式医薬品マスター: 2026-11-24に[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)を確認し、`yFile`から公式ZIPを再取得。archive 872,908 bytes・SHA256 `5412101070ad7487beed6255abcaa11fe315c589cee2c7d774aae71971dc64b5`、唯一のmember `y_20261112.csv`、CSV 6,098,622 bytes・SHA256 `835538c20a35c73a24af5bbbecef4b65fac1a7837b9e8a170691f43ff0515550` が同梱manifestと一致。edition `20261112`、19,324件。`check_drug_master_bundle.py`も成功し、`activation: false`、オペレーター承認必須、`conversion_held: terms_unconfirmed`を確認した。
 - ローカル取込・本番適用・利用者試用: Local Handsの接続設定のみ行い、端末の走査・変更はしていない。対象リポジトリ・本番適用先・権限の同一性確認、取込、適用、サービス再起動は未実施。rollback手順は合成環境の既存更新ツールと事前backupで確認したが、実機では未実施。
 - tag `v1.3.0`・GitHub Release公開は、実機適用後にYusukeがしばらく使用し、本人が明示的に承認するまで行わない。
 
