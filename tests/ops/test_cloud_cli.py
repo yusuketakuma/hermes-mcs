@@ -412,7 +412,8 @@ def test_control_cli_waits_boundedly_for_owner_and_rechecks_code(world, monkeypa
 
     monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
     assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
-    assert waits == [{"wait_s": 5.0, "expected_code_stamp": 123,
+    import locked_command
+    assert waits == [{"wait_s": locked_command.WAIT_SECONDS, "expected_code_stamp": 123,
                       "marker_path": str(root / "data" / "update_in_progress.marker")}]
     fd = acquire(str(root / "data" / "run.lock"))
     assert fd is not None

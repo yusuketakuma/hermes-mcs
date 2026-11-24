@@ -7,7 +7,22 @@ from pathlib import Path
 
 import mcs_util
 
-WAIT_SECONDS = 5.0
+# A human-confirmed command waits for run.lock longer than one collection tick holds it
+# (run_check waits up to 150 s itself): with the resident workers and the 5-second
+# command ticks taking turns, a few seconds of polling almost never sees the lock free.
+WAIT_SECONDS = 180.0
+
+
+def wait_writer(lock_path: str, marker_path: str, expected_code: int) -> int | None:
+    """Take run.lock for one human-confirmed CLI command, waiting up to WAIT_SECONDS; None while busy."""
+    import sys
+    from writer_lock import acquire_run_lock, wait_run_lock
+    lock_fd = acquire_run_lock(lock_path)
+    if lock_fd is None:
+        print(f"ほかの保存処理の終了を最大{int(WAIT_SECONDS)}秒待ちます…", file=sys.stderr, flush=True)
+        lock_fd = wait_run_lock(lock_path, wait_s=WAIT_SECONDS, expected_code_stamp=expected_code,
+                                marker_path=marker_path)
+    return lock_fd
 
 
 def ledger_path() -> Path:
@@ -22,7 +37,7 @@ def apply_locked(req: dict, *, under_lock=None):
     reloaded under the lock). Callers validate ``req`` before calling, so a malformed
     request never opens a writer.
     """
-    from writer_lock import acquire_run_lock, code_stamp, wait_run_lock
+    from writer_lock import code_stamp
     from ledger import Ledger
     import mcs_requests
     import notify_spool
@@ -32,10 +47,7 @@ def apply_locked(req: dict, *, under_lock=None):
         raise ValueError("ledger_unavailable")
     lock_path = str(path.parent / "run.lock")
     marker = path.parent / "update_in_progress.marker"
-    lock_fd = acquire_run_lock(lock_path)
-    if lock_fd is None:
-        lock_fd = wait_run_lock(lock_path, wait_s=WAIT_SECONDS, expected_code_stamp=expected_code,
-                                marker_path=str(marker))
+    lock_fd = wait_writer(lock_path, str(marker), expected_code)
     if lock_fd is None:
         return None
     try:
