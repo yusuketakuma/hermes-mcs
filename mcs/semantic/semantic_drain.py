@@ -238,8 +238,8 @@ _REPROCESS_JOB_MAX_BYTES = semantic_store._REPROCESS_JOB_MAX_BYTES
 # runs both on every pass, so the backlog copy is only a freshness backstop
 # and must not cost a slice of lock time per job.
 _BACKLOG_INVALIDATE_S = 600.0
-# Room a job whose calls all go to Jev needs to start (QC and classification-only semantic).
-_JEV_START_RESERVE_S = 15.0
+# Room a QC job needs to start; its Jev calls have no pre-send cutoff.
+_QC_START_RESERVE_S = 15.0
 # Jev skips that pass with the quota day or the Jev circuit, not settings.
 _JEV_WAIT_SKIPS = ("daily_budget", "backlog_reserved", "circuit_open")
 # Per-pass cap for the inference reprocess keyset walk: it is resumable by
@@ -277,8 +277,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,
             lane: str | None = None, cloud_only: bool = False,
-            prioritize_patients: bool = False) -> dict:
+            prioritize_patients: bool = False, start_by: float | None = None) -> dict:
     """Drain due semantic jobs inside the tick's remaining budget.
+    start_by, when given, ends the window for starting jobs earlier than
+    ``deadline``, which still bounds each started job's transports and commit.
     OFF returns immediately — no job creation, no external calls, no
     auto-drain (AT-053). The caller's shared run lock is held by
     run_check; a standalone CLI takes acquire_run_lock itself.
@@ -603,6 +605,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             ledger, lane, kinds, qc_active, max_jobs, long_defers,
             first_batch, selected, out, deadline, consumed_turns, held_after,
             selector=selector if cloud_only or prioritize_patients else None):
+        if start_by is not None and time.monotonic() >= start_by:
+            out["start_window_closed"] = True
+            break
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -781,10 +786,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             # via BudgetShort without charging an attempt. QC rows and
             # semantic jobs without a local-model stage need room for Jev
             # requests only, so they use the short Jev start floor.
-            jev_only_job = job["kind"] == QC_JOB_KIND or not needs_local_model(scfg)
-            floor = deadline - (_JEV_START_RESERVE_S if jev_only_job else
-                                min(runtime.LLM_CALL_RESERVE_S,
-                                    float(scfg["job_budget_seconds"]) * 2 / 3))
+            floor = deadline - (_QC_START_RESERVE_S if job["kind"] == QC_JOB_KIND
+                                else runtime.jev_start_reserve(scfg) if not needs_local_model(scfg)
+                                else min(runtime.LLM_CALL_RESERVE_S,
+                                         float(scfg["job_budget_seconds"]) * 2 / 3))
             if lane == "backlog":
                 floor -= _backlog_commit_reserve(scfg)
             if time.monotonic() > floor:
@@ -968,10 +973,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if job_progressed:
                 out["progressed"] += 1
             budget_short = status == "deferred_short"
-            if budget_short and not job_progressed:
+            if budget_short and not job_progressed and not (
+                    diagnostics.get("not_sent") == "jev_next_call"
+                    and float(scfg["job_budget_seconds"]) >= runtime.jev_start_reserve(scfg)):
                 # nothing persisted this pass: a free defer would loop
                 # forever (and re-spend Jev every minute) — charge a bounded
-                # attempt like any other overrun
+                # attempt like any other overrun. A first Jev request the
+                # pre-send cutoff refused was never sent, and a job budget
+                # that fits one would let it start next pass: that stays free.
                 status = "retry"
             if status in ("deferred", "deferred_backoff") \
                     and diagnostics.get("not_sent") == "long_output_needs_budget":

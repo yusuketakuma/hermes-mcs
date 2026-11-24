@@ -16,6 +16,7 @@ import time
 from collections import deque
 from contextlib import suppress
 
+import mcs_util
 from mcs_util import load_config, strict_json
 from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
@@ -23,6 +24,9 @@ import semantic_runtime as runtime
 from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config, waits_for_jev_quota
 
 QC_MAX_ITEMS = 16
+# Answers a QC job obtained before Jev stopped it, bound to the extraction
+# and question set they answer; never a QC result.
+QC_WAIT_KIND = "extract_qc_wait"
 # Audited sections in round-robin order; allergies come last so earlier
 # extractions (which carry none) keep their exact question layout.
 _QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events", "allergies")
@@ -89,6 +93,47 @@ def _drop_stale_qc(ledger, mid: int, current_hash: str) -> None:
         "DELETE FROM artifacts WHERE kind=? AND message_id=?"
         " AND json_valid(meta) AND json_extract(meta,'$.hash') != ?",
         (QC_ARTIFACT, mid, current_hash))
+
+
+def _reduce_answers(partial, questions) -> dict | None:
+    """Validated Jev answers to ``questions`` in their stored shape; None when any is malformed."""
+    if not isinstance(partial, dict) or set(partial) - set(questions):
+        return None
+    reduced = {}
+    for qid, answer in partial.items():
+        if not isinstance(answer, dict):
+            return None
+        question = questions[qid]
+        if question.get("type") == "noul":
+            value = answer.get("noul")
+            if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
+                return None
+            reduced[qid] = {"type": "noul", "noul": value}
+        else:
+            choice, confidence = answer.get("choice"), answer.get("confidence")
+            if (not isinstance(choice, str) or choice not in question.get("criteria", {})
+                    or type(confidence) not in (int, float)
+                    or not math.isfinite(confidence) or not 0 <= confidence <= 1):
+                return None
+            reduced[qid] = {"type": "choice", "choice": choice, "confidence": confidence}
+    return reduced
+
+
+def _wait_answers(db, pid, mid, binding, questions) -> dict:
+    """Answers the latest wait row kept for exactly this extraction and question set."""
+    row = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                     "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                     (QC_WAIT_KIND, pid, mid)).fetchone()
+    if row is None:
+        return {}
+    try:
+        content, meta = strict_json(row[0]), strict_json(row[1])
+    except (ValueError, TypeError, RecursionError):
+        return {}
+    if (not isinstance(meta, dict) or not is_current(meta)
+            or {k: meta.get(k) for k in binding} != binding or not isinstance(content, dict)):
+        return {}
+    return _reduce_answers(content.get("answers"), questions) or {}
 
 
 def _qc_seed(ledger, now: float, limit: int = 32, *, skip_mode: bool = False) -> int:
@@ -306,6 +351,28 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             source_fingerprint=f"{art[1]}:{art[2]}", current_source=current_source,
             stage=stage)
 
+    # Answers kept from an earlier window that Jev stopped; only the rest is asked.
+    binding = {"hash": art[1], "source_artifact_id": art[2],
+               "extract_version": extract_llm.EXTRACT_VERSION,
+               "questions": mcs_util.payload_hash({"questions": questions, "state": state})}
+    answered = _wait_answers(ledger.db, pid, mid, binding, questions)
+
+    def drop_wait():
+        ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND project_id=? AND message_id=?",
+                          (QC_WAIT_KIND, pid, mid))
+
+    def keep_answers(partial):
+        # A resumable row, never a result: the job stays pending.
+        reduced = _reduce_answers({**answered, **(partial or {})}, questions)
+        if not reduced or reduced == answered:
+            return
+        with ledger.db:
+            guard('qc:wait')
+            drop_wait()
+            ledger.artifact_add_tx(QC_WAIT_KIND, json.dumps({"answers": reduced}),
+                                   project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                                   meta={VERSION_KEY: CURRENT_VERSION, **binding})
+
     def write(content, qc, extra=None):
         # stale QC rows for a superseded hash are replaced in the same tx;
         # the job transition lands here too so the row is never left
@@ -313,6 +380,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         with ledger.db:
             guard('qc:write')
             _drop_stale_qc(ledger, mid, art[1])
+            drop_wait()
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
@@ -328,28 +396,14 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         skip_reason = reason
         if skip_reason not in jev.SKIP_REASONS:
             return "deferred"
-        if not isinstance(partial, dict) or set(partial) - set(questions):
+        reduced = _reduce_answers({**answered, **partial} if isinstance(partial, dict) else partial,
+                                  questions)
+        if reduced is None:
             return "failed"
-        reduced = {}
-        for qid, answer in partial.items():
-            if not isinstance(answer, dict):
-                return "failed"
-            question = questions[qid]
-            if question.get("type") == "noul":
-                value = answer.get("noul")
-                if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
-                    return "failed"
-                reduced[qid] = {"type": "noul", "noul": value}
-            else:
-                choice, confidence = answer.get("choice"), answer.get("confidence")
-                if (not isinstance(choice, str) or choice not in question.get("criteria", {})
-                        or type(confidence) not in (int, float)
-                        or not math.isfinite(confidence) or not 0 <= confidence <= 1):
-                    return "failed"
-                reduced[qid] = {"type": "choice", "choice": choice, "confidence": confidence}
         try:
             with ledger.db:
                 guard('qc:skip')
+                drop_wait()
                 ledger.artifact_add_tx(
                     "extract_qc_skipped", json.dumps({"status": "SKIPPED", "reason": skip_reason,
                                                       **({"partial_answers": reduced} if reduced else {})}),
@@ -373,19 +427,26 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     req0 = jev_client.requests_made
     client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing,
                               config_path=cfg_path)
+    remaining = {qid: q for qid, q in questions.items() if qid not in answered}
     try:
-        out = (jev.evaluate_chunked(client, state, questions, deadline,
+        out = (jev.evaluate_chunked(client, state, remaining, deadline,
                                     scfg["max_questions_per_request"])
-               if questions else {"answers": {}})
+               if remaining else {"answers": {}})
     except jev.JevError as error:
         with suppress(Exception):
             jev_client.last_error = error
         from semantic_audit import jev_skip_reason
         reason = jev_skip_reason(error)
         if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
-            # QC has no resumable partial row: the job stays due, uncharged.
+            # the next quota window asks only what is still unanswered
             if diagnostics is not None:
                 diagnostics["jev_wait"] = reason
+            try:
+                keep_answers(getattr(error, "partial_answers", None))
+            except runtime.RuntimeStale:
+                return "stale"
+            except (runtime.RuntimeOff, runtime.RuntimeBudget):
+                pass
             return "deferred"
         if reason is not None and hasattr(error, "partial_answers"):
             return write_skip(reason, error.partial_answers)
@@ -411,7 +472,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         # a failed CAS here propagates, as it always has for this path
         write({"qc": "unevaluated", "reason": unevaluated}, "unevaluated")
         return "done"
-    answers = out["answers"]
+    answers = {**answered, **out["answers"]}
     items, urgency = [], None
     for qid, section, i in layout:
         ans = answers.get(qid)

@@ -3,6 +3,7 @@ resident turn, ahead of the local-model turn, still stopped by the Jev daily
 cap and backlog reserve; QC and semantic share the backlog window fairly.
 
 Synthetic only: temp ledger, Jev/LLM stubs, no services."""
+import contextlib
 import json
 import os
 import time
@@ -15,6 +16,7 @@ import semantic_drain
 import semantic_due_selection
 import semantic_jev
 import semantic_policy
+import semantic_qc
 import writer_lock
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
@@ -95,7 +97,9 @@ def _background(monkeypatch, cfg):
     monkeypatch.setattr(writer_lock, "wait_run_lock", lambda *a, **k: fd)
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: 7)
     monkeypatch.setattr(semantic_drain, "run_due", lambda ledger, cfg, result, deadline, **k: seen.append(
-        {**k, "budget": deadline - time.monotonic()}) or {"done": 0})
+        {**k, "budget": deadline - time.monotonic(),
+         "start_window": None if k.get("start_by") is None else k["start_by"] - time.monotonic()})
+        or {"done": 0})
     extract_llm_resident._background_semantic(object())
     return seen[0]
 
@@ -104,10 +108,14 @@ def test_background_pass_drains_jev_only_work_and_keeps_one_local_job(monkeypatc
     drain = _background(monkeypatch, _cfg("shadow", **JEV_ONLY))
     assert drain["max_jobs"] == extract_llm_resident._JEV_DRAIN_MAX_JOBS > 1
     assert drain["lane"] == "backlog"
-    assert extract_llm_resident._JEV_DRAIN_BUDGET_S - 5 < drain["budget"] <= extract_llm_resident._JEV_DRAIN_BUDGET_S
-    local = _background(monkeypatch, _cfg("shadow"))
     job_budget = semantic_policy.semantic_config(_cfg("shadow"))[0]["job_budget_seconds"]
-    assert local["max_jobs"] == 1 and local["budget"] <= job_budget + 30
+    # the cap closes only the start window; a started job keeps one job's room after it
+    window = extract_llm_resident._JEV_DRAIN_BUDGET_S
+    assert window - 5 < drain["start_window"] <= window
+    assert drain["budget"] - drain["start_window"] == pytest.approx(job_budget + 30, abs=1)
+    local = _background(monkeypatch, _cfg("shadow"))
+    assert local["max_jobs"] == 1 and local["start_window"] is None
+    assert local["budget"] <= job_budget + 30
 
 
 def _resident_loop(monkeypatch, cfg, events, *, carry=False):
@@ -277,7 +285,7 @@ def test_a_long_job_budget_does_not_stretch_the_drain_or_block_its_jobs(threads,
     cfg = _cfg("shadow", job_budget_seconds=1260, **JEV_ONLY)
     run_due = semantic_drain.run_due
     drain = _background(monkeypatch, cfg)
-    assert drain["budget"] <= extract_llm_resident._JEV_DRAIN_BUDGET_S
+    assert drain["start_window"] <= extract_llm_resident._JEV_DRAIN_BUDGET_S
     scfg = semantic_policy.semantic_config(cfg)[0]
     assert semantic_drain._backlog_commit_reserve(scfg) == 0.0
     out = run_due(threads, cfg, {"errors": []},
@@ -295,3 +303,140 @@ def test_local_breaker_stops_only_work_that_needs_the_local_model(threads, monke
                                  jev_client=_FakeJev(), llm_fn=_no_local_model, lane="realtime", max_jobs=4)
     assert (out["done"] == 4) is runs
     assert ("circuit_open_s" in out) is not runs
+
+
+def _clock(monkeypatch, start=1000.0):
+    clock = [start]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    return clock
+
+
+def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads, monkeypatch):
+    """The drain cap closes the start window only: the job in flight retakes
+    the lock after a tick held it past that point and saves its answer;
+    no new job starts after it."""
+    clock = _clock(monkeypatch)
+    windows = []
+
+    @contextlib.contextmanager
+    def tick_holds_lock(ledger, lock_fd, wait_s=None, deadline=None):
+        yield
+        if not windows:
+            clock[0] += 20          # the tick held run.lock across start_by
+        windows.append(deadline)
+        if clock[0] >= deadline:
+            raise writer_lock.RunLockLost(held=False, updated=False)
+
+    monkeypatch.setattr(writer_lock, "unlocked_transport", tick_holds_lock)
+    fd = os.open(os.devnull, os.O_RDONLY)
+    try:
+        start_by = clock[0] + 10
+        out = semantic_drain.run_due(threads, _cfg("shadow", **JEV_ONLY), {"errors": []},
+                                     start_by + 45 + 30, jev_client=_HookedJev(), llm_fn=_no_local_model,
+                                     lane="backlog", max_jobs=8, run_lock_fd=fd, start_by=start_by)
+    finally:
+        os.close(fd)
+    assert "run_lock_lost" not in out
+    assert out["done"] == 1 and out["start_window_closed"] is True
+    assert _pending(threads) == 3
+
+
+class _HookedJev(_FakeJev):
+    """Runs the per-attempt hooks before each send, as JevClient does."""
+    supports_attempt_hooks = True
+    attempt_timeout = 20.0
+
+    def evaluate(self, state, questions, deadline, before_attempt=None, after_result=None,
+                 reserve_fn=None, transport=None):
+        if before_attempt is not None:
+            before_attempt()
+        send = super().evaluate
+        out = (transport(send, state, questions, deadline) if transport is not None
+               else send(state, questions, deadline))
+        if after_result is not None:
+            after_result()
+        return out
+
+
+def _one_job(tmp_path):
+    db = _ledger(tmp_path)
+    p = _patient(db, 1)
+    p.messages = [_message(10, pid=1)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    return db
+
+
+def _job_row(db):
+    return tuple(db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                               (semantic_drain.JOB_KIND,)).fetchone())
+
+
+def test_jev_only_start_floor_covers_the_pre_send_cutoff(tmp_path, monkeypatch):
+    clock = _clock(monkeypatch)
+    db = _one_job(tmp_path)
+    try:
+        cfg = _cfg("shadow", **JEV_ONLY)
+        reserve = semantic_drain.runtime.jev_start_reserve(semantic_policy.semantic_config(cfg)[0])
+        assert reserve > _HookedJev.attempt_timeout
+        jev = _HookedJev()
+        # 22 s left: above the QC floor, below one Jev attempt plus margin
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, clock[0] + 22, jev_client=jev,
+                                     llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert out["floor_skipped"] == {"semantic": 1} and jev.requests_made == 0
+        assert _job_row(db) == ("pending", 0)
+    finally:
+        db.close()
+
+
+def test_a_first_request_refused_before_sending_charges_no_attempt(tmp_path, monkeypatch):
+    clock = _clock(monkeypatch)
+    db = _one_job(tmp_path)
+    reserve = semantic_drain._reserve_long_defer
+
+    def slow_reserve(*args, **kwargs):
+        clock[0] += 12             # the job passed the floor, then lost time before its first send
+        return reserve(*args, **kwargs)
+
+    monkeypatch.setattr(semantic_drain, "_reserve_long_defer", slow_reserve)
+    try:
+        jev = _HookedJev()
+        out = semantic_drain.run_due(db, _cfg("shadow", **JEV_ONLY), {"errors": []}, clock[0] + 30,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert jev.requests_made == 0 and out["done"] == 0
+        assert [m["status"] for m in out["job_metrics"]] == ["deferred_short"]
+        assert _job_row(db) == ("pending", 0)
+    finally:
+        db.close()
+
+
+def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monkeypatch):
+    from extract_testkit import _hash, _v2_artifact
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1)])
+        content = {"meds": [{"name": f"合成薬M{i}", "action": "start", "subject": "patient"}
+                            for i in range(4)], "urgency": "routine"}
+        _v2_artifact(db, 1, _hash(db), content=content)
+        cfg = _cfg("shadow", budget=10, max_questions_per_request=1, extract_qc="annotate", **JEV_ONLY)
+        _usage(monkeypatch, 7)      # two backlog requests per quota window
+        asked = []
+        for day in range(3):
+            jev = _CappedJev()
+            with db.db:
+                db.db.execute("UPDATE fetch_jobs SET next_try=0")
+            out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                                         jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+            asked += [q for call in jev.calls for q in call]
+            qc = db.db.execute("SELECT content FROM artifacts WHERE kind='extract_qc'").fetchone()
+            if day < 2:
+                assert qc is None and out["budget_exhausted"] is True
+                job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                                    (semantic_drain.QC_JOB_KIND,)).fetchone()
+                assert tuple(job) == ("pending", 0)
+        questions, _, _ = semantic_qc._qc_questions(content)
+        # every question was asked exactly once across the three windows
+        assert sorted(asked) == sorted(questions) and len(questions) == 5
+        assert json.loads(qc[0])["coverage"]["checked"] == 5
+        assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (semantic_qc.QC_WAIT_KIND,)).fetchall()
+    finally:
+        db.close()

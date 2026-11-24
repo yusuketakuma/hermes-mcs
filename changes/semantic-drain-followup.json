@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "Jevだけで終わる意味解析・QCのまとめ処理で、受け取った回答と試行回数を失わないよう修正",
+  "summary": "Jevだけで終わる意味解析とQCのまとめ処理で、受け取った回答を捨てて問い合わせ直すことや、送っていない問い合わせで試行回数を減らすことがなくなります。約5分の上限は新しいジョブを始める期限だけになり、始めたジョブは自分の予算内で保存まで終えます。日次上限で止まったQCも途中の回答を残し、次の枠では残りだけを問い合わせます。",
+  "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。summary_mode か loop_mode が off 以外の設定では、ローカルLLMを使う意味解析の動作は変わりません（QCの途中回答の保存は backlog レーンで日次上限に達したときに働きます）。",
+  "details": [
+    "まとめ処理の約300秒は新しいジョブを始める期限にだけ使う。始まったジョブは job_budget_seconds の範囲で、定期処理が run.lock を持っている間も取り直して回答を保存する。",
+    "Jevだけで終わる意味解析ジョブは、Jevの1回の試行時間（attempt_timeout_seconds）に5秒を加えた残り時間がないと始めない。送信前の打ち切りで1件も送っていない場合は、ジョブ予算が1回の試行に足りる限り試行回数を数えない。ローカル用の書込み予備時間は取らない。",
+    "backlog レーンでQCが途中でJevの日次上限に達したときは、得た回答を対象の抽出結果と質問の組に結び付けて保存し（extract_qc_wait）、次の枠では残りだけを問い合わせる。QCの結果はすべての回答がそろってから書く。",
+    "Jevだけで終わるジョブをローカルLLMの接続遮断（circuit）で止めない扱いと上記の開始条件は、10分ごとの定期処理（新着用 realtime レーン）にも適用する。定期処理が意味解析を始める条件（残り60秒超、ローカルLLMの新着用の枠が空いていること）は変わらない。",
+    "新着用 realtime レーンでは従来どおり、日次上限に達したジョブも評価を省略した結果で完了し、新着の処理を止めない。待機して次の枠を待つのは backlog レーンだけ。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_resident.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_qc.py",
+    "mcs/semantic/semantic_runtime.py"
+  ]
+}

@@ -638,6 +638,15 @@ def guarded_llm(fn, guard, deadline, timeout_cap=None, call_reserve=None):
     return _GuardedLLM(fn, guard, deadline, timeout_cap, call_reserve)
 
 
+# Margin a job keeps beyond one Jev attempt so a target is not cut off before its first request.
+JEV_START_MARGIN_S = 5.0
+
+
+def jev_start_reserve(scfg: dict) -> float:
+    """Time left that lets a job's first Jev request pass the pre-send cutoff."""
+    return float(scfg["attempt_timeout_seconds"]) + JEV_START_MARGIN_S
+
+
 def _jev_cutoff(cutoff, attempt_s: float = 0.0) -> None:
     """A Jev request (or internal retry) may not start when it could still
     be in flight at ``cutoff`` — a free defer of the pass, like a follow-up
