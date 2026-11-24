@@ -53,6 +53,119 @@ def test_source_quality_precedes_cloud_summary_and_missing_receipt_reopens_c(run
     assert sum("source" in request for request in cloud[0]) == scan_calls
 
 
+@pytest.mark.parametrize('mutation', ['other_patient', 'source', 'pause', 'owner', 'own_write'])
+def test_source_quality_commits_only_with_current_inputs_and_owner(runtime, cloud, monkeypatch, mutation):
+    led, _, _ = runtime
+    seed(led, body='完全合成の居住記録。')
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    marker = led.artifact_add('synthetic_unrelated', '{}', project_id=2)
+    acquire = patient_context_quality_receipts._acquire
+    attempts = []
+
+    def intervening_write(*args, **kwargs):
+        # First lock claims the work. The second takes the reservation's lock.
+        if kwargs.get('current') and (mutation == 'other_patient' or not attempts or mutation == 'owner' and len(attempts) == 1):
+            attempts.append(1)
+            with closing(sqlite3.connect(path)) as other:
+                if mutation == 'other_patient':
+                    other.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (str(len(attempts)), marker))
+                elif mutation == 'source':
+                    other.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+                elif mutation == 'pause':
+                    other.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,1,'paused','{}',1)",
+                                  (mcs_queries.SEMANTIC_CONTROL_KIND,))
+                elif mutation == 'owner' and len(attempts) == 2:
+                    other.execute("UPDATE fetch_jobs SET payload='{}' WHERE kind=? AND project_id=1",
+                                  (patient_context_refresh_state.QUALITY_CLAIM,))
+                elif mutation == 'own_write':
+                    with led.db:
+                        led.db.execute("UPDATE artifacts SET content='own' WHERE artifact_id=?", (marker,))
+                other.commit()
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(patient_context_quality_receipts, '_acquire', intervening_write)
+    if mutation == 'other_patient':
+        drain(runtime)
+        assert len(attempts) > 4
+        assert len(led.artifacts('patient_context_source_quality_pass_v1', project_id=1)) == 1
+        question_sets = [(request['state']['target']['id'], tuple(request['questions']))
+                         for request in led.synthetic_jev_requests]
+        assert len(question_sets) == len(set(question_sets))
+        return
+    for _ in range(10):
+        result = step(runtime)
+        if attempts:
+            break
+    assert len(attempts) == (2 if mutation == 'owner' else 1)
+    assert not led.synthetic_jev_requests
+    assert not led.artifacts('patient_context_source_quality_pass_v1', project_id=1)
+    assert not led.db.execute("SELECT 1 FROM artifacts WHERE kind='semantic_usage' AND "
+                              "json_extract(meta,'$.operation')='patient_source_quality'").fetchone()
+    if mutation == 'own_write':
+        assert result.get('reason') == 'source_quality_unavailable:patient_summary_quality_source_changed'
+
+
+def test_source_pass_rechecks_sealed_answers_at_the_writer(runtime, cloud, monkeypatch):
+    led, clock, _ = runtime
+    seed(led, body='完全合成の居住記録。')
+    read_content = patient_context_quality_receipts._quality_pass_content
+    acquire = patient_context_quality_receipts._acquire
+    before_send_count = []
+    changed = []
+
+    def read(*args, **kwargs):
+        content = read_content(*args, **kwargs)
+        if content is not None:
+            before_send_count.append(len(led.synthetic_jev_requests))
+        return content
+
+    def change_answer(*args, **kwargs):
+        if before_send_count and not changed:
+            path = led.db.execute('PRAGMA database_list').fetchone()[2]
+            with closing(sqlite3.connect(path)) as other, other:
+                count = other.execute("UPDATE artifacts SET content='{}' WHERE kind='patient_context_source_quality_v1' "
+                                      "AND project_id=1").rowcount
+                assert count > 0
+            changed.append(True)
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(patient_context_quality_receipts, '_quality_pass_content', read)
+    monkeypatch.setattr(patient_context_quality_receipts, '_acquire', change_answer)
+    for _ in range(12):
+        result = step(runtime)
+        if changed:
+            break
+    assert result.get('reason') == 'source_quality_unavailable:patient_summary_quality_source_changed'
+    assert not led.artifacts('patient_context_source_quality_pass_v1', project_id=1)
+    clock.wall += 61
+    clock.mono += 61
+    assert step(runtime).get('reason') == 'source_quality_unknown'
+    assert len(led.synthetic_jev_requests) == before_send_count[0]
+
+
+def test_unrelated_commit_during_source_repair_does_not_repeat_a_send(runtime, source_repair, monkeypatch):
+    led, _, _ = runtime
+    marker = led.artifact_add('synthetic_other', '{}', project_id=2)
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    inputs = patient_context_refresh_sources._source_repair_inputs
+    changed = []
+
+    def read(*args, **kwargs):
+        result = inputs(*args, **kwargs)
+        if not changed:
+            with closing(sqlite3.connect(path)) as other, other:
+                other.execute("UPDATE artifacts SET content='changed' WHERE artifact_id=?", (marker,))
+            changed.append(True)
+        return result
+
+    monkeypatch.setattr(patient_context_refresh_sources, '_source_repair_inputs', read)
+    drain(runtime)
+    assert changed and len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)) == 1
+    assert len(source_repair['sent']) == 2
+    drain(runtime)
+    assert len(source_repair['sent']) == 2
+
+
 @pytest.mark.parametrize("negative_target", ["source_coverage", "source_facts"])
 def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, monkeypatch, negative_target):
     import semantic_jev
