@@ -16,7 +16,10 @@ from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, 
 def test_revive_failed_does_not_requeue_without_a_result_reader(tmp_path):
     db = _seeded(tmp_path)
     try:
-        job_id = db.job_add("semantic", 1, 1, payload={"generation": "synthetic"})
+        db.job_add("semantic", 1, 999, payload={"generation": "synthetic"})
+        job_id = db.db.execute(
+            "SELECT job_id FROM fetch_jobs WHERE kind='semantic' AND project_id=1 "
+            "AND message_id=999").fetchone()[0]
         now = time.time()
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=5,updated_at=? WHERE job_id=?",
