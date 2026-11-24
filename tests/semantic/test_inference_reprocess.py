@@ -45,6 +45,14 @@ def _replay(store, cfg=None, **kw):
     return drain.reprocess_step(store, cfg or _cfg(loop_mode='off'), **kw)
 
 
+def _stage_error_reasons(store, errors):
+    """Health state reasons the real builder derives from a pass's errors."""
+    import health_report
+    health = health_report.build_health(store.db, {'errors': list(errors), 'notify': {}},
+                                        'partial', cfg={'notify': {'interactive': 'slack'}})
+    return health['state_reasons']
+
+
 def _arrival(store):
     return store.outbox_add('new_messages', 1, {'source': 'unread', 'message_ids': [1]})
 
@@ -1533,8 +1541,13 @@ def test_drain_repairs_at_most_one_root_per_pass(store, monkeypatch):
     assert sorted(gens.values()).count('f' * 64) == 1
     assert _current_execution() in gens.values()
     assert len(processed) == 1
-    assert 'semantic: execution_repair_deferred' in result['errors']
+    assert 'semantic_repair_deferred' in result['errors']
     assert tuple(_job(store, 2)) == held_before
+    # the designed one-repair-per-pass wait is deferred work, not a fault:
+    # the run stays partial (errors non-empty) but health is not degraded
+    from collection_diagnostics import classify
+    assert {classify(e) for e in result['errors']} == {'deferred'}
+    assert 'stage_errors' not in _stage_error_reasons(store, result['errors'])
 
 
 def test_drain_holds_unverified_repair_candidate(store, monkeypatch):
@@ -1557,6 +1570,8 @@ def test_drain_holds_unverified_repair_candidate(store, monkeypatch):
     assert output.get('payload_hold_count') == 1
     assert 'semantic: execution_repair_unverified' in result['errors']
     assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64
+    # unverified evidence is a real hold and must still degrade health
+    assert 'stage_errors' in _stage_error_reasons(store, result['errors'])
 
 
 def test_drain_repairs_one_root_and_defers_nine_stale(store, monkeypatch):
@@ -1936,7 +1951,11 @@ def test_drain_caps_repair_evaluations_at_one_per_pass(store, monkeypatch):
     assert len(repair_calls) == 1
     assert processed == [current_id]
     assert 'semantic: execution_repair_paused' in result['errors']
-    assert 'semantic: execution_repair_deferred' in result['errors']
+    assert 'semantic_repair_deferred' in result['errors']
+    # the deferred wait alongside a real repair outcome still degrades
+    assert 'stage_errors' in _stage_error_reasons(store, result['errors'])
+    assert 'stage_errors' not in _stage_error_reasons(
+        store, [e for e in result['errors'] if e == 'semantic_repair_deferred'])
     for mid in (1, 2, 3):
         row = _job(store, mid, 2)
         assert row['state'] == 'pending'

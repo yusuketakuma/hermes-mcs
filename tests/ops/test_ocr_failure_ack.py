@@ -524,3 +524,41 @@ def _current_acknowledged(db, artifact_id):
         return ack.acknowledged(db, ack.target(db, artifact_id))
     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
         return False
+
+
+class _Restat:
+    """The real stat result of a file with chosen identity fields replaced."""
+
+    def __init__(self, real, fields):
+        self._real, self._fields = real, fields
+
+    def __getattr__(self, name):
+        return self._fields[name] if name in self._fields else getattr(self._real, name)
+
+
+def _restat(monkeypatch, path, fields):
+    """Every os.stat of ``path`` reports ``fields(real)``; other paths keep the real call."""
+    real_stat, target = os.stat, os.path.realpath(path)
+
+    def stat(name, *args, **kwargs):
+        info = real_stat(name, *args, **kwargs)
+        if isinstance(name, (str, os.PathLike)) and os.path.realpath(name) == target:
+            return _Restat(info, fields(info))
+        return info
+    monkeypatch.setattr(os, 'stat', stat)
+
+
+def test_reboot_renumbering_the_device_keeps_the_ack_but_a_new_inode_voids_it(case, monkeypatch):
+    operator.apply(case.root, request(case))
+    _status(case.data, **observed(case))
+    database = case.data / 'ledger.db'
+    _restat(monkeypatch, database, lambda info: {'st_dev': info.st_dev + 1})
+    assert observed(case)['acknowledged_exhausted'] == 1
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report['reason'] == 'attachment_ocr_acknowledged_gap' and report['alert_required'] is False
+    _restat(monkeypatch, database, lambda info: {'st_dev': info.st_dev + 1, 'st_ino': info.st_ino + 1})
+    assert observed(case)['acknowledged_exhausted'] == 0
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report['reason'] == 'attachment_ocr_ack_unverified'
+    operator.apply(case.root, request(case))       # an old acknowledgement is redone, never revived
+    assert observed(case)['acknowledged_exhausted'] == 1

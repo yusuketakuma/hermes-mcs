@@ -578,3 +578,27 @@ def test_a_reader_limit_names_the_stage_it_stopped_at(legacy, monkeypatch, targe
     report = local_rebuild.preview(ledger, stop=(SyntheticLimit,))
     assert report['state'] == 'partial' and report['stopped_at'] == stage
     assert report['excluded']['unverified'] == report['candidates'] == 2 and report['plan'] is None
+
+
+def test_a_reboot_renumbering_the_device_keeps_the_approval_but_a_new_inode_voids_it(legacy, monkeypatch):
+    import os
+    ledger, _ = legacy
+    plan = local_rebuild.preview(ledger)['plan']
+    path = os.path.realpath(ledger.db.execute('PRAGMA database_list').fetchone()[2])
+    real_stat = os.stat
+
+    def restat(dev=0, ino=0):
+        def stat(name, *args, **kwargs):
+            info = real_stat(name, *args, **kwargs)
+            if isinstance(name, (str, os.PathLike)) and os.path.realpath(name) == path:
+                return os.stat_result((info.st_mode, info.st_ino + ino, info.st_dev + dev,
+                                       *tuple(info)[3:10]))
+            return info
+        monkeypatch.setattr(os, 'stat', stat)
+    restat(dev=1)
+    assert _approve(ledger, plan)[1]['outcome'] == 'applied'    # the plan was read before the renumbering
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+    restat(dev=2)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+    restat(dev=2, ino=1)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
