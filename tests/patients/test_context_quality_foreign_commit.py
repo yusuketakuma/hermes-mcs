@@ -162,6 +162,42 @@ def test_summary_audit_stops_when_another_process_changes_the_audited_summary(qu
     assert not led.db.in_transaction
 
 
+@pytest.mark.parametrize("model_changed", [True, False])
+def test_summary_pass_rechecks_config_at_the_writer(quality_owner, monkeypatch, model_changed):
+    led, clock, cfg, doc, sends, _ = quality_owner
+    status, identity = _summary_step(led, clock, cfg, doc)
+    assert status == "pending" and len(sends) == 1
+    read = patient_context_quality_receipts._quality_pass_content
+    acquire = patient_context_quality_receipts._acquire
+    proofs = []
+    changed = []
+
+    def read_proof(*args, **kwargs):
+        content = read(*args, **kwargs)
+        if content is not None:
+            proofs.append(content)
+        return content
+
+    def change_before_save(*args, **kwargs):
+        if proofs and not changed:
+            if model_changed:
+                monkeypatch.setitem(cfg, "local_llm", {"model": "synthetic-new-model"})
+            else:
+                monkeypatch.setitem(cfg["cloud_llm"], "daily_request_budget", 50)
+            changed.append(True)
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(patient_context_quality_receipts, "_quality_pass_content", read_proof)
+    monkeypatch.setattr(patient_context_quality_receipts, "_acquire", change_before_save)
+    if model_changed:
+        with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
+            _summary_step(led, clock, cfg, doc)
+    else:
+        assert _summary_step(led, clock, cfg, doc)[0] == "passed"
+    assert changed and len(sends) == 1 and len(led.artifacts("semantic_usage")) == 1
+    assert patient_context_quality_receipts._quality_passed(led.db, 1, identity) == (not model_changed)
+
+
 def test_summary_repair_is_reserved_while_another_process_keeps_committing(repair, monkeypatch):
     led, run, facts, _, sent, _, _ = repair
     commits = _commit_at_every_lock(monkeypatch, led)

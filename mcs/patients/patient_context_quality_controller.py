@@ -1,4 +1,5 @@
 """Patient context quality audit and finite source or summary repair execution."""
+import copy
 import json
 import math
 import os
@@ -704,7 +705,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         ledger.db.rollback()
     identity = initial["identity"]
     denied = False
-    fence = [None]
+    fence = None
+    observed_config = None
 
     def inputs_current(live):
         """Whether this check's own inputs still read as captured, in the open transaction."""
@@ -728,7 +730,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         """Whether the caller may go on: outside a transaction it reads the inputs in its own
         snapshot; inside one it accepts that read while no other process has committed since,
         and reads the inputs again otherwise. ``own_writes`` is what the caller wrote since."""
-        nonlocal denied
+        nonlocal denied, fence, observed_config
         if denied:
             return False
         owns_read = not ledger.db.in_transaction
@@ -788,18 +790,20 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 if not mark.wrote(0):
                     denied = True
                     return False
-                fence[0] = mark
-            elif fence[0] is None or not fence[0].wrote(own_writes):
+                fence = mark
+                observed_config = copy.deepcopy(live)
+            elif (fence is None or not fence.wrote(own_writes)
+                  or not extract_llm._same_but_operating_limits(live, observed_config)):
                 denied = True
                 return False
-            elif fence[0].foreign_commit():
+            elif fence.foreign_commit():
                 # Another process committed since the inputs were last read. That is not a
                 # change of this check's inputs: read them again in the caller's transaction.
                 # The read writes nothing: a write during it would be hidden by the new mark.
-                if not inputs_current(live) or not fence[0].wrote(own_writes):
+                if not inputs_current(live) or not fence.wrote(own_writes):
                     denied = True
                     return False
-                fence[0] = patient_context_refresh_state.ReadMark(ledger.db, own_writes=own_writes)
+                fence = patient_context_refresh_state.ReadMark(ledger.db, own_writes=own_writes)
             return True
         except (ValueError, KeyError, TypeError, OSError):
             denied = True
