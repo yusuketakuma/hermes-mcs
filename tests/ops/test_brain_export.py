@@ -660,6 +660,79 @@ def test_stale_patient_removed(env, tmp_path):
     assert not (out / "patients" / "p1.md").exists()
 
 
+def test_archived_patient_page_is_kept_and_marked(env):
+    """An archived room (権限喪失) keeps its exported page — marked archived,
+    never pruned — and its open signals leave every export surface."""
+    snap, out = env
+    brain_export.run(out, snap)
+    assert "- archived: true" not in (out / "patients/p1.md").read_text()
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 1 and res["archived"] == 1 and res["signals"] == 0
+    page = (out / "patients/p1.md").read_text()
+    assert "- archived: true" in page and "アーカイブ済み" in page
+    assert PATIENT_NAME in page  # content still renders from the frozen rollup
+    signals = (out / "signals/latest.md").read_text()
+    assert "open候補なし" in signals and "rx_period_expiry" not in signals
+    assert all(r["type"] != "signal" for r in _jsonl(out))
+    assert "mcs.patients.archived" in (out / "stats/latest.md").read_text()
+
+
+def test_unarchived_patient_page_and_signals_regenerate(env):
+    """復権（archive 解除）で通常ページと signal 出力が再生成される。"""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    brain_export.run(out, snap)
+    assert "- archived: true" in (out / "patients/p1.md").read_text()
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET is_archived=0 WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["archived"] == 0 and res["signals"] == 1
+    page = (out / "patients/p1.md").read_text()
+    assert "- archived: true" not in page and "アーカイブ済み" not in page
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+
+
+def test_archived_signals_exclusion_is_per_patient(env):
+    """Signal filtering is scoped to the archived patient — another
+    patient's open signal and normal page are untouched."""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute(
+            "INSERT INTO patients(project_id,project_type,patient_name,disease,"
+            "station_name,url,fetch_state,fetch_reason,last_complete_fetch,"
+            "last_seen,is_archived,created_at) "
+            "SELECT 2,project_type,'SYNTH patient B',disease,station_name,url,"
+            "fetch_state,fetch_reason,last_complete_fetch,last_seen,is_archived,"
+            "created_at FROM patients WHERE project_id=1")
+        roll = json.loads(conn.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup'")
+            .fetchone()[0])
+        roll["project_id"] = 2
+        conn.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+            "VALUES ('patient_rollup',2,?,?,?)",
+            (json.dumps(roll), json.dumps({VERSION_KEY: CURRENT_VERSION}),
+             SNAP_TS))
+        sig = json.loads(conn.execute(
+            "SELECT content FROM artifacts WHERE kind='signal_v1'")
+            .fetchone()[0])
+        sig["project_id"] = 2
+        conn.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+            "VALUES ('signal_v1',2,?,?,?)",
+            (json.dumps(sig), json.dumps({"key": "sig-2"}), SNAP_TS))
+        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 2 and res["archived"] == 1 and res["signals"] == 1
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert [r["project_id"] for r in _jsonl(out) if r["type"] == "signal"] == [2]
+    assert "- archived: true" in (out / "patients/p1.md").read_text()
+    assert "- archived: true" not in (out / "patients/p2.md").read_text()
+
+
 def test_not_a_snapshot(tmp_path):
     bad = tmp_path / "live.db"
     conn = sqlite3.connect(str(bad))  # no snapshot_meta, user_version=0

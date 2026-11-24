@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "アーカイブ済み患者のexportページは保持してarchived表示し、そのシグナルはexportしない",
+  "summary": "外部知識ストア向けの日次export（brain_export）で、ルームがアーカイブ済みの患者ページは削除せずarchived表示付きで保持するようになりました。アーカイブ済み患者の未解決シグナルはsignalsページ・export.jsonl・統計のopen件数から除外されます。アーカイブが解除されれば通常のページとシグナル出力へ戻ります。実行結果にarchivedページ数が加わり、統計のFactsにmcs.patients.archivedが加わります。",
+  "upgrade": "追加操作は不要です。次回のexport実行から反映されます。",
+  "details": [
+    "patients.is_archived=1 の患者ページ（patients/p番号.md）は従来どおり生成を続けるが、先頭に archived 表示（- archived: true と案内文）が付く。内容は最終取得時点のrollupを使う。",
+    "アーカイブ済み患者のopenシグナルは signals/latest.md・export.jsonl の signal/signals_truncated レコード・結果のsignals件数・mcs.signals.openメトリクスから除外する。シグナル評価で閉じられるまでの間もexportには出さない。",
+    "current_openの取得上限（200件）で打ち切られた場合は、除外後の件数が下限になるためtotalの補正は行わずtruncated表記を維持する。",
+    "is_archived解除で従来どおり通常ページへ再生成され、シグナルも出力へ戻る。患者行そのものが消えた場合のページ削除（stale-page GC）・外部ファイルの保護・保持期限の掃除は変わらない。",
+    "実行結果JSONにarchivedキー（今回生成したページのうちarchived表示の数）を追加した。"
+  ],
+  "refs": [
+    "mcs/ops/brain_export.py",
+    "tests/ops/test_brain_export.py"
+  ]
+}

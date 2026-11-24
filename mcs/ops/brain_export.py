@@ -172,7 +172,9 @@ def _metrics(db, snap_ts: float, open_signals: int) -> list[tuple]:
     week = _count(db, "SELECT COUNT(*) FROM messages WHERE posted_at_ts>=?",
                   snap_ts - 7 * 86400)
     pats = _count(db, "SELECT COUNT(*) FROM patients")
-    return [("mcs.patients.total", pats), ("mcs.messages.total", total),
+    archived = _count(db, "SELECT COUNT(*) FROM patients WHERE is_archived=1")
+    return [("mcs.patients.total", pats), ("mcs.patients.archived", archived),
+            ("mcs.messages.total", total),
             ("mcs.messages.24h", day), ("mcs.messages.7d", week),
             ("mcs.signals.open", open_signals)]
 
@@ -229,13 +231,18 @@ def _signals_md(view, res: dict) -> str:
     return "".join(lines)
 
 
-def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_config_unavailable=False) -> str:
+def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_config_unavailable=False,
+                archived: bool = False) -> str:
     title = f"MCS {name}"
     lines = [_fm(title), f"# {name}\n\n"]
     lines.append(f"- project_id: {pid}\n")
     lines.extend(f"- {k}: {info[k]}\n"
                  for k in ("project_type", "disease", "station_name")
                  if info.get(k))
+    if archived:
+        lines.append("- archived: true\n\n"
+                     "> このルームはアーカイブ済みです。新しい投稿を取得できないため、"
+                     "ページの内容は最終取得時点のままです。\n")
     if roll.get("rollup_freshness") == "unknown":
         lines.append("\n## 患者集約: 未確認\n\n記録の現行性を確認できません。\n")
         return "".join(lines)
@@ -364,8 +371,10 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             directory = out_dir / name
             _check_directory(directory)
         info = {r["project_id"]: dict(r) for r in view.db.execute(
-            "SELECT project_id,patient_name,project_type,disease,station_name"
-            " FROM patients")}
+            "SELECT project_id,patient_name,project_type,disease,station_name,"
+            "is_archived FROM patients")}
+        archived_pids = {pid for pid, row in info.items()
+                         if row.get("is_archived")}
         rolls = {r["project_id"]: (r["content"], r["meta"]) for r in view.db.execute(
             "SELECT project_id,content,meta FROM artifacts "
             "WHERE kind='patient_rollup' ORDER BY artifact_id")}
@@ -422,7 +431,8 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             try:
                 pages[f"p{pid}.md"] = (
                     _patient_md(pid, name, info.get(pid) or {}, roll,
-                                measurement_config_unavailable=True)
+                                measurement_config_unavailable=True,
+                                archived=pid in archived_pids)
                     + "\n---\n\n" + banner)
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
@@ -430,6 +440,17 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         sig_res = mcs_signals.current_open(view.db, limit=200)
         if sig_res.get("errors"):
             raise ValueError("signal_state_invalid")
+        if archived_pids:
+            kept = [c for c in sig_res["items"]
+                    if c.get("project_id") not in archived_pids]
+            # An archived room's open signal cannot be acted on and closes
+            # at the next evaluation; the export hides it. Only the fetched
+            # window can be filtered — a truncated read may hide further
+            # non-archived signals, so the total is adjusted only when the
+            # whole open set was listed.
+            sig_res = {**sig_res, "items": kept, "returned": len(kept)}
+            if not sig_res.get("truncated"):
+                sig_res["total"] = len(kept)
         model = read_model.read_model(view.db, scope="aggregate")
         _write(out_dir, "meta.md", _meta_md(view))
         _write(out_dir, "health.md", _health_md(view))
@@ -462,6 +483,7 @@ def run(out_dir: Path, snapshot: Path) -> dict:
                         os.unlink(name, dir_fd=directory)
         expired = _sweep_exports(out_dir, time.time())
         return {"ok": True, "patients": len(seen),
+                "archived": sum(1 for pid in rolls if pid in archived_pids),
                 "signals": sig_res["total"],
                 "snapshot_generation_id": view.meta["generation_id"],
                 "contract": read_model.CONTRACT,
