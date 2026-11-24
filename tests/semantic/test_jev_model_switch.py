@@ -288,14 +288,6 @@ def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
     semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
                            llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0
-    fp = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
-    policy = semantic_policy.policy_fingerprint(scfg)
-    row, _ = semantic_store._primary_assessment_history(db.db, 1, 1, fp, policy)
-    assert row is not None
-    assert row["model"] == NEXT == row["meta"]["model"]
-    assert row["meta"]["technical_status"] == "complete"
-    assert semantic_store._valid_primary_assessment(
-        row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
     scfg = semantic_policy.runtime_config(cfg)[0]
     policy = semantic_policy.policy_fingerprint(scfg)
     fp = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
@@ -342,3 +334,11 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
     semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
                            llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0
+    fp = bundle["source_fingerprint"]
+    policy = semantic_policy.policy_fingerprint(scfg)
+    row, _ = semantic_store._primary_assessment_history(db.db, 1, 1, fp, policy)
+    assert row is not None
+    assert row["model"] == NEXT == row["meta"]["model"]
+    assert row["meta"]["technical_status"] == "complete"
+    assert semantic_store._valid_primary_assessment(
+        row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
