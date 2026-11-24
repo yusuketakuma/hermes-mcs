@@ -292,3 +292,22 @@ def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(run
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
     snapshot, _, pending = readiness._pending(ledger.db, 1, cfg)
     assert not any(pending.values())   # an out-of-scope skip is final, even with Jev available
+
+
+def test_an_in_scope_patient_past_the_jev_deadline_is_neither_sent_nor_skipped(runtime, real_cloud, monkeypatch):
+    """The control for the out-of-scope case: an expired semantic.until still holds an in-scope patient."""
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    assert cfg['semantic']['project_ids'] == [1]   # the fixture's Jev scope covers the cloud patient
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: 'synthetic-jev-key')
+
+    def past_until(*_args, **_kwargs):
+        raise semantic_jev.JevError('budget_exceeded', 'semantic_until_expired')
+    monkeypatch.setattr(semantic_runtime, '_jev_window_check', past_until)
+    outcomes = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(20)]
+    assert posts and not ledger.synthetic_jev_requests
+    assert 'source_quality_deferred' in {result.get('reason') for result in outcomes}
+    assert outcomes[-1]['status'] != 'complete'
+    assert not ledger.artifacts('patient_context_source_quality_skipped_v1')
+    assert not ledger.artifacts(state.QUALITY_SKIP)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is None

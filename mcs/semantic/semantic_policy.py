@@ -254,6 +254,19 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
     return out, errors
 
 
+def off_cause(cfg: dict, *, key_present, root=None, transfer_status=None) -> str | None:
+    """Why semantic_config resolves semantic to off ("invalid", "explicit", "review_held" or "no_key"), or None while on."""
+    scfg, errors = semantic_config(cfg, key_present=key_present, root=root, transfer_status=transfer_status)
+    if scfg["mode"] != "off":
+        return None
+    block = cfg.get("semantic")
+    if errors:
+        return "invalid"
+    if isinstance(block, dict) and "mode" in block:
+        return "explicit"
+    return "review_held" if scfg["jev_held"] else "no_key"
+
+
 def runtime_key_present(cfg, root) -> bool:
     """Whether this MCS dotenv's Jev key can switch an omitted mode on."""
     block = cfg.get("semantic")
