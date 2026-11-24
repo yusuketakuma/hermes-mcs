@@ -722,6 +722,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] == "ops.provider_pending_finalize":
         from config_edit import finalize_provider_pending_tx
         return finalize_provider_pending_tx(db, req, filesystem_changes)
+    if req["cmd"] == "ops.jev_model_set":
+        from jev_model_setup import apply_tx as jev_model_tx
+        return jev_model_tx(db, req, filesystem_changes)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

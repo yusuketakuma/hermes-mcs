@@ -303,8 +303,10 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                         "no_api_key")
     elif sem["mode"] == "off" and _extract_qc_requested(cfg):
         # an explicit off is never overridden by a key, so only an omitted mode is fixed by one
-        remedy = ("semantic.mode を off 以外に変更してください" if "mode" in cfg["semantic"] else
-                  "TYPESAFE_API_KEYを登録するか、semantic.mode を設定してください")
+        # an explicit mode also needs project_ids and a daily budget above 0 (semantic_policy)
+        scope = "semantic.project_ids と 0 より大きい semantic.daily_request_budget も設定してください"
+        remedy = (f"semantic.mode を off 以外に変更し、{scope}" if "mode" in cfg["semantic"] else
+                  f"TYPESAFE_API_KEYを登録してください。semantic.mode を設定する場合は、{scope}")
         warnings.append("抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません。"
                         f"使う場合は{remedy}。エラーコード: extract_qc_inactive")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
