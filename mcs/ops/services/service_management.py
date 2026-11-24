@@ -311,6 +311,8 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
         path = standalone_service_path(paths=paths)
         if not os.path.exists(path):
             warnings.append('独立動作の常駐設定が未導入です。`mcs_setup.py services`を実行してください。個別の起動方法: 常駐管理ツールから`python -m mcs_standalone run`を起動してください')
+        elif standalone_loaded(paths=paths) is None:
+            warnings.append('独立動作の常駐処理の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
         elif not standalone_loaded(paths=paths):
             errors.append('独立動作の常駐処理は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください')
         else:
@@ -359,15 +361,21 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
             recorded = paths.root
         if os.path.realpath(recorded) != os.path.realpath(paths.checkout):
             warnings.append(f'復旧監視の対象は{recorded}です。この導入先{paths.checkout}とは異なります。' + fix)
-        if not agent_loaded(contract.RECOVERY_LABEL, paths=paths):
+        recovery_loaded = agent_loaded(contract.RECOVERY_LABEL, paths=paths)
+        if recovery_loaded is None:
+            warnings.append(f'復旧監視{contract.RECOVERY_LABEL}の読み込み状態を確認できません（launchctl が応答しません）。`launchctl print gui/{uid}/{contract.RECOVERY_LABEL}`で確認してください')
+        elif not recovery_loaded:
             errors.append(f'復旧監視{contract.RECOVERY_LABEL}は導入済みですが読み込まれていません。起動方法: `launchctl bootstrap gui/{uid} {plist}`')
         held = recovery_hold(paths.root)
         if held:
             warnings.append(f'復旧監視は保留中です（{held}）。中断した更新があっても自動では復旧しません。'
                             '設定と保留記録を削除せず、`mcs_update.py status`と更新ガイド（UPGRADE_AGENT.md）§7を確認してください')
-    if not any((agent_loaded(lb, paths=paths) for lb in contract.LLAMA_LABELS)):
+    llama_states = {lb: agent_loaded(lb, paths=paths) for lb in contract.LLAMA_LABELS}
+    if not any(llama_states.values()):
         installed = [lb for lb in contract.LLAMA_LABELS if os.path.exists(os.path.join(paths.agents_dir, f'{lb}.plist'))]
-        if installed:
+        if None in llama_states.values():
+            warnings.append(f'ローカルAIの常駐処理の読み込み状態を確認できません（launchctl が応答しません）。`launchctl print gui/{uid}/<label>`で確認してください')
+        elif installed:
             lp = os.path.join(paths.agents_dir, f'{installed[0]}.plist')
             errors.append(f'ローカルAIの常駐処理{installed[0]}は導入済みですが読み込まれておらず、AIは停止しています。起動方法: `launchctl bootstrap gui/{uid} {lp}`')
         else:
@@ -442,9 +450,11 @@ def _defer_reload(script: str, label: str, dst: str, *, paths: ServicePaths) -> 
     subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, f'gui/{uid}/{label}', f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
 
 
-def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool:
+def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool | None:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
-    Converges loaded state to rendered content (R6)."""
+    Converges loaded state to rendered content (R6). None when launchd
+    cannot answer the pre-check — the job may still run old settings, so
+    it is not proof of absence (the caller keeps the old plist visible)."""
     uid = paths.uid
     if os.environ.get('XPC_SERVICE_NAME') == label:
         note(f'常駐処理{label}: この設定処理の終了後に読み込み直します')
@@ -457,7 +467,7 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
         # of absence: bootstrap over a loaded job fails to apply the new plist,
         # yet a late `print` answering 0 would still record it as loaded.
         note(f'常駐処理{label}: 読み込み状態を確認できないため、起動・再読込は行いません')
-        return False
+        return None
     if loaded:
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
@@ -565,12 +575,14 @@ def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths, st
             write_service_file(dst, body)
     loaded = True
     if changed or stale or not agent_loaded(label, paths=paths):
-        loaded = agent_reconcile(label, dst, note, dry, paths=paths)
-        if not loaded and changed and not dry:
-            # A written-but-not-reloaded plist reads as current next run
-            # (changed=False) while the loaded job still runs its old settings:
-            # put back what was on disk so the pending reload stays visible
-            # and the job keeps its launchd registration for next login.
+        outcome = agent_reconcile(label, dst, note, dry, paths=paths)
+        loaded = bool(outcome)
+        if outcome is None and changed and not dry:
+            # Only an unverifiable pre-state can hide a stale job: put back
+            # what was on disk so the pending reload stays visible next run
+            # and the job keeps its launchd registration. A failed bootstrap
+            # keeps the new file — a loaded job already runs it, and an
+            # absent one is retried by `not agent_loaded` next run.
             if cur is None:
                 with suppress(OSError):
                     os.unlink(dst)
@@ -839,6 +851,8 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
             break
     if not installed:
         warnings.append('独立動作の稼働監視が未導入です。本体が停止しても警報が出ません。`mcs_setup.py services`を実行してください')
+    elif standalone_health_loaded(paths=paths) is None:
+        warnings.append('独立動作の稼働監視の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
     elif not standalone_health_loaded(paths=paths):
         errors.append('独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください')
     try:
