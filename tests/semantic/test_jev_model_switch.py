@@ -273,20 +273,20 @@ def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
     import semantic_drain
     import semantic_policy
     import semantic_store
-    from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+    from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient
 
     class NextJev(_FakeJev):
         def evaluate(self, state, questions, deadline):
             return {**super().evaluate(state, questions, deadline), "model": NEXT}
 
-    cfg = _cfg("shadow", summary_mode="off", loop_mode="off", model=NEXT)
+    cfg = _cfg("shadow", summary_mode="shadow", loop_mode="off", model=NEXT)
     db = _ledger(tmp_path)
     patient = _patient(db)
     patient.messages = [_message(1)]
     db.save_patient(patient, notify={"source": "unread"}, semantic=True)
     client = NextJev()
     semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
-                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+                           llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0
     scfg = semantic_policy.runtime_config(cfg)[0]
     policy = semantic_policy.policy_fingerprint(scfg)
@@ -309,13 +309,13 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
     import semantic_store
     from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_policy import SCHEMA_VERSION
-    from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+    from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient
 
     class NextJev(_FakeJev):
         def evaluate(self, state, questions, deadline):
             return {**super().evaluate(state, questions, deadline), "model": NEXT}
 
-    cfg = _cfg("shadow", summary_mode="off", loop_mode="off", model=NEXT)
+    cfg = _cfg("shadow", summary_mode="shadow", loop_mode="off", model=NEXT)
     db = _ledger(tmp_path)
     patient = _patient(db)
     patient.messages = [_message(1)]
@@ -332,5 +332,5 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
                     project_id=1, message_id=1, model=jev.JEV_MODEL, meta=meta)
     client = NextJev()
     semantic_drain.run_due(db, cfg, {"errors": []}, clock.monotonic() + 300, jev_client=client,
-                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+                           llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done" and client.requests_made > 0
