@@ -147,14 +147,23 @@ def test_summary_audit_survives_another_process_refreshing_seen_time(quality_own
 
 @pytest.mark.parametrize("statement,params", [
     ("UPDATE messages SET body_text=body_text||'変更' WHERE message_id=1", ()),
+    ("UPDATE messages SET content_hash='synthetic-rewritten' WHERE message_id=1", ()),
     ("UPDATE messages SET first_seen=COALESCE(first_seen,0)+1 WHERE message_id=1", ()),
+    # Maintenance columns a broad message read also returns stay signed: only
+    # updated_seen may differ without stopping the audit.
+    ("UPDATE messages SET reply_count=COALESCE(reply_count,0)+1 WHERE message_id=1", ()),
+    ("UPDATE messages SET is_unread=1-is_unread WHERE message_id=1", ()),
     ("INSERT INTO message_revisions(message_id,seq,content_hash,body_state,observed_at) "
      "VALUES (1,99,'synthetic','full',0)", ()),
+    ("UPDATE patients SET fetch_state='forbidden' WHERE project_id=1", ()),
+    ("UPDATE artifacts SET content=content||' ' WHERE kind=? AND project_id=1",
+     (patient_context_refresh_state.CHUNK,)),
 ])
 def test_summary_audit_still_stops_when_another_process_changes_inputs(
         quality_owner, monkeypatch, statement, params):
-    """Body, first_seen and revision are inputs: bumping them at the lock
-    position must still refuse the quality write."""
+    """Body, hash, first_seen, reply_count, is_unread, revisions, permission and
+    the summary's chunk artifacts are inputs: bumping them at the lock position
+    must still refuse the quality write."""
     led, clock, cfg, doc, sends, _ = quality_owner
     _commit_at_every_lock(monkeypatch, led, statement, params)
     with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
