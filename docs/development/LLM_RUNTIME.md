@@ -95,7 +95,7 @@ pinしないunitの送信先の選択は従来どおりです。
 現在の世代で`qc_fix`を持つ投稿は通常の再抽出として送りません。人の報告と世代更新の再抽出は対象外です。
 `meta.qc_fix.attempt`は採用した2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
 送信後の失敗はローカルで再実行せず、抽出を書き直さないので現在の監査がその抽出を指したまま残り、`mcs view qc`の確認候補に出します。
-モデルは`jev-1.14.0`へ固定し、応答モデル不一致を拒否します（2026-11 に`jev-1.13.0`から更新。料金・文脈上限・要求と応答の形式は同じ）。設定の`semantic.model`に書けるのは固定IDか以前の版が固定していたID（`JEV_RETIRED_PINS`）だけで、どちらも固定IDとして扱います。別のIDは設定誤りとして意味解析を止めます。抽出監査は旧モデルの結果を抽出が変わるまで有効とし、新しい監査から新モデルを使います。
+コードの既定モデルは`jev-1.14.0`で、応答モデル不一致を拒否します（2026-11 に`jev-1.13.0`から更新。料金・文脈上限・要求と応答の形式は同じ）。使うモデルは`semantic_jev.resolve_model`が`semantic.model`から1か所で決め、Jevへの要求・`policy_fingerprint`（したがって`execution_generation`）・診断がその値を使います。`semantic.model`がない、既定と同じ、または以前の版が固定していたID（`JEV_RETIRED_PINS`）なら既定を使い、別の固定版ID（`jev-X.Y.Z`）ならその版を使います。`latest`などの別名や形式の違うIDは設定誤りとして意味解析を止めます。モデルは自動で切り替えません（AT-064）。`mcs_setup.py check`は1日1回までJevのモデル一覧を取得して（日次上限に数えます）、使用中より新しい固定版を「情報」に表示します。切替は`mcs_setup.py jev-model --to <版> --confirm-human --reason`だけで、合成データの検出確認（`semantic_bench.detection_probe`）に合格したときに承認記録`ops.jev_model_set`とともに`config_edit.apply`で保存します。切り替えると`policy_fingerprint`が変わり、完了済みの意味解析が新しいモデルで再投入されます。Jevの成果物の`model`列と`bundle_fingerprint`の`model`は現在もコードの既定を記録します。抽出監査は旧モデルの結果を抽出が変わるまで有効とし、新しい監査から新モデルを使います。
 429/5xx/transportのretryはjobの残予算内、401/403はretryしません。
 
 評価CLIには、通常のmodeとは別に実LLM/Jevを呼ぶ入口もあります。

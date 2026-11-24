@@ -813,7 +813,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
 def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, config_path=None):
     """Reserve every explicit live-evaluation HTTP against the same MCS daily count."""
     from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
-    if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e"}:
+    if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e",
+                         "jev_model_probe", "jev_model_check"}:
         raise ValueError("manual_jev_operation_invalid")
     if daily_request_budget is None:
         daily_request_budget = DAILY_REQUEST_LIMIT
@@ -1070,6 +1071,10 @@ class JevEvaluation:
         self._cutoff = cutoff
         self._transport = transport
         self._timing = timing
+
+    @property
+    def model(self):
+        return getattr(self._client, "model", None)
 
     @property
     def requests_made(self):
