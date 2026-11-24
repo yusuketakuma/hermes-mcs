@@ -20,9 +20,12 @@ def recent_posted_at():
 
     The clock is read once per test. Posts order by (posted_at, message_id), so
     two default-stamped messages built on either side of a wall-clock second
-    would otherwise swap places in a thread or a queue, on a slow host only."""
+    would otherwise swap places in a thread or a queue, on a slow host only.
+    Calls without a current test ID are not cached."""
     global _recent
     test = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    if not test:
+        return (datetime.now(_JST) - timedelta(hours=1)).isoformat(timespec="seconds")
     if _recent[0] != test:
         _recent = (test, (datetime.now(_JST) - timedelta(hours=1)).isoformat(timespec="seconds"))
     return _recent[1]
