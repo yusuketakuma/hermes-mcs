@@ -14,7 +14,7 @@
 ## 今回の対象
 
 - v1.2.1（タグ 2026-11-22）以降の変更記録37件を `changes/archive/1.3.0/` へ収録。機能アップデート版として番号 `1.3.0` を指定（所有者 2026-11-24）。
-- 内訳: 新機能12件（在宅ケア台帳・職員・ケアチーム・訪問歴・処方歴・訪問ルート・常駐モード・ローカルバックアップ対象・医薬品検索共通入口・患者横断検索・照会返答待ちアラート・日次サマリー処方期限一覧・Jev要求内訳表示・ローカル患者画面の表示とMCS引き渡し）、改善8件（Jev 1.14.0・モジュール整理・QC再抽出・意味解析まとめ処理など）、不具合修正17件（既存14件に#352/#358・#356・#359を追加）。
+- 内訳: 新機能12件（在宅ケア台帳・職員・ケアチーム・訪問歴・処方歴・訪問ルート・常駐モード・ローカルバックアップ対象・医薬品検索共通入口・患者横断検索・照会返答待ちアラート・日次サマリー処方期限一覧・Jev要求内訳表示・ローカル患者画面の表示とMCS引き渡し）、改善8件（Jev 1.14.0・モジュール整理・QC再抽出・抽出QCのまとめ処理など）、不具合修正17件（既存14件に#352/#358・#356・#359を追加）。
 - CHANGELOG の v1.3.0 節と公開Release本文を生成し、同じ比較表・説明図PNGを掲載。README のリリース案内も生成。図は合成の説明図で実画面ではない旨を記載し、公開URLの到達・Release画面での表示は未確認（tag/asset未公開）。公開本文は上限内。
 - 説明図の来歴とhashは `visual-source.json`（PNG 1960×840 の sha256 記録済み）、37件の対応表は `change-map.json`。
 - PR #367（head `54d435b5c86a7cc10dd5073ac4074d2b041279fd`）は別候補として管理し、この37件には含めない。PR本文に記された稼働Mac側の未pushブランチ `codex/patient-context-progress-20261124` と患者選定ロック案は、対象・内容ともこちらでは照合していない。PR #367とSoftware Factoryで依頼された改善の対応関係は未確定。担当側で関連テストの旧head比較中のため、重複実装・テスト・実機変更・取込は行わない。
@@ -26,7 +26,7 @@
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
 - `release_notes.py build --version 1.3.0 --date 2026-11-24`: 既存版を上書きしないようcleanな一時worktreeで生成。候補側で更新済みの `jev-optional.json` と `semantic-drain-throughput.json` を用い、archive 37件がPR作業ツリーと完全一致することを確認。
-- `release_notes.py export --version 1.3.0`: 本文・タイトル出力成功。`release-notes-1.3.0.md`・`release-title-1.3.0.txt` に収録（本文113,640 byte、上限内）。
+- `release_notes.py export --version 1.3.0`: 本文・タイトル出力成功。`release-notes-1.3.0.md`・`release-title-1.3.0.txt` に収録（本文115,091バイト、上限内）。
 - `update_readme.py`: README生成ブロックは生成済み状態と一致（release・modules・signals・stats・cli）。
 - `readme_release.py --check`: 合格。
 - `check_drug_master_bundle.py`: 同梱 bundle は公式最新版 20261112（MHLW download menu の医薬品マスター最終更新日・令和8年11月12日・19,324件との一致を 2026-11-24 に確認）。有効化は要オペレーター承認で未実施。
