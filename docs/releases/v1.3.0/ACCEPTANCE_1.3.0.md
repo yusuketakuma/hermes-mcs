@@ -84,7 +84,7 @@
   - 承認範囲: 候補の`candidate_fingerprint`は選択モデルを含まず、切替処理にも`fact_source=canonical`の拒否がありません。canonicalの承認済み証跡とモデルを結び付けられず、切替後に旧証跡が再利用される可能性があります。初期値が既定モデルかどうかだけでは判定できません。
   - 中断時の記録: 候補は切替設定を保存してから承認receiptをcommitします。間でプロセスが中断すると、設定変更とreceiptが不一致になる可能性があり、非既定モデル利用の有無にかかわらず切替操作が対象です。
   これらは静的な候補差分の確認であり、実機設定や実サービスでの検証ではありません。対象設定は調査していません。通信許可・承認範囲・中断時の回復確認が終わるまで取込・適用を保留します。
-- 公式医薬品マスター: 2026-11-24に最新版20261112・19,324件を照合した既存証跡と、`activation: false`・オペレーター承認必須のmanifestを保持しています。この追補では公式サイトから再取得していないため、公開前に更新有無を再確認します。
+- 公式医薬品マスター: 2026-11-24に[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)を再確認しました。令和8年度版の医薬品マスターは2026-11-12更新・19,324件で、同梱manifestのedition `20261112`・rows `19324` と一致します。`check_drug_master_bundle.py` も成功し、同梱archive/CSVとmanifestのhash一致、`activation: false`、オペレーター承認必須、`conversion_held: terms_unconfirmed` を確認しました。公式archive自体の再ダウンロードはしていません。
 - ローカル取込・本番適用・利用者試用: Local Handsの接続設定のみ行い、端末の走査・変更はしていません。対象リポジトリ／本番適用先の同一性確認、取込、適用、通常サービス再起動は未実施です。rollbackは既存更新ツールと事前backupを使う手順を合成環境で確認していますが、実機では未実施です。適用時は更新前backupを確認し、問題があれば`"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`を使います。schema変更に伴うDB復元では別途人の承認が必要な場合があり、コードだけを戻す操作で代用しません。
 - tag `v1.3.0` 作成・GitHub Release公開は、Yusukeの実使用後の明示OKまで行いません。
 
