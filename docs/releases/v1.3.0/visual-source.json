@@ -1,0 +1,27 @@
+{
+ "artifacts": [
+  {
+   "path": "docs/releases/v1.3.0/homecare-drug-search-v130.svg",
+   "sha256": "2186fc484bd7e1b6f99412a52a9057453099a45457b62139057103886e650368"
+  },
+  {
+   "path": "docs/releases/v1.3.0/homecare-drug-search-v130.png",
+   "sha256": "64431b1ae6f98f53466ba84c4a58cf204c9ae50c66215a71ae7b211bfa895ce7"
+  }
+ ],
+ "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+ "notes": [
+  "図1点はv1.3.0の主要な追加（在宅ケアの患者台帳への記録集約と、医薬品の検索・照会共通入口・患者横断検索・照会返答待ちアラート）を説明する合成図。実画面・測定結果・患者データを含まない。",
+  "SVG原稿は手書きXML、PNGはChrome headlessで980x420@2xに描画（1960x840）。",
+  "GitHub Release への画像添付と外部表示は未実施。CHANGELOG・export本文では releases/download/v1.3.0/ 配下のURLを参照し、README生成時はリポジトリ内相対パスへ変換される。tag・asset未公開のため到達・表示は未確認。",
+  "図の直下に説明文を添え、『実画面や測定結果ではありません』の注記を図内にも記載。"
+ ],
+ "scope": "v1.3.0 の主要な追加の説明図1点。最終候補SHAの固定・受入証拠ではない。",
+ "source": "docs/releases/v1.3.0/homecare-drug-search-v130.svg",
+ "status": "unpublished_preparation",
+ "visual_check": {
+  "checked": "2026-11-24、1960x840のPNGを1372x588相当へ縮小した表示で文字欠落・重なり・余白を確認。",
+  "narrow_width_ok": true,
+  "png_rendered": true
+ }
+}
