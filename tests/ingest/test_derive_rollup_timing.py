@@ -51,7 +51,8 @@ def test_derive_rollup_timing_has_remaining_budget_and_no_stage_double_count(tim
     assert result["rollup_scan"]["unknown_observed"] == 1
     assert result["rollups"] == 1 and result["rollup_source_unknown"] == 1
     assert result["errors"] == ["deadline_deferred:rollup_scan", "rollup: source_unknown"]
-    assert set(result["stage_elapsed_s"]) == {"derive_rules", "derive_medications"}
+    assert set(result["stage_elapsed_s"]) == {
+        "derive_rules", "derive_llm", "derive_medications", "derive_signals"}
     assert result["run"]["slowest_stage"] == "derive_rules"
 
 
@@ -100,3 +101,24 @@ def test_scan_clock_failure_does_not_replace_original_failure(timing_case, monke
     assert result["errors"] == ["rollup: ValueError"]
     assert "rollup_timing" not in result
     assert "synthetic-private" not in str(result)
+
+
+def test_derive_records_realtime_llm_and_signals_seconds(timing_case, monkeypatch):
+    """Both previously unmeasured parts of derive report their own elapsed seconds."""
+    ledger, clock = timing_case
+
+    def realtime(*args, **kwargs):
+        clock[0] += 7.25
+
+    def signals(*args, **kwargs):
+        clock[0] += 4.5
+        return {"errors": []}
+
+    monkeypatch.setattr(run_check, "_derive_realtime_llm", realtime)
+    monkeypatch.setattr(mcs_signals, "evaluate", signals)
+    monkeypatch.setattr(rollup, "scan_fair_dirty_projects",
+                        lambda *a, **k: rollup.RollupScan((), (), False, ()))
+    result = {"errors": []}
+    run_check.stage_derive(ledger, result, 200, {}, llm_budget_cap=0)
+    assert result["stage_elapsed_s"]["derive_llm"] == 7.25
+    assert result["stage_elapsed_s"]["derive_signals"] == 4.5
