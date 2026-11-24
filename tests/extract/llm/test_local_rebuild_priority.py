@@ -12,7 +12,7 @@ import extract_llm_local_rebuild as local_rebuild
 import extract_llm_resident as resident
 import mcs_queries
 from extract_testkit import _message
-from test_anthropic_runtime import routed
+from test_anthropic_runtime import old, routed
 from test_local_rebuild_execution import _approved, _no_cloud_unit, _paid, _usage
 
 __all__ = ['routed']
@@ -105,3 +105,58 @@ def test_a_proof_changed_unit_fails_closed_without_stalling_the_pass(routed, mon
         "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' AND message_id=1").fetchone()
     assert held and held[0] > time.time() + 60           # bounded hold, not a spin
     assert worker.run_pending(ledger, limit=2, budget_s=180)['done'] == 0
+
+
+def _aged(ledger, mid):
+    """A previously-extracted row left pending by a version bump (the backlog's
+    usual non-fresh shape)."""
+    old(ledger, mid)
+
+
+def test_limit_one_oldest_turn_lifts_the_approved_unit_past_old_backlog(routed, monkeypatch):
+    """A single-slot oldest-only turn still takes the approval first."""
+    ledger, cfg, calls, reserved, results = routed
+    _approved(ledger, monkeypatch)
+    for mid in range(100, 150):
+        _aged(ledger, mid)
+    rows, _ = worker._select_pending(ledger, 1, None, None, True)
+    assert [row["message_id"] for row in rows] == [1]
+
+
+def test_the_approved_unit_counts_as_selected_but_never_fresh(routed, monkeypatch):
+    """selected/fresh_selected pinning: a re-extraction is never a new arrival."""
+    ledger, cfg, calls, reserved, results = routed
+    _approved(ledger, monkeypatch)
+    _freshes(ledger, (2, 3))
+    rows, fresh_selected = worker._select_pending(ledger, 1, None, None, False)
+    assert [row["message_id"] for row in rows] == [1] and fresh_selected == 0
+    rows, fresh_selected = worker._select_pending(ledger, 3, None, None, False)
+    assert [row["message_id"] for row in rows] == [1, 3, 2] and fresh_selected == 2
+
+
+def test_an_adopted_unit_stays_approved_at_the_head_when_it_pends_again(routed, monkeypatch):
+    """Adopted is runnable: while the approval stands, a version-aged adopted
+    final returns to the head and re-runs locally under the same tag."""
+    ledger, cfg, calls, reserved, results = routed
+    unit = _approved(ledger, monkeypatch)
+    _no_cloud_unit(monkeypatch)
+    prompts = []
+    _local_stub(monkeypatch, prompts)
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    _freshes(ledger, (2,))
+    with ledger.db:
+        # a later extract-version bump leaves the adopted final non-current
+        ledger.db.execute(
+            "UPDATE artifacts SET meta=json_set(meta,'$.extract_version',?) "
+            "WHERE kind=? AND message_id=1", (worker.EXTRACT_VERSION - 1, worker.KIND))
+    rows, _ = worker._select_pending(ledger, 1, None, None, False)
+    assert [row["message_id"] for row in rows] == [1]
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report['done'] == 1 and len(prompts) == 2
+    assert calls == [] and reserved == [] and results == []
+    final = ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind=? AND message_id=1 ORDER BY artifact_id DESC LIMIT 1",
+        (worker.KIND,)).fetchone()
+    assert json.loads(final[0])['local_rebuild'] == local_rebuild.tag(unit)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED

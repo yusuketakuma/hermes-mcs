@@ -568,6 +568,8 @@ def _admitted_per_pass(monkeypatch, passes, base=None):
 
     class DB:
         def execute(self, sql, params=()):
+            if "command_receipts" in sql:
+                return []                       # no approved rebuilds in this fixture
             assert "notified_at" in sql
             return [(7,)]
 
@@ -638,6 +640,8 @@ def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
 
     class DB:
         def execute(self, sql, params=()):
+            if "command_receipts" in sql:
+                return []                       # no approved rebuilds in this fixture
             assert "notified_at" in sql
             return [(7,)]
 
@@ -919,3 +923,118 @@ def test_backlog_lane_runs_the_reprocess_slice_once_per_maintenance_interval(tmp
         assert seen["calls"] == 3
     finally:
         db.close()
+
+
+def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, monkeypatch):
+    """Real resident entry: an approved rebuild, backlog and new arrivals share
+    the drainer; every kind advances while the approved unit never counts as
+    a fresh selection."""
+    import json
+
+    from extract_testkit import _hash, _ledger, _message, _v2_artifact
+    import extract_llm_local_rebuild as local_rebuild
+    from test_local_rebuild_execution import _approved
+
+    db = _ledger(tmp_path)
+    real_close = db.close
+    clock = [1000.0]
+    wall_now = time.time()
+    seen = []
+    turn_fresh = []
+    turn_kind = []
+    errors = []
+    pass_count = [0]
+    try:
+        unit = _approved(db, monkeypatch)               # approved unit (mid 1)
+        tag = local_rebuild.tag(unit)
+        db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")
+                          for mid in (9, 11)])
+        db.ensure_patient(2)
+        db.save_messages([_message(mid=12, project_id=2, body="合成本文 12")])
+        with db.db:
+            db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+        for mid in (9, 11):
+            db.artifact_add(
+                extract_llm.KIND, json.dumps({"summary": "synthetic old"}),
+                project_id=1, message_id=mid,
+                meta={"hash": _hash(db, mid),
+                      "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        db.artifact_add(
+            extract_llm.KIND, json.dumps({"summary": "synthetic old"}),
+            project_id=2, message_id=12,
+            meta={"hash": _hash(db, 12),
+                  "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        base = {1, 9, 11, 12, *range(100, 106)}
+
+        monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True,
+                            raising=False)
+        for mod in (extract_llm_carry, extract_llm_errors, extract_llm_resident,
+                    extract_llm_runner, extract_llm_selection,
+                    extract_llm_source_contract):
+            monkeypatch.setattr(mod, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+        def background(*_args):
+            if pass_count[0] == 6:
+                raise KeyboardInterrupt("synthetic stop")
+            mid = 100 + pass_count[0]
+            db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
+            with db.db:
+                db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
+                              (wall_now, mid))
+            pass_count[0] += 1
+            clock[0] += extract_llm.SEMANTIC_FIRST_S / 2 + 1
+            return {"errors": [], "job_metrics": [
+                {"kind": "semantic", "status": "done"}]}
+
+        def select_and_complete(ledger, **kwargs):
+            extra = {key: True for key in ("archived_first", "fair_oldest")
+                     if kwargs.get(key)}
+            rows, fresh_selected = extract_llm._select_pending(
+                ledger, kwargs["limit"], kwargs["admitted_ids"],
+                kwargs["shard"], kwargs["oldest_first"], **extra)
+            try:
+                if rows:
+                    row = dict(rows[0])
+                    own_lease = extract_llm._claim(ledger, row)
+                    if own_lease is not None:
+                        mid = row["message_id"]
+                        meta = {"summary": "synthetic current"}
+                        if mid == 1:                    # adoption: tagged final
+                            meta["local_rebuild"] = tag
+                        _v2_artifact(ledger, mid, _hash(ledger, mid), meta,
+                                     project_id=row["project_id"])
+                        extract_llm._release(ledger, row, own_lease)
+                        seen.append(mid)
+                        turn_kind.append("oldest" if kwargs["oldest_first"]
+                                         else "normal")
+                        turn_fresh.append(fresh_selected)
+                return {"done": int(bool(rows)), "failed": 0,
+                        "left": 1, "selected": len(rows)}
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+                return {"done": 0, "failed": 1, "left": 1, "selected": 0}
+
+        _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+        monkeypatch.setattr(db, "close", lambda: None)
+        monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+        monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
+        monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: set(base))
+        monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+        monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
+        monkeypatch.setattr(extract_llm, "run_pending", select_and_complete)
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+        with pytest.raises(KeyboardInterrupt):
+            extract_llm.main()
+
+        assert not errors
+        assert seen[0] == 1                            # approved unit goes first
+        approved_turn = turn_fresh[0]
+        assert approved_turn == 0                      # re-extraction, not fresh
+        normal_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
+                        if mid in range(100, 106) and kind == "normal"]
+        assert normal_fresh and all(f == 1 for f in normal_fresh)
+        assert any(mid in range(100, 106) for mid in seen)   # arrivals advance
+        assert 9 in seen or 11 in seen or 12 in seen         # backlog advances
+    finally:
+        real_close()
