@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 
 import health_report
-import semantic_policy
+from semantic_qc import KIND_JEV_HEALTH_RECOVERY
 from common_testkit import ledger_fixture
 
 db = ledger_fixture(name="db")
@@ -87,10 +87,10 @@ def test_only_a_completed_qc_with_a_recorded_jev_request_clears_the_previous_blo
         ("extract_qc", '{"qc":"done","jev_requests":"1"}'),
         ("extract_qc", '{"qc":"unevaluated","jev_requests":1}'),
         ("extract_qc", "{broken"),
-        (semantic_policy.KIND_JEV_HEALTH_RECOVERY, "{}"),
-        (semantic_policy.KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":0}'),
-        (semantic_policy.KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":true}'),
-        (semantic_policy.KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":1.5}'),
+        (KIND_JEV_HEALTH_RECOVERY, "{}"),
+        (KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":0}'),
+        (KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":true}'),
+        (KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":1.5}'),
         ("extract_qc_skipped", '{"qc":"done","jev_requests":1}'),
         ("extract_qc_wait", '{"qc":"done","jev_requests":1}'),
     ]:
@@ -98,7 +98,7 @@ def test_only_a_completed_qc_with_a_recorded_jev_request_clears_the_previous_blo
         assert health_report.jev_block_reason(db.db) == "payment_required"
     _add(db, "extract_qc", '{"qc":"done","jev_requests":1}', 200)
     assert health_report.jev_block_reason(db.db) is None
-    _add(db, semantic_policy.KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":1}', 100)
+    _add(db, KIND_JEV_HEALTH_RECOVERY, '{"jev_requests":1}', 100)
     assert health_report.jev_block_reason(db.db) is None
     _add(db, "semantic_assess", '{"technical_status":"error","error_kind":"auth_error"}', 100)
     assert health_report.jev_block_reason(db.db) == "auth_error"

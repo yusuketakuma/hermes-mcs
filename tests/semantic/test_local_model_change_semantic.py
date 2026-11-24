@@ -5,6 +5,7 @@ import re
 import pytest
 
 import semantic_policy
+import semantic_qc
 import semantic_runtime
 import semantic_store
 import semantic_transport
@@ -115,7 +116,7 @@ def test_cloud_artifacts_stay_current_and_local_ones_go_stale(store, model):
 def test_reservation_receipts_and_jev_results_are_not_model_pinned(store, model):
     kinds = (semantic_policy.KIND_REPAIR, semantic_policy.KIND_SUMMARY_FORMAT_REPAIR,
              semantic_policy.KIND_FACT_REPAIR, semantic_policy.KIND_AUDIT, semantic_policy.KIND_COVERAGE,
-             semantic_policy.KIND_FACT_AUDIT, semantic_policy.KIND_BUNDLE)
+             semantic_policy.KIND_FACT_AUDIT, semantic_policy.KIND_BUNDLE, semantic_qc.KIND_JEV_HEALTH_RECOVERY)
     for kind in kinds:
         _add(store, kind)
     model("synthetic-local-b")
@@ -129,18 +130,22 @@ def _kind_constants():
     import semantic_extraction
     import semantic_loops
     import semantic_publication
-    values = set()
-    for module in (semantic_policy, semantic_publication, semantic_extraction, semantic_store,
-                   semantic_conversion, semantic_loops):
-        values |= {value for name, value in vars(module).items()
-                   if re.fullmatch(r"KIND_[A-Z0-9_]+", name) and isinstance(value, str)}
-    return values
+    modules = (semantic_policy, semantic_publication, semantic_extraction, semantic_store,
+               semantic_conversion, semantic_loops, semantic_qc)
+    kinds = {}
+    for module in modules:
+        for name, value in vars(module).items():
+            if re.fullmatch(r"KIND_[A-Z0-9_]+", name) and isinstance(value, str):
+                assert kinds.setdefault(name, value) == value
+    return kinds
 
 
 def test_every_semantic_kind_is_classified_for_the_local_model_gate():
-    gated, ungated = semantic_policy.LOCAL_MODEL_GATED_KINDS, semantic_policy.LOCAL_MODEL_UNGATED_KINDS
+    gated = semantic_policy.LOCAL_MODEL_GATED_KINDS
+    # Monitoring records are independent of both the local model and the interpretation policy.
+    ungated = semantic_policy.LOCAL_MODEL_UNGATED_KINDS | {semantic_qc.KIND_JEV_HEALTH_RECOVERY}
     assert not gated & ungated
-    assert _kind_constants() == gated | ungated
+    assert set(_kind_constants().values()) == gated | ungated
 
 
 def test_loop_completion_generation_is_model_free_but_requeue_generation_is_not(model):
@@ -232,10 +237,7 @@ def _artifact_writers():
 def test_every_local_model_gated_writer_records_its_model():
     """A row without a model keeps its fingerprint-only identity, so a gated writer must name one."""
     import ast
-    constants = {name: value for module in (semantic_policy,) + tuple(
-        __import__(m) for m in ("semantic_publication", "semantic_extraction", "semantic_store",
-                                "semantic_conversion", "semantic_loops"))
-        for name, value in vars(module).items() if re.fullmatch(r"KIND_[A-Z0-9_]+", name)}
+    constants = _kind_constants()
     gated_writers = 0
     for name, line, kind, model in _artifact_writers():
         if isinstance(kind, ast.Constant):
