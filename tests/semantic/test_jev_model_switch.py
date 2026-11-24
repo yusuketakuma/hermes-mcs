@@ -267,7 +267,8 @@ def test_a_rerun_never_undoes_a_later_switch(home, monkeypatch, capsys):
     assert "別の変更" in capsys.readouterr().out
 
 
-def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
+@pytest.mark.parametrize(("summary", "loop"), [("shadow", "off"), ("off", "shadow")])
+def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path, summary, loop):
     import time as clock
 
     import semantic_drain
@@ -279,7 +280,7 @@ def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
         def evaluate(self, state, questions, deadline):
             return {**super().evaluate(state, questions, deadline), "model": NEXT}
 
-    cfg = _cfg("shadow", summary_mode="off", model=NEXT)
+    cfg = _cfg("shadow", summary_mode=summary, loop_mode=loop, model=NEXT)
     db = _ledger(tmp_path)
     patient = _patient(db)
     patient.messages = [_message(1)]
@@ -295,12 +296,13 @@ def test_a_chosen_model_labels_and_validates_scheduled_assessments(tmp_path):
     row, previous = semantic_store._primary_assessment_history(db.db, 1, 1, fp, policy)
     assert row["model"] == NEXT == row["meta"]["model"]
     assert semantic_store._valid_primary_assessment(row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
-    default = semantic_policy.runtime_config(_cfg("shadow", summary_mode="off"))[0]
+    default = semantic_policy.runtime_config(_cfg("shadow", summary_mode=summary, loop_mode=loop))[0]
     assert not semantic_store._valid_primary_assessment(row["content"], row["meta"], row["model"], 1, fp,
                                                         policy, default)
 
 
-def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_path):
+@pytest.mark.parametrize(("summary", "loop"), [("shadow", "off"), ("off", "shadow")])
+def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_path, summary, loop):
     """A pinned env's pre-switch rows said JEV_MODEL while the policy pinned NEXT:
     the label cannot be trusted, so the job re-evaluates instead of failing."""
     import time as clock
@@ -316,7 +318,7 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
         def evaluate(self, state, questions, deadline):
             return {**super().evaluate(state, questions, deadline), "model": NEXT}
 
-    cfg = _cfg("shadow", summary_mode="off", model=NEXT)
+    cfg = _cfg("shadow", summary_mode=summary, loop_mode=loop, model=NEXT)
     db = _ledger(tmp_path)
     patient = _patient(db)
     patient.messages = [_message(1)]
