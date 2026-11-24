@@ -254,7 +254,12 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                         WHERE claim.kind='extract_claim'
                           AND claim.project_id=m.project_id
                           AND claim.message_id=m.message_id
-                          AND claim.next_try > ?)
+                          AND claim.next_try > ?
+                          AND CASE WHEN json_valid(claim.payload)
+                                   AND json_extract(claim.payload,'$.hash') IS NOT NULL
+                                   AND m.content_hash IS NOT NULL
+                              THEN json_extract(claim.payload,'$.hash') IS m.content_hash
+                              ELSE 1 END)
         AND ({_retry_budget_sql()})
         AND ({pending})
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))

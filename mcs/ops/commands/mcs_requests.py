@@ -168,7 +168,7 @@ def validate(req):
                           "ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
                           "ops.external_transfer_acknowledge", "ops.slack_setup_discard",
-                          "ops.provider_pending_finalize"):
+                          "ops.provider_pending_finalize", "ops.jev_model_set"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
@@ -227,7 +227,7 @@ def apply_local_operation(req):
     """Apply one human-confirmed projectless ops.* command from a local CLI.
 
     Shared by the CLI entries: validate before opening a writer, take run.lock
-    (5 s bounded wait), refuse during an update or restore hold, then the
+    (bounded wait, locked_command.WAIT_SECONDS), refuse during an update or restore hold, then the
     receipt-first transaction. Returns the receipt, or None when the writer
     stayed busy."""
     import locked_command

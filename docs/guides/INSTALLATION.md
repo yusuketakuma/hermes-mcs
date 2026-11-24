@@ -691,7 +691,7 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | Hermes の通知接続が常駐管理されていません | `services` を実行（`hermes gateway install`+`start` で常駐化） |
 | 通知接続が更新前のプログラムで動いています（注意） | `hermes gateway restart`（§A-6） |
 | 意味解析は有効ですが、TYPESAFE_API_KEYを取得できません（no_api_key） | `semantic.mode` を `off` 以外に明示した環境で必須 — `~/.mcs/.env` に登録。`mode=off` と、mode を省略しキーがない環境は Jev を使わず、この警告は出ません（後者は「情報: Jev: 未導入」を1行表示） |
-| 抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません（extract_qc_inactive） | `semantic.mode=off` を明示している場合は mode を `off` 以外に変える（キーを登録しても off は変わらない）。mode を省略している場合は TYPESAFE_API_KEY を登録するか mode を設定する。注記が不要なら `extract_qc` を外す |
+| 抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません（extract_qc_inactive） | 対処は止まっている理由で分かれ、警告文が理由に合う対処を示す（`semantic_policy.off_cause`）。semantic の設定に問題があるときは、mode やキーの状態にかかわらず、まず同じチェックの問題・注意に従って設定を直す。設定に問題がない場合だけ次に進む。`semantic.mode=off` を明示：mode を `off` 以外に変え、`semantic.project_ids` と 0 より大きい `semantic.daily_request_budget` も設定する（mode を明示すると上限の既定は 0。キーが未登録なら登録も必要。キーを登録しても off は変わらない）。mode を省略しキーなし：TYPESAFE_API_KEY を登録する（mode を設定する場合は上と同じく `project_ids` と上限も必要）。mode を省略しキーはあるが施設の確認で保留：キーの再登録ではなく、施設の確認で Jev を含めて記録する（同じチェックの Jev 送信停止の注意を参照）。注記が不要ならどの場合も `extract_qc` を外す |
 
 
 ### 7-3. その他の症状

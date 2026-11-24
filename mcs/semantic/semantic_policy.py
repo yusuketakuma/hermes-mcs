@@ -183,7 +183,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
         if not provider_settings.jev_model_pin_ok(block["model"], jev.JEV_MODEL):
             errors.append("config: semantic_model_invalid")
             out["mode"] = "off"
-        out["model"] = jev.JEV_MODEL
+        out["model"] = jev.resolve_model(block["model"]) or jev.JEV_MODEL
     for key, lo, hi in (("daily_request_budget", 0, jev.DAILY_REQUEST_BUDGET_MAX),
                         ("max_questions_per_request", 1, 48),
                         ("max_attempts_per_try", 1, 3),
@@ -254,6 +254,19 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
     return out, errors
 
 
+def off_cause(cfg: dict, *, key_present, root=None, transfer_status=None) -> str | None:
+    """Why semantic_config resolves semantic to off ("invalid", "explicit", "review_held" or "no_key"), or None while on."""
+    scfg, errors = semantic_config(cfg, key_present=key_present, root=root, transfer_status=transfer_status)
+    if scfg["mode"] != "off":
+        return None
+    block = cfg.get("semantic")
+    if errors:
+        return "invalid"
+    if isinstance(block, dict) and "mode" in block:
+        return "explicit"
+    return "review_held" if scfg["jev_held"] else "no_key"
+
+
 def runtime_key_present(cfg, root) -> bool:
     """Whether this MCS dotenv's Jev key can switch an omitted mode on."""
     block = cfg.get("semantic")
@@ -308,12 +321,13 @@ def needs_local_model(scfg: dict) -> bool:
     return scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off"
 
 
-def waits_for_jev_quota(scfg: dict, lane) -> bool:
+def waits_for_jev_quota(scfg: dict, lane, kind: str) -> bool:
     """Whether a Jev refused for quota leaves the job due instead of completing it as skipped.
 
-    A backlog job with no local-model stage would complete with nothing but a
-    skipped assessment, so it waits for the next quota window."""
-    return lane == "backlog" and not needs_local_model(scfg)
+    A backlog job whose whole result is Jev's — every QC job, and a semantic
+    job with no local-model stage — would complete with nothing but a skipped
+    assessment, so it waits for the next quota window. Realtime jobs complete."""
+    return lane == "backlog" and (kind == QC_JOB_KIND or not needs_local_model(scfg))
 
 
 def policy_fingerprint(scfg: dict) -> str:

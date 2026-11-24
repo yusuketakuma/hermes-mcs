@@ -75,7 +75,8 @@ def test_slow_invalidation_yields_next_window_with_the_same_budget(tmp_path, mon
         second = semantic_drain.run_due(db, cfg, {"errors": []}, deadline,
                                        lane="backlog", max_jobs=1, jev_client=_FakeJev(), llm_fn=lambda *_: None)
         assert scans == [100]
-        assert served == ([] if fixed_stop else [881])
+        # the job runs to its own run deadline, settled when it starts (401 + 450 s)
+        assert served == ([] if fixed_stop else [min(881, 401 + 450)])
         assert second["done"] == (0 if fixed_stop else 1)
         row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
         assert row["state"] == ("pending" if fixed_stop else "done")

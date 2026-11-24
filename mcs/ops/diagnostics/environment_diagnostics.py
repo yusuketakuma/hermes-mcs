@@ -166,6 +166,21 @@ def _extract_qc_requested(cfg: dict) -> bool:
     return isinstance(block, dict) and block.get("extract_qc") == "annotate"
 
 
+def _qc_remedy(cause: str, key_present: bool) -> str:
+    """The step that turns semantic on for the cause semantic_policy.off_cause names."""
+    key = "" if key_present else "TYPESAFE_API_KEYを登録し、"
+    if cause == "invalid":
+        return "semantic の設定の問題（このチェックの問題・注意を参照）を直してください"
+    if cause == "review_held":
+        return "施設の確認で Jev を含めて記録してください（Jev への送信停止の注意を参照）"
+    if cause == "explicit":
+        # an explicit off is never overridden by a key; an explicit mode needs a scope and a budget
+        return (f"{key}semantic.mode を off 以外に変更し、semantic.project_ids と"
+                " 0 より大きい semantic.daily_request_budget を設定してください")
+    return ("TYPESAFE_API_KEYを登録してください。semantic.mode を設定する場合は、"
+            "semantic.project_ids と 0 より大きい semantic.daily_request_budget も設定してください")
+
+
 def jev_notice(cfg: dict, root) -> str | None:
     """Name an install that never set up Jev as information, since local-only use is supported."""
     block = cfg.get("semantic")
@@ -293,20 +308,17 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                     d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
                 + "）が稼働中のサービスより新しくなっています。"
                 "`hermes gateway restart`で新しいプログラムを読み込んでください")
-    from semantic_policy import semantic_config
+    from semantic_policy import off_cause
     jev_key_present = bool(mcs_util.private_env_value("TYPESAFE_API_KEY", paths.root))
-    sem, _ = semantic_config(cfg, key_present=jev_key_present)
-    if sem["mode"] != "off" and not jev_key_present:
+    cause = off_cause(cfg, key_present=jev_key_present, root=paths.root)
+    if cause is None and not jev_key_present:
         # newly diagnosed private-dotenv rule: a warning, so an older updater baseline never sees a new error
         warnings.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
                         "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                         "no_api_key")
-    elif sem["mode"] == "off" and _extract_qc_requested(cfg):
-        # an explicit off is never overridden by a key, so only an omitted mode is fixed by one
-        remedy = ("semantic.mode を off 以外に変更してください" if "mode" in cfg["semantic"] else
-                  "TYPESAFE_API_KEYを登録するか、semantic.mode を設定してください")
+    elif cause is not None and _extract_qc_requested(cfg):
         warnings.append("抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません。"
-                        f"使う場合は{remedy}。エラーコード: extract_qc_inactive")
+                        f"使う場合は{_qc_remedy(cause, jev_key_present)}。エラーコード: extract_qc_inactive")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
     labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
     if labels:
@@ -335,7 +347,14 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
             plist = os.path.join(agents, f"{label}.plist")
             if not os.path.exists(plist) or not domain_ok:
                 continue
-            if not service_management.agent_loaded(label, paths=paths, **probe_args):
+            loaded = service_management.agent_loaded(label, paths=paths, **probe_args)
+            if loaded is None:
+                # A flaked probe is not proof of a stop: warn to verify, never
+                # point at a bootstrap that may clash with a running job
+                warnings.append(
+                    f"常駐処理{label}の読み込み状態を確認できません（launchctl が応答しません）。"
+                    + f"`launchctl print gui/{paths.uid}/{label}`で確認してください")
+            elif not loaded:
                 # LINE WORKS is newly diagnosed in this version: a warning, so an
                 # updater postcheck baseline from older code never sees a new error
                 (warnings if label == lw else errors).append(

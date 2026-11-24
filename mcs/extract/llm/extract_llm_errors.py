@@ -367,10 +367,15 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> f
         payload=excluded.payload,state='pending',
         next_try=excluded.next_try,updated_at=excluded.updated_at
       WHERE fetch_jobs.next_try <= ?
+         OR (CASE WHEN json_valid(fetch_jobs.payload)
+                  AND json_extract(fetch_jobs.payload,'$.hash') IS NOT NULL
+                  AND ? IS NOT NULL
+             THEN json_extract(fetch_jobs.payload,'$.hash') IS NOT ?
+             ELSE 0 END)
         """, (r["project_id"], r["message_id"],
               json.dumps({inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
                           "ver": EXTRACT_VERSION, "owner_token": token}),
-              lease, now, now, now))
+              lease, now, now, now, r["content_hash"], r["content_hash"]))
         ledger.db.commit()
     except BaseException:
         try:
@@ -390,9 +395,13 @@ def _release(ledger, r, lease: float | None):
     if lease is None or ledger.db.in_transaction:
         return
     token = r.get("_claim_token") if isinstance(r, dict) else None
-    if isinstance(r, dict) and r.pop("_commit_hold", False):
+    hold = r.pop("_commit_hold", False) if isinstance(r, dict) else False
+    if hold:
         # Preserve this owner's claim briefly after a rejected save; checking
         # the occurrence and updating its lease share one writer transaction.
+        # A positive number carries the wait decided by the refusing path;
+        # a bare flag keeps the short prepare hold.
+        hold_s = hold if type(hold) in (int, float) and hold > 0 else _PREPARE_HOLD_S
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
             if (mcs_util.valid_hash(r.get("_source_binding")) and type(token) is str and token
@@ -402,7 +411,7 @@ def _release(ledger, r, lease: float | None):
                     "UPDATE fetch_jobs SET next_try=?,updated_at=? WHERE kind='extract_claim' "
                     "AND project_id=? AND message_id=? AND next_try=? AND next_try>? "
                     "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ?",
-                    (now + _PREPARE_HOLD_S, now, r["project_id"], r["message_id"], lease, now, token))
+                    (now + hold_s, now, r["project_id"], r["message_id"], lease, now, token))
                 if held.rowcount:
                     ledger.db.commit()
                     return

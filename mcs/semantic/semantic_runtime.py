@@ -638,6 +638,15 @@ def guarded_llm(fn, guard, deadline, timeout_cap=None, call_reserve=None):
     return _GuardedLLM(fn, guard, deadline, timeout_cap, call_reserve)
 
 
+# Margin a job keeps beyond one Jev attempt so a target is not cut off before its first request.
+JEV_START_MARGIN_S = 5.0
+
+
+def jev_start_reserve(scfg: dict) -> float:
+    """Time left that lets a job's first Jev request pass the pre-send cutoff."""
+    return float(scfg["attempt_timeout_seconds"]) + JEV_START_MARGIN_S
+
+
 def _jev_cutoff(cutoff, attempt_s: float = 0.0) -> None:
     """A Jev request (or internal retry) may not start when it could still
     be in flight at ``cutoff`` — a free defer of the pass, like a follow-up
@@ -813,7 +822,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
 def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, config_path=None):
     """Reserve every explicit live-evaluation HTTP against the same MCS daily count."""
     from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
-    if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e"}:
+    if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e",
+                         "jev_model_probe", "jev_model_check"}:
         raise ValueError("manual_jev_operation_invalid")
     if daily_request_budget is None:
         daily_request_budget = DAILY_REQUEST_LIMIT
@@ -1070,6 +1080,10 @@ class JevEvaluation:
         self._cutoff = cutoff
         self._transport = transport
         self._timing = timing
+
+    @property
+    def model(self):
+        return getattr(self._client, "model", None)
 
     @property
     def requests_made(self):

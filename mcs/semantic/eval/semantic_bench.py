@@ -362,6 +362,43 @@ def _unevaluated_reason(summary, client) -> str:
     return reason
 
 
+def detection_probe(client) -> dict:
+    """Send the fixed synthetic probes through audit_claims and score them.
+
+    ``verdict`` is "pass" only when every probe was evaluated and judged as
+    expected, "fail" when an evaluated probe was misjudged, else
+    "unevaluated": a probe Jev did not answer never counts as a pass."""
+    tp = fp = fn = tn = unevaluated = 0
+    rows = []
+    for p in _PROBES:
+        client.last_error = None
+        findings, evaluated = audit_claims(
+            client, p["bundle"], p["summary"], time.monotonic() + 60)
+        rejected = any(f["code"] in ("claim_contradicts",
+                                     "claim_not_supported",
+                                     "claim_ambiguous",
+                                     "claim_low_confidence")
+                       for f in findings)
+        ok = rejected == p["expect_reject"] if evaluated else None
+        if evaluated:
+            if p["expect_reject"] and rejected:
+                tp += 1
+            elif p["expect_reject"]:
+                fn += 1
+            elif rejected:
+                fp += 1
+            else:
+                tn += 1
+        else:
+            unevaluated += 1
+        rows.append({"name": p["name"], "expect_reject": p["expect_reject"], "rejected": rejected,
+                     "codes": [f["code"] for f in findings], "ok": ok,
+                     "unevaluated_reason": None if evaluated else _unevaluated_reason(p["summary"], client)})
+    verdict = ("fail" if fn or fp else "unevaluated" if unevaluated else "pass")
+    return {"verdict": verdict, "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "unevaluated": unevaluated, "requests": client.requests_made, "rows": rows}
+
+
 def cmd_detect(args) -> int:
     """Run fixed live probes under the shared MCS per-HTTP budget."""
     key = jev.api_key()
@@ -369,36 +406,16 @@ def cmd_detect(args) -> int:
         print("TYPESAFE_API_KEY not found", file=sys.stderr)
         return 2
     with jev.live_client(key, operation="semantic_detect", job_budget=120) as client:
-        tp = fp = fn = tn = unevaluated = 0
-        for p in _PROBES:
-            client.last_error = None
-            findings, evaluated = audit_claims(
-                client, p["bundle"], p["summary"], time.monotonic() + 60)
-            rejected = any(f["code"] in ("claim_contradicts",
-                                         "claim_not_supported",
-                                         "claim_ambiguous",
-                                         "claim_low_confidence")
-                           for f in findings)
-            ok = rejected == p["expect_reject"] if evaluated else None
-            if evaluated:
-                if p["expect_reject"] and rejected:
-                    tp += 1
-                elif p["expect_reject"]:
-                    fn += 1
-                elif rejected:
-                    fp += 1
-                else:
-                    tn += 1
-            else:
-                unevaluated += 1
-            print(f"  {p['name']:20s} expect_reject={p['expect_reject']} "
-                  f"-> {'REJECT' if rejected else 'pass'} "
-                  f"({[f['code'] for f in findings]}) "
-                  f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}"
-                  f"{'' if evaluated else ' ' + _unevaluated_reason(p['summary'], client)}")
-    print(f"detection: TP={tp} FP={fp} FN={fn} TN={tn} unevaluated={unevaluated} "
-          f"(requests used: {client.requests_made})")
-    return 0 if fn == 0 and fp == 0 and unevaluated == 0 else 1
+        result = detection_probe(client)
+    for row in result["rows"]:
+        print(f"  {row['name']:20s} expect_reject={row['expect_reject']} "
+              f"-> {'REJECT' if row['rejected'] else 'pass'} "
+              f"({row['codes']}) "
+              f"{'OK' if row['ok'] else 'MISS' if row['ok'] is False else 'UNEVAL'}"
+              f"{'' if row['unevaluated_reason'] is None else ' ' + row['unevaluated_reason']}")
+    print(f"detection: TP={result['tp']} FP={result['fp']} FN={result['fn']} TN={result['tn']} "
+          f"unevaluated={result['unevaluated']} (requests used: {result['requests']})")
+    return 0 if result["verdict"] == "pass" else 1
 
 
 def main() -> int:
