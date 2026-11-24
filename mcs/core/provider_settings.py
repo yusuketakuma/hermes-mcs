@@ -54,15 +54,35 @@ def _budget(value):
         raise ValueError("provider_budgets_invalid")
 
 
-# Jev model ids an earlier release fixed. A stored Jev ``model`` could only ever
-# equal the fixed id, so one of these names the fixed model, never another one.
+# Jev model ids an earlier release fixed. Before a model could be chosen, a
+# stored Jev ``model`` could only equal the fixed id, so one of these names the
+# code default ``jev_model``, never itself; it is not offered as a choice.
 JEV_RETIRED_PINS = frozenset({"jev-1.13.0"})
+# A chosen Jev model is one fixed version id; an alias such as "latest" never is (AT-064).
+_JEV_MODEL_ID = re.compile(r"jev-(\d{1,4})\.(\d{1,4})\.(\d{1,4})")
+
+
+def jev_model_version(model) -> tuple[int, int, int] | None:
+    """The (major, minor, patch) of a fixed Jev model id, or None for anything else."""
+    match = _JEV_MODEL_ID.fullmatch(model) if isinstance(model, str) else None
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def effective_jev_model(pin, jev_model) -> str | None:
+    """The Jev model a stored ``model`` selects over the code default ``jev_model``, or None when invalid.
+
+    Absent, the default itself or a retired pin selects the default; another
+    fixed version id selects that version."""
+    if not isinstance(jev_model, str) or pin is not None and not isinstance(pin, str):
+        return None
+    if pin is None or pin == jev_model or pin in JEV_RETIRED_PINS:
+        return jev_model
+    return pin if jev_model_version(pin) is not None else None
 
 
 def jev_model_pin_ok(pin, jev_model) -> bool:
-    """Whether a stored Jev ``model`` names the fixed ``jev_model`` (or an id an earlier release fixed)."""
-    return (isinstance(pin, str) and isinstance(jev_model, str)
-            and (pin == jev_model or pin in JEV_RETIRED_PINS))
+    """Whether a stored Jev ``model`` is valid: the default, a retired pin or a fixed version id."""
+    return pin is not None and effective_jev_model(pin, jev_model) is not None
 
 
 def _jev_values(value, jev_model):

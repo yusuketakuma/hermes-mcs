@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "Jevの新しいモデルを知らせ、確認に合格したときだけコマンドで切り替える",
+  "summary": "Jevを使う環境では mcs_setup.py check が1日1回までモデル一覧を取得し、新しい固定版があれば情報として表示します。自動では切り替えません。mcs_setup.py jev-model --to で、合成データの確認に合格したときだけ人の確認と承認記録を伴って切り替えられ、完了済みの意味解析は新しいモデルでやり直されます。",
+  "upgrade": "追加操作は不要です。既定のモデル（jev-1.14.0）は変わりません。一覧の取得はJevのキーがあり日次予算が1以上の環境だけで、1日1要求を日次上限に数えます。切り替える場合は mcs_setup.py jev-model --to 版のID --confirm-human --reason '理由' を実行し、戻す場合は --to default を指定します。切替後は再処理の分だけJevの要求が増えます。",
+  "details": [
+    "使うモデルは semantic_jev.resolve_model が semantic.model から決め、Jevへの要求・policy_fingerprint・診断が同じ値を使う。",
+    "semantic.model には別の固定版ID（jev-X.Y.Z）も書けるようになった。latest などの別名と形式の違うIDは従来どおり設定誤り。以前の版が固定していた jev-1.13.0 は既定のモデルとして扱い、切替先には指定できない。",
+    "切替は人承認操作 ops.jev_model_set として承認記録に変更前後の版と確認結果を残し、config_edit.apply で保存する。確認が不合格・未評価なら変更しない。",
+    "一覧の結果は data/jev-models.json に保存し、mcs_setup.py jev-model（引数なし）は通信せずに表示する。"
+  ],
+  "refs": [
+    "mcs/semantic/jev_model_updates.py",
+    "mcs/ops/setup/jev_model_setup.py",
+    "mcs/semantic/semantic_jev.py",
+    "mcs/core/provider_settings.py"
+  ]
+}

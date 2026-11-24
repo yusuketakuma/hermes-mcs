@@ -956,9 +956,10 @@ def cmd_check(args) -> int:
     progress_warning = _install_progress_warning()
     if progress_warning is not None:
         warnings.append(progress_warning)
-    notice = environment_diagnostics.jev_notice(cfg, HOME)
-    if notice is not None:
-        print(f"  情報: {notice}")
+    import jev_model_updates
+    for notice in (environment_diagnostics.jev_notice(cfg, HOME), jev_model_updates.check(cfg, HOME)):
+        if notice is not None:
+            print(f"  情報: {notice}")
     for w in warnings:
         print(f"  注意: {w}")
     for e in errors:
@@ -1618,6 +1619,8 @@ def main(argv: list[str] | None = None) -> int:
     cloud_cli.add_parsers(sub)
     import config_edit
     config_edit.add_parsers(sub)
+    import jev_model_setup
+    jev_model_setup.add_parser(sub)
     import remote_access_setup
     remote_access_setup.add_parser(sub, cmd_services)
     args = ap.parse_args(argv)

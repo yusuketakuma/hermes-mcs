@@ -168,7 +168,7 @@ def validate(req):
                           "ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
                           "ops.external_transfer_acknowledge", "ops.slack_setup_discard",
-                          "ops.provider_pending_finalize"):
+                          "ops.provider_pending_finalize", "ops.jev_model_set"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
