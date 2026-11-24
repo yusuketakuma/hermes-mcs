@@ -493,6 +493,13 @@ def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monke
         assert sorted(asked) == sorted(questions) and len(questions) == 5
         assert json.loads(qc[0])["coverage"]["checked"] == 5
         assert jev_block_reason(db.db) is None
+        recovery = db.db.execute("SELECT meta FROM artifacts WHERE kind=?",
+                                 (semantic_policy.KIND_JEV_HEALTH_RECOVERY,)).fetchone()
+        assert recovery and json.loads(recovery[0])["jev_requests"] > 0
+        semantic_qc._drop_stale_qc(db, 1, "edited-source-hash")
+        db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
+                        meta={"hash": "edited-source-hash", "qc": "done", "jev_requests": 0})
+        assert jev_block_reason(db.db) is None
         assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (semantic_qc.QC_WAIT_KIND,)).fetchall()
     finally:
         db.close()

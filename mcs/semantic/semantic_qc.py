@@ -21,7 +21,8 @@ from mcs_util import load_config, strict_json
 from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
 import semantic_runtime as runtime
-from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config, waits_for_jev_quota
+from semantic_policy import (KIND_JEV_HEALTH_RECOVERY, QC_ARTIFACT, QC_JOB_KIND,
+                             runtime_config, waits_for_jev_quota)
 
 QC_MAX_ITEMS = 16
 # Answers a QC job obtained before Jev stopped it, bound to the extraction
@@ -381,13 +382,17 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             guard('qc:write')
             _drop_stale_qc(ledger, mid, art[1])
             drop_wait()
+            meta = {VERSION_KEY: CURRENT_VERSION, "hash": art[1],
+                    "extract_version": extract_llm.EXTRACT_VERSION,
+                    "source_artifact_id": art[2], "qc": qc, **(extra or {})}
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
-                meta={VERSION_KEY: CURRENT_VERSION, "hash": art[1],
-                      "extract_version": extract_llm.EXTRACT_VERSION,
-                      "source_artifact_id": art[2],
-                      "qc": qc, **(extra or {})})
+                meta=meta)
+            jev_requests = meta.get("jev_requests")
+            if qc == "done" and type(jev_requests) is int and jev_requests > 0:
+                ledger.db.execute("DELETE FROM artifacts WHERE kind=?", (KIND_JEV_HEALTH_RECOVERY,))
+                ledger.artifact_add_tx(KIND_JEV_HEALTH_RECOVERY, "{}", meta={"jev_requests": jev_requests})
             if not runtime.transition_tx(ledger, token, "done"):
                 raise runtime.RuntimeStale("qc:write")
 
