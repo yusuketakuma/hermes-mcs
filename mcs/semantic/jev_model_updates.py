@@ -95,7 +95,7 @@ def refresh(root, key, *, now=None, force=False, client_factory=None) -> dict | 
                         key=provider_settings.jev_model_version, reverse=True)[:MAX_LISTED]
         fresh = {"version": STATE_VERSION, "checked_at": now, "models": models, "error": None}
     except jev.JevError as error:
-        if error.detail == "usage_lock_busy":
+        if error.detail in ("usage_lock_busy", "usage_ledger_busy"):
             return state
         fresh = {"version": STATE_VERSION, "checked_at": now,
                  "models": state["models"] if state is not None else [], "error": error.kind}
