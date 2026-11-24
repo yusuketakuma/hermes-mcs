@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "クラウド再抽出が同じ持ち越し投稿を繰り返し選定する問題を修正",
+  "summary": "クラウド再抽出で、支払い済み結果の確定できない投稿と、旧世代の保留記録しか持たない投稿が、パスごとに再選定されて重い準備処理を繰り返していました。条件が変わっていないと証明できる間は、これらの投稿が既存の復帰間隔（6時間）の有界な claim を保持するようになり、その間に後続の投稿が処理されます。条件が変われば従来どおり通常の選定経路で見直され、支払い済み履歴・旧チェックポイント・再送防止の条件は変わりません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更は不要です。",
+  "details": [
+    "cloud_unit_unresolved で延期されたクラウド行は、ソース・所有者・リースが不変のときに限り release 時の CAS で next_try を復帰間隔（REVIVE_COOLDOWN_S、6時間）へ更新する。従来は claim をそのまま残して元のリース期限ごとに再選定されていた。不変を証明できない場合は従来どおり解放され、次の選定で通常経路に戻る。",
+    "クラウドの lookahead で prepare_context_load_superseded（複数片の旧世代保留行）にも _prepare_hold_s 経由の有界 claim を置く。従来は保持対象外で、パスごとに context の読み直しを繰り返していた。保留集合が引き続き旧世代だけと証明できる間は6時間、変われば短い準備待ち（60秒）で見直される。",
+    "_release の _commit_hold は真偽値のほか保持秒数を値として受け取るようになった。真偽値は従来どおり短い準備待ち（_PREPARE_HOLD_S、60秒）を意味する。",
+    "その他の保持理由（cloud_source_unverified・currentness_unverified・prepare_profile_unavailable・local_rebuild_*）と、verified repeat の refilled 判定・古いチェックポイント・支払い履歴の扱いは変わらない。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_errors.py"
+  ]
+}
