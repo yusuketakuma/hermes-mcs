@@ -463,9 +463,11 @@ def test_a_start_window_closing_during_the_gates_leaves_the_job_unserved(tmp_pat
 
 def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monkeypatch):
     from extract_testkit import _hash, _v2_artifact
+    from health_report import jev_block_reason
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(1)])
+        db.artifact_add("semantic_assess", "{}", meta={"error_kind": "payment_required"})
         content = {"meds": [{"name": f"合成薬M{i}", "action": "start", "subject": "patient"}
                             for i in range(4)], "urgency": "routine"}
         _v2_artifact(db, 1, _hash(db), content=content)
@@ -482,6 +484,7 @@ def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monke
             qc = db.db.execute("SELECT content FROM artifacts WHERE kind='extract_qc'").fetchone()
             if day < 2:
                 assert qc is None and out["budget_exhausted"] is True
+                assert jev_block_reason(db.db) == "payment_required"
                 job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
                                     (semantic_drain.QC_JOB_KIND,)).fetchone()
                 assert tuple(job) == ("pending", 0)
@@ -489,6 +492,7 @@ def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monke
         # every question was asked exactly once across the three windows
         assert sorted(asked) == sorted(questions) and len(questions) == 5
         assert json.loads(qc[0])["coverage"]["checked"] == 5
+        assert jev_block_reason(db.db) is None
         assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (semantic_qc.QC_WAIT_KIND,)).fetchall()
     finally:
         db.close()
