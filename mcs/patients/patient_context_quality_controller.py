@@ -279,13 +279,6 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         os.close(fd)
 
 
-# Why a quality step deferred, for the pass record: which gate, never a value it read.
-DEFERRAL_CODES = frozenset({
-    "cloud_stopped", "semantic_config", "jev_not_asked", "jev_usage_unread", "jev_circuit", "scope",
-    "claim", "jev_client", "retry_wait", "jev_not_evaluated", "inputs_changed", "repair", "cloud_off",
-})
-
-
 # Input-deterministic scan refusals inside a paid repair dispatch: the same
 # bound inputs can never produce a different outcome, so retrying only spends.
 # nightly_* is the pre-rename spelling of the same persisted codes.
@@ -615,12 +608,11 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
 
 
 def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_mode, base_doc=None, base_meta=None,
-                  source=None, source_candidate_ref=None, detail_out=None):
+                  source=None, source_candidate_ref=None):
     """Audit one bounded page of the current candidate outside DB and run locks.
 
     ``cloud_mode`` is the cloud mode the caller's unit runs under; a repair, which only the cloud
-    makes, is sent only while it is ``on`` and is ``cloud_off`` otherwise. ``detail_out`` receives
-    the fixed code of the step that deferred (``DEFERRAL_CODES``), for the pass record only."""
+    makes, is sent only while it is ``on`` and is ``cloud_off`` otherwise."""
     import extract_llm
     import cloud_policy
     import cloud_client
@@ -632,15 +624,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
 
     source_keys = patient_context_refresh_sources._source_scope((base_meta or {}).get('source_scope')) if source is None else None
 
-    def deferred(code, payload=None):
-        if detail_out is not None:
-            detail_out.append(code)
-        return "deferred", payload
-
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if cloud_policy.stopped(ledger):
-        return deferred("cloud_stopped")   # `cloud-llm stop` also stops sends to Jev without sticking after resume
+        return "deferred", None   # `cloud-llm stop` also stops sends to Jev without sticking after resume
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
@@ -655,7 +642,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         local_quality = bool(not actual.get('provider')
                              and (actual.get('route_provider') or not route['provider']))
     if errors:
-        return deferred("semantic_config")
+        return "deferred", None
     # Jev cannot be asked: semantic off, the patient outside Jev's scope, or the
     # facility review withholds Jev.
     out_of_scope = semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(cfg)[0], pid)
@@ -677,7 +664,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 OSError, RecursionError, OverflowError):
             return "unknown", None
     if not cloud_key and not optional_quality or jev_off and not optional_quality:
-        return deferred("jev_not_asked")
+        return "deferred", None
     from semantic_store import jev_usage_today
     # Jev is never asked here (semantic off, or the patient outside Jev's scope):
     # no send deadline, budget or circuit decides, as on an install without Jev.
@@ -691,7 +678,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             semantic_runtime._jev_window_check()
             used = jev_usage_today(ledger)
         except (semantic_jev.JevError, ValueError, sqlite3.Error):
-            return deferred("jev_usage_unread")
+            return "deferred", None
         skip_reason = (semantic_jev.REVIEW_HELD if scfg["jev_held"] else
                        "not_configured" if not key else
                        "disabled" if scfg["daily_request_budget"] <= 0 else
@@ -699,7 +686,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     if no_send is None and semantic_runtime.circuit_open(ledger):
         state = semantic_runtime._circuit_state(ledger)
         if state["failure_class"] not in semantic_runtime._CIRCUIT_FAILURE_CLASSES:
-            return deferred("jev_circuit")
+            return "deferred", None
         skip_reason = skip_reason or "circuit_open"
     assessment = patient_context_refresh_state._quality_assessment(scfg)
     summary = doc.get("summary")
@@ -712,7 +699,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                    if source is not None else
                    patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, summary, assessment, display_projection, source_keys=source_keys))
         if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, cfg, initial["sources"]):
-            return deferred("scope")
+            return "deferred", None
     finally:
         ledger.db.rollback()
     identity = initial["identity"]
@@ -829,7 +816,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
 
     claim = patient_context_quality_receipts._quality_claim(ledger, pid, identity["input_key"], deadline, current)
     if claim is None:
-        return deferred("claim")
+        return "deferred", None
     try:
         if not patient_context_quality_receipts._quality_failure_allows_remainder(ledger.db, pid, identity):
             return ("held" if source_candidate_ref is not None else "failed"), identity
@@ -884,7 +871,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
             max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
-            return deferred("jev_client")
+            return "deferred", None
         def seal_not_sent(unsent, reason):
             # committed, but its POST never started: settle it so the page can be asked again
             fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
@@ -920,7 +907,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 return "unknown", identity
             retry = patient_context_quality_receipts._quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose)
             if retry["held"] or retry["next_try"] > patient_context_refresh_state.time.time():
-                return deferred("retry_wait", identity)
+                return "deferred", identity
             candidates = [by_id[fid] for fid in ids] if page is None else None
             sources = ({ (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
                         for fact in candidates } if candidates is not None else None)
@@ -953,24 +940,23 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 failure_class = outcome.get("failure_class", "failed")
                 if failure_class in ("retry", "failed"):
                     patient_context_quality_receipts._quality_record_failure(ledger, pid, identity, claim, page_key, failure_class, current)
-                return deferred("jev_not_evaluated", identity)
+                return "deferred", identity
             return "pending", identity  # one bounded page per tick
         if patient_context_quality_receipts._quality_failed(ledger.db, pid, identity):
             if purpose == "source":
                 if source_candidate_ref is not None:
                     return "held", identity
-                repair_status, ref = _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
+                return _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
                     claim, current, deadline, admit, scfg["match_threshold"], cloud_mode=cloud_mode)
-                return deferred("repair", ref) if repair_status == "deferred" else (repair_status, ref)
             if not current():
-                return deferred("inputs_changed")
+                return "deferred", None
             repair_status, candidate = _quality_repair_candidate(
                 ledger, pid, cfg, workday_id, doc, identity, claim, current, deadline, admit,
                 initial["facts"], assessment, scfg["match_threshold"], initial["state"],
                 cloud_mode=cloud_mode, source_keys=source_keys)
             if repair_status == "candidate":
                 return "candidate", {**candidate, "facts": initial["facts"], "state": initial["state"]}
-            return deferred("repair", identity) if repair_status == "deferred" else (repair_status, identity)
+            return repair_status, identity
         patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))

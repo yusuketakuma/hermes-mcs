@@ -1044,20 +1044,15 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     # Set when a quality repair, which only the cloud makes, waits for a context child.
     repair_waits = [False]
-    # The fixed code of the gate that deferred the last quality step, for the pass record.
-    quality_deferral = []
 
     def quality_step(*args, **kwargs):
         """Audit under this unit's cloud mode: a local lane, the takeover included, never sends a
         repair, which is deferred as with the cloud off. Only where the takeover turned the cloud
         off (a child would make the repair) does the pass report a wait for a child."""
-        quality_deferral.clear()
-        status, value = patient_context_quality_controller._quality_step(
-            *args, cloud_mode=mode, detail_out=quality_deferral, **kwargs)
+        status, value = patient_context_quality_controller._quality_step(*args, cloud_mode=mode, **kwargs)
         if status == "cloud_off":
             repair_waits[0] = takeover
             status = "deferred"
-            quality_deferral.append("cloud_off")
         return status, value
 
     def answer_stale(latest):
@@ -2188,5 +2183,4 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                if failure or deferred_reason else {}),
             **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
             **({"cloud_refusal": cloud_refusal[0]} if cloud_refusal[0] is not None else {}),
-            **({"quality_detail": quality_deferral[-1]} if deferred_reason and quality_deferral else {}),
             "lock_wait_s": waited, **stats}
