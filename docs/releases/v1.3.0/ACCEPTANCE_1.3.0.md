@@ -61,7 +61,7 @@
 - 新規導入の受入（fresh-install ワークフロー相当）: 未実施（上記）。
 - 本番適用・常駐サービスの再起動: 未実施。「更新時の注意」に記載の再起動条件は公開後の適用時に従う。
 - QA_VERSION切替後の実際の再判定所要時間、サービス再起動後の自動進行、実画面での復帰は未検証。合成probeの対象に既存の品質不合格記録はなく、そのケースの再試験も未実施。
-- 未リリース記録 `changes/drug-alias-over-limit-cache.json`: 準備中に main へ届いた記録で、次版の集約対象として未収録のまま残す。
+- 未リリース記録 `changes/drug-alias-over-limit-cache.json`（#356）と `changes/launchd-unknown-agent-state.json`（#352）: どちらも1.3.0の34件へは含めず、`changes/` に未アーカイブのまま次版の集約対象として残す。
 
 ## 参照
 
