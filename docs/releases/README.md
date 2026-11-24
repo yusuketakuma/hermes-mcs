@@ -8,6 +8,7 @@
 
 | 版 | 記録 |
 |---|---|
+| 1.3.0（候補） | [受入・残条件](v1.3.0/ACCEPTANCE_1.3.0.md) · [変更の要点](v1.3.0/README.md) · [変更記録の対応表](v1.3.0/change-map.json) · [説明図](v1.3.0/homecare-drug-search-v130.png) |
 | 1.2.1（候補） | [受入・残条件](v1.2.1/ACCEPTANCE_1.2.1.md) · [変更の要点](v1.2.1/README.md) · [変更記録の対応表](v1.2.1/change-map.json) · [説明図](v1.2.1/notification-flow-v121.png) |
 | 1.2.0（候補） | [受入・残条件](v1.2.0/ACCEPTANCE_1.2.0.md) · [変更の要点](v1.2.0/README.md) · [変更記録の対応表](v1.2.0/change-map.json) · [説明図](v1.2.0/notification-card-v120.png) |
 | 1.1.2（候補） | [受入・残条件](v1.1.2/ACCEPTANCE_1.1.2.md) · [変更の要点](v1.1.2/README.md) · [変更記録の対応表](v1.1.2/change-map.json) · [説明図](v1.1.2/cloud-continuity.png) |

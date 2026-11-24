@@ -1,687 +1,747 @@
 {
-  "format": 1,
-  "synthetic": true,
-  "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter. Revalidated 2026-10-06 against current local v1.0.0-v1.0.13 tags: ledger and dependency blob hashes match every recorded source_sha256; DDL generated from the same schema-only methods matches every fixture sqlite_master entry after whitespace normalization, excluding SQLite internal and FTS shadow tables. Updated v1.0.3-v1.0.12 commit mappings to the current tag commits; source and fixture hashes are unchanged. This verifies current tag schema equivalence, not the historical updater binaries or the historical 26-path runner. v1.0.14 added on 2026-10-06 by the same schema-only extraction at exact tag 3d9e324bd8fdf493213a4df506d62ccca8edf24a; shape-8 adds only thread_read_marks to shape-7 while retaining schema 9, all earlier sqlite_master definitions normalized equal. v1.0.15 added 2026-10-08 from the exact released tag Ledger._init on an empty synthetic SQLite DB in an offline bounded container. All prior shape-8 definitions normalized equal; six new explicit indexes require separate shape-9. Historical fixtures are unchanged. v1.0.16 added 2026-10-09 by the same schema-only extraction at exact tag 746ca0d6fde61fc1f6ec3aa5146f48815132d837: only Ledger._init of the exported tag on an empty synthetic SQLite DB (no relation guards), tables/indexes/triggers ordered by type then name; the identical extractor reproduces shape-9 byte for byte from v1.0.15. shape-10 adds only notification_cards.layout to shape-9 while retaining schema 9. Historical fixtures are unchanged. v1.0.17 added 2026-10-11 by the same schema-only extraction at exact tag be0a392afc48fac9cb1d51e361a0e951cf01f720: the identical extractor reproduces shape-10 byte for byte from v1.0.16, and v1.0.17 produces the same DDL (schema 9), so it shares shape-10. Historical fixtures are unchanged. v1.0.18 added 2026-10-11 by the same schema-only extraction at exact tag 14c33dd204e1355e8b951117715a9940fc25bfb4: ledger.py changed but produces the same DDL as v1.0.17 (schema 9), so it shares shape-10; mcs_requests and notify_cards are unchanged. Historical fixtures are unchanged. v1.0.19 added 2026-10-12 from exact released tag (annotated tag object 2cc03a7db9d2f0599f7f3e6747b3dd344f940055, dereferenced commit 25f434f0005ac9661f08cc7302d7002ec2572e93) by schema-only AST extraction of Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB, with same-tag dependency SCHEMA constants inlined; no whole historical module, constructor, service or real database executes. The extractor first reproduces every normalized shape-10 sqlite_master definition from v1.0.18, and v1.0.19 has identical definitions and schema 9, so it shares unchanged shape-10. Historical release rows and fixture files remain unchanged. v1.0.20 added 2026-10-13 from exact released tag (dereferenced commit bbca0e09484f9115e88660ba764a7a79071d88e3) by the same schema-only AST extraction against an empty in-memory SQLite DB. In addition to the prior methods, the newly called _install_fts_update_trigger and its _FTS_AU_MARK/_FTS_AU_SQL constants are included; the pure positive helper is inlined from the same-tag mcs_util, without importing that module. The extractor reproduces every normalized shape-10 definition from v1.0.19. v1.0.20 retains schema 9 but changes messages_au and adds idx_artifacts_kind_created and idx_messages_posted_ts, so its 56 definitions use separate shape-11. No whole module, constructor, relation-guard installation, service or stored database executes. Historical release rows and fixture files remain unchanged. v1.0.21 added 2026-10-16 from exact released tag (dereferenced commit 802d45c9a50034a735e6138648f44b49722509ae) by the same allowlisted schema-only AST extraction against an empty in-memory SQLite DB, with same-tag dependency SCHEMA constants and the pure positive helper inlined. The extractor first reproduces every normalized shape-11 definition from v1.0.20; v1.0.21 has the same 56 definitions and schema 9, so it shares unchanged shape-11. No whole historical module, constructor, service or stored database executes. Historical release rows and fixture files remain unchanged. v1.0.22 added 2026-10-17 from exact released tag f8c6c20d4f7fd841d5d66adfbf4b9675371a9339 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.21, unchanged shape-11 and the v1.0.23 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, service or real database executed. v1.0.23 added 2026-10-17 from exact released tag 1c11122808bde5472800df24fb01b94f6f1158be by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.22, unchanged shape-11 and the v1.0.24 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, service or real database executed. v1.0.24 added 2026-10-17 from exact released tag 35b5a5531e04441391bfb43b8389a7ca43a5dc94 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.23, unchanged shape-11 and the v1.0.25 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.25 added 2026-10-18 from exact released tag 5ecea075500cba976764b508cdaef5004ce8795f by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.24, unchanged shape-11 and the v1.0.26 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.26 added 2026-10-19 from exact released tag 982c471b19a26ef790afb135c7d0c9d3d69c0702 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.25, unchanged shape-11 and the v1.0.27 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.27 added 2026-10-21 for exact released tag 272512db2892cff8cec4371b962f48ad8604e72b: its ledger.py and the mcs_requests, notify_cards and mcs_util dependency blobs are byte-identical to the recorded v1.0.26 source_sha256 values, so the same bounded schema-only extraction necessarily yields the same 56 normalized sqlite_master definitions as v1.0.26 (unchanged shape-11, schema 9; normalized definition SHA256 c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf). The v1.0.28 candidate keeps schema 9 but is not DDL-identical to shape-11 (it adds idx_patients_name WHERE patient_name IS NOT NULL), which the existing update path creates. No extractor rerun was needed; all historical rows and SQL fixtures remain unchanged and no historical module, constructor, relation guards, service or real database executed. v1.0.28 added 2026-10-22 from exact released tag 6940d135f0e642b932b7164869f199e7cef89503. Its schema owner is now ledger_schema.py: six allowlisted schema functions (initialize, _install_fts_update_trigger, _script, _migrate, _migrate_body, backfill_v3), same-tag REQUEST_SCHEMA/NOTIFICATION_SCHEMA/FTS constants and the pure positive helper were extracted through AST and executed only against empty in-memory SQLite with a 20-second progress deadline. No historical module, Ledger constructor, relation guards, service or stored DB executed; source-row helpers fail if entered. The 57 normalized sqlite_master definitions preserve every shape-11 definition and add only idx_patients_name, so shape-12 records the released DDL while schema remains 9. All earlier release rows and SQL fixtures remain unchanged. 2026-10-26: exact v1.0.29 tag 1feb9fd121272f9a8a59397ebc36cbfb4676ac48 extracted using six allowlisted schema functions, four same-tag SQL constants and inlined pure positive helper on empty in-memory SQLite. The same extractor first reproduced all 57 normalized shape-12 definitions from v1.0.28; v1.0.29 preserves them and adds four indexes (61 definitions, schema 9), stored as shape-13.sql. No historical module imports, constructors, real data or services executed; relation guards installed separately by Ledger are outside this DDL fixture. Existing historical records and SQL files are unchanged. v1.1.0 added 2026-11-02 from exact released tag (annotated tag object 29ecd30cc3d7bd6c216f3a67cd5ffb3fd15b9d92, dereferenced commit 2b3ecd02b1412868eb2fb92d3124345dd3d606e6) by bounded schema-only AST extraction. The same extractor first reproduces every normalized shape-12 definition from v1.0.28 and shape-13 definition from v1.0.29. The v1.1.0 allowlist contains initialize, _initialize, _install_fts_update_trigger, _script, _migrate, _migrate_body, _expand_card_kinds and backfill_v3, with four same-tag SQL constants, the trivial MigrationError definition and the pure positive helper inlined. Historical code runs only against empty in-memory SQLite; no whole module import, Ledger constructor, relation guards, services or stored DB executes. FTS is active, all business tables remain empty, and integrity_check is ok. The released schema is 10 and has 72 definitions (30 tables, 40 indexes, 2 triggers), stored as shape-14.sql; compared with shape-13, 11 indexes are added and patients/notification_cards change, with no definitions removed. Normalized definition SHA256: d9163813f61abd0af5f336a64504f09d3843ad7b2709d9fdcdfd3474965bf578. Extractor SHA256: 80554e503595a7b32644ff6adb1b0338e61f9a6b24ef19426747128154e565f0. All earlier release rows and SQL fixtures remain unchanged; extraction checks initialization only, not historical updater execution or host deployment. v1.1.1 added 2026-11-07 from exact released tag 0bd4eb9e18df8f2319e112cd76bcd1c1d6ccb91e using the same eight allowlisted schema-only AST functions, MigrationError, four SQL/FTS constants and same-tag pure positive helper on empty in-memory SQLite with a 20-second progress deadline. The extractor first reproduced every normalized shape-14 definition from v1.1.0. The released schema is 11 with 72 definitions; only notification_render_parts changes (file_group kind), so shape-15 is separate. FTS initialization, empty business tables and integrity_check were verified. No whole historical module, constructor, relation guards, service or stored database executed. Extractor SHA256: d5eccd0c5cb9304656db9c1f25981eb123beb59c1a369142d3d7e6cfeaf9dac8. All earlier rows and fixture bytes remain unchanged; v1.1.2 is only a candidate target, not a released origin.",
-  "coverage": "Released v1.0.0 through v1.1.1; manual source update through v1.0.2; original schema-only initialized shapes, not intermediate migration states.",
-  "historical_number_evidence": "All supported release tags declare schema 7 (v1.0.0-v1.0.10), 8 (v1.0.11-v1.0.12), 9 (v1.0.13-v1.0.29), or 10 (v1.1.0). Additionally schema 5 is fully evidenced by pre-release commit 6b532e5:adapter/ledger.py and adapter/mcs_requests.py and represented separately, without claiming automatic release update eligibility. Local SCHEMA_VERSION history jumps 5 to 7 at 3e51b36; complete original schema 0-4 and 6 source definitions are not evidenced by this history. Comments/compatibility branches alone do not establish those fixtures. Current SCHEMA_VERSION is imported dynamically by tests. The later released v1.0.15-v1.0.29 sources also declare schema 9; source and fixture provenance is recorded per release below. Released v1.1.1 declares schema 11; its original shape-15 is recorded separately from candidate schema 12.",
-  "pre_release_shapes": [
+ "format": 1,
+ "synthetic": true,
+ "origin_method": "For each local release tag, run only Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB. Inline SCHEMA constants from mcs_requests and notify_cards at the same tag, not current modules. Export sqlite_master SQL (tables, explicit indexes, triggers), excluding SQLite internal and FTS shadow tables; append the actual historical user_version. No patient data or historical database was read. Identical DDL is shared; every release remains a separate test parameter. Revalidated 2026-10-06 against current local v1.0.0-v1.0.13 tags: ledger and dependency blob hashes match every recorded source_sha256; DDL generated from the same schema-only methods matches every fixture sqlite_master entry after whitespace normalization, excluding SQLite internal and FTS shadow tables. Updated v1.0.3-v1.0.12 commit mappings to the current tag commits; source and fixture hashes are unchanged. This verifies current tag schema equivalence, not the historical updater binaries or the historical 26-path runner. v1.0.14 added on 2026-10-06 by the same schema-only extraction at exact tag 3d9e324bd8fdf493213a4df506d62ccca8edf24a; shape-8 adds only thread_read_marks to shape-7 while retaining schema 9, all earlier sqlite_master definitions normalized equal. v1.0.15 added 2026-10-08 from the exact released tag Ledger._init on an empty synthetic SQLite DB in an offline bounded container. All prior shape-8 definitions normalized equal; six new explicit indexes require separate shape-9. Historical fixtures are unchanged. v1.0.16 added 2026-10-09 by the same schema-only extraction at exact tag 746ca0d6fde61fc1f6ec3aa5146f48815132d837: only Ledger._init of the exported tag on an empty synthetic SQLite DB (no relation guards), tables/indexes/triggers ordered by type then name; the identical extractor reproduces shape-9 byte for byte from v1.0.15. shape-10 adds only notification_cards.layout to shape-9 while retaining schema 9. Historical fixtures are unchanged. v1.0.17 added 2026-10-11 by the same schema-only extraction at exact tag be0a392afc48fac9cb1d51e361a0e951cf01f720: the identical extractor reproduces shape-10 byte for byte from v1.0.16, and v1.0.17 produces the same DDL (schema 9), so it shares shape-10. Historical fixtures are unchanged. v1.0.18 added 2026-10-11 by the same schema-only extraction at exact tag 14c33dd204e1355e8b951117715a9940fc25bfb4: ledger.py changed but produces the same DDL as v1.0.17 (schema 9), so it shares shape-10; mcs_requests and notify_cards are unchanged. Historical fixtures are unchanged. v1.0.19 added 2026-10-12 from exact released tag (annotated tag object 2cc03a7db9d2f0599f7f3e6747b3dd344f940055, dereferenced commit 25f434f0005ac9661f08cc7302d7002ec2572e93) by schema-only AST extraction of Ledger._init, _migrate, _migrate_body, _script and _backfill_v3 against an empty in-memory SQLite DB, with same-tag dependency SCHEMA constants inlined; no whole historical module, constructor, service or real database executes. The extractor first reproduces every normalized shape-10 sqlite_master definition from v1.0.18, and v1.0.19 has identical definitions and schema 9, so it shares unchanged shape-10. Historical release rows and fixture files remain unchanged. v1.0.20 added 2026-10-13 from exact released tag (dereferenced commit bbca0e09484f9115e88660ba764a7a79071d88e3) by the same schema-only AST extraction against an empty in-memory SQLite DB. In addition to the prior methods, the newly called _install_fts_update_trigger and its _FTS_AU_MARK/_FTS_AU_SQL constants are included; the pure positive helper is inlined from the same-tag mcs_util, without importing that module. The extractor reproduces every normalized shape-10 definition from v1.0.19. v1.0.20 retains schema 9 but changes messages_au and adds idx_artifacts_kind_created and idx_messages_posted_ts, so its 56 definitions use separate shape-11. No whole module, constructor, relation-guard installation, service or stored database executes. Historical release rows and fixture files remain unchanged. v1.0.21 added 2026-10-16 from exact released tag (dereferenced commit 802d45c9a50034a735e6138648f44b49722509ae) by the same allowlisted schema-only AST extraction against an empty in-memory SQLite DB, with same-tag dependency SCHEMA constants and the pure positive helper inlined. The extractor first reproduces every normalized shape-11 definition from v1.0.20; v1.0.21 has the same 56 definitions and schema 9, so it shares unchanged shape-11. No whole historical module, constructor, service or stored database executes. Historical release rows and fixture files remain unchanged. v1.0.22 added 2026-10-17 from exact released tag f8c6c20d4f7fd841d5d66adfbf4b9675371a9339 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.21, unchanged shape-11 and the v1.0.23 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, service or real database executed. v1.0.23 added 2026-10-17 from exact released tag 1c11122808bde5472800df24fb01b94f6f1158be by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.22, unchanged shape-11 and the v1.0.24 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, service or real database executed. v1.0.24 added 2026-10-17 from exact released tag 35b5a5531e04441391bfb43b8389a7ca43a5dc94 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.23, unchanged shape-11 and the v1.0.25 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.25 added 2026-10-18 from exact released tag 5ecea075500cba976764b508cdaef5004ce8795f by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.24, unchanged shape-11 and the v1.0.26 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.26 added 2026-10-19 from exact released tag 982c471b19a26ef790afb135c7d0c9d3d69c0702 by the same bounded schema-only AST extraction (six allowlisted Ledger methods, same-tag SCHEMA/FTS constants and pure positive helper inlined) on empty in-memory SQLite. All 56 normalized sqlite_master definitions equal v1.0.25, unchanged shape-11 and the v1.0.27 candidate; schema remains 9. Normalized definition SHA256: c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf. All historical rows and SQL fixtures remain unchanged; no historical module, constructor, relation guards, service or real database executed. v1.0.27 added 2026-10-21 for exact released tag 272512db2892cff8cec4371b962f48ad8604e72b: its ledger.py and the mcs_requests, notify_cards and mcs_util dependency blobs are byte-identical to the recorded v1.0.26 source_sha256 values, so the same bounded schema-only extraction necessarily yields the same 56 normalized sqlite_master definitions as v1.0.26 (unchanged shape-11, schema 9; normalized definition SHA256 c859117dc4fa00c921d995ee92cc8f5d28d2e1eabbd2a4b1b07a841b9da117bf). The v1.0.28 candidate keeps schema 9 but is not DDL-identical to shape-11 (it adds idx_patients_name WHERE patient_name IS NOT NULL), which the existing update path creates. No extractor rerun was needed; all historical rows and SQL fixtures remain unchanged and no historical module, constructor, relation guards, service or real database executed. v1.0.28 added 2026-10-22 from exact released tag 6940d135f0e642b932b7164869f199e7cef89503. Its schema owner is now ledger_schema.py: six allowlisted schema functions (initialize, _install_fts_update_trigger, _script, _migrate, _migrate_body, backfill_v3), same-tag REQUEST_SCHEMA/NOTIFICATION_SCHEMA/FTS constants and the pure positive helper were extracted through AST and executed only against empty in-memory SQLite with a 20-second progress deadline. No historical module, Ledger constructor, relation guards, service or stored DB executed; source-row helpers fail if entered. The 57 normalized sqlite_master definitions preserve every shape-11 definition and add only idx_patients_name, so shape-12 records the released DDL while schema remains 9. All earlier release rows and SQL fixtures remain unchanged. 2026-10-26: exact v1.0.29 tag 1feb9fd121272f9a8a59397ebc36cbfb4676ac48 extracted using six allowlisted schema functions, four same-tag SQL constants and inlined pure positive helper on empty in-memory SQLite. The same extractor first reproduced all 57 normalized shape-12 definitions from v1.0.28; v1.0.29 preserves them and adds four indexes (61 definitions, schema 9), stored as shape-13.sql. No historical module imports, constructors, real data or services executed; relation guards installed separately by Ledger are outside this DDL fixture. Existing historical records and SQL files are unchanged. v1.1.0 added 2026-11-02 from exact released tag (annotated tag object 29ecd30cc3d7bd6c216f3a67cd5ffb3fd15b9d92, dereferenced commit 2b3ecd02b1412868eb2fb92d3124345dd3d606e6) by bounded schema-only AST extraction. The same extractor first reproduces every normalized shape-12 definition from v1.0.28 and shape-13 definition from v1.0.29. The v1.1.0 allowlist contains initialize, _initialize, _install_fts_update_trigger, _script, _migrate, _migrate_body, _expand_card_kinds and backfill_v3, with four same-tag SQL constants, the trivial MigrationError definition and the pure positive helper inlined. Historical code runs only against empty in-memory SQLite; no whole module import, Ledger constructor, relation guards, services or stored DB executes. FTS is active, all business tables remain empty, and integrity_check is ok. The released schema is 10 and has 72 definitions (30 tables, 40 indexes, 2 triggers), stored as shape-14.sql; compared with shape-13, 11 indexes are added and patients/notification_cards change, with no definitions removed. Normalized definition SHA256: d9163813f61abd0af5f336a64504f09d3843ad7b2709d9fdcdfd3474965bf578. Extractor SHA256: 80554e503595a7b32644ff6adb1b0338e61f9a6b24ef19426747128154e565f0. All earlier release rows and SQL fixtures remain unchanged; extraction checks initialization only, not historical updater execution or host deployment. v1.1.1 added 2026-11-07 from exact released tag 0bd4eb9e18df8f2319e112cd76bcd1c1d6ccb91e using the same eight allowlisted schema-only AST functions, MigrationError, four SQL/FTS constants and same-tag pure positive helper on empty in-memory SQLite with a 20-second progress deadline. The extractor first reproduced every normalized shape-14 definition from v1.1.0. The released schema is 11 with 72 definitions; only notification_render_parts changes (file_group kind), so shape-15 is separate. FTS initialization, empty business tables and integrity_check were verified. No whole historical module, constructor, relation guards, service or stored database executed. Extractor SHA256: d5eccd0c5cb9304656db9c1f25981eb123beb59c1a369142d3d7e6cfeaf9dac8. All earlier rows and fixture bytes remain unchanged; v1.1.2 is only a candidate target, not a released origin. v1.1.2, v1.2.0 and v1.2.1 added 2026-11-24 by the same schema-only extraction at their exact tags (mcs/core/ledger_schema.py initialize() at schema_version 12 on an empty in-memory SQLite DB; sqlite_master entries exported in creation order; SQLite internal sqlite_sequence and FTS5 shadow tables excluded, matching the existing fixture convention). v1.2.0 and v1.2.1 have byte-identical ledger.py, ledger_schema.py and mcs_util.py and share shape-17.",
+ "coverage": "Released v1.0.0 through v1.2.1; manual source update through v1.0.2; original schema-only initialized shapes, not intermediate migration states.",
+ "historical_number_evidence": "All supported release tags declare schema 7 (v1.0.0-v1.0.10), 8 (v1.0.11-v1.0.12), 9 (v1.0.13-v1.0.29), or 10 (v1.1.0). Additionally schema 5 is fully evidenced by pre-release commit 6b532e5:adapter/ledger.py and adapter/mcs_requests.py and represented separately, without claiming automatic release update eligibility. Local SCHEMA_VERSION history jumps 5 to 7 at 3e51b36; complete original schema 0-4 and 6 source definitions are not evidenced by this history. Comments/compatibility branches alone do not establish those fixtures. Current SCHEMA_VERSION is imported dynamically by tests. The later released v1.0.15-v1.0.29 sources also declare schema 9; source and fixture provenance is recorded per release below. Released v1.1.1 declares schema 11; its original shape-15 is recorded separately from candidate schema 12. Released v1.1.2, v1.2.0 and v1.2.1 declare schema 12; v1.1.2 uses shape-16 while v1.2.0 and v1.2.1 share shape-17.",
+ "pre_release_shapes": [
+  {
+   "release": "pre-release-schema-5",
+   "commit": "6b532e532843dce7bddb558bde3290590ebb17b0",
+   "source": "adapter/ledger.py",
+   "source_sha256": "0b1f6d349abd746d8c294a77ac3e905eb87854e33f625897aa219536685089fe",
+   "dependencies": [
     {
-      "release": "pre-release-schema-5",
-      "commit": "6b532e532843dce7bddb558bde3290590ebb17b0",
-      "source": "adapter/ledger.py",
-      "source_sha256": "0b1f6d349abd746d8c294a77ac3e905eb87854e33f625897aa219536685089fe",
-      "dependencies": [
-        {
-          "source": "adapter/mcs_requests.py",
-          "source_sha256": "eba6ed2752e8ae93068318d8e330de65e76c9c118d9de1e2b56b30dc4eaed7b0"
-        }
-      ],
-      "schema_version": 5,
-      "fixture": "shape-6.sql",
-      "fixture_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a",
-      "update_route": "not_a_release_tag"
+     "source": "adapter/mcs_requests.py",
+     "source_sha256": "eba6ed2752e8ae93068318d8e330de65e76c9c118d9de1e2b56b30dc4eaed7b0"
     }
-  ],
-  "releases": [
+   ],
+   "schema_version": 5,
+   "fixture": "shape-6.sql",
+   "fixture_sha256": "af4ae0860944ed07a489b08906eba22a3fad93a66dd292b16874ce8886ef4b7a",
+   "update_route": "not_a_release_tag"
+  }
+ ],
+ "releases": [
+  {
+   "release": "v1.0.0",
+   "commit": "0e79829e18418177f988f8777aeffc54b20b0a53",
+   "source": "mcs/ledger.py",
+   "source_sha256": "b6ff19f899280e3435895b5aac5d0008a6d76e72da1d27a9072ddb3ea3e8e809",
+   "dependencies": [
     {
-      "release": "v1.0.0",
-      "commit": "0e79829e18418177f988f8777aeffc54b20b0a53",
-      "source": "mcs/ledger.py",
-      "source_sha256": "b6ff19f899280e3435895b5aac5d0008a6d76e72da1d27a9072ddb3ea3e8e809",
-      "dependencies": [
-        {
-          "source": "mcs/mcs_requests.py",
-          "source_sha256": "ee4bd7a90e31c14a2afae66ec92984e6bf22d4fb3eeebbe2ca842f05a5e83a35"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-1.sql",
-      "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
-      "update_route": "manual"
-    },
-    {
-      "release": "v1.0.1",
-      "commit": "8e3cb26763b103393c8cc1efc371f8b5b48cc939",
-      "source": "mcs/ledger.py",
-      "source_sha256": "b6ff19f899280e3435895b5aac5d0008a6d76e72da1d27a9072ddb3ea3e8e809",
-      "dependencies": [
-        {
-          "source": "mcs/mcs_requests.py",
-          "source_sha256": "ee4bd7a90e31c14a2afae66ec92984e6bf22d4fb3eeebbe2ca842f05a5e83a35"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-1.sql",
-      "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
-      "update_route": "manual"
-    },
-    {
-      "release": "v1.0.2",
-      "commit": "29eb9aec69ad61e70eeb5a6e1b8800b663c3caf3",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "093ab7f8886c44764f8f54750d0047ea0f58f0f4c51743ee6f092cc223220c5f",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "2c9f930f57352c09c2e85827b4a38db424d326e777e43998d6a5b115e41e9069"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-1.sql",
-      "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
-      "update_route": "manual"
-    },
-    {
-      "release": "v1.0.3",
-      "commit": "90e0f3d0ad2e980f9370977ee982d362d864c061",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "e6fd2900a785421edb2185d016efa40fc779793ba0de2a1e4729170c0fe5c1d2",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "bfabebbd512d4e9eaefac73befa263e0e04f7408661140faa73fcace0e8ce837"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "946df37d544180313a0e6b49ab60e09c9aa11010897d18ef1449a9b369ae8a27"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-2.sql",
-      "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.4",
-      "commit": "4ab2249af4033e6cb5daecc09af6463c7d817605",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "7da09590e9177fdf9240e850cc0b0b8c765f79944ff8e4028c24938b5787252e"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "0fe8cfd4da53f7f4d7ac71df5e648438b059343db1e5c14ef1dd5c30f58f8836"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-2.sql",
-      "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.5",
-      "commit": "141ad259b24e6d72966036c2b0b7e638872cfb02",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "7da09590e9177fdf9240e850cc0b0b8c765f79944ff8e4028c24938b5787252e"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "0fe8cfd4da53f7f4d7ac71df5e648438b059343db1e5c14ef1dd5c30f58f8836"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-2.sql",
-      "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.6",
-      "commit": "77d0baff93effd99767d076c98117b248deb58fc",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "1e3dd46deb9571b712512f3b9121e0d3e34061c66f508a4ffb4de38e430b5bf6",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "25f5a52b4e0b64e293f91c4b3827028d0e3611543f8ab60bf377d7cae23a174f"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-2.sql",
-      "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.7",
-      "commit": "3a519da520d9892a15a092ba7c2fe192142e74ee",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "6e27b120846be8a0e0eadbb654d106fca3d8e2ebd97aa3c9f723a6b8ab172812",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "df74f9ec3633a607d40b0203c9d1d3b2a813469d79a3a4aaa9aa10c007987a8d"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-3.sql",
-      "fixture_sha256": "8b994ecf27ded0737ca407d19115ef078f5c3d29ef6ba3a6a97342515bd162c0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.8",
-      "commit": "145bf5e02044fa9b137c168060d53eb0436f5b9a",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "83ed1bf998ca29e1a22ff7e3656a01eb57d0f63b586571e8646d21ee63e5f810",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "f794621ee4caf094e23a9e882691deaa6694c6237ad3fef4b699d422adf20a5a"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-4.sql",
-      "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.9",
-      "commit": "fc07c074f5b5a50bb4bc35703976cc4c9bbcb292",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "e6cb45222efd760520fb6d03886493802b83ea43331fcd0c3690ea80fb2e4871"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-4.sql",
-      "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.10",
-      "commit": "3d57a4457e2e1732f65bfbb0870bfee8b8ffb623",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "436a074f0b1e9a228b7af6038cadf2d83cafea0869a21d9ff2faaa217c01f6c5"
-        }
-      ],
-      "schema_version": 7,
-      "fixture": "shape-4.sql",
-      "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.11",
-      "commit": "26c22bddb9349fe9dd2feb14e7cdcb242de1138c",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "c0f65242861e3a9c4845d006f89cc17f6b7128fabdaa7d2b1602472853cc7970",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d5ce9271ff204e53018d0f485516c9fc2d5ada5ee294ce5be8e578e2dff073af"
-        }
-      ],
-      "schema_version": 8,
-      "fixture": "shape-5.sql",
-      "fixture_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.12",
-      "commit": "c6379ad1d5b0ae6a892f4bf8a8672dbd45770f3a",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "016c73f502bdd38bff614b36d76a7b923ae335038349d4f2eb5adb385ead53ff",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d5ce9271ff204e53018d0f485516c9fc2d5ada5ee294ce5be8e578e2dff073af"
-        }
-      ],
-      "schema_version": 8,
-      "fixture": "shape-5.sql",
-      "fixture_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.13",
-      "commit": "f4f74b375795e0b6e9fb5709ae8909ad6cd2e22d",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-7.sql",
-      "fixture_sha256": "e1521d86f01abc2c347c1cfe6d30df56c9c4e3ff1fb20b2953ea812dcf9b2fa0",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.14",
-      "commit": "3d9e324bd8fdf493213a4df506d62ccca8edf24a",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "e3ae7083ba881f9f8b61d90860de01d55eb8919332869a6c2b198f799972033f",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "831f7d5fa25edc593c9fe6315dc13ddeb826a4e253774e0156532a4dbafac8cf"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-8.sql",
-      "fixture_sha256": "86b6e47c2dd5d40830a7d91d25bebb9e7bc7e2089a37ad0c708c504a8f762068",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.15",
-      "commit": "7ae6ee47210608759bd14b7b2ed86aa73606b1c2",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "f97b6cfd1debcc9c876021eff9b6576588f5be890c88b4f1e995ed1cab32dc04",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "55e3326eb1fcda144cf03a0c65f4dcc2c101a9af244bc43d0ac199bb6447c020"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-9.sql",
-      "fixture_sha256": "4e41624542322d2629b9874048d662b31b0d2fae61dcfdfd4184b27c10d8fa1e",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.16",
-      "commit": "746ca0d6fde61fc1f6ec3aa5146f48815132d837",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "d0ff171e2381bb0fa176290e626ea8221516e6b5cc47e0148c193d0612515388",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-10.sql",
-      "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.17",
-      "commit": "be0a392afc48fac9cb1d51e361a0e951cf01f720",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "8dbf891c5d05a0861c85ea7a76f67b04a9c07a3823f77aae7b819d14da47d715",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-10.sql",
-      "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.18",
-      "commit": "14c33dd204e1355e8b951117715a9940fc25bfb4",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "13e2a6ded2720b34c212e917f7c3f89f557183ce231c15e5a2a6af57c6b2a802",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-10.sql",
-      "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.19",
-      "commit": "25f434f0005ac9661f08cc7302d7002ec2572e93",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "13e2a6ded2720b34c212e917f7c3f89f557183ce231c15e5a2a6af57c6b2a802",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-10.sql",
-      "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.20",
-      "commit": "bbca0e09484f9115e88660ba764a7a79071d88e3",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "a68ab56b9a35157e451f066f45060465244da71fb061326b87ba125f70310bae",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "1ccd814d44e2f77572f1347d332daf14a00284770f2a36f4b95854919bc4b6ea"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "e1f313693309abea58f6b094d4fb2a560a3b9c7ac7d2a609d852d2d6c5ad510d"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.21",
-      "commit": "802d45c9a50034a735e6138648f44b49722509ae",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "7429f3c3f35b6cfda24f423dd2a68569e0ee080b8d839dfcc4abb157d2c635a1"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.22",
-      "commit": "f8c6c20d4f7fd841d5d66adfbf4b9675371a9339",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "7429f3c3f35b6cfda24f423dd2a68569e0ee080b8d839dfcc4abb157d2c635a1"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.23",
-      "commit": "1c11122808bde5472800df24fb01b94f6f1158be",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "bda9b0bc75e149b37696a4400b6531e001122ab886f4ed06c303b67de0b19a96"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "0557133ed39809db345bfd3eab79adf9856dfa3753256ce398ae90646c364b96"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.24",
-      "commit": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "bda9b0bc75e149b37696a4400b6531e001122ab886f4ed06c303b67de0b19a96"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "0557133ed39809db345bfd3eab79adf9856dfa3753256ce398ae90646c364b96"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.25",
-      "commit": "5ecea075500cba976764b508cdaef5004ce8795f",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "59dde0ebe99a58d03e7634a475e7e40f9c72ec1393395929a6513b0190150fb5",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "a9b4e4c71a3015d9407cb8a2d7db4e46210284477ad3271ae8e47c88717605f4"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.26",
-      "commit": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "af55af2090f587aa857e4cf5d2bc626a295bc4f0a0e8238e112277e7f0513fe7",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "397d127ce6d61d0ef405220d567dcc3e0ca9554d4215ea835f463faf9565d346"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.27",
-      "commit": "272512db2892cff8cec4371b962f48ad8604e72b",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "af55af2090f587aa857e4cf5d2bc626a295bc4f0a0e8238e112277e7f0513fe7",
-      "dependencies": [
-        {
-          "source": "mcs/ops/mcs_requests.py",
-          "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
-        },
-        {
-          "source": "mcs/notify/notify_cards.py",
-          "source_sha256": "397d127ce6d61d0ef405220d567dcc3e0ca9554d4215ea835f463faf9565d346"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-11.sql",
-      "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.28",
-      "commit": "6940d135f0e642b932b7164869f199e7cef89503",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "94b9dd3a77e9cc9cf742203850169e135beb6c4a475d2e001a151e87ac9cc383",
-      "dependencies": [
-        {
-          "source": "mcs/core/ledger_schema.py",
-          "source_sha256": "3424d73732937982814178994f1b7b503ac62b48c2e90646f682addda7e7e720"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "7ba92a6be306b90cf13109584ca021fd5daddc82ffe4ddbe635096992be90a84"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-12.sql",
-      "fixture_sha256": "952091080d92f09eda807709184c30e60f9fa2d95c11d23ad8b72252e3e1b77a",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.0.29",
-      "commit": "1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "ceaf0398752f2aeeb94437ebc98e290fe705a009e2ae3b2b9e65ff139a901d2e",
-      "dependencies": [
-        {
-          "source": "mcs/core/ledger_schema.py",
-          "source_sha256": "e57c360286a3f4dc2f25fe7ed0a9b1acc25886617ef8afa87ad606e5c8a3bc2b"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "563550be331ac44fcbfffabfe6987cd7f9bd78d3bb2fa4ef0cc7359140b36a28"
-        }
-      ],
-      "schema_version": 9,
-      "fixture": "shape-13.sql",
-      "fixture_sha256": "cca890ca31a19f0e7c71007f9e74cf553770b5846f52ccfb71cc0f5b05352c01",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.1.0",
-      "commit": "2b3ecd02b1412868eb2fb92d3124345dd3d606e6",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "41bbc01f83ed275ea89da05180f68a58fb1d629075123d5240a77b55deacae4a",
-      "dependencies": [
-        {
-          "source": "mcs/core/ledger_schema.py",
-          "source_sha256": "d5ece34e900f87d54f907cdf7191c3e67ae66a9920eaaa21119c7e2d6b708ac9"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "f7b97de84771e46cb92603f9356174f531ac12dc4649d53c8aee924afc1d8a38"
-        }
-      ],
-      "schema_version": 10,
-      "fixture": "shape-14.sql",
-      "fixture_sha256": "15c589253670b45505fcb75aec17924918155db8a9fa3e7bc004ee56fdcfd2be",
-      "update_route": "automatic"
-    },
-    {
-      "release": "v1.1.1",
-      "commit": "0bd4eb9e18df8f2319e112cd76bcd1c1d6ccb91e",
-      "source": "mcs/core/ledger.py",
-      "source_sha256": "2ce0ed9d95a7e1e820394453e9de9bfb334ed18a6be3c698ef2be65a82407065",
-      "dependencies": [
-        {
-          "source": "mcs/core/ledger_schema.py",
-          "source_sha256": "acefe2d3b47b3baf64a883351a03dc2528f36e9cf76858f5ad78cf9559828857"
-        },
-        {
-          "source": "mcs/core/mcs_util.py",
-          "source_sha256": "30e2a64af2a908da59b9ce9adb0eb4d0f83166f3863182524d7234c3a065ab3f"
-        }
-      ],
-      "schema_version": 11,
-      "fixture": "shape-15.sql",
-      "fixture_sha256": "da16f2855ca3134d381e2cb1147edfdc2bedb74b699c477adee7ccf64246e0de",
-      "update_route": "automatic"
+     "source": "mcs/mcs_requests.py",
+     "source_sha256": "ee4bd7a90e31c14a2afae66ec92984e6bf22d4fb3eeebbe2ca842f05a5e83a35"
     }
-  ]
+   ],
+   "schema_version": 7,
+   "fixture": "shape-1.sql",
+   "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+   "update_route": "manual"
+  },
+  {
+   "release": "v1.0.1",
+   "commit": "8e3cb26763b103393c8cc1efc371f8b5b48cc939",
+   "source": "mcs/ledger.py",
+   "source_sha256": "b6ff19f899280e3435895b5aac5d0008a6d76e72da1d27a9072ddb3ea3e8e809",
+   "dependencies": [
+    {
+     "source": "mcs/mcs_requests.py",
+     "source_sha256": "ee4bd7a90e31c14a2afae66ec92984e6bf22d4fb3eeebbe2ca842f05a5e83a35"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-1.sql",
+   "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+   "update_route": "manual"
+  },
+  {
+   "release": "v1.0.2",
+   "commit": "29eb9aec69ad61e70eeb5a6e1b8800b663c3caf3",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "093ab7f8886c44764f8f54750d0047ea0f58f0f4c51743ee6f092cc223220c5f",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "2c9f930f57352c09c2e85827b4a38db424d326e777e43998d6a5b115e41e9069"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-1.sql",
+   "fixture_sha256": "9b5b75dc8b1df92facb2cec7360859220cfe8e9a701c32a912448bfe1621bcce",
+   "update_route": "manual"
+  },
+  {
+   "release": "v1.0.3",
+   "commit": "90e0f3d0ad2e980f9370977ee982d362d864c061",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "e6fd2900a785421edb2185d016efa40fc779793ba0de2a1e4729170c0fe5c1d2",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "bfabebbd512d4e9eaefac73befa263e0e04f7408661140faa73fcace0e8ce837"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "946df37d544180313a0e6b49ab60e09c9aa11010897d18ef1449a9b369ae8a27"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-2.sql",
+   "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.4",
+   "commit": "4ab2249af4033e6cb5daecc09af6463c7d817605",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "7da09590e9177fdf9240e850cc0b0b8c765f79944ff8e4028c24938b5787252e"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "0fe8cfd4da53f7f4d7ac71df5e648438b059343db1e5c14ef1dd5c30f58f8836"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-2.sql",
+   "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.5",
+   "commit": "141ad259b24e6d72966036c2b0b7e638872cfb02",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "57ffe9ff58ef91c46e3855e38f8d0acf18fe048d3ab855ee602a59e55903152f",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "7da09590e9177fdf9240e850cc0b0b8c765f79944ff8e4028c24938b5787252e"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "0fe8cfd4da53f7f4d7ac71df5e648438b059343db1e5c14ef1dd5c30f58f8836"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-2.sql",
+   "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.6",
+   "commit": "77d0baff93effd99767d076c98117b248deb58fc",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "1e3dd46deb9571b712512f3b9121e0d3e34061c66f508a4ffb4de38e430b5bf6",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "25f5a52b4e0b64e293f91c4b3827028d0e3611543f8ab60bf377d7cae23a174f"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-2.sql",
+   "fixture_sha256": "0a8f4bc5ed9a3da27c43fb3dd5884e4a79e6c47f649b0d5f5a9c9266f221ced0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.7",
+   "commit": "3a519da520d9892a15a092ba7c2fe192142e74ee",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "6e27b120846be8a0e0eadbb654d106fca3d8e2ebd97aa3c9f723a6b8ab172812",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "df74f9ec3633a607d40b0203c9d1d3b2a813469d79a3a4aaa9aa10c007987a8d"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-3.sql",
+   "fixture_sha256": "8b994ecf27ded0737ca407d19115ef078f5c3d29ef6ba3a6a97342515bd162c0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.8",
+   "commit": "145bf5e02044fa9b137c168060d53eb0436f5b9a",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "83ed1bf998ca29e1a22ff7e3656a01eb57d0f63b586571e8646d21ee63e5f810",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "d80e14e5d9dec24b801d74a20f2da42ae4831d4049a2290051b44f3b913fb213"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "f794621ee4caf094e23a9e882691deaa6694c6237ad3fef4b699d422adf20a5a"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-4.sql",
+   "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.9",
+   "commit": "fc07c074f5b5a50bb4bc35703976cc4c9bbcb292",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "e6cb45222efd760520fb6d03886493802b83ea43331fcd0c3690ea80fb2e4871"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-4.sql",
+   "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.10",
+   "commit": "3d57a4457e2e1732f65bfbb0870bfee8b8ffb623",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "f59aea61a5f5f79a5fb36d19202c7ccf978f82e345caba4b07f0bfbe208ddd2c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "436a074f0b1e9a228b7af6038cadf2d83cafea0869a21d9ff2faaa217c01f6c5"
+    }
+   ],
+   "schema_version": 7,
+   "fixture": "shape-4.sql",
+   "fixture_sha256": "f3c21805eaca20dd23b6b02bc4233ee4462e658fb9b22cadcbfeb7645483df7b",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.11",
+   "commit": "26c22bddb9349fe9dd2feb14e7cdcb242de1138c",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "c0f65242861e3a9c4845d006f89cc17f6b7128fabdaa7d2b1602472853cc7970",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d5ce9271ff204e53018d0f485516c9fc2d5ada5ee294ce5be8e578e2dff073af"
+    }
+   ],
+   "schema_version": 8,
+   "fixture": "shape-5.sql",
+   "fixture_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.12",
+   "commit": "c6379ad1d5b0ae6a892f4bf8a8672dbd45770f3a",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "016c73f502bdd38bff614b36d76a7b923ae335038349d4f2eb5adb385ead53ff",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "49170be641eb7d838981d37e1d08161468ff98d730cd228645ca6f5b20b47b21"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d5ce9271ff204e53018d0f485516c9fc2d5ada5ee294ce5be8e578e2dff073af"
+    }
+   ],
+   "schema_version": 8,
+   "fixture": "shape-5.sql",
+   "fixture_sha256": "c6b1f02feb9e1be8a3eae3dea811a89951d1dfc80aedc9b0f976b8c2fae2625b",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.13",
+   "commit": "f4f74b375795e0b6e9fb5709ae8909ad6cd2e22d",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "94a81559b28cdf4a9e061b4e67a93a57b922adc0c9fe0dc4c0d96afb99b1c98e",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "e41caa907dbf06ab263f422097b11f9d7a880a867ac57a53298b0639493ebd0d"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-7.sql",
+   "fixture_sha256": "e1521d86f01abc2c347c1cfe6d30df56c9c4e3ff1fb20b2953ea812dcf9b2fa0",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.14",
+   "commit": "3d9e324bd8fdf493213a4df506d62ccca8edf24a",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "e3ae7083ba881f9f8b61d90860de01d55eb8919332869a6c2b198f799972033f",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "831f7d5fa25edc593c9fe6315dc13ddeb826a4e253774e0156532a4dbafac8cf"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-8.sql",
+   "fixture_sha256": "86b6e47c2dd5d40830a7d91d25bebb9e7bc7e2089a37ad0c708c504a8f762068",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.15",
+   "commit": "7ae6ee47210608759bd14b7b2ed86aa73606b1c2",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "f97b6cfd1debcc9c876021eff9b6576588f5be890c88b4f1e995ed1cab32dc04",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "55e3326eb1fcda144cf03a0c65f4dcc2c101a9af244bc43d0ac199bb6447c020"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-9.sql",
+   "fixture_sha256": "4e41624542322d2629b9874048d662b31b0d2fae61dcfdfd4184b27c10d8fa1e",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.16",
+   "commit": "746ca0d6fde61fc1f6ec3aa5146f48815132d837",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "d0ff171e2381bb0fa176290e626ea8221516e6b5cc47e0148c193d0612515388",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-10.sql",
+   "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.17",
+   "commit": "be0a392afc48fac9cb1d51e361a0e951cf01f720",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "8dbf891c5d05a0861c85ea7a76f67b04a9c07a3823f77aae7b819d14da47d715",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-10.sql",
+   "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.18",
+   "commit": "14c33dd204e1355e8b951117715a9940fc25bfb4",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "13e2a6ded2720b34c212e917f7c3f89f557183ce231c15e5a2a6af57c6b2a802",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-10.sql",
+   "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.19",
+   "commit": "25f434f0005ac9661f08cc7302d7002ec2572e93",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "13e2a6ded2720b34c212e917f7c3f89f557183ce231c15e5a2a6af57c6b2a802",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "1faa7f421ea0154ada1d0d55931f741ebd302e709255f0ea54ec7b1fcd9d266d"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "d33f08788f1134994e732d872578ff0bc9783109bc8599ddfa563aaf7023678b"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-10.sql",
+   "fixture_sha256": "896d0b430b945d39396065f37945618a85f0e32f16e18f0bbae6a4a989303a49",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.20",
+   "commit": "bbca0e09484f9115e88660ba764a7a79071d88e3",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "a68ab56b9a35157e451f066f45060465244da71fb061326b87ba125f70310bae",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "1ccd814d44e2f77572f1347d332daf14a00284770f2a36f4b95854919bc4b6ea"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "e1f313693309abea58f6b094d4fb2a560a3b9c7ac7d2a609d852d2d6c5ad510d"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.21",
+   "commit": "802d45c9a50034a735e6138648f44b49722509ae",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "7429f3c3f35b6cfda24f423dd2a68569e0ee080b8d839dfcc4abb157d2c635a1"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.22",
+   "commit": "f8c6c20d4f7fd841d5d66adfbf4b9675371a9339",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "b1e7ad41bfa56d6946fd74f73e5b5c3d31f348dab0e65b3e9e25f5adc35ef12b"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "7429f3c3f35b6cfda24f423dd2a68569e0ee080b8d839dfcc4abb157d2c635a1"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.23",
+   "commit": "1c11122808bde5472800df24fb01b94f6f1158be",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "bda9b0bc75e149b37696a4400b6531e001122ab886f4ed06c303b67de0b19a96"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "0557133ed39809db345bfd3eab79adf9856dfa3753256ce398ae90646c364b96"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.24",
+   "commit": "35b5a5531e04441391bfb43b8389a7ca43a5dc94",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "017457abe04149078516774388b5b7ac4490af175756f02a3e3724577dd6350c",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "bda9b0bc75e149b37696a4400b6531e001122ab886f4ed06c303b67de0b19a96"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "0557133ed39809db345bfd3eab79adf9856dfa3753256ce398ae90646c364b96"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.25",
+   "commit": "5ecea075500cba976764b508cdaef5004ce8795f",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "59dde0ebe99a58d03e7634a475e7e40f9c72ec1393395929a6513b0190150fb5",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "a9b4e4c71a3015d9407cb8a2d7db4e46210284477ad3271ae8e47c88717605f4"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.26",
+   "commit": "982c471b19a26ef790afb135c7d0c9d3d69c0702",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "af55af2090f587aa857e4cf5d2bc626a295bc4f0a0e8238e112277e7f0513fe7",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "397d127ce6d61d0ef405220d567dcc3e0ca9554d4215ea835f463faf9565d346"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.27",
+   "commit": "272512db2892cff8cec4371b962f48ad8604e72b",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "af55af2090f587aa857e4cf5d2bc626a295bc4f0a0e8238e112277e7f0513fe7",
+   "dependencies": [
+    {
+     "source": "mcs/ops/mcs_requests.py",
+     "source_sha256": "ea46ed40321e4a846ccf0770e3ed05708a9050ca4d937c4f733623111871e7a8"
+    },
+    {
+     "source": "mcs/notify/notify_cards.py",
+     "source_sha256": "397d127ce6d61d0ef405220d567dcc3e0ca9554d4215ea835f463faf9565d346"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "65a044acb0a9a5e2347417053896e427317ccd640374f8ac068a70a856dfa1b7"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-11.sql",
+   "fixture_sha256": "62e4300d77ea2e9b8450fb79c144bab9d84700582363f9254fe28fc35347a144",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.28",
+   "commit": "6940d135f0e642b932b7164869f199e7cef89503",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "94b9dd3a77e9cc9cf742203850169e135beb6c4a475d2e001a151e87ac9cc383",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "3424d73732937982814178994f1b7b503ac62b48c2e90646f682addda7e7e720"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "7ba92a6be306b90cf13109584ca021fd5daddc82ffe4ddbe635096992be90a84"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-12.sql",
+   "fixture_sha256": "952091080d92f09eda807709184c30e60f9fa2d95c11d23ad8b72252e3e1b77a",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.0.29",
+   "commit": "1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "ceaf0398752f2aeeb94437ebc98e290fe705a009e2ae3b2b9e65ff139a901d2e",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "e57c360286a3f4dc2f25fe7ed0a9b1acc25886617ef8afa87ad606e5c8a3bc2b"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "563550be331ac44fcbfffabfe6987cd7f9bd78d3bb2fa4ef0cc7359140b36a28"
+    }
+   ],
+   "schema_version": 9,
+   "fixture": "shape-13.sql",
+   "fixture_sha256": "cca890ca31a19f0e7c71007f9e74cf553770b5846f52ccfb71cc0f5b05352c01",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.1.0",
+   "commit": "2b3ecd02b1412868eb2fb92d3124345dd3d606e6",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "41bbc01f83ed275ea89da05180f68a58fb1d629075123d5240a77b55deacae4a",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "d5ece34e900f87d54f907cdf7191c3e67ae66a9920eaaa21119c7e2d6b708ac9"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "f7b97de84771e46cb92603f9356174f531ac12dc4649d53c8aee924afc1d8a38"
+    }
+   ],
+   "schema_version": 10,
+   "fixture": "shape-14.sql",
+   "fixture_sha256": "15c589253670b45505fcb75aec17924918155db8a9fa3e7bc004ee56fdcfd2be",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.1.1",
+   "commit": "0bd4eb9e18df8f2319e112cd76bcd1c1d6ccb91e",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "2ce0ed9d95a7e1e820394453e9de9bfb334ed18a6be3c698ef2be65a82407065",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "acefe2d3b47b3baf64a883351a03dc2528f36e9cf76858f5ad78cf9559828857"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "30e2a64af2a908da59b9ce9adb0eb4d0f83166f3863182524d7234c3a065ab3f"
+    }
+   ],
+   "schema_version": 11,
+   "fixture": "shape-15.sql",
+   "fixture_sha256": "da16f2855ca3134d381e2cb1147edfdc2bedb74b699c477adee7ccf64246e0de",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.1.2",
+   "commit": "ff038ef8f162f4228a8d56ba5df63ad3f50c3b02",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "5c8cf42077562b69b3d989c4292d1eb651e6d34331297a37380d34e11b6316c7",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "053017adce6c08514f5898c555f688cf097326cca5773c4a9c8478ce5e5274ca"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "30e2a64af2a908da59b9ce9adb0eb4d0f83166f3863182524d7234c3a065ab3f"
+    }
+   ],
+   "schema_version": 12,
+   "fixture": "shape-16.sql",
+   "fixture_sha256": "84b1c183e801ebfc31ab988639550c398d827fc2f01dd31910106a910e5c505c",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.2.0",
+   "commit": "204cbdbb008c34c2db2241122966a75992574955",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "2b99d9f51d97a84a8546945c5274229fda47446fc0179594f75ba9e5f1a91459",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "65e7791ef19854007917a8cbdd499c5bf25ad10f663eb778793613bffd48afd8"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "23f30ea8ce2b982c320babb5860ef623cdf6aa069530ca80207353764ad56175"
+    }
+   ],
+   "schema_version": 12,
+   "fixture": "shape-17.sql",
+   "fixture_sha256": "a1490a75521aa69870cbb9c6851030e878d13fe589bd1c4ae0df3479326c71ab",
+   "update_route": "automatic"
+  },
+  {
+   "release": "v1.2.1",
+   "commit": "4a97288dd74f356c8bb2f7191721819f0a1fdaf3",
+   "source": "mcs/core/ledger.py",
+   "source_sha256": "2b99d9f51d97a84a8546945c5274229fda47446fc0179594f75ba9e5f1a91459",
+   "dependencies": [
+    {
+     "source": "mcs/core/ledger_schema.py",
+     "source_sha256": "65e7791ef19854007917a8cbdd499c5bf25ad10f663eb778793613bffd48afd8"
+    },
+    {
+     "source": "mcs/core/mcs_util.py",
+     "source_sha256": "23f30ea8ce2b982c320babb5860ef623cdf6aa069530ca80207353764ad56175"
+    }
+   ],
+   "schema_version": 12,
+   "fixture": "shape-17.sql",
+   "fixture_sha256": "a1490a75521aa69870cbb9c6851030e878d13fe589bd1c4ae0df3479326c71ab",
+   "update_route": "automatic"
+  }
+ ]
 }
