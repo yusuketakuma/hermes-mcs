@@ -640,21 +640,25 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             return "unknown", None
     if not cloud_key and not optional_quality or jev_off and not optional_quality:
         return "deferred", None
-    lane_cap = scfg["daily_request_budget"] - math.ceil(
-        scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
     from semantic_store import jev_usage_today
-    try:
-        semantic_runtime._jev_window_check()
-        used = jev_usage_today(ledger)
-    except (semantic_jev.JevError, ValueError, sqlite3.Error):
-        return "deferred", None
-    skip_reason = ("disabled" if optional_quality and scfg['mode'] == 'off' else
-                   patient_context_quality_receipts.OUT_OF_SCOPE if out_of_scope else
-                   semantic_jev.REVIEW_HELD if scfg["jev_held"] else
-                   "not_configured" if not key else
-                   "disabled" if scfg["daily_request_budget"] <= 0 else
-                   "backlog_reserved" if used >= lane_cap else None)
-    if semantic_runtime.circuit_open(ledger):
+    # Jev is never asked here (semantic off, or the patient outside Jev's scope):
+    # no send deadline, budget or circuit decides, as on an install without Jev.
+    no_send = ("disabled" if optional_quality and scfg['mode'] == 'off' else
+               patient_context_quality_receipts.OUT_OF_SCOPE if out_of_scope else None)
+    skip_reason = no_send
+    if no_send is None:
+        lane_cap = scfg["daily_request_budget"] - math.ceil(
+            scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
+        try:
+            semantic_runtime._jev_window_check()
+            used = jev_usage_today(ledger)
+        except (semantic_jev.JevError, ValueError, sqlite3.Error):
+            return "deferred", None
+        skip_reason = (semantic_jev.REVIEW_HELD if scfg["jev_held"] else
+                       "not_configured" if not key else
+                       "disabled" if scfg["daily_request_budget"] <= 0 else
+                       "backlog_reserved" if used >= lane_cap else None)
+    if no_send is None and semantic_runtime.circuit_open(ledger):
         state = semantic_runtime._circuit_state(ledger)
         if state["failure_class"] not in semantic_runtime._CIRCUIT_FAILURE_CLASSES:
             return "deferred", None
@@ -690,20 +694,23 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             live = extract_llm.load_config()
             live_key = semantic_jev.api_key()
             live_semantic, problems = semantic_policy.semantic_config(live, key_present=bool(live_key))
-            if skip_reason is not None:
+            if no_send is not None:
+                # re-verified before every write, the skip record included
+                still_skipped = (semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(live)[0], pid)
+                                 if no_send == patient_context_quality_receipts.OUT_OF_SCOPE else
+                                 optional_quality and live_semantic['mode'] == 'off')
+                if not still_skipped:
+                    denied = True
+                    return False
+            elif skip_reason is not None:
                 try:
                     semantic_runtime._jev_window_check()
                     live_used = jev_usage_today(ledger)
                     live_cap = live_semantic["daily_request_budget"] - math.ceil(
                         live_semantic["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
-                    live_out_of_scope = semantic_policy.jev_scope_excludes(
-                        semantic_policy.jev_scope_policy(live)[0], pid)
                     still_skipped = ((skip_reason == "not_configured" and not live_key)
-                                     or (skip_reason == patient_context_quality_receipts.OUT_OF_SCOPE
-                                         and live_out_of_scope)
                                      or (skip_reason == semantic_jev.REVIEW_HELD and live_semantic["jev_held"])
-                                     or (skip_reason == "disabled" and (live_semantic["daily_request_budget"] <= 0
-                                         or optional_quality and live_semantic['mode'] == 'off'))
+                                     or (skip_reason == "disabled" and live_semantic["daily_request_budget"] <= 0)
                                      or (skip_reason == "backlog_reserved" and live_used >= live_cap)
                                      or (skip_reason == "daily_budget" and live_used >= live_cap)
                                      or skip_reason == "service_unavailable"
