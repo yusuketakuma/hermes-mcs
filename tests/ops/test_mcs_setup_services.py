@@ -657,6 +657,52 @@ def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch)
     assert "bootout" not in service_management.AWAIT_RELOAD_SCRIPT
 
 
+@pytest.mark.parametrize("print_code", [124, 127])
+def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
+        monkeypatch, print_code):
+    """A `launchctl print` that times out (124) or cannot start (127) is
+    "unknown", never "absent": reconcile must not bootstrap. Over a loaded
+    job, bootstrap fails to apply the new plist yet a late `print` answering
+    0 would still be recorded as `loaded: True` in the manifest (#352)."""
+    import subprocess
+    from types import SimpleNamespace
+    seen, probes = [], {"n": 0}
+
+    def fake_run(argv, **kwargs):
+        verb = argv[1]
+        seen.append(verb)
+        rc = 0
+        if verb == "print":
+            probes["n"] += 1
+            rc = print_code if probes["n"] == 1 else 0
+        elif verb == "bootstrap":
+            rc = 5                  # already loaded: Input/output error
+        return subprocess.CompletedProcess(argv, rc, "", "synthetic")
+
+    sleeps, notes = [], []
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
+    monkeypatch.setattr(service_management, "time",
+                        SimpleNamespace(time=service_management.time.time,
+                                        sleep=sleeps.append))
+    assert service_management.agent_reconcile(
+        'ai.mcs.x', '/p.plist', notes.append, False,
+        paths=mcs_setup._service_paths()) is False
+    assert "bootstrap" not in seen and "bootout" not in seen
+    assert seen == ["print"]
+    assert any("確認できない" in n for n in notes)
+
+
+def test_services_unknown_launchd_state_is_a_problem_not_loaded(
+        monkeypatch, tmp_path):
+    """`agent_loaded` answering None must surface as unverifiable, not as
+    `loaded: True` in the service manifest (#352)."""
+    calls, args = _services_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+
+
 def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
     import subprocess
     stubs = tmp_path / "bin"
