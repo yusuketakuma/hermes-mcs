@@ -534,3 +534,26 @@ def test_non_contention_ledger_error_is_not_retryable(home, monkeypatch):
         with pytest.raises(jev.JevError, match="budget_exceeded") as error:
             _evaluate(client)
     assert error.value.detail == "usage_ledger_unavailable" and not error.value.retryable
+
+
+def test_lock_won_after_the_request_time_never_records_usage(home, monkeypatch):
+    import writer_lock
+    holder = writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))
+    real_wait = writer_lock.wait_run_lock
+    def late_wait(path, **kwargs):
+        import os
+        os.close(holder)
+        fd = real_wait(path, **kwargs)
+        monkeypatch.setattr(jev.time, "monotonic", lambda: float("inf"))   # the scheduler woke it late
+        return fd
+    monkeypatch.setattr(writer_lock, "wait_run_lock", late_wait)
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("late lock must not send")) as client:
+        monkeypatch.setattr("ledger.Ledger", lambda *a, **kw: pytest.fail("usage recorded after the wait budget"))
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+    assert error.value.detail == "usage_lock_busy" and _used(home) == 0
+    fd = writer_lock.acquire_run_lock(str(home / "data" / "run.lock"))
+    assert fd is not None
+    import os
+    os.close(fd)

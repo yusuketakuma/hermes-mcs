@@ -279,7 +279,7 @@ def restart_intent_active(data_dir: str | None = None, *, now: float | None = No
 
 def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
                   marker_path: str) -> int | None:
-    """Poll the run lock until ``wait_s`` elapses, never acquiring after it — short polls so a
+    """Poll the run lock until ``wait_s`` elapses — short polls so a
     holder that releases between batches is won, not missed. A lock won
     right after an updater released it is given back: this process
     loaded the OLD code before waiting, and running it (with modules
@@ -293,11 +293,8 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
         if restart_intent_active(intent_dir, deadline=until):
             record_writer_refusal("restart_intent_active", "write_lock")
             return None
+        # The last poll falls on the deadline, not a whole interval past it.
         time.sleep(min(RUN_LOCK_POLL_S, max(0.0, until - time.monotonic())))
-        if time.monotonic() >= until:
-            # A lock won after the caller's deadline would let it record work it
-            # can no longer do (e.g. a usage reservation it will not send).
-            break
         if os.path.lexists(marker_path):
             # An update started: leave now instead of holding a waiting
             # child that its quiesce must see gone (IA-078).

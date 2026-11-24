@@ -126,12 +126,14 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
     from semantic_runtime import manual_usage_reserver
     from writer_lock import acquire_run_lock, capture_writer_refusal, code_stamp, wait_run_lock
     lock_path = str(home / "data" / "run.lock")
+    wait_s = min(LIVE_LOCK_WAIT_S, timeout)
+    waited_until = time.monotonic() + wait_s
     lock_fd = acquire_run_lock(lock_path)
     if lock_fd is None:
         # Background writers hold the lock briefly but back to back; wait like other CLIs,
         # never longer than the request's own timeout.
         with capture_writer_refusal() as refusal:
-            lock_fd = wait_run_lock(lock_path, wait_s=min(LIVE_LOCK_WAIT_S, timeout),
+            lock_fd = wait_run_lock(lock_path, wait_s=wait_s,
                                     expected_code_stamp=expected_code_stamp,
                                     marker_path=str(home / "data" / "update_in_progress.marker"))
         if lock_fd is None:
@@ -139,6 +141,10 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
                 raise JevError("budget_exceeded", "usage_code_changed")
             raise JevError("budget_exceeded", "usage_lock_busy")
     try:
+        if time.monotonic() > waited_until:
+            # Won only after the request's time was spent: recording usage now
+            # would count a request the caller can no longer send.
+            raise JevError("budget_exceeded", "usage_lock_busy")
         # Ledger construction may migrate: reject stale code before opening it.
         if ((home / "data" / "update_in_progress.marker").exists()
                 or code_stamp() != expected_code_stamp):
