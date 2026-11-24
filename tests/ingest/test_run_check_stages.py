@@ -1074,7 +1074,9 @@ def test_capped_unread_requires_every_parent_body_in_the_unread_time_range(tmp_p
 def test_semantic_late_lock_retake_leaves_the_tick_running(tmp_path, monkeypatch):
     """A background holder keeps run.lock past the realtime job's own deadline
     but inside the tick's: the retake succeeds, the late answer is not saved
-    or charged, and the tick goes on to its snapshot and finishing steps."""
+    or charged, and the semantic stage returns without raising RunLockLost,
+    the signal on which run_check ends the tick before its later stages.
+    The later stages themselves are not run here."""
     import contextlib
     import os
     import semantic_policy

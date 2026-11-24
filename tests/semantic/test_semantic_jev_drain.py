@@ -311,26 +311,28 @@ def _clock(monkeypatch, start=1000.0):
     return clock
 
 
-def _tick_holds_lock(monkeypatch, threads, hold_s):
+def _tick_holds_lock(monkeypatch, threads, hold_s, jev=None):
     """One drain whose first Jev answer meets a tick holding run.lock for hold_s."""
     clock = _clock(monkeypatch)
     windows = []
 
     @contextlib.contextmanager
     def tick_holds_lock(ledger, lock_fd, wait_s=None, deadline=None):
-        yield
-        if not windows:
-            clock[0] += hold_s
-        windows.append(deadline)
-        if clock[0] >= deadline:   # the bounded retake ran out
-            raise writer_lock.RunLockLost(held=False, updated=False)
+        try:
+            yield
+        finally:   # the retake follows the call's answer and its error alike
+            if not windows:
+                clock[0] += hold_s
+            windows.append(deadline)
+            if clock[0] >= deadline:   # the bounded retake ran out
+                raise writer_lock.RunLockLost(held=False, updated=False)
 
     monkeypatch.setattr(writer_lock, "unlocked_transport", tick_holds_lock)
     fd = os.open(os.devnull, os.O_RDONLY)
     start_by = clock[0] + 10
     try:
         out = semantic_drain.run_due(threads, _cfg("shadow", **JEV_ONLY), {"errors": []},
-                                     start_by + 45 + 30, jev_client=_HookedJev(), llm_fn=_no_local_model,
+                                     start_by + 45 + 30, jev_client=jev or _HookedJev(), llm_fn=_no_local_model,
                                      lane="backlog", max_jobs=8, run_lock_fd=fd, start_by=start_by)
     finally:
         os.close(fd)
@@ -350,16 +352,18 @@ def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads,
     assert _pending(threads) == 3
 
 
-def test_a_tick_holding_the_lock_past_the_job_deadline_keeps_the_attempt(threads, monkeypatch):
+@pytest.mark.parametrize("error", [None, semantic_jev.JevError(
+    "contract_error", "http_400", retryable=False, status=400)], ids=["answer", "http_400"])
+def test_a_tick_holding_the_lock_past_the_job_deadline_keeps_the_attempt(threads, monkeypatch, error):
     """A retake that lands after the job's run deadline keeps the pass going:
-    the late answer is not saved and the job keeps its attempts."""
-    out = _tick_holds_lock(monkeypatch, threads, 50)
-    assert "run_lock_lost" not in out and out["done"] == 0
+    neither the late answer nor a late non-retryable error is kept, no
+    assessment is written and the job keeps its attempts."""
+    out = _tick_holds_lock(monkeypatch, threads, 50, jev=_HookedJev(error=error))
+    assert "run_lock_lost" not in out and out["done"] == 0 and out["failed"] == 0
     rows = threads.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
                               (semantic_drain.JOB_KIND,)).fetchall()
     assert {tuple(r) for r in rows} == {("pending", 0)}
-    assert not threads.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND json_extract(meta,"
-                                  "'$.technical_status')='complete'",
+    assert not threads.db.execute("SELECT 1 FROM artifacts WHERE kind=?",
                                   (semantic_policy.KIND_ASSESS,)).fetchall()
 
 
@@ -427,6 +431,47 @@ def test_a_first_request_refused_before_sending_charges_no_attempt(tmp_path, mon
         assert jev.requests_made == 0 and out["done"] == 0
         assert [m["status"] for m in out["job_metrics"]] == ["deferred_short"]
         assert _job_row(db) == ("pending", 0)
+    finally:
+        db.close()
+
+
+def test_a_start_window_closing_during_the_gates_leaves_the_job_unserved(tmp_path, monkeypatch):
+    """The start window is checked again after the per-job gates: a job whose
+    gates outlast it is not dispatched, its long-defer reservation is undone,
+    and neither its attempts nor the fairness counters move."""
+    clock = _clock(monkeypatch)
+    db = _one_job(tmp_path)
+    reserve = semantic_drain._reserve_long_defer
+    start_by = clock[0] + 10
+
+    def slow_reserve(*args, **kwargs):
+        clock[0] = start_by + 1    # the gates ran past the start window
+        return reserve(*args, **kwargs)
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("a job past the start window must not be dispatched")
+
+    accounted = []
+    persist = semantic_drain._persist_drain_accounting
+
+    def record(ledger, scfg, out, result, selected, *args, **kwargs):
+        accounted.append(dict(selected))
+        return persist(ledger, scfg, out, result, selected, *args, **kwargs)
+
+    monkeypatch.setattr(semantic_drain, "_reserve_long_defer", slow_reserve)
+    monkeypatch.setattr(semantic_drain, "_process_job", must_not_run)
+    monkeypatch.setattr(semantic_drain, "_persist_drain_accounting", record)
+    try:
+        before = dict(semantic_drain._long_defers(db))
+        jev = _HookedJev()
+        out = semantic_drain.run_due(db, _cfg("shadow", **JEV_ONLY), {"errors": []}, clock[0] + 300,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog",
+                                     max_jobs=8, start_by=start_by)
+        assert out["start_window_closed"] is True and out["done"] == 0
+        assert jev.requests_made == 0 and not out["job_metrics"]
+        assert _job_row(db) == ("pending", 0)
+        assert dict(semantic_drain._long_defers(db)) == before
+        assert accounted and not any(sum(c.values()) for c in accounted)
     finally:
         db.close()
 
