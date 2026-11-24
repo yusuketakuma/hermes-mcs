@@ -5,7 +5,7 @@
 ## 版番号の提案記録
 
 - 比較元（直近の公開済み版）: タグ `v1.2.1` = `4a97288dd74f356c8bb2f7191721819f0a1fdaf3`（CHANGELOG の v1.2.1 節と照合済み）。本番反映SHAはこの記録では確認していない。
-- 対象SHA: `devin/release-1.3.0-prep` の最終 commit は push 時点で固定する（準備時点の HEAD は `face4449`、base は origin/main `bbcb846a`）。
+- 対象SHA: `devin/release-1.3.0-prep` の最終 commit は push 時点で固定する（記録時点の HEAD は `f4b35f7`、base は origin/main `bbcb846a`）。
 - 推奨番号: `1.3.0`（機能アップデート版）。最大区分は MINOR。
 - 根拠: 未リリース変更記録34件の内訳が 新機能12・改善8・不具合修正14。12件の `added` 記録は互換な機能追加（在宅ケア台帳・医薬品検索共通入口・患者横断検索・Jev要求内訳表示など）。根拠path: `changes/archive/1.3.0/` 各記録と `docs/releases/v1.3.0/change-map.json`。非互換な CLI/JSON/設定/保存データの変更は記録に無い。内部改善の件数・行数・schema番号は区分の代理に使っていない。
 - 互換性・必要な操作: 互換。更新時の必要操作は CHANGELOG「更新時の注意」にある再起動・設定確認、薬剤マスターのオペレーター承認（配布のみで有効化は別承認）、`QA_VERSION` 1→2（品質確認の受入れ規則変更に伴う版マーカー: Jev対象外患者を `out_of_scope` の SKIPPED として記録・`project_ids` から `jev_scope_policy` への置き換え・Jev モデル jev-1.14.0 への更新）。
@@ -21,7 +21,7 @@
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象は `devin/release-1.3.0-prep` ブランチの作業ツリー（base: origin/main `bbcb846a`、HEAD `face4449`）。実行日は 2026-11-24（JST）。
+対象は `devin/release-1.3.0-prep` ブランチの作業ツリー（base: origin/main `bbcb846a`、HEAD `f4b35f7`）。実行日は 2026-11-24（JST）。
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
 - `release_notes.py build --version 1.3.0 --date 2026-11-24`: 生成成功（archive移動・CHANGELOG・README更新・changelog-1.3.0.md）。
@@ -37,20 +37,21 @@
 
 ### 新規インストールの受入
 
-- クリーンな一時HOME・合成データでの導入・起動・診断・代表機能: `tests/release/` の検証に含まれる新規導入シナリオ（59 tests + 128 subtests）を実測合格。実接続が必要な部分（実MCS・実サービス）は権限・環境の範囲外のため未実施。
-- 配布候補の取得・依存導入: fresh-install CI lane は最終SHAのCI run で確認予定（未実行）。
+- クリーンな一時HOME・合成データでの導入・起動・診断・代表機能: 未実施。`tests/release/`（59 tests + 128 subtests、合格）はリリース資料・公開ツールの検証で、新規導入・起動・診断は実行しない。新規導入ワークフロー（`.github/workflows/fresh-install.yml`）はこのPRの自動実行条件に該当しない。
+- 配布候補の取得・依存導入: 未実施。
 
 ### 過去版からの更新の受入
 
-- 対応を宣言する更新元: 全公開版からの更新経路を `tests/fixtures/schema_upgrade/` で追跡。直近公開タグを含む origins を同tagの実コードから生成したDDL fixture と hash で追加済み: v1.1.2 `ff038ef8`→`shape-16.sql`（72オブジェクト）、v1.2.0 `204cbdbb`・v1.2.1 `4a97288d`→`shape-17.sql`（74オブジェクト。2版は対象ソースがbyte同一で同一 fixture）。
-- `update-paths.json` の target は v1.3.0。`test_supported_update_paths.py`・`test_supported_schema_upgrade.py`・`test_release_origin_tick.py`（fixture 追加後に失敗した項目を fixture のDDL・hash修正で再検証）: 616 tests 合格（2026-11-24 実測）。
-- 更新元の合成DB・設定から更新コードの実入口・バックアップ・保持・再起動後の診断・rollback: 上記3ファイルのシナリオがカバー。実機の本番DBでの適用は未実施（別承認）。
+- 対応を宣言する更新元: 全公開版からの更新経路を `tests/fixtures/schema_upgrade/` で追跡。origins に直近公開タグを含む3件を同tagの実コードから生成したDDL fixture と hash で追加済み: v1.1.2 `ff038ef8`→`shape-16.sql`（72件の正規化DDL定義）、v1.2.0 `204cbdbb`・v1.2.1 `4a97288d`→`shape-17.sql`（74件。2版は対象ソースがbyte同一で同一 fixture）。SQLite内部テーブルとFTS5 shadowテーブルは既存 fixture の慣行どおり除外。
+- `update-paths.json` の target は v1.3.0。`test_supported_update_paths.py`・`test_supported_schema_upgrade.py`・`test_release_origin_tick.py`: 616 tests 合格（2026-11-24 実測）。fixture 追加直後の初回実行では生成DDLの順序・内部テーブル取り込みが原因で66件失敗し、fixtureのDDLを修正して同項目のみ再実行で合格（失敗後の再検証）。実行したツリーは、fixture 追加を含む作業ツリー＝コミット `3520c87`（fixtures・test更新）と `f4b35f7`（受入票・図版hash）の内容。コードは push 済み HEAD と同一。
+- 合成環境で確認した範囲: 更新コードの実入口・plan/apply・事前バックアップ・設定・保存データの保持・rollback・失敗時の復旧（runtimeの再起動・サービス監視はスタブ）。再起動後の診断・代表機能の稼働確認と実機の本番DBでの適用は未実施（別承認）。
 
 ## 未実行・残条件
 
 - 全体 suite・CI の全6 lane: 本票作成時点ではリリースPRの CI run が最終の実測証拠になる。対象SHAでのrunを照合する。
 - 独立レビュー（Devin Review）: PR に付く見込み。指摘があれば対応を記録する。
 - tag `v1.3.0` の作成・GitHub Release の公開・説明図 PNG の release asset 添付と到達・表示確認: 未実施。本文中の画像URLは公開後に照合が必要。
+- 新規導入の受入（fresh-install ワークフロー相当）: 未実施（上記）。
 - 本番適用・常駐サービスの再起動: 未実施。「更新時の注意」に記載の再起動条件は公開後の適用時に従う。
 - 未リリース記録 `changes/drug-alias-over-limit-cache.json`: 準備中に main へ届いた記録で、次版の集約対象として未収録のまま残す。
 
