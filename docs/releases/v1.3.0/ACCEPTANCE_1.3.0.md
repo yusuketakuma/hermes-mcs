@@ -22,7 +22,7 @@
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象はPR #357の `devin/release-1.3.0-prep` ブランチ。main merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` と37件の変更記録を含みます。最終head SHAと必須CIはこの資料更新をpushした後にPR上で確認します。実行日は2026-11-24（JST）。
+対象はPR #357の `devin/release-1.3.0-prep` ブランチ。main merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` と37件の変更記録を含みます。本票の最新head確認は `94a2b32378a78a87e8cc5ce44de4b38d0c3752c3` に対するものです。今回の受入追補を反映した新headのCI・レビューは別途確認します。実行日は2026-11-24（JST）。
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
 - `release_notes.py build --version 1.3.0 --date 2026-11-24`: 既存版を上書きしないようcleanな一時worktreeで生成。候補側で更新済みの `jev-optional.json` と `semantic-drain-throughput.json` を用い、archive 37件がPR作業ツリーと完全一致することを確認。
@@ -41,6 +41,8 @@
 - 同じ合成台帳で候補のQA_VERSION 2を適用し、旧PASSが保存されたまま概要が一時的に非表示になることを確認する。
 - 独立した2ケースで背景再判定を進める。Jev対象内はstubの新しいPASS後に表示が戻ること、対象外はJev要求なしでsource/summaryの両方に `SKIPPED(out_of_scope)` が記録され、表示が戻ることを確認する。
 - 2026-11-24の合成probeでは上記2経路を確認。workerループは常駐レーンから `run_due` を呼ぶが、probe自体は処理単位を直接進めたため、サービス再起動・worker監督・画面を含む一連の統合動作は未検証。実Jev・実患者データ・本番DBは使っていない。
+- このprobeは旧PASSがある患者（過去の不合格なし）の表示回復を確認したもので、過去に品質不合格がある患者の回復を確認したものではない。過去の不合格がある患者はJev対象外でもSKIPPEDへ切り替えて公開せず、保留を維持する（変更記録上、全ての未実施理由に適用）。`test_prior_negative_quality_answer_cannot_be_converted_to_skip` は日次予算0での変換拒否を検証するが、Jev対象外での回復は試験していない。そのケースの回復経路・表示回復は未確認。
+- `patient_context_quality_identity` は意味解析候補のソース指紋に含まれるため、QA_VERSION 1→2 で候補指紋も変わります。`semantic.fact_source=canonical` で承認済みの環境は意味解析が止まり、現行手順で再評価・再承認が必要です（`semantic-assess-churn.json`）。実機設定は確認しておらず、承認の変更もしていません。
 - `release_owner_source.py --check` は `41da58883` のソースで合格（digest `0602f939…`）。その後にmainから取り込んだ変更を含む PR #357 の `94a2b3237` のソース660件から、manifestを再生成しました（digest `9b0127a4…`）。
 
 ### 新規インストールの受入
@@ -71,7 +73,7 @@
 
 ## 未実行・残条件
 
-- PR #357の最終headに対する必須CI: 37件の資料更新をpushした後、正確なhead SHAのrequired checksを確認する。旧候補 `6845138a...` の16成功・2 pending結果や、別PRの成功を統合候補のCIとして流用しない。
+- PR #357 head `94a2b32378a78a87e8cc5ce44de4b38d0c3752c3` の必須CI: 21成功・0失敗・0保留・8 skip。`lint-test`、`macos`、`hermes-integration`、`standalone-sdk`、`hygiene`、`incident-gates`、`merge-gate` はすべて成功。この受入票更新をpushした後のheadは未確認で、同じCI結果を流用しない。
 - 既存の3修正PRの証跡: #358（常駐処理）は最終head `d60fd48b4` で関連テストとCI 24件成功、#356（薬名辞書）はCI 21成功・0失敗・9 skip、#359（クラウド再処理）はCI 22成功・0失敗・8 skip。これらは各PRのheadに対する既存証跡で、37件を含む#357候補のCI成功の代替ではない。
 - PR #365統合: 最終head `d71f58d936265aeff973d1bc5f348f367c4dd086` はmain merge commit `76e2e2d65e993adf07d049fcdef15c58b0365383` に取り込まれ、候補ツリーに含む。既存PR CIは24成功・0失敗・0 pending・9 skip。関連対象テスト135件は最終headと変更記録の記述差1行の `8d74b2724` で合格。旧モデル名の誤ラベル評価を使用中モデルで再評価する回帰テストも追加済み。
 - #365のDevin Review: 最終headのレビュー結果コメントは5件の自動修正を記録。成果物・使用記録のモデル整合、送信直前の許可再確認、canonical切替拒否とモデル束縛、receipt先行保存と同じcommand-idの再実行、canonical再評価・再承認手順をコード・記録・ガイドで確認した。旧モデルQCジョブは`config_generation`と実行時guardで送信/書込み前に停止するとのレビュー回答があり、既定の役割として扱う。親ディレクトリfsyncの失敗を注入した耐久性試験は既存証跡で確認できず、読取り可能性と永続性を分けた実機検証も未実施。
@@ -105,6 +107,13 @@
 - 37件の外に患者コンテキスト変更記録が3件ある: 別患者の更新時も対象入力が一致すれば品質確認を続ける、保存直前に原文・回答・概況を再照合する、候補予約後に患者選定ロックを解放する。変更記録は未archiveの `patient-context-quality-concurrent-writes`、`patient-context-quality-foreign-commit`、`patient-context-selection-concurrency`。37件には加えず、#368統合headでの受入証跡も未確認。
 - 他に新しい未archive変更記録が14件ある。抽出・添付再処理（手動範囲、承認済み作り直し、OCR受付/保留理由）、薬剤・検査値、semantic待機、通知/スタンプ照合、archive患者export、権限の弱い `.env` 等で、患者コンテキスト機能とは別範囲。`homecare-local-backup.json` は既存37件のarchive側にあり、新規追加ではない。
 - PR #368本文に記された83件・254件のテストは各統合元の実行結果で、head `79cc372` の合格証跡ではない。ここでは読み取り比較だけを行い、#368のテストは実行していない。
+
+## PR #357 head `94a2b3237` のDevin Review
+
+- レビューは3件。Jev対象外で過去に品質不合格がある患者は、確認なしのSKIPPED公開を避けるため保留を維持する。旧PASSだけを使った合成probeとは別ケースで、回復・表示は未確認。
+- `patient_context_quality_identity` のソース変更は候補指紋に影響し、canonical承認済み環境には再評価・再承認が必要。上記のとおり既存の `semantic-assess-churn.json` に手順がある。
+- 受入票見出しが記録対象SHAと不一致という指摘は、この追補で `a01066d2f` の記録へ修正した。旧レビュー5件のtriage未登録とは別のレビューで、代理triageは行っていない。
+- このheadのGitHubレビューイベントには人によるレビューを確認できず、取得できたbranch protection情報では必須承認数0。新headの通常レビュー・必須CIは更新後に再確認する。
 
 ## 参照
 
