@@ -20,7 +20,7 @@
  "source": "docs/releases/v1.3.0/homecare-drug-search-v130.svg",
  "status": "unpublished_preparation",
  "visual_check": {
-  "checked": "2026-11-24、1960x840のPNGを1372x588相当へ縮小した表示で文字欠落・重なり・余白を確認。",
+  "checked": "2026-11-24、1960x840のPNGを390px幅相当と1372px幅相当へ縮小した表示で文字欠落・重なり・余白を確認。390pxでも見出し・両パネルの主要ラベルを判読。",
   "narrow_width_ok": true,
   "png_rendered": true
  }
