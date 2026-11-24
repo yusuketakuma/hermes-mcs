@@ -38,7 +38,7 @@ PUBLISH_BACKOFF_CAP_S = 3600
 # Reconciliation is GET-only and ends one hour after the send attempt; records
 # written before attempt timestamps existed get the same hour from the first
 # post-upgrade check that can save the field.
-RECONCILE_EXPIRE_S = 3600
+RECONCILE_WINDOW_S = 3600
 # SQL mirror of _publish_state's due rule: rows predating retry bookkeeping are
 # due from creation; corrupt due values are due now rather than hidden forever.
 _PUBLISH_DUE = ("CASE WHEN json_type(content,'$.publish_next_at') IN ('integer','real') "
@@ -600,7 +600,7 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         # Even after DB rollback, an attempted operation is reconciled by GET only.
         if actual == desired:
             state = "confirmed"
-        elif now - attempted_at >= RECONCILE_EXPIRE_S:
+        elif now - attempted_at >= RECONCILE_WINDOW_S:
             state, outcome_error = "rejected", "stamp_reconcile_expired"
         else:
             state = "unknown"
