@@ -389,4 +389,15 @@ def test_real_scan_past_its_deadline_is_partial_never_totals(tmp_path, monkeypat
     _slow_clock(monkeypatch)
     report = mcs_setup._doctor_context_refresh({}, probe=True)
     assert report['counts'] is None and report['status'] == 'unknown'
-    assert report['partial']['total'] == 3 and report['partial']['checked'] < 3
+    # a scan stopped before its first patient is no reading; otherwise only the checked part
+    partial = report['partial']
+    assert partial is None or (partial['total'] == 3 and 0 < partial['checked'] < 3)
+    if partial is None:
+        assert '時間内に確認できませんでした' in mcs_setup._context_refresh_lines(report)[0]
+
+
+def test_scan_stopped_before_any_patient_is_no_reading(synthetic_database, monkeypatch, healthy_states):
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: _partial(0, 5)))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['partial'] is None and report['status'] == 'unknown'
+    assert mcs_setup._context_refresh_lines(report)[0] == '作業待ちの件数: 時間内に確認できませんでした（0件とは扱いません）'

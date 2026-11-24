@@ -1938,7 +1938,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev   # the adoption check below reads the key again
-                refusal =_quality_save_refusal(ledger.db, pid, live_cfg, live_policy, problems, fresh["sources"],
+                refusal = _quality_save_refusal(ledger.db, pid, live_cfg, live_policy, problems, fresh["sources"],
                                                 source_quality_identity, source_quality_keys, source_quality_skipped,
                                                 set(), expected=source_pass_content)
                 if refusal is not None:

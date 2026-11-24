@@ -1054,7 +1054,7 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
         counts = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
         if scan["complete"]:
             result["counts"] = counts
-        else:
+        elif scan["checked"]:  # nothing checked is no reading, never zero counts
             result["partial"] = {"checked": scan["checked"], "total": scan["total"], "counts": counts}
     # fixed lane codes and counts only; a malformed block stays unknown, not zero
     result["lanes"] = {lane: {code: lanes[lane][code] for code in _CONTEXT_REFRESH_LANE_CODES}

@@ -455,6 +455,22 @@ def test_status_keeps_an_interrupt_before_the_deadline_an_error(runtime, monkeyp
         readiness.status(led.db, CFG)
 
 
+def test_status_keeps_a_non_interrupt_error_after_the_deadline_an_error(runtime, monkeypatch):
+    led, clock, _ = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    real = readiness._pending
+
+    def pending(db, pid, *args, **kwargs):
+        if pid == 2:
+            clock.mono += 120
+            raise sqlite3.OperationalError('database is locked')
+        return real(db, pid, *args, **kwargs)
+    monkeypatch.setattr(readiness, '_pending', pending)
+    with pytest.raises(sqlite3.OperationalError):
+        readiness.status(led.db, CFG, deadline=clock.mono + 60)
+
+
 def test_pending_estimate_reports_an_unreadable_scope_as_invalid_and_keeps_others(runtime):
     led, _, _ = runtime
     for pid in (1, 2):

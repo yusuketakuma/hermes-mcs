@@ -695,9 +695,10 @@ def status(db, cfg, *, deadline=None):
     a patient whose stored state cannot be read is counted in ``invalid`` only.
     ``scan`` says how many of ``total`` patients were ``checked``. With a
     ``deadline`` (``time.monotonic()``) the scan stops between patients once it
-    passes; a patient still being read then is left uncounted, ``complete`` is
-    false and ``lanes`` is None, so the counts cover only the checked part. An
-    SQLite interrupt becomes that partial result only after the deadline."""
+    passes; a patient still being read then is left uncounted and ``complete``
+    is false, so the counts cover only the checked part. ``lanes`` is read only
+    without a deadline. Only an SQLite interrupt after the deadline becomes that
+    partial result; any other error is raised."""
     counts = dict.fromkeys(("initial_pending", "delta_pending", "history_pending",
                            "audit_pending", "failed", "complete", "invalid"), 0)
     from types import SimpleNamespace
@@ -713,8 +714,9 @@ def status(db, cfg, *, deadline=None):
             break
         try:
             increments = _status_increments(db, pid, cfg, cloud_scan)
-        except sqlite3.OperationalError:
-            if not expired():
+        except sqlite3.OperationalError as exc:
+            # only the progress handler's own interrupt, once the deadline passed, is a stop
+            if not expired() or "interrupt" not in str(exc).lower():
                 raise
             break
         if expired():
@@ -723,7 +725,8 @@ def status(db, cfg, *, deadline=None):
             counts[key] += n
         checked += 1
     complete = checked == len(pids)
-    counts["lanes"] = lane_metrics(db)["lanes"] if complete else None
+    # a bounded caller (doctor) reads lanes under its own budget
+    counts["lanes"] = lane_metrics(db)["lanes"] if deadline is None else None
     counts["scan"] = {"checked": checked, "total": len(pids), "complete": complete}
     return counts
 
