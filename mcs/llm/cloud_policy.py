@@ -1697,6 +1697,9 @@ class _Tally:
         self.total = Decimal(0)
         self.invalid = False
         self.carried = None   # carry-over marker the totals include; None until first read
+        # (guard mutation count, artifact id, digest state) of committed rows hashed
+        # outside any transaction while the write-time guard was installed, else None.
+        self._guarded = None
 
     def _add(self, day, cost, provider):
         self.days.setdefault(day, [0, Decimal(0)])[1] += cost
@@ -1719,6 +1722,38 @@ class _Tally:
                 _hash_row(digest, row)
         self._main, self._main_id = digest.copy(), self.last_id
         return self._with_prior(digest, ledger, now)
+
+    def unchanged(self, ledger, now):
+        """The rows this tally already hashed are unchanged in the caller's read snapshot.
+
+        The installed write-time guard moves its mutation count whenever an accounting
+        row is changed, removed, replaced or inserted below a newer id; appends leave it
+        alone. While it still matches the count seen when committed rows were hashed,
+        those rows hold and only the rows tallied after them (which a rollback may have
+        removed or an id reuse replaced) are hashed again. Otherwise everything is."""
+        guarded, mutations = self._guarded, _guard_mutations(ledger.db)
+        if guarded is not None and mutations == guarded[0] and guarded[1] <= self.last_id:
+            digest = guarded[2].copy()
+            if guarded[1] < self.last_id:
+                # The tail is an artifact_id range: read it through the accounting-only
+                # order index when present, else by rowid, never by the kind/created_at
+                # index that would walk the whole period.
+                source = _accounting_order_source(ledger.db)
+                with closing(ledger.db.execute(_GUARDED_TAIL_SQL.format(
+                        source=source if source != "artifacts" else "artifacts NOT INDEXED"),
+                        (guarded[1] + 1, self.last_id, self.month))) as rows:
+                    for row in rows:
+                        _hash_row(digest, row)
+            if self._with_prior(digest.copy(), ledger, now) == self.prefix:
+                self._main, self._main_id = digest, self.last_id
+                return True
+        return self.prefix == self.fingerprint(ledger, now)
+
+    def _mark_guarded(self, ledger):
+        """Remember the verified digest of committed rows for unchanged()'s guarded check."""
+        mutations = None if ledger.db.in_transaction else _guard_mutations(ledger.db)
+        if mutations is not None and self._main_id == self.last_id:
+            self._guarded = (mutations, self._main_id, self._main.copy())
 
     def _with_prior(self, digest, ledger, now):
         """Finish a main-row digest with the prior-period reservations, in fingerprint's order."""
@@ -1805,7 +1840,21 @@ class _Tally:
                 self.prefix = self._with_prior(extend, ledger, now)
             else:
                 self.prefix = self.fingerprint(ledger, now)
+        self._mark_guarded(ledger)
         self.checked_at = now
+
+
+_GUARDED_TAIL_SQL = (
+    "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM {source} "
+    "WHERE artifact_id BETWEEN ? AND ? AND kind IN ('cloud_usage_reserve','cloud_usage_result') "
+    "AND created_at>=? ORDER BY artifact_id")
+
+
+def _guard_mutations(db):
+    """The accounting guard's mutation count while its exact index and triggers are installed, else None."""
+    import ledger_schema
+    state = ledger_schema.cloud_usage_guard_state(db)
+    return None if state is None else state[1]
 
 
 def _tally_precheck(db, start):
@@ -1828,7 +1877,7 @@ def _current_tally(ledger, start, attribute, now):
             _validate_accounting_timestamps(ledger.db)
             if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
                     or tally.carried != carryover_marker(ledger.db)
-                    or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger, now))):
+                    or (tally.prefix is not None and not tally.unchanged(ledger, now))):
                 tally = _Tally(start, ledger.db)
                 setattr(ledger, attribute, tally)
             tally.update(ledger, now)
