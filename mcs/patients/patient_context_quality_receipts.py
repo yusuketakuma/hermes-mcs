@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import sqlite3
 import patient_context_artifacts as context_artifacts
 from mcs_util import loads_dict, strict_json, valid_hash
@@ -60,6 +61,52 @@ def _profiled_summary_repair_exists(db, pid, input_key):
     return False
 
 
+# Maintenance columns a stored post rewrites on every re-observation are never
+# quality inputs; a broad ``m.*``/``SELECT *`` message read must not sign them.
+_MESSAGE_INPUT_FIELDS = ("message_id", "project_id", "parent_id", "sender_id", "sender_name",
+                        "sender_type", "profession", "organization", "posted_at", "posted_at_ts",
+                        "body_html", "body_text", "body_state", "content_hash", "first_seen")
+_STAR_MESSAGES = re.compile(r"\*\s+FROM\s+messages(?:\s+(m))?\b", re.I)
+
+
+def _narrow_message_read(sql):
+    """The same message read selecting only the columns a quality input may use."""
+    if "m.*" in sql:
+        return sql.replace("m.*", ",".join("m." + col for col in _MESSAGE_INPUT_FIELDS), 1)
+    match = _STAR_MESSAGES.search(sql)
+    if match is None:
+        return None
+    prefix = match.group(1) + "." if match.group(1) else ""
+    cols = ",".join(prefix + col for col in _MESSAGE_INPUT_FIELDS)
+    return _STAR_MESSAGES.sub(lambda found: cols + found.group(0)[1:], sql, count=1)
+
+
+def _message_inputs_reproof(db, recording):
+    """Re-observe each broad message read as the input columns it actually uses.
+
+    Hydration, binding and proof reads fetch the whole message row, but only its
+    content and provenance columns are quality inputs; a maintenance write like
+    ``updated_seen`` must not read as a source change. The narrowed reads land
+    in the same recording, so the sealed witness still proves every input the
+    original observation covered."""
+    broad = []
+    for entry in recording._entries.values():
+        narrow = _narrow_message_read(entry['sql'])
+        if narrow is not None:
+            broad.append((narrow, entry['params']))
+    for sql, params in broad:
+        for _ in db.execute(sql, params):
+            pass
+    return bool(broad)
+
+
+def _inputs_witness(witness):
+    """Swap the broad observations for their input-column reproofs."""
+    from patient_readiness_witness import Witness
+    return Witness(tuple(entry for entry in witness._entries
+                         if _narrow_message_read(entry[0]) is None), witness._guard)
+
+
 def _quality_read(ledger, deadline, read):
     """Seal the observed rows, keeping the original version fence for unrecordable reads."""
     from patient_context_refresh_sources import _candidate_reader, _scan_writer_wait
@@ -76,7 +123,10 @@ def _quality_read(ledger, deadline, read):
             with _candidate_reader(ledger, deadline) as reader:
                 with Recording(reader.db) as recording:
                     value = read(reader)
+                    broad = _message_inputs_reproof(reader.db, recording)
                     witness = recording.seal()
+                    if broad and witness is not None:
+                        witness = _inputs_witness(witness)
         except sqlite3.DatabaseError as error:
             if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_AUTH:
                 raise

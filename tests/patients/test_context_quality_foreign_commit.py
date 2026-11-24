@@ -129,6 +129,39 @@ def _summary_step(led, clock, cfg, doc, **kwargs):
         cloud_mode=worker._cloud_mode(led, cfg, "patient_context", 1), **kwargs)
 
 
+def test_summary_audit_survives_another_process_refreshing_seen_time(quality_owner, monkeypatch):
+    """Re-observing an unchanged post still rewrites updated_seen; that
+    maintenance column is not a quality input, so the audit must proceed."""
+    led, clock, cfg, doc, sends, _ = quality_owner
+    commits = _commit_at_every_lock(
+        monkeypatch, led,
+        "UPDATE messages SET updated_seen=COALESCE(updated_seen,0)+1 WHERE message_id=1")
+    status, _ = _summary_step(led, clock, cfg, doc)
+    assert status == "pending" and len(sends) == 1
+    clock.mono += 61
+    status, identity = _summary_step(led, clock, cfg, doc)
+    assert status == "passed" and len(sends) == 1   # the answer was sent and billed once
+    assert patient_context_quality_receipts._quality_passed(led.db, 1, identity)
+    assert len(commits) >= 2
+
+
+@pytest.mark.parametrize("statement,params", [
+    ("UPDATE messages SET body_text=body_text||'変更' WHERE message_id=1", ()),
+    ("UPDATE messages SET first_seen=COALESCE(first_seen,0)+1 WHERE message_id=1", ()),
+    ("INSERT INTO message_revisions(message_id,seq,content_hash,body_state,observed_at) "
+     "VALUES (1,99,'synthetic','full',0)", ()),
+])
+def test_summary_audit_still_stops_when_another_process_changes_inputs(
+        quality_owner, monkeypatch, statement, params):
+    """Body, first_seen and revision are inputs: bumping them at the lock
+    position must still refuse the quality write."""
+    led, clock, cfg, doc, sends, _ = quality_owner
+    _commit_at_every_lock(monkeypatch, led, statement, params)
+    with pytest.raises(ValueError, match="patient_summary_quality_source_changed"):
+        _summary_step(led, clock, cfg, doc)
+    assert not sends and not led.db.in_transaction
+
+
 def test_summary_audit_passes_while_another_process_keeps_committing(quality_owner, monkeypatch):
     led, clock, cfg, doc, sends, _ = quality_owner
     commits = _commit_at_every_lock(monkeypatch, led)
