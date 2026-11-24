@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "閲覧権限を失った患者はexportから除外し、権限のあるarchiveはarchived行を付ける",
+  "summary": "日次export（brain_export）で、取得が拒否された患者（fetch_state=forbidden または権限系の fetch_reason）は患者ページを生成せず既存ページを削除し、その未解決シグナルも出力から除外するようになりました。除外した患者数は実行結果とmeta.mdに出ます。権限が戻れば再生成されます。権限のあるアーカイブは従来どおり出力で先頭に archived: true の1行が付きます。",
+  "upgrade": "追加操作は不要です。次回のexport実行から反映されます。",
+  "details": [
+    "権限喪失の判定は他の患者処理と同じ述語（fetch_state=forbidden または fetch_reason が forbidden・permission_denied・access_revoked）を使う。is_archived だけでは除外しない。",
+    "権限喪失の患者はページを生成せず、既存の patients/p番号.md は通常の掃除で削除する。rollup が一時的に欠けているだけの患者とは区別し、権限喪失の患者がrollupを持たなくてもexport全体を止めない。",
+    "権限喪失の患者のopenシグナルは signals/latest.md・export.jsonl の signal/signals_truncated レコード・結果のsignals件数・mcs.signals.openメトリクスから除外する。current_openの取得上限（200件）で打ち切られた場合は除外後の件数が下限になるためtotalの補正は行わずtruncated表記を維持する。",
+    "除外した患者数は実行結果JSONのexcludedキーとmeta.mdの「excluded patients (権限喪失)」行に出る。権限が戻れば次のexportで通常ページとシグナルが再生成される。",
+    "権限のあるアーカイブ（is_archived=1で権限喪失でない）のページは従来どおり生成し、先頭に archived: true を付ける。患者行そのものが消えた場合のページ削除・外部ファイルの保護・保持期限の掃除は変わらない。"
+  ],
+  "refs": [
+    "mcs/ops/brain_export.py",
+    "tests/ops/test_brain_export.py"
+  ]
+}
