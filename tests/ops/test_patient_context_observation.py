@@ -1,6 +1,9 @@
 """Synthetic coverage and bounded-work checks for patient context observation."""
 import json
+import sqlite3
 import time
+
+import pytest
 
 import extract_llm
 import patient_context_refresh as context
@@ -164,3 +167,75 @@ def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
     states = patient_context_status.sanitize(patient_context_status.state_counts(db))
     assert states['invalid_rows'] == 3 and patient_context_status.has_problem(states)
     ledger.close()
+
+
+_CARRIED_COUNTS = {'published': 2, 'active_patients': 3, 'extraction_complete': 1,
+                   'focus_eligible': 1, 'focus_targets': 1, 'invalid_rows': 0}
+
+
+def _context_health(monkeypatch, previous, now, *, fail=None, cfg=None):
+    """Run patient_context_health against ``previous`` with a refresh that fails as ``fail``."""
+    import health_report
+    reads = []
+
+    def read(db, fn, seconds=None, **kwargs):
+        reads.append(seconds)
+        if fail is not None:
+            raise fail
+        return {'lanes': {}, 'quality': {}, **_CARRIED_COUNTS, 'published': 9}
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {'patient_context': previous})
+    monkeypatch.setattr(health_report, 'bounded_health_read', read)
+    return health_report.patient_context_health(None, cfg, now, 'synthetic', seconds=30), reads
+
+
+def _recorded(observed_at, **extra):
+    return {**_CARRIED_COUNTS, 'lanes': {}, 'quality': {}, 'publication': True, 'status': 'recorded',
+            'observed_at': observed_at, 'source': 'synthetic',
+            'extract_version': extract_llm.EXTRACT_VERSION, **extra}
+
+
+@pytest.mark.parametrize('fail,reason', [(RuntimeError('observation_limit'), 'observation_limit'),
+                                         (sqlite3.DatabaseError('synthetic'), 'observation_unavailable')])
+def test_failed_refresh_carries_the_last_recorded_counts_as_stale(monkeypatch, fail, reason):
+    import health_report
+    now = 100_000.0
+    observed = now - health_report.COVERAGE_COUNT_S - 5
+    cfg = {'extract': {'patient_context': {'publication': False}}}
+    result, reads = _context_health(monkeypatch, _recorded(observed), now, fail=fail, cfg=cfg)
+    assert reads == [health_report.PATIENT_CONTEXT_S]       # the refresh was attempted within its bound
+    assert result['status'] == 'stale_measurement' and result['reason'] == reason
+    assert result['observed_at'] == observed and result['age_s'] == round(now - observed, 1)
+    assert {k: result[k] for k in _CARRIED_COUNTS} == _CARRIED_COUNTS
+    assert result['publication'] is False                   # current config, not the old block
+
+
+def test_carried_counts_carry_again_with_the_original_time_and_still_retry(monkeypatch):
+    import health_report
+    now = 100_000.0
+    observed = now - 2 * health_report.COVERAGE_COUNT_S
+    carried = _recorded(observed, status='stale_measurement', reason='observation_limit', age_s=1.0)
+    result, reads = _context_health(monkeypatch, carried, now, fail=RuntimeError('observation_limit'))
+    assert len(reads) == 1 and result['status'] == 'stale_measurement'
+    assert result['observed_at'] == observed and result['age_s'] == round(now - observed, 1)
+    assert result['publication'] is None                    # unchecked config is unknown publication
+    # a recent carried value is never reused as fresh: the refresh runs and replaces it
+    recent = _recorded(now - 10, status='stale_measurement', reason='observation_limit', age_s=10.0)
+    result, reads = _context_health(monkeypatch, recent, now)
+    assert len(reads) == 1 and result['status'] == 'recorded' and result['observed_at'] == now
+    assert result['published'] == 9
+
+
+@pytest.mark.parametrize('previous', [
+    'too_old', 'other_ledger', 'other_generation', 'unknown', 'missing_count'])
+def test_unusable_previous_counts_stay_unknown(monkeypatch, previous):
+    import health_report
+    now = 100_000.0
+    block = {'too_old': _recorded(now - health_report.PATIENT_CONTEXT_CARRY_S - 1),
+             'other_ledger': _recorded(now - 4000, source='other'),
+             'other_generation': _recorded(now - 4000, extract_version=extract_llm.EXTRACT_VERSION - 1),
+             'unknown': {'status': 'unknown', 'observed_at': now - 600, 'reason': 'observation_limit',
+                         'publication': True},
+             'missing_count': {k: v for k, v in _recorded(now - 4000).items() if k != 'invalid_rows'}}[previous]
+    result, _ = _context_health(monkeypatch, block, now, fail=RuntimeError('observation_limit'))
+    assert result == {'status': 'unknown', 'observed_at': now, 'reason': 'observation_limit',
+                      'publication': None}

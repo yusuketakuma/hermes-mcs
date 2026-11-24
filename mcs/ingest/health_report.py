@@ -11,8 +11,8 @@ import stat
 import time
 from contextlib import closing, suppress
 
-from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
-                           WATCH_STATUS_REL, freshness_deadline)
+from health_policy import (CARD_STALL_S, COVERAGE_COUNT_S, HEALTH_REL, PATIENT_CONTEXT_CARRY_S,
+                           STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL, freshness_deadline)
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -483,7 +483,6 @@ def backup_health(cfg: dict, now: float) -> dict:
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
 DUE_SLACK_S = 900           # next_try this close counts as due (defer cycles)
 LOCAL_LLM_DOWN_S = 3600     # llm_down_for_s at or past this, with due work, alerts
-COVERAGE_COUNT_S = 3600     # full extraction-coverage COUNTs at most this often
 
 
 _JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
@@ -986,24 +985,31 @@ def patient_context_health(db, checked_cfg, now, source, seconds=None) -> dict:
     """Counts only, never patients: context refresh lane outcomes, extraction-complete
     and patient-focus counts, stored published contexts. Counts are reused for
     COVERAGE_COUNT_S on the same db and extraction generation; publication is
-    always read from the current checked config (None when unchecked). A read
-    past its bound is 'unknown', never zero."""
+    always read from the current checked config (None when unchecked). When a
+    refresh fails, the last recorded counts of the same db and generation are
+    carried as 'stale_measurement' with their own observed_at for at most
+    PATIENT_CONTEXT_CARRY_S, and every later pass retries; otherwise the block
+    is 'unknown', never zero."""
     import extract_llm
     import patient_context_refresh
     publication = patient_context_refresh.options(checked_cfg)["publication"] if checked_cfg is not None else None
     key = {"source": source, "extract_version": extract_llm.EXTRACT_VERSION}
     prev = prev_health().get("patient_context")
-    if (isinstance(prev, dict) and prev.get("status") == "recorded"
-            and all(prev.get(k) == v for k, v in key.items()) and finite_number(prev.get("observed_at"))
-            and 0 <= now - prev["observed_at"] < COVERAGE_COUNT_S
+    if not (isinstance(prev, dict) and prev.get("status") in ("recorded", "stale_measurement")
+            and all(prev.get(k) == v for k, v in key.items())
             and all(type(prev.get(k)) is int and prev[k] >= 0 for k in _PATIENT_CONTEXT_COUNTS)):
+        prev = None
+    if (prev is not None and prev["status"] == "recorded" and finite_number(prev.get("observed_at"))
+            and 0 <= now - prev["observed_at"] < COVERAGE_COUNT_S):
         return {**prev, "publication": publication}
     try:
         counts = bounded_health_read(db, lambda _check: {
             **patient_context_refresh.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
             seconds=min(PATIENT_CONTEXT_S, seconds) if seconds is not None else PATIENT_CONTEXT_S)
     except Exception as exc:
-        return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc),
+        unknown = {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
+        return {**carried_measurement(unknown, prev, now, max_age_s=PATIENT_CONTEXT_CARRY_S,
+                                      reasons=("observation_limit", "observation_unavailable")),
                 "publication": publication}
     return {**counts, "publication": publication, "status": "recorded",
             "observed_at": now, **key}
@@ -1093,13 +1099,16 @@ def delivery_latency_health(db, cfg, now, seconds) -> dict:
         return {"status": "unavailable", "observed_at": now, "reason": _observation_failure(exc)}
 
 
-def carried_measurement(current: dict, previous, now: float) -> dict:
-    """Keep the previous complete measurement, marked stale, when this read stopped at its bound."""
-    if current.get("status") != "unknown" or current.get("reason") != "observation_limit":
+def carried_measurement(current: dict, previous, now: float, *, max_age_s=CARD_STALL_S,
+                        reasons=("observation_limit",)) -> dict:
+    """Keep the previous complete measurement, marked stale, when this read failed for one of ``reasons``.
+
+    The carried value expires ``max_age_s`` after its own observation."""
+    if current.get("status") != "unknown" or current.get("reason") not in reasons:
         return current
     observed = previous.get("observed_at") if isinstance(previous, dict) else None
     if (previous is None or previous.get("status") not in (None, "recorded", "stale_measurement")
-            or not finite_number(observed) or not 0 <= now - observed <= CARD_STALL_S
+            or not finite_number(observed) or not 0 <= now - observed <= max_age_s
             # every field the unknown block would publish must be carried;
             # observation is this read's own stop diagnostic, not carried data
             or any(k not in previous for k in current
@@ -1107,7 +1116,7 @@ def carried_measurement(current: dict, previous, now: float) -> dict:
         return current
     # The original observed_at is kept so chained carries still expire.
     return {**previous, **{k: current[k] for k in ("observation",) if k in current},
-            "status": "stale_measurement", "reason": "observation_limit",
+            "status": "stale_measurement", "reason": current["reason"],
             "age_s": round(now - observed, 1)}
 
 

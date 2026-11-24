@@ -401,6 +401,60 @@ def test_status_counts_invalid_patient_and_keeps_others(runtime):
     assert not led.db.in_transaction
 
 
+def _three_patients(runtime, monkeypatch, *, on_second=None):
+    """Seed three patients; reading the second patient moves the fake clock past 1005."""
+    led, clock, _ = runtime
+    for pid in (1, 2, 3):
+        seed(led, mid=pid, pid=pid)
+    real = readiness._pending
+
+    def pending(db, pid, *args, **kwargs):
+        if pid == 2:
+            clock.mono = 1010
+            if on_second is not None:
+                raise on_second
+        return real(db, pid, *args, **kwargs)
+    monkeypatch.setattr(readiness, '_pending', pending)
+    return led
+
+
+def test_status_without_deadline_counts_every_patient_and_reports_the_scan(runtime):
+    led, _, _ = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    counts = readiness.status(led.db, CFG)
+    assert counts['scan'] == {'checked': 2, 'total': 2, 'complete': True}
+    assert counts['initial_pending'] == 2 and isinstance(counts['lanes'], dict)
+
+
+@pytest.mark.parametrize('on_second', [None, sqlite3.OperationalError('interrupted'),
+                                       ValueError('patient_context_source_scope_invalid')])
+def test_status_stops_at_the_deadline_and_leaves_the_cut_patient_uncounted(runtime, monkeypatch, on_second):
+    led = _three_patients(runtime, monkeypatch, on_second=on_second)
+    counts = readiness.status(led.db, CFG, deadline=1005)
+    # only patient 1 finished before the deadline; patient 2 ran past it and is not counted
+    assert counts['scan'] == {'checked': 1, 'total': 3, 'complete': False}
+    assert counts['initial_pending'] == 1 and counts['invalid'] == 0 and counts['lanes'] is None
+    assert not led.db.in_transaction
+
+
+def test_status_keeps_an_interrupt_before_the_deadline_an_error(runtime, monkeypatch):
+    led, clock, _ = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    real = readiness._pending
+
+    def pending(db, pid, *args, **kwargs):
+        if pid == 2:
+            raise sqlite3.OperationalError('interrupted')
+        return real(db, pid, *args, **kwargs)
+    monkeypatch.setattr(readiness, '_pending', pending)
+    with pytest.raises(sqlite3.OperationalError):
+        readiness.status(led.db, CFG, deadline=clock.mono + 60)
+    with pytest.raises(sqlite3.OperationalError):
+        readiness.status(led.db, CFG)
+
+
 def test_pending_estimate_reports_an_unreadable_scope_as_invalid_and_keeps_others(runtime):
     led, _, _ = runtime
     for pid in (1, 2):

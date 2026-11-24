@@ -1006,11 +1006,13 @@ _CONTEXT_REFRESH_LANE_CODES = ("length_stop", "unsupported", "other_failure", "s
 
 
 def _bounded_read(db, read):
-    """Run one read-only diagnostic step under its own 1-second SQL budget; failure is None, never zero."""
+    """Run one read-only diagnostic step under its own 1-second SQL budget; failure is None, never zero.
+
+    ``read`` receives that budget's ``time.monotonic()`` deadline."""
     deadline = time.monotonic() + 1
     db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
-        return read()
+        return read(deadline)
     except (OSError, ValueError, TypeError, sqlite3.Error):
         return None
     finally:
@@ -1021,9 +1023,12 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
     """患者コンテキスト作成を、明示診断時だけ読取り専用で件数確認する。
 
     `states` is the cheap per-state count of last stored outcomes; `counts` is the
-    optional per-patient work scan and stays None when it does not finish in time."""
+    optional per-patient work scan and stays None when it does not finish in time.
+    `partial` holds the counts of the patients checked before that scan stopped
+    (with `checked` and `total`), never a total."""
     from patient_context_refresh import options
-    result = {"status": "not_checked", **options(cfg), "counts": None, "lanes": None, "states": None}
+    result = {"status": "not_checked", **options(cfg), "counts": None, "partial": None,
+              "lanes": None, "states": None}
     if not probe:
         return result
     result["status"] = "unknown"
@@ -1036,24 +1041,32 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
             from patient_context_refresh import lane_metrics, status
             import patient_context_status
             db.row_factory = sqlite3.Row
-            states = _bounded_read(db, lambda: patient_context_status.state_counts(db))
-            lanes = _bounded_read(db, lambda: lane_metrics(db)["lanes"])
-            raw = _bounded_read(db, lambda: status(db, cfg))
+            states = _bounded_read(db, lambda _deadline: patient_context_status.state_counts(db))
+            lanes = _bounded_read(db, lambda _deadline: lane_metrics(db)["lanes"])
+            raw = _bounded_read(db, lambda deadline: status(db, cfg, deadline=deadline))
     except (OSError, ValueError, TypeError, sqlite3.Error):
         return result
     result["states"] = patient_context_status.sanitize(states)
-    if isinstance(raw, dict) and all(
-            type(raw.get(key)) is int and raw[key] >= 0 for key in _CONTEXT_REFRESH_COUNTS):
-        result["counts"] = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
+    scan = raw.get("scan") if isinstance(raw, dict) else None
+    if isinstance(scan, dict) and type(scan.get("checked")) is int and type(scan.get("total")) is int \
+            and 0 <= scan["checked"] <= scan["total"] and scan.get("complete") is (scan["checked"] == scan["total"]) \
+            and all(type(raw.get(key)) is int and raw[key] >= 0 for key in _CONTEXT_REFRESH_COUNTS):
+        counts = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
+        if scan["complete"]:
+            result["counts"] = counts
+        else:
+            result["partial"] = {"checked": scan["checked"], "total": scan["total"], "counts": counts}
     # fixed lane codes and counts only; a malformed block stays unknown, not zero
     result["lanes"] = {lane: {code: lanes[lane][code] for code in _CONTEXT_REFRESH_LANE_CODES}
                        for lane in "ABC"} if isinstance(lanes, dict) and all(
         isinstance(lanes.get(lane), dict) and all(
             type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
             for code in _CONTEXT_REFRESH_LANE_CODES) for lane in "ABC") else None
-    problem = bool(result["counts"] and (result["counts"]["failed"] or result["counts"]["invalid"])) or bool(
+    # a problem already seen in the checked part of a stopped scan is still a problem
+    scanned = result["counts"] or (result["partial"] or {}).get("counts")
+    problem = bool(scanned and (scanned["failed"] or scanned["invalid"])) or bool(
         result["states"] and patient_context_status.has_problem(result["states"]))
-    # healthy needs both readings: a missing work-queue scan is unknown, never fine
+    # healthy needs both readings: a missing or partial work-queue scan is unknown, never fine
     result["status"] = ("warning" if problem else "unknown" if None in (result["states"], result["counts"])
                         else "healthy")
     return result
@@ -1064,10 +1077,15 @@ def _context_refresh_lines(result: dict) -> list[str]:
     if result["status"] == "not_checked":
         return []
     lines = []
-    counts, states = result["counts"], result["states"]
+    counts, partial, states = result["counts"], result.get("partial"), result["states"]
+    names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了", "読めない記録")
     if counts is not None:
-        names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了", "読めない記録")
         lines.append("、".join(f"{name}{counts[key]}件" for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
+    elif partial is not None:
+        lines.append(f"作業待ちの件数: 患者{partial['total']}人のうち{partial['checked']}人まで確認"
+                     "（確認した範囲の件数です。残りは時間内に確認できず、0件とは扱いません）: "
+                     + "、".join(f"{name}{partial['counts'][key]}件"
+                                for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
     else:
         lines.append("作業待ちの件数: 時間内に確認できませんでした（0件とは扱いません）")
     if states is None:
@@ -1228,7 +1246,7 @@ def cmd_doctor(args) -> int:
                   "checks": checks, "collection": {"status": "not_checked", "counts": None, "stop": None},
                   "runtimes": {"selected": None, "recovery": None, "desired_recovery": None},
                   "patient_context": {"status": "not_checked", "enabled": None, "publication": None,
-                                      "counts": None, "lanes": None, "states": None},
+                                      "counts": None, "partial": None, "lanes": None, "states": None},
                   "optional_features": None, "operations": None, "card_worker": None,
                   "providers": None, "source": None,
                   "recovery_selection": {"explicit": None, "matches_deployed": None},

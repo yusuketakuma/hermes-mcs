@@ -669,35 +669,62 @@ def _unreadable_in_scope(db, pid, cfg, whole=None) -> bool:
     return not patient_context_refresh_state._out_of_scope(whole)
 
 
-def status(db, cfg):
+def _status_increments(db, pid, cfg, cloud_scan):
+    """One patient's work-state increments; None when run_due never works on the patient."""
+    try:
+        with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
+            snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for,
+                                                  cloud_scan=cloud_scan(pid))
+            if patient_context_refresh_state._out_of_scope(snapshot):
+                return None
+            old, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
+            done = _inference_coverage(db, pid, cfg, snapshot,
+                read_proof=proof_for(snapshot, cfg), proof_for=proof_for)["complete"]
+    except (ValueError, TypeError, KeyError):
+        return {"invalid": int(_unreadable_in_scope(db, pid, cfg))}
+    return {"initial_pending": int(not old), "delta_pending": int(bool(old) and pending["A"]),
+            "history_pending": int(pending["B"]), "audit_pending": int(pending["C"]),
+            "failed": int(bool(progress.get("failure") or snapshot["source_failures"])),
+            "complete": int(done)}
+
+
+def status(db, cfg, *, deadline=None):
     """Count work states without returning patients, source values or summaries.
+
     Patients run_due never works on are left out, so the counts match the worker;
-    a patient whose stored state cannot be read is counted in ``invalid`` only."""
+    a patient whose stored state cannot be read is counted in ``invalid`` only.
+    ``scan`` says how many of ``total`` patients were ``checked``. With a
+    ``deadline`` (``time.monotonic()``) the scan stops between patients once it
+    passes; a patient still being read then is left uncounted, ``complete`` is
+    false and ``lanes`` is None, so the counts cover only the checked part. An
+    SQLite interrupt becomes that partial result only after the deadline."""
     counts = dict.fromkeys(("initial_pending", "delta_pending", "history_pending",
                            "audit_pending", "failed", "complete", "invalid"), 0)
     from types import SimpleNamespace
     cloud_scan = _cloud_scan_for(SimpleNamespace(db=db), cfg)
-    for row in db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
-        pid = row[0]
+    pids = [row[0] for row in db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id")]
+
+    def expired():
+        return deadline is not None and patient_context_refresh_state.time.monotonic() >= deadline
+
+    checked = 0
+    for pid in pids:
+        if expired():
+            break
         try:
-            with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
-                snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for,
-                                                      cloud_scan=cloud_scan(pid))
-                if patient_context_refresh_state._out_of_scope(snapshot):
-                    continue
-                old, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
-                done = _inference_coverage(db, pid, cfg, snapshot,
-                    read_proof=proof_for(snapshot, cfg), proof_for=proof_for)["complete"]
-        except (ValueError, TypeError, KeyError):
-            counts["invalid"] += int(_unreadable_in_scope(db, pid, cfg))
-            continue
-        counts["initial_pending"] += int(not old)
-        counts["delta_pending"] += int(bool(old) and pending["A"])
-        counts["history_pending"] += int(pending["B"])
-        counts["audit_pending"] += int(pending["C"])
-        counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
-        counts["complete"] += int(done)
-    counts["lanes"] = lane_metrics(db)["lanes"]
+            increments = _status_increments(db, pid, cfg, cloud_scan)
+        except sqlite3.OperationalError:
+            if not expired():
+                raise
+            break
+        if expired():
+            break  # a read that ran past the deadline may have been cut short inside
+        for key, n in (increments or {}).items():
+            counts[key] += n
+        checked += 1
+    complete = checked == len(pids)
+    counts["lanes"] = lane_metrics(db)["lanes"] if complete else None
+    counts["scan"] = {"checked": checked, "total": len(pids), "complete": complete}
     return counts
 
 
