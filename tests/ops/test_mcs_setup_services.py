@@ -695,8 +695,9 @@ def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
 def test_services_unknown_launchd_state_is_a_problem_not_loaded(
         monkeypatch, tmp_path):
     """`agent_loaded` answering None must surface as unverifiable, not as
-    `loaded: True` in the service manifest (#352): nothing is bootstrapped
-    and a previously recorded loaded agent is rewritten as unloaded."""
+    `loaded: True` in the service manifest (#352): nothing is bootstrapped,
+    and when other sections changed the saved record marks every agent
+    unloaded."""
     import json
     calls, args = _services_env(monkeypatch, tmp_path)
     path, previous = _seed_manifest(tmp_path)
@@ -709,6 +710,25 @@ def test_services_unknown_launchd_state_is_a_problem_not_loaded(
     assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
     saved = json.loads(path.read_text())
     assert saved["agents"] and not any(a["loaded"] for a in saved["agents"])
+
+
+def test_services_unknown_launchd_state_keeps_the_previous_manifest(
+        monkeypatch, tmp_path):
+    """When nothing else changed, a failed run saves no service manifest at
+    all (#352): the previous record is left on disk byte-for-byte."""
+    import json
+    calls, args = _services_env(monkeypatch, tmp_path,
+                                cron_entries=_desired_cron_entries())
+    path, previous = _seed_manifest(tmp_path)
+    previous["cron"] = _desired_cron_entries()
+    previous["agents"].append({"label": "ai.mcs.extract-drainer",
+                               "sha256": "stale", "loaded": True})
+    path.write_text(json.dumps(previous))
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda label, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
+    assert json.loads(path.read_text()) == previous
 
 
 def test_services_retries_reload_after_an_unknown_probe_recovers(
@@ -724,7 +744,8 @@ def test_services_retries_reload_after_an_unknown_probe_recovers(
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda name, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 1
-    assert not stale.exists()
+    # the written plist is reverted so the running job's registration stays
+    assert stale.read_text() == "synthetic old settings"
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda name, **_service_kwargs: name == label)
     calls.clear()
