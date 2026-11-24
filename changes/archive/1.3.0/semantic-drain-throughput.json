@@ -1,10 +1,10 @@
 {
   "category": "changed",
-  "title": "Jevだけで終わる意味解析・抽出QCの滞留を常駐workerがまとめて処理",
-  "summary": "意味解析の結果を使う設定では、Jevだけで終わる意味解析jobを最大8件・約5分まとめて処理します。抽出QCはextract_qc=annotateのとき独立して処理し、要約とループがともにoffなら意味解析jobは実行しません。Jev上限到達時はbacklog jobを待機させ、新着レーンは変更しません。",
-  "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。要約とループがともにoffの間、意味解析jobは実行されません。抽出QCはextract_qc=annotateの場合だけ実行されます。",
+  "title": "Jevだけで終わる意味解析・QCの滞留を常駐workerがまとめて処理",
+  "summary": "要約（summary_mode）とループ（loop_mode）がともに off の設定では、意味解析とQCの滞留ジョブがローカルLLMを使わないため、常駐の抽出workerがローカル抽出の順番待ちや保存待ちに関係なく、1回に最大8件・約5分までまとめて処理します。Jevの1日の上限と新着用の予備枠（10%）に達したら、評価を省略した完了にはせず、ジョブを残して次の枠まで待ちます。QCは両方が待っているとき4件に1件の割合で処理し、意味解析が半分に抑えられることもQCが止まることもありません。ローカルLLMが必要な設定では従来どおり抽出1回ごとに1件です。",
+  "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。summary_mode か loop_mode が off 以外の設定では、QCの割合以外の動作は変わりません。",
   "details": [
-    "意味解析jobの対象は semantic_policy.primary_verdicts_consumed で判定し、抽出QC jobは独立した extract_qc=annotate 設定で判定する。",
+    "ローカルLLMの要否は解決済みの semantic 設定から semantic_policy.needs_local_model で判定し、ジョブ処理・状態判定・常駐workerが同じ判定を使う。",
     "まとめて処理する時間の上限（約300秒）はジョブごとの予算（job_budget_seconds）と別に持ち、長いジョブ予算でもこの上限を超えない。",
     "まとめて処理する間も run.lock は各Jev通信の前後で解放し、通信中は保持しない。",
     "Jevだけで終わるジョブは、ローカルLLMの接続遮断（circuit）で止めず、開始に必要な残り時間はQCと同じ短い値を使い、ローカル用の書込み予備時間を取らない。これは10分ごとの定期処理（新着用 realtime レーン）にも同じく適用する。",
