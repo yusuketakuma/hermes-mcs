@@ -686,10 +686,57 @@ def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
                                         sleep=sleeps.append))
     assert service_management.agent_reconcile(
         'ai.mcs.x', '/p.plist', notes.append, False,
-        paths=mcs_setup._service_paths()) is False
+        paths=mcs_setup._service_paths()) is None
     assert "bootstrap" not in seen and "bootout" not in seen
     assert seen == ["print"]
     assert any("確認できない" in n for n in notes)
+
+
+@pytest.mark.parametrize("preexisting", [True, False])
+def test_converge_agent_reverts_the_plist_when_probe_is_unknown(
+        monkeypatch, tmp_path, preexisting):
+    """An unverifiable probe after writing a changed plist restores the
+    on-disk settings so the stale loaded job stays visible (changed=True)
+    on the next run — and keeps its launchd registration for next login."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    if preexisting:
+        dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: None)
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    if preexisting:
+        assert dst.read_text() == "old settings"
+    else:
+        assert not dst.exists()
+    assert manifest["agents"][0]["loaded"] is False
+
+
+def test_converge_agent_keeps_the_plist_when_bootstrap_verify_is_unknown(
+        monkeypatch, tmp_path):
+    """A bootstrap that ran but whose final probe flaked keeps the new
+    plist: a loaded job already runs those settings, and the absent case
+    is retried by `not agent_loaded` on the next run."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(service_management, 'launchd_bootstrap',
+                        lambda *a, **k: "bootstrap exited 0 but the label is not loaded")
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    assert dst.read_text() == "new settings"
+    assert manifest["agents"][0]["loaded"] is False
 
 
 def test_services_unknown_launchd_state_is_a_problem_not_loaded(
@@ -724,11 +771,12 @@ def test_services_unknown_launchd_state_keeps_the_previous_manifest(
     previous["agents"].append({"label": "ai.mcs.extract-drainer",
                                "sha256": "stale", "loaded": True})
     path.write_text(json.dumps(previous))
+    before = path.read_bytes()
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda label, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 1
     assert not any(a[:2] == ["launchctl", "bootstrap"] for a in calls)
-    assert json.loads(path.read_text()) == previous
+    assert path.read_bytes() == before
 
 
 def test_services_retries_reload_after_an_unknown_probe_recovers(
