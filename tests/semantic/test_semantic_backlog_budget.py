@@ -934,7 +934,9 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
     from extract_testkit import _hash, _ledger, _message, _v2_artifact
     import extract_llm_engine
     import extract_llm_local_rebuild as local_rebuild
-    from test_local_rebuild_execution import _approved, _no_cloud_unit
+    import mcs_requests
+    import uuid
+    from test_local_rebuild_execution import _approved, _no_cloud_unit, _paid, _usage
 
     db = _ledger(tmp_path)
     real_close = db.close
@@ -945,6 +947,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
     turn_kind = []
     errors = []
     pass_count = [0]
+    usage_snapshot = [None]
     try:
         _approved(db, monkeypatch)                      # approved unit (mid 1)
         _no_cloud_unit(monkeypatch)
@@ -968,7 +971,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
             project_id=2, message_id=12,
             meta={"hash": _hash(db, 12),
                   "extract_version": extract_llm.EXTRACT_VERSION - 1})
-        base = {1, 9, 11, 12, *range(100, 106)}
+        base = {1, 9, 11, 12, 50, *range(100, 106)}
 
         monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True,
                             raising=False)
@@ -981,11 +984,29 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         def background(*_args):
             if pass_count[0] == 6:
                 raise KeyboardInterrupt("synthetic stop")
-            mid = 100 + pass_count[0]
-            db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
-            with db.db:
-                db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
-                              (wall_now, mid))
+            if pass_count[0] == 3:
+                # warm-up is over: the human approves a second rebuild now —
+                # a mid-run approval must still get a bounded slot
+                db.save_messages([_message(mid=50, body="合成本文 50",
+                                           posted_at=wall_now - 5000)])
+                _paid(db, monkeypatch, 50)
+                plan = local_rebuild.preview(db)['plan']
+                assert [u['message_id'] for u in plan['units']] == [50]
+                receipt = mcs_requests.apply_command(db, {
+                    'version': 1, 'cmd': local_rebuild.COMMAND,
+                    'command_id': str(uuid.uuid4()), 'actor': 'synthetic-human',
+                    'human_confirmed': True, 'project_id': None,
+                    'reason': '完全合成の確認', 'plan': plan})
+                assert receipt['outcome'] == 'applied'
+                usage_snapshot[0] = [tuple(r) for r in _usage(db)]
+            if pass_count[0] < 4:
+                # arrivals stop after warm-up: the recent windows that follow
+                # must hand their leftover slots to the new approval
+                mid = 100 + pass_count[0]
+                db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
+                with db.db:
+                    db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
+                                  (wall_now, mid))
             pass_count[0] += 1
             clock[0] += extract_llm.SEMANTIC_FIRST_S / 2 + 1
             return {"errors": [], "job_metrics": [
@@ -993,7 +1014,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
 
         def select_and_complete(ledger, **kwargs):
             extra = {key: True for key in ("archived_first", "fair_oldest",
-                                           "approved_first")
+                                           "approved_first", "approved_fill")
                      if kwargs.get(key)}
             rows, fresh_selected = extract_llm._select_pending(
                 ledger, kwargs["limit"], kwargs["admitted_ids"],
@@ -1001,12 +1022,12 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
             try:
                 if rows:
                     row = dict(rows[0])
-                    if row["message_id"] == 1:
+                    if row["message_id"] in {1, 50}:
                         # the approved unit goes through the real runner:
                         # real claim, real local rebuild, real adopted final
                         report = extract_llm_runner.run_pending(
                             ledger, limit=1, budget_s=30, approved_first=True)
-                        seen.append(1)
+                        seen.append(row["message_id"])
                         turn_kind.append("oldest" if kwargs["oldest_first"]
                                          else "normal")
                         turn_fresh.append(fresh_selected)
@@ -1046,6 +1067,11 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         approved_turn = turn_fresh[0]
         assert approved_turn == 0                      # re-extraction, not fresh
         assert local_rebuild.permit(db, 1, 1) == local_rebuild.ADOPTED
+        # the approval added after warm-up was adopted within a bounded span
+        # while arrivals and semantic work kept moving
+        assert local_rebuild.permit(db, 1, 50) == local_rebuild.ADOPTED
+        assert 50 in seen
+        assert [tuple(r) for r in _usage(db)] == usage_snapshot[0]
         normal_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
                         if mid in range(100, 106) and kind == "normal"]
         assert normal_fresh and all(f == 1 for f in normal_fresh)

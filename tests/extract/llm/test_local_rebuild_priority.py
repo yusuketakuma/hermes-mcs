@@ -13,7 +13,7 @@ import extract_llm_engine
 import extract_llm_local_rebuild as local_rebuild
 import extract_llm_resident as resident
 import mcs_queries
-from extract_testkit import _hash, _message
+from extract_testkit import _hash, _message, _v2_artifact
 from test_anthropic_runtime import routed
 from test_local_rebuild_execution import _approved, _no_cloud_unit, _paid, _usage
 
@@ -93,9 +93,9 @@ def test_an_oldest_turn_keeps_its_oldest_candidate(routed, monkeypatch):
     assert [row["message_id"] for row in rows] == [100]
 
 
-def test_a_recent_only_turn_keeps_its_actual_arrival(routed, monkeypatch):
-    """The recent-only window serves real arrivals first even when an
-    approval is re-admitted into it."""
+def test_a_recent_only_turn_serves_the_arrival_then_the_approval(routed, monkeypatch):
+    """The recent-only window serves real arrivals first; an approval
+    re-admitted into it takes only the slots the arrivals leave."""
     ledger, cfg, calls, reserved, results = routed
     _approved(ledger, monkeypatch)
     _freshes(ledger, (2,))
@@ -106,10 +106,15 @@ def test_a_recent_only_turn_keeps_its_actual_arrival(routed, monkeypatch):
     assert adm == {1, 2}                   # the approval is re-admitted although nothing notified it
     # A real admission gate still bounds the union: the cohort wins.
     assert resident._priority_admitted(ledger, {2, 9}) == {2}
-    # the resident never opts a recent-only window into the lift: the actual
-    # arrival keeps the slot under the plain admitted walk
-    rows, _ = worker._select_pending(ledger, 1, adm, None, False)
+    # a competing actual arrival keeps the slot — the approval never outranks it
+    rows, _ = worker._select_pending(ledger, 1, adm, None, False,
+                                   approved_fill=True)
     assert [row["message_id"] for row in rows] == [2]
+    # once the arrival is served (or absent), the leftover slot is the approval's
+    _v2_artifact(ledger, 2, _hash(ledger, 2), {"summary": "合成"})
+    rows, _ = worker._select_pending(ledger, 1, adm, None, False,
+                                   approved_fill=True)
+    assert [row["message_id"] for row in rows] == [1]
     rows, _ = worker._select_pending(ledger, 1, {1}, None, False)
     assert [row["message_id"] for row in rows] == [1]
 

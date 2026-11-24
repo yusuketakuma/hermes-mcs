@@ -762,6 +762,7 @@ def _main() -> int:
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm,
                                     approved_first=not oldest_turn and not semantic_priority,
+                                    approved_fill=semantic_priority,
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
