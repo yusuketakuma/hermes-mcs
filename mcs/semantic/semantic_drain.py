@@ -452,15 +452,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
     # The served job's own run deadline, settled once when it starts: its
-    # transports, the lock retake after them and its result checks all end
-    # there, so a retake never outwaits the job and voids a received answer.
-    # Between jobs (selection) it is the pass deadline.
+    # transports and its result checks end there. The lock retake after a
+    # transport keeps the caller's deadline, so a holder outlasting the job
+    # costs only the job's answer (left due, uncharged), never the caller's
+    # pass. Between jobs (selection) it is the pass deadline.
     job_run_deadline = deadline
+    late_retake = [False]
 
     def _unlocked(kind, call, *args, **kwargs):
         nonlocal held_since
         started, ended = time.monotonic(), None
-        bound = job_run_deadline
         if lock_hold is not None:
             hold = started - held_since
             lock_hold["hold_sum_s"] += hold
@@ -468,7 +469,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             lock_hold["hold_count"] += 1
         try:
             with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s,
-                                    deadline=bound):
+                                    deadline=deadline):
                 try:
                     return call(*args, **kwargs)
                 finally:
@@ -481,13 +482,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["run_lock_lost_detail"] = {
                     "kind": kind, "transport_s": round(ended - started, 1),
                     "reacquire_s": round(time.monotonic() - ended, 1),
-                    "window_s": round(max(0.0, min(wait, bound - ended)), 1)}
+                    "window_s": round(max(0.0, min(wait, deadline - ended)), 1)}
             raise
         finally:
             if ended is not None:
                 # raw sums: rounding each call would drop short calls
                 transport[f"{kind}_transport_s"] += ended - started
                 transport[f"{kind}_reacquire_s"] += time.monotonic() - ended
+                if ended <= job_run_deadline < time.monotonic():
+                    # the call ended in time; only waiting for the lock made it late
+                    late_retake[0] = True
             held_since = time.monotonic()
 
     # Endpoint health shared with the extract lane's breaker: a refused
@@ -608,13 +612,25 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if qc_active:
         out["lanes"]["qc"] = 0
     selected = {"qc": 0, "arrival": 0, "backfill": 0}
+    # Kinds still selectable this pass: once a QC job waits for the Jev
+    # quota, the other QC rows would only wait too, so later selections leave
+    # them (state and attempts untouched) and the scan window goes to work
+    # that can run.
+    live_kinds = list(kinds)
+
+    def quota_waits(kind):
+        if kind in live_kinds and len(live_kinds) > 1:
+            live_kinds.remove(kind)
+
     for job, cohort_name, mutation in _refill_due(
-            ledger, lane, kinds, qc_active, max_jobs, long_defers,
+            ledger, lane, live_kinds, qc_active, max_jobs, long_defers,
             first_batch, selected, out, deadline, consumed_turns, held_after,
             selector=selector if cloud_only or prioritize_patients else None):
         if start_by is not None and time.monotonic() >= start_by:
             out["start_window_closed"] = True
             break
+        if job["kind"] not in live_kinds:
+            continue
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -862,6 +878,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 _defer_note(out, job_skip)
                 if not needs_local_model(scfg):
                     break
+                quota_waits(job["kind"])
                 continue
             if (job["kind"] == JOB_KIND and jev_only_job and job_skip is None
                     and time.monotonic() > deadline - runtime.jev_start_reserve(scfg)):
@@ -940,6 +957,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if job_skip is not None:
                 diagnostics["jev_skip_reason"] = job_skip
             job_run_deadline = runtime.job_deadline(scfg, deadline)
+            late_retake[0] = False
             try:
                 if job["kind"] == QC_JOB_KIND:
                     status = semantic_qc._process_qc_job(
@@ -1001,6 +1019,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # pre-send cutoff refused was never sent, and a job budget
                 # that fits one would let it start next pass: that stays free.
                 status = "retry"
+            if status == "retry" and late_retake[0]:
+                # the answer arrived in time but the run lock came back after
+                # the job deadline: the input is not at fault
+                _why(diagnostics, "lock_retake_late")
+                status = "deferred"
             if status in ("deferred", "deferred_backoff") \
                     and diagnostics.get("not_sent") == "long_output_needs_budget":
                 n = reservation[1]['n'] if reservation is not None else 0
@@ -1078,6 +1101,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["budget_exhausted"] = True
                 if not needs_local_model(scfg):
                     break
+                quota_waits(job["kind"])
             # A free hold with no new work must not starve independent due jobs.
             if free_hold:
                 selected[cohort_name] -= 1

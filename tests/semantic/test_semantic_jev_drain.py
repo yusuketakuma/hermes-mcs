@@ -327,16 +327,16 @@ def _tick_holds_lock(monkeypatch, threads, hold_s):
 
     monkeypatch.setattr(writer_lock, "unlocked_transport", tick_holds_lock)
     fd = os.open(os.devnull, os.O_RDONLY)
-    started = clock[0]
+    start_by = clock[0] + 10
     try:
-        start_by = started + 10
         out = semantic_drain.run_due(threads, _cfg("shadow", **JEV_ONLY), {"errors": []},
                                      start_by + 45 + 30, jev_client=_HookedJev(), llm_fn=_no_local_model,
                                      lane="backlog", max_jobs=8, run_lock_fd=fd, start_by=start_by)
     finally:
         os.close(fd)
-    # the retake is bounded by the job's own run deadline, not the drain's
-    assert windows[0] == started + 45
+    # the retake keeps the caller's pass deadline; the job's own run deadline
+    # bounds only its calls and its result check
+    assert windows[0] == start_by + 45 + 30
     return out
 
 
@@ -351,13 +351,16 @@ def test_a_tick_holding_the_lock_past_the_start_window_keeps_the_answer(threads,
 
 
 def test_a_tick_holding_the_lock_past_the_job_deadline_keeps_the_attempt(threads, monkeypatch):
-    """A retake that cannot finish inside the job's run deadline gives up
-    there: nothing is written and the job keeps its attempts."""
+    """A retake that lands after the job's run deadline keeps the pass going:
+    the late answer is not saved and the job keeps its attempts."""
     out = _tick_holds_lock(monkeypatch, threads, 50)
-    assert out["run_lock_lost"] == "timeout" and out["done"] == 0
+    assert "run_lock_lost" not in out and out["done"] == 0
     rows = threads.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
                               (semantic_drain.JOB_KIND,)).fetchall()
     assert {tuple(r) for r in rows} == {("pending", 0)}
+    assert not threads.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND json_extract(meta,"
+                                  "'$.technical_status')='complete'",
+                                  (semantic_policy.KIND_ASSESS,)).fetchall()
 
 
 class _HookedJev(_FakeJev):
@@ -517,5 +520,42 @@ def test_backlog_qc_waits_for_quota_with_local_model_stages_on(tmp_path, monkeyp
         job, kinds = _qc_state(db)
         assert job == ("pending", 0)
         assert kinds == ({semantic_qc.QC_WAIT_KIND} if requests else set())
+    finally:
+        db.close()
+
+
+def test_waiting_qc_does_not_crowd_out_archived_local_model_work(tmp_path, monkeypatch):
+    """Once QC waits for the quota, the rest of the pass selects no QC: an
+    archived patient's local-model job behind 64+ waiting QC rows still runs."""
+    db = _ledger(tmp_path)
+    served = []
+    try:
+        p = _patient(db, 1)
+        p.messages = [_message(10, pid=1)]
+        db.save_patient(p, notify={"source": "unread"}, semantic=True)
+        db.ensure_patient(2)
+        with db.db:
+            db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+            db.db.execute("UPDATE patients SET is_archived=0 WHERE project_id=2")
+        for mid in range(100, 170):
+            db.job_add(semantic_drain.QC_JOB_KIND, 2, message_id=mid,
+                       payload={VERSION_KEY: CURRENT_VERSION})
+
+        def process(ledger, scfg, job, *args, **kwargs):
+            served.append(job["message_id"])
+            assert semantic_drain.runtime.transition(
+                ledger, semantic_drain.runtime.JobToken.from_row(job), "done")
+            return "done"
+
+        monkeypatch.setattr(semantic_drain, "_process_job", process)
+        monkeypatch.setattr(semantic_qc, "_qc_seed", lambda *a, **k: 0)
+        _usage(monkeypatch, 9)      # the backlog lane's share is spent
+        out = semantic_drain.run_due(db, _cfg("shadow", budget=10, extract_qc="annotate"), {"errors": []},
+                                     time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_no_local_model,
+                                     lane="backlog", max_jobs=1, prioritize_patients=True)
+        assert served == [10] and out["done"] == 1
+        rows = db.db.execute("SELECT DISTINCT state,attempts FROM fetch_jobs WHERE kind=?",
+                             (semantic_drain.QC_JOB_KIND,)).fetchall()
+        assert [tuple(r) for r in rows] == [("pending", 0)]
     finally:
         db.close()

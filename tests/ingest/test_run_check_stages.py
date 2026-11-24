@@ -1069,3 +1069,68 @@ def test_capped_unread_requires_every_parent_body_in_the_unread_time_range(tmp_p
             result = _capped_run(db, adapter)
         assert marks == [((1, 123), {"fallback_plain": True})]
         assert result["marked_read"] == [1] and result["incomplete"] == []
+
+
+def test_semantic_late_lock_retake_leaves_the_tick_running(tmp_path, monkeypatch):
+    """A background holder keeps run.lock past the realtime job's own deadline
+    but inside the tick's: the retake succeeds, the late answer is not saved
+    or charged, and the tick goes on to its snapshot and finishing steps."""
+    import contextlib
+    import os
+    import semantic_policy
+    import writer_lock
+    from semantic_testkit import _FakeJev, _cfg, _message as _sem_message, _patient
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path)
+    cfg = _cfg("shadow", summary_mode="off", loop_mode="off")
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(run_check, "CONF_PATH", str(conf))
+
+    class HookedJev(_FakeJev):
+        supports_attempt_hooks = True
+        attempt_timeout = 20.0
+
+        def evaluate(self, state, questions, deadline, before_attempt=None, after_result=None,
+                     reserve_fn=None, transport=None):
+            before_attempt()
+            send = super().evaluate
+            out = transport(send, state, questions, deadline) if transport else send(state, questions, deadline)
+            after_result()
+            return out
+
+    monkeypatch.setattr(semantic_drain.jev, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(semantic_drain.jev, "JevClient", lambda **kw: HookedJev())
+    held = []
+
+    @contextlib.contextmanager
+    def background_holds_lock(ledger, lock_fd, wait_s=None, deadline=None):
+        yield
+        if not held:
+            clock[0] += 60          # past the 45 s job budget, inside the tick
+        held.append(deadline)
+        if clock[0] >= deadline:
+            raise writer_lock.RunLockLost(held=False, updated=False)
+
+    monkeypatch.setattr(writer_lock, "unlocked_transport", background_holds_lock)
+    db = _ledger(tmp_path)
+    fd = os.open(os.devnull, os.O_RDONLY)
+    try:
+        p = _patient(db, 1)
+        p.messages = [_sem_message(10, pid=1)]
+        db.save_patient(p, notify={"source": "unread"}, semantic=True)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1)")
+        result = {"errors": []}
+        run_check._run_semantic(db, _sem_args(), cfg, result, clock[0] + 400, True, run_lock_fd=fd)
+        assert held and "run_lock_lost" not in result["semantic"]
+        assert result["semantic"]["done"] == 0
+        row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert tuple(row) == ("pending", 0)
+        assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND json_extract(meta,"
+                                 "'$.technical_status')='complete'",
+                                 (semantic_policy.KIND_ASSESS,)).fetchall()
+    finally:
+        os.close(fd)
+        db.close()
