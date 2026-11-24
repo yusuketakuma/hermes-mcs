@@ -51,6 +51,21 @@ def test_cloud_page_result_survives_local_model_change_without_calls(page_store)
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
+def test_patient_quality_changes_keep_the_stored_page_result(page_store, monkeypatch):
+    ledger, cfg, key, local_calls, cloud_calls, _ = page_store
+    assert run(ledger, cfg, 'local')['done'] == 1
+    stored = worker.current(ledger.db, 1, key, cfg=cfg)
+    calls = len(local_calls)
+    loaded = worker.extract_llm._LOADED_SOURCE_DIGESTS
+    for name in ('patient_context_refresh', 'patient_context_quality_receipts', 'patient_context_quality_controller'):
+        monkeypatch.setitem(loaded, name, 'a' * 64)
+    assert worker.current(ledger.db, 1, key, cfg=cfg)['artifact_id'] == stored['artifact_id']
+    assert run(ledger, cfg, 'local')['done'] == 0
+    assert len(local_calls) == calls and not cloud_calls
+    monkeypatch.setitem(loaded, 'cloud_backlog', 'b' * 64)
+    assert worker.current(ledger.db, 1, key, cfg=cfg) is None
+
+
 def test_local_page_result_is_redone_after_local_model_change(page_store):
     ledger, cfg, key, local_calls, cloud_calls, _ = page_store
     assert run(ledger, cfg, 'local')['done'] == 1

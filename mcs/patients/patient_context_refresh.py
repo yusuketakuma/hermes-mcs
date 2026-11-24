@@ -1761,44 +1761,35 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
         discard_if_changed()
         return {"status": "deferred", "done": 0}
-    # Rebuild the source signature outside the write lock. A data-version
-    # fence seals the read against any concurrent writer before publication.
-    quality_fence = None
-    source_pass_content = None
-    if source_quality_identity is not None:
-        before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        ledger.db.execute("BEGIN")
-        try:
-            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["route"], cfg, result):
-                return {"status": "source_changed", "done": 0}
-            source_pass_content = (patient_context_quality_receipts._quality_pass_content(ledger.db, pid, source_quality_identity)
-                                   if not source_quality_skipped else None)
-            if not source_quality_skipped and source_pass_content is None:
-                return {"status": "source_changed", "done": 0}
-        finally:
-            ledger.db.rollback()
-        quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        if quality_fence != before:
-            return {"status": "source_changed", "done": 0}
-    if quality_identity is not None:
-        before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        ledger.db.execute("BEGIN")
-        try:
-            refreshed_quality = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, result["summary"],
-                                                  quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
+    def quality_proofs(reader):
+        source_pass_content = refreshed_quality = None
+        if source_quality_identity is not None:
+            if not patient_context_refresh_sources._source_quality_verified(
+                    reader.db, pid, source, snapshot["route"], cfg, result):
+                return None
+            if not source_quality_skipped:
+                source_pass_content = patient_context_quality_receipts._quality_pass_content(
+                    reader.db, pid, source_quality_identity)
+                if source_pass_content is None:
+                    return None
+        if quality_identity is not None:
+            refreshed_quality = patient_context_refresh_sources._quality_capture(
+                reader.db, pid, cfg, workday_id, result["summary"], quality_identity["assessment"],
+                result["temporal_view"], source_keys=source_keys)
             if refreshed_quality["identity"] != quality_identity:
-                return {"status": "source_changed", "done": 0}
-        except (ValueError, KeyError, TypeError):
+                return None
+        return source_pass_content, refreshed_quality
+
+    quality_current = None
+    if quality_identity is not None or source_quality_identity is not None:
+        try:
+            proofs, quality_current = patient_context_quality_receipts._quality_read(ledger, deadline, quality_proofs)
+        except (ValueError, KeyError, TypeError, patient_context_refresh_state.Deferred):
             return {"status": "source_changed", "done": 0}
-        finally:
-            ledger.db.rollback()
-        quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        if quality_fence != before:
+        if proofs is None:
             return {"status": "source_changed", "done": 0}
+        source_pass_content, refreshed_quality = proofs
     version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-    changes = ledger.db.total_changes
-    if quality_fence is not None and quality_fence != (version, changes):
-        return {"status": "source_changed", "done": 0}
     _, write_proof[0], ready_snapshot = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg, deadline=deadline,
         complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys,
         write_scope={'source_key': context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None,
@@ -1853,7 +1844,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 except ValueError:
                     return {"status": "source_changed", "done": 0}
                 version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-                changes = ledger.db.total_changes
                 fresh = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
                 scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
                 waited = 0
@@ -1886,8 +1876,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": str(refused),
                             "guard_error": guard_error[0], "cloud_refusal": cloud_refusal[0]}
-            if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                                                 or ledger.db.total_changes != changes):
+            if quality_current is not None and not quality_current():
                 ledger.db.rollback()
                 return {"status": "source_changed", "done": 0}
             if quality_identity is not None:
@@ -2115,7 +2104,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, extract_llm.load_config(), [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and patient_context_refresh_state.time.monotonic() < deadline
-                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
                     and ledger.db.total_changes == adoption_before + adoption_writes[0])
                 if not valid_adoption:
                     ledger.db.rollback()
