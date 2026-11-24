@@ -763,3 +763,41 @@ def test_live_restart_intent_yields_before_opening_the_database(tmp_path, monkey
             raise AssertionError("db must not open")
     monkeypatch.setattr(mcs_ocr, "Ledger", ForbiddenLedger)
     assert mcs_ocr.run(cfg) == {"reason": "restart_yield"}
+
+
+@pytest.mark.parametrize("refusal", ["writer_busy", "restart_yield", "busy", "gateway_restart_pending"])
+def test_a_run_refused_before_the_drain_keeps_the_last_aggregate_until_it_is_stale(
+        tmp_path, monkeypatch, refusal):
+    import health_report
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {
+        "complete": 1, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0, "pending_failed": 0,
+        "queue_status": "known", "local_done": 0, "local_deferred": 0})
+    assert mcs_ocr.main() == 0
+    status = tmp_path / "attachment_ocr_status.json"
+    completed = status.read_bytes()
+    at = mcs_ocr.json.loads(completed)["at"]
+    assert health_report.attachment_ocr_health(str(tmp_path), cfg, at + 1)["state"] == "ok"
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {"reason": refusal})
+    for _ in range(3):
+        assert mcs_ocr.main() == 0
+    assert status.read_bytes() == completed
+    assert health_report.attachment_ocr_health(str(tmp_path), cfg, at + 1)["state"] == "ok"
+    late = at + health_report.freshness_deadline(cfg) + 1
+    report = health_report.attachment_ocr_health(str(tmp_path), cfg, late)
+    assert report["state"] == "unknown" and report["reason"] == "attachment_ocr_status_stale"
+
+
+def test_a_refusal_after_the_drain_started_still_replaces_the_aggregate(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {"reason": "writer_blocked"})
+    mcs_ocr.main()
+    status = tmp_path / "attachment_ocr_status.json"
+    assert mcs_ocr.json.loads(status.read_text())["reason"] == "writer_blocked"
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {"local_done": 1, "local_deferred": 0,
+                                                     "reason": "restart_yield"})
+    mcs_ocr.main()
+    assert mcs_ocr.json.loads(status.read_text())["local_done"] == 1

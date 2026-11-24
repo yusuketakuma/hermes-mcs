@@ -158,6 +158,9 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, observed, *, live_
     return result
 
 
+_NOT_STARTED = ("busy", "gateway_restart_pending", "writer_busy", "restart_yield")
+
+
 def _status_text(result, at):
     """Serialize the status record; the optional deferral breakdowns yield to the reader's size limit."""
     data = json.dumps({"at": at, **result})
@@ -270,7 +273,10 @@ def main():
         result = run(None, retry_errors=True) if args.retry_errors else run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
-    if result.get("reason") not in ("busy", "gateway_restart_pending") and Path(DATA).is_dir():
+    # A run refused before the drain observed nothing: the last real aggregate stays and its
+    # age still turns stale; the refusal is reported on stdout only.
+    started = not (result.keys() == {"reason"} and result["reason"] in _NOT_STARTED)
+    if started and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
                          lambda stream: stream.write(_status_text(result, time.time())), mode=0o600)
