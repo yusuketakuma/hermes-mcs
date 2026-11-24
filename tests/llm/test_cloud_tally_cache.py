@@ -398,8 +398,45 @@ def test_commit_during_refresh_is_not_cached_with_new_stamp(tmp_path, monkeypatc
 
         monkeypatch.setattr(c._Tally, 'update', update)
         first = c._tally(ledger)
-        assert first.precheck is None and ledger._cloud_usage_tally is None
-        assert c._tally(ledger).total == 2 * first.total
+        total = first.total
+        assert first.precheck is None and ledger._cloud_usage_tally is first
+        assert c._tally(ledger).total == 2 * total
+
+
+@pytest.mark.parametrize('guard', [True, False])
+def test_unrelated_commit_during_warm_keeps_tally_for_writer_transaction(tmp_path, monkeypatch, now, guard):
+    """A busy database commits somewhere during every long warm-up: the tally loses only its
+    stamp, so the next check inside a writer transaction re-verifies it (guard: no full re-hash)
+    instead of rebuilding the month under the lock."""
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        _reserve(ledger)
+        if not guard:
+            _drop_usage_guard(ledger)
+        original = c._Tally.update
+        committed = []
+
+        def update(tally, owner, current):
+            original(tally, owner, current)
+            if not committed:
+                committed.append(True)
+                with sqlite3.connect(path) as writer:
+                    writer.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('synthetic_observation','{}',?)",
+                                   (now,))
+
+        monkeypatch.setattr(c._Tally, 'update', update)
+        warmed = c._tally(ledger, now)
+        assert committed and warmed.precheck is None and ledger._cloud_usage_tally is warmed
+        statements = []
+        ledger.db.execute('BEGIN IMMEDIATE')
+        ledger.db.set_trace_callback(statements.append)
+        try:
+            assert c._tally(ledger, now) is warmed and not warmed.invalid
+        finally:
+            ledger.db.set_trace_callback(None)
+            ledger.db.rollback()
+        assert sum('AND artifact_id<=' in sql for sql in statements) == (0 if guard else 1)
+        assert warmed.prefix == warmed.fingerprint(ledger, now)
 
 
 def test_concurrent_precheck_commit_cannot_bypass_transactional_cap_or_open_circuit(tmp_path, monkeypatch, now):
@@ -424,7 +461,7 @@ def test_concurrent_precheck_commit_cannot_bypass_transactional_cap_or_open_circ
         monkeypatch.setattr(c._Tally, 'update', update)
         cfg = _cfg(daily_request_budget=2)
         assert c.budget_block_reason(ledger, cfg) is None
-        assert committed and ledger._cloud_usage_tally is None
+        assert committed and ledger._cloud_usage_tally.precheck is None
         assert c.global_block_reason(ledger, model=MODEL) is None
         calls = []
         client = AnthropicClient('synthetic', post_fn=lambda *args: calls.append(True), max_attempts=1)
@@ -459,7 +496,7 @@ def test_mutation_between_fingerprint_and_update_uses_one_snapshot(tmp_path, mon
         snapshot = _read(ledger, period, now)
         assert committed and snapshot is original and not snapshot.invalid and snapshot.total > 0
         attribute = '_cloud_usage_tally' if period == 'month' else '_cloud_window_tally'
-        assert snapshot.precheck is None and getattr(ledger, attribute) is None
+        assert snapshot.precheck is None and getattr(ledger, attribute) is snapshot
         with pytest.raises(AnthropicError, match='pricing_unverified'):
             _read(ledger, period, now)
 
