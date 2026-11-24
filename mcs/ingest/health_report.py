@@ -495,15 +495,20 @@ def jev_block_reason(db) -> str | None:
 
     Only an assessment can raise the alert. A readable assessment found by
     time therefore bounds the id scan, including any later QC recovery."""
+    import semantic_policy
+
+    recovery_kind = semantic_policy.KIND_JEV_HEALTH_RECOVERY
     row = db.execute(
         "SELECT CASE WHEN kind='semantic_assess' THEN json_extract(meta,'$.error_kind') END "
         "FROM artifacts NOT INDEXED WHERE artifact_id>=("
         "SELECT artifact_id FROM artifacts INDEXED BY idx_artifacts_kind_created "
         "WHERE kind='semantic_assess' AND json_valid(meta) ORDER BY created_at DESC LIMIT 1) "
-        "AND kind IN ('semantic_assess','extract_qc') AND json_valid(meta) "
-        "AND (kind='semantic_assess' OR (json_extract(meta,'$.qc')='done' "
-        "AND json_type(meta,'$.jev_requests')='integer' AND json_extract(meta,'$.jev_requests')>0)) "
-        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        "AND kind IN ('semantic_assess','extract_qc',?) AND json_valid(meta) "
+        "AND (kind='semantic_assess' OR (kind=? AND json_type(meta,'$.jev_requests')='integer' "
+        "AND json_extract(meta,'$.jev_requests')>0) OR (kind='extract_qc' "
+        "AND json_extract(meta,'$.qc')='done' AND json_type(meta,'$.jev_requests')='integer' "
+        "AND json_extract(meta,'$.jev_requests')>0)) ORDER BY artifact_id DESC LIMIT 1",
+        (recovery_kind, recovery_kind)).fetchone()
     kind = row[0] if row else None
     return kind if kind in _JEV_BLOCK_KINDS else None
 

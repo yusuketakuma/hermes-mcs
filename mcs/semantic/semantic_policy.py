@@ -16,6 +16,7 @@ JOB_KIND = "semantic"
 QC_JOB_KIND = "extract_qc"
 SCHED_KIND = "semantic_sched"
 QC_ARTIFACT = "extract_qc"
+KIND_JEV_HEALTH_RECOVERY = "semantic_jev_health_recovery"
 
 KIND_BUNDLE = "semantic_bundle"
 KIND_ASSESS = "semantic_assess"
@@ -55,6 +56,7 @@ LOCAL_MODEL_UNGATED_KINDS = frozenset({
     KIND_BUNDLE, KIND_ASSESS, KIND_FACT_AUDIT, KIND_FACT_REPAIR, KIND_MANIFEST, KIND_AUDIT,
     KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN, KIND_USAGE, KIND_COVERAGE, KIND_REPAIR,
     KIND_SUMMARY_FORMAT_REPAIR, KIND_POLICY, KIND_DRAIN_RUN, KIND_SHADOW_V2,
+    KIND_JEV_HEALTH_RECOVERY,
     "semantic_loop_completion", "loop_relation_rejected", "semantic_facts_v4_skipped", "v4_stage",
     "v4_diagnostic", "v4_retire_cohort", "v4_retire_item"})
 
