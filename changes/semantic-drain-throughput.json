@@ -1,7 +1,7 @@
 {
   "category": "changed",
   "title": "Jevだけで終わる意味解析・抽出QCの滞留を常駐workerがまとめて処理",
-  "summary": "意味解析の結果を使う設定では、Jevだけで終わる意味解析の滞留jobを、常駐の抽出workerがローカル抽出の順番待ちや保存待ちに関係なく、1回に最大8件・約5分までまとめて処理します。抽出QC（extract_qc=annotate）は意味解析の読者設定と独立して同じ処理枠を使います。要約とループがともにoffなら意味解析jobは実行せず、抽出QCが有効な場合に限ってQCだけを処理します。Jevの日次上限と新着用予備枠（10%）に達した場合は評価を省略して完了扱いにせず、jobを残して次の枠まで待ちます。ローカルLLMが必要な設定では従来どおり抽出1回ごとに1件です。",
+  "summary": "意味解析の結果を使う設定では、Jevだけで終わる意味解析jobを最大8件・約5分まとめて処理します。抽出QCはextract_qc=annotateのとき独立して処理し、要約とループがともにoffなら意味解析jobは実行しません。上限到達時はjobを残し、ローカルLLMを使う設定は従来どおりです。",
   "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。要約とループがともにoffの間、意味解析jobは実行されません。抽出QCはextract_qc=annotateの場合だけ実行されます。",
   "details": [
     "意味解析jobの対象は semantic_policy.primary_verdicts_consumed で判定し、抽出QC jobは独立した extract_qc=annotate 設定で判定する。",
