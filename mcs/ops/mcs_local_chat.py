@@ -69,7 +69,10 @@ def response(snapshot, allowed, route, query):
             raise ValueError("bad_arguments")
         return local_chat_view.sections() if route == "sections" else local_chat_view.drugs(text)
     if route != "patients":
-        project = int(project or "")
+        # Plain ASCII digits only, so the room that is read is always the room read_subject records.
+        if not (project and project.isascii() and project.isdigit()):
+            raise ValueError("bad_arguments")
+        project = int(project)
         local_chat_view.require_project(project, allowed)
     view = View(snapshot)
     try:

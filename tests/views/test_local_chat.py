@@ -526,3 +526,12 @@ def test_visit_sheet_pages_count_from_the_same_last_visit(snapshot):
                   "project=1&section=changes&since=-1", "project=1&since=1"):
         with pytest.raises(ValueError):
             chat.response(snapshot, {1}, "panel" if "section" in query else "timeline", query)
+
+
+@pytest.mark.parametrize("project", ["%2B1", "%201", "1%20", "%EF%BC%91", "1_0", "-1", ""])
+def test_a_room_is_named_in_plain_digits_so_the_access_record_names_the_same_room(snapshot, project):
+    # int() would read these as a room that read_subject cannot name: the read would go unrecorded.
+    with pytest.raises(ValueError, match="bad_arguments"):
+        chat.response(snapshot, {1, 10}, "timeline", "project=" + project)
+    assert chat.read_subject("timeline", "project=" + project) == (None, [], False)
+    assert chat.read_subject("timeline", "project=1") == (1, [1], False)
