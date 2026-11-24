@@ -164,7 +164,7 @@ def stamp_attrs(fields: dict, form: dict | None):
         return "対象の投稿を選択してください。"
     own = post.get("own") if isinstance(post.get("own"), dict) else {}
     if own.get("state") == "pending":
-        return "この投稿のMCSスタンプは確認中です。結果が出てからやり直してください。"
+        return "この投稿には結果を確認中のスタンプ操作があります。確認は通常1時間以内に終わります。急ぐ場合はMCSの画面で操作してください。"
     if own.get("state") != "observed":
         return "この投稿の現在のMCSスタンプを確認できないため送信できません。"
     op = fields.get("op") or ""

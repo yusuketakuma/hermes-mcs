@@ -2,6 +2,7 @@
 superseded — never resumed, never silently unverifiable (fully synthetic)."""
 import hashlib
 import json
+import time
 from unittest.mock import patch
 
 import pytest
@@ -15,12 +16,15 @@ import extract_llm as worker
 import extract_llm_context
 import extract_llm_engine
 import extract_llm_historical
+import extract_llm_provider
+import extract_llm_runner
 import extraction_context as frames
 import mcs_queries
 from anthropic_runtime_testkit import _use_real_cloud_accounting
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from test_anthropic_runtime import old, routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['routed']
 
@@ -485,3 +489,84 @@ def test_parallel_superseded_jobs_complete_through_owner_guard(
         + " AND json_extract(a.meta,'$.extract_version')=?",
         (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
     assert len(current) == 2
+
+
+def _superseded_claim(ledger, row):
+    return ledger.db.execute(
+        "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
+        "AND project_id=? AND message_id=?",
+        (row["project_id"], row["message_id"])).fetchone()
+
+
+def _multi_piece_body():
+    return "\n".join(f"合成の経過記録{i:03d}。症状は安定している。" for i in range(400))
+
+
+def test_superseded_hold_claim_waits_the_revive_interval(routed):
+    """A still-superseded head keeps one bounded claim for the revive interval
+    instead of re-blocking every pass; the row returns through the normal
+    selection path only after that claim lapses."""
+    ledger, *_ = routed
+    row, frame = _frozen(ledger, body=_multi_piece_body())
+    _persist(ledger, row, frame, _old_context(row, frame))
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report["defer_reasons"]["prepare_context_load_superseded"] == 1
+    claim = _superseded_claim(ledger, row)
+    assert claim and claim["next_try"] > time.time() + 5 * 3600
+
+
+def test_superseded_hold_shortens_when_the_pending_set_changes(routed):
+    """The long wait is conditional: it lasts only while every collectible
+    pending record still binds a retired generation."""
+    ledger, *_ = routed
+    row, frame = _frozen(ledger, body=_multi_piece_body())
+    _persist(ledger, row, frame, _old_context(row, frame))
+    held = {**_scan_row(ledger, row), "_superseded_local": True}
+    reasons = ("prepare_context_load_superseded",)
+    assert extract_llm_runner._prepare_hold_s(ledger, held, reasons) \
+        == extract_llm_runner.REVIVE_COOLDOWN_S
+    # a pending record a current contract can bind ends the long wait
+    _persist(ledger, row, frame, _current_context(row, frame))
+    assert extract_llm_runner._prepare_hold_s(ledger, held, reasons) \
+        == extract_llm_runner._PREPARE_HOLD_S
+    # a row that was never tagged superseded keeps the short hold
+    assert extract_llm_runner._prepare_hold_s(ledger, _scan_row(ledger, row), reasons) \
+        == extract_llm_runner._PREPARE_HOLD_S
+
+
+def test_superseded_head_keeps_one_claim_and_the_cloud_tail_runs(
+        routed, monkeypatch):
+    """Cloud lane: a still-superseded head takes one bounded claim in the
+    lookahead instead of re-blocking every pass; the next pass sees the
+    unclaimed tail instead of re-loading the same context."""
+    ledger, cfg, calls, reserved, results = routed
+    cfg["cloud_llm"]["max_concurrency"] = 32
+    row, frame = _frozen(ledger, body=_multi_piece_body(), mid=2)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    old(ledger, 1)
+    now = time.time()
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET first_seen=?,posted_at_ts=?", (now - 1200, now - 1200))
+        # newest-first selection: the superseded row must be the head
+        ledger.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=2", (now - 1100,))
+        ledger.db.execute("UPDATE message_revisions SET observed_at=?", (now - 1200,))
+        cloud_policy.capture_history_tx(ledger.db, "synthetic-superseded-head", now)
+    monkeypatch.setattr(worker, "_probe_format", lambda **kw: pytest.fail("cloud probed local backend"))
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
+
+    def _pass():
+        with legacy_cloud_routes():
+            return worker.run_pending(ledger, limit=1, workers=1, budget_s=180,
+                background=True, cloud_only=True, prioritize_patients=True)
+
+    first = _pass()
+    # the blocked head frees its slot inside the same pass: the tail completes
+    assert first["defer_reasons"] == {"prepare_context_load_superseded": 1}
+    assert first["done"] == 1
+    claim = _superseded_claim(ledger, row)
+    assert claim and claim["next_try"] > time.time() + 5 * 3600
+    second = _pass()
+    # the held head is not re-selected or re-prepared by the next pass
+    assert second["selected"] == 0 and second["deferred"] == 0
+    assert len(calls) == len(reserved) == len(results) == 1

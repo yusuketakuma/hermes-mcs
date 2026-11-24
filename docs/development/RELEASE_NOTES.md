@@ -101,6 +101,8 @@ PRのCIは実行コードの変更・削除に変更記録を要求する。
 
 患者コンテキストの品質確認の受入れ規則（`patient_context_quality_controller.py`・`patient_context_quality_receipts.py`・`semantic_usage_receipts.py` の PASS 判定、答えの解釈、Jev の振る舞い）を変えた候補では、`patient_context_quality_identity.QA_VERSION` を上げたかを確認する。hash される範囲は `docs/specs/patient-context.md`「品質確認の識別値（P0-2c）」を参照する。
 
+クラウド料金表は毎回、現行4モデル全ての再確認期限までの残りがCHANGELOG最新版の日付を基準に21日を超えることを`tests/release/test_cloud_price_runway.py`で確認する。残り21日以下の場合は、公式料金を確認した新しい料金定義を先に適用してからリリースする。
+
 リリースを依頼されたエージェントは、未リリースの記録を確認して見出しと要約を作る。
 version・日本時間の日付は明示的に指定する。暗黙にversionを上げない。
 
