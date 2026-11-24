@@ -637,7 +637,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 OSError, RecursionError, OverflowError):
             return "unknown", None
     if (not cloud_key and not optional_quality or jev_off and not optional_quality
-            or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
+            or semantic_policy.jev_scope_excludes(scfg, pid)):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
         scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
@@ -697,7 +697,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     still_skipped = ((skip_reason == "not_configured" and not live_key)
                                      or (skip_reason == semantic_jev.REVIEW_HELD and live_semantic["jev_held"])
                                      or (skip_reason == "disabled" and (live_semantic["daily_request_budget"] <= 0
-                                         or local_quality and live_semantic['mode'] == 'off'))
+                                         or optional_quality and live_semantic['mode'] == 'off'))
                                      or (skip_reason == "backlog_reserved" and live_used >= live_cap)
                                      or (skip_reason == "daily_budget" and live_used >= live_cap)
                                      or skip_reason == "service_unavailable"
@@ -711,13 +711,13 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     denied = True
                     return False
             if (patient_context_refresh_state.time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
-                    or live_key != key or problems or live_semantic["mode"] == "off" and not local_quality
+                    or live_key != key or problems or live_semantic["mode"] == "off" and not optional_quality
                     # a run that asks Jev stops once the live config no longer lets Jev be asked
                     or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"])
                     or paused(ledger.db, pid)
                     or cloud_policy.stopped(ledger)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
-                    or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
+                    or semantic_policy.jev_scope_excludes(live_semantic, pid)
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
                 denied = True
                 return False
@@ -788,7 +788,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))
-            return "passed", {**identity, "_keys": (key, cloud_key),
+            return "passed", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key),
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
                    if purpose == "source" else {})}
         if skip_reason is not None:
@@ -796,7 +796,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 return skip_blocked_status(), identity
             patient_context_quality_receipts._quality_mark_skipped(ledger, pid, identity, claim, selected, current,
                                   scfg["match_threshold"], skip_reason)
-            return "skipped", {**identity, "_keys": (key, cloud_key), "_skip_reason": skip_reason,
+            return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": skip_reason,
                 **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                    if purpose == "source" else {})}
         reserve = semantic_runtime.patient_summary_usage_reserver(
@@ -885,7 +885,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                                               scfg["match_threshold"], reason)
                     except (ValueError, patient_context_refresh_state.Deferred):
                         return "unknown", identity
-                    return "skipped", {**identity, "_keys": (key, cloud_key), "_skip_reason": reason,
+                    return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": reason,
                         **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                            if purpose == "source" else {})}
                 failure_class = outcome.get("failure_class", "failed")
@@ -911,7 +911,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))
-        return "passed", {**identity, "_keys": (key, cloud_key),
+        return "passed", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key),
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
                    if purpose == "source" else {})}
     finally:

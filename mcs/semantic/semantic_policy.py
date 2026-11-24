@@ -260,6 +260,18 @@ def runtime_key_present(cfg, root) -> bool:
     return not explicit and bool(jev.api_key(root))
 
 
+def jev_available(scfg: dict, key_present) -> bool:
+    """Whether Jev may be asked now: semantic on, a key present, no review hold and a budget."""
+    return (bool(key_present) and scfg["mode"] != "off" and not scfg["jev_held"]
+            and scfg["daily_request_budget"] > 0)
+
+
+def jev_scope_excludes(scfg: dict, project_id) -> bool:
+    """Whether the Jev patient scope leaves this patient out; with semantic off there is no scope."""
+    scope = scfg["project_ids"]
+    return scfg["mode"] != "off" and scope is not None and project_id not in scope
+
+
 def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     return semantic_config(cfg, key_present=runtime_key_present(cfg, root), root=root)

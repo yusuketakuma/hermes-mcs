@@ -161,6 +161,16 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     return out
 
 
+def jev_notice(cfg: dict, root) -> str | None:
+    """Name an install that never set up Jev as information, since local-only use is supported."""
+    block = cfg.get("semantic")
+    if block is not None and (not isinstance(block, dict) or "mode" in block):
+        return None   # an explicit mode is checked by check_environment
+    if mcs_util.private_env_value("TYPESAFE_API_KEY", root):
+        return None
+    return "Jev: 未導入（Jev への送信は行いません）"
+
+
 def launch_agents_to_check(cfg: dict) -> list[str]:
     """LaunchAgents this check expects: standalone checks its own host elsewhere, and the resident patient
     workspace is checked here in either mode."""
@@ -286,9 +296,6 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
         warnings.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
                         "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                         "no_api_key")
-    elif not jev_key_present:
-        warnings.append("TYPESAFE_API_KEYは未設定です。"
-                        "外部の意味解析を有効にする場合に必要です")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
     labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
     if labels:

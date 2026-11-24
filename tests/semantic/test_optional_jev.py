@@ -501,3 +501,38 @@ def test_qc_keeps_a_negative_answer_when_a_later_chunk_hits_budget(tmp_path):
                                                _hash(db), extract_llm.EXTRACT_VERSION, cfg)
     finally:
         db.close()
+
+
+def _no_review():
+    return {"state": "not_required", "auto_enable": True}
+
+
+@pytest.mark.parametrize("semantic, key, available", [
+    (None, False, False),        # a fresh install without Jev: semantic resolves to off
+    (None, True, True),          # a key alone switches an omitted mode on
+    ({"mode": "assist", "project_ids": [1], "daily_request_budget": 10}, False, False),
+    ({"mode": "assist", "project_ids": [1], "daily_request_budget": 10}, True, True),
+    ({"mode": "assist", "project_ids": [1]}, True, False),   # an explicit mode starts with no budget
+    ({"mode": "off"}, True, False),
+])
+def test_jev_available_needs_mode_key_and_budget(semantic, key, available):
+    import semantic_policy
+    cfg = {} if semantic is None else {"semantic": semantic}
+    scfg, errors = semantic_policy.semantic_config(
+        cfg, key_present=key, transfer_status=_no_review)
+    assert not errors
+    assert semantic_policy.jev_available(scfg, key) is available
+    assert semantic_policy.jev_available({**scfg, "jev_held": True}, key) is False
+
+
+def test_jev_scope_applies_only_while_semantic_is_on():
+    import semantic_policy
+    off, _ = semantic_policy.semantic_config({}, key_present=False,
+                                             transfer_status=_no_review)
+    assert off["mode"] == "off" and off["project_ids"] == []
+    assert not semantic_policy.jev_scope_excludes(off, 1)
+    on, _ = semantic_policy.semantic_config(
+        {"semantic": {"mode": "assist", "project_ids": [1]}}, key_present=False,
+        transfer_status=_no_review)
+    assert not semantic_policy.jev_scope_excludes(on, 1)
+    assert semantic_policy.jev_scope_excludes(on, 2)

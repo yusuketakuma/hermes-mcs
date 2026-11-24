@@ -12,7 +12,8 @@ import patient_context_refresh_state
 def _quality_scope_allowed(db, pid, policy, sources=None):
     """Keep validated policy scope and canonical provenance separate from notification modes."""
     from mcs_queries import paused
-    if paused(db, pid) or policy["project_ids"] is not None and pid not in policy["project_ids"]:
+    from semantic_policy import jev_scope_excludes
+    if paused(db, pid) or jev_scope_excludes(policy, pid):
         return False
     if sources is None:
         return True

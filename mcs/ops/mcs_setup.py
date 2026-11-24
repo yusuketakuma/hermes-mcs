@@ -958,6 +958,9 @@ def cmd_check(args) -> int:
     progress_warning = _install_progress_warning()
     if progress_warning is not None:
         warnings.append(progress_warning)
+    notice = environment_diagnostics.jev_notice(cfg, HOME)
+    if notice is not None:
+        print(f"  情報: {notice}")
     for w in warnings:
         print(f"  注意: {w}")
     for e in errors:

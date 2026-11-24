@@ -113,6 +113,11 @@ def _digest(value):
                                      separators=(",", ":")).encode()).hexdigest()
 
 
+def _credential_tag(jev_key, cloud_key):
+    """Fingerprint the Jev and cloud keys so a key change invalidates work without keeping the keys."""
+    return _digest([str(key) if key else None for key in (jev_key, cloud_key)])
+
+
 def _digest_iter(items):
     """_digest(list(items)) without holding the items: same bytes, one item at a time."""
     h = hashlib.sha256(b"[")
