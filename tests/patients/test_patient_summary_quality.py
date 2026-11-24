@@ -1019,3 +1019,17 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
         assert status == 'unknown'
     assert len(sends) == count
     assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS)
+
+
+@pytest.mark.parametrize("code,reason,failure,child_wait,expected", [
+    ("deadline", "source_quality_unavailable:deadline", None, False, {"quality_detail": "deadline"}),
+    ("deadline", "summary_quality_deferred", None, False, {"quality_detail": "deadline"}),
+    ("deadline", "patient_context_capacity_or_deadline", None, False, {}),
+    ("deadline", "source_quality_deferred", "patient_context_length_stop", False, {}),
+    ("deadline", "source_quality_deferred", None, True, {}),
+    (None, "source_quality_deferred", None, False, {}),
+    ("free text 本文", "source_quality_deferred", None, False, {"quality_detail": "unclassified"}),
+])
+def test_quality_detail_field_only_reports_a_quality_deferral(code, reason, failure, child_wait, expected):
+    # the early deadline return and the final return share this rule
+    assert refresh._quality_detail_field(code, reason, failure=failure, child_wait=child_wait) == expected

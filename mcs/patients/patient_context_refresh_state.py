@@ -125,7 +125,7 @@ QUALITY_DETAIL_CODES = frozenset({
     # the read fence
     "own_write_mismatch", "version_unwitnessed", "witness_mismatch", "replay_commit",
     # steps that end without raising
-    "origin_unverified", "jev_unavailable", "jev_usage_unread", "jev_circuit_unclassified",
+    "origin_unverified", "jev_unavailable", "jev_window_closed", "jev_usage_unread", "jev_circuit_unclassified",
     "claim_unavailable", "failure_recorded", "jev_client_hooks", "request_problem", "retry_wait",
     "jev_not_evaluated", "prior_failure_blocks_skip", "skip_unrecorded", "candidate_failed",
     # repairs

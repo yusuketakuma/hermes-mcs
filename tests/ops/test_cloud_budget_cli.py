@@ -463,6 +463,34 @@ def test_settings_matching_no_recorded_save_are_reported_without_claiming_a_caus
     assert shown["limits_match_record"] is True and "limits_record_note" not in shown
 
 
+def test_a_reverted_change_is_not_taken_for_the_save_before_it(verified_split, capsys):
+    conf = verified_split[0]
+    assert _run(daily="5") == 0
+    for record in conf.parent.glob("data/.provider-settings-stage-*/change.json"):
+        record.unlink()                      # 5 USD was saved before records existed
+    # 10 then back to 5: the later save restores the state the save to 10 started from.
+    assert _run(daily="10") == 0 and _run(daily="5") == 0
+    capsys.readouterr()
+    assert cli.budget_command(SimpleNamespace(history=3)) == 0
+    shown = json.loads(capsys.readouterr().out)
+    back, up = shown["limit_history"]["records"]
+    assert back["changes"]["cloud_llm.daily_cost_limit_usd"] == {"before": 10, "after": 5}
+    assert up["changes"]["cloud_llm.daily_cost_limit_usd"] == {"before": 5, "after": 10}
+    assert [entry["previous_record_found"] for entry in (back, up)] == [True, False]
+    assert shown["last_limit_change"]["changes"] == back["changes"]
+
+
+def test_only_rejected_records_are_unavailable_not_absent(verified_split, monkeypatch, capsys):
+    assert _run(daily="2") == 0
+    capsys.readouterr()
+    original = provider_settings.change_records
+    def rejected(root, limit):
+        return {**original(root, limit), "records": [], "rejected_records": 1}
+    monkeypatch.setattr(provider_settings, "change_records", rejected)
+    assert _run() == 0
+    assert json.loads(capsys.readouterr().out)["last_limit_change"]["state"] == "unavailable"
+
+
 def test_a_save_in_progress_is_not_compared(verified_split, monkeypatch, capsys):
     conf, _, _, _, _ = verified_split
     assert _run(daily="2") == 0

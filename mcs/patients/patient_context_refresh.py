@@ -182,6 +182,14 @@ def _quality_unavailable_detail(exc):
     return type(exc).__name__
 
 
+def _quality_detail_field(code, deferred_reason, *, failure, child_wait):
+    """The ``quality_detail`` a pass result carries: only for a quality deferral, never for a failure or a child wait."""
+    if (code is None or failure or child_wait or not deferred_reason
+            or not deferred_reason.startswith(("summary_quality_", "source_quality_"))):
+        return {}
+    return {"quality_detail": patient_context_refresh_state.bounded_quality_detail(code)}
+
+
 def _quality_save_refusal(db, pid, live_cfg, live_policy, problems, sources, identity, keys, skipped, selected,
                           *, expected=None):
     """The save-time gate that refuses one audited identity, or None while its policy and receipts hold."""
@@ -1795,7 +1803,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return {"status": "deferred", "done": 0}
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
         discard_if_changed()
-        return {"status": "deferred", "done": 0}
+        # the gate of a quality deferral this pass ran into still reports (observation only)
+        return {"status": "deferred", "done": 0, **_quality_detail_field(
+            quality_detail[0], deferred_reason, failure=failure, child_wait=repair_waits[0])}
     def quality_proofs(reader):
         source_pass_content = refreshed_quality = None
         if source_quality_identity is not None:
@@ -2218,9 +2228,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             **({"reason": failure or (CHILD_WAIT_REASON if repair_waits[0] else deferred_reason)}
                if failure or deferred_reason else {}),
             # The gate that stopped a quality deferral this pass reports (observation only).
-            **({"quality_detail": patient_context_refresh_state.bounded_quality_detail(quality_detail[0])}
-               if not failure and not repair_waits[0] and quality_detail[0] is not None and deferred_reason
-               and deferred_reason.startswith(("summary_quality_", "source_quality_")) else {}),
+            **_quality_detail_field(quality_detail[0], deferred_reason, failure=failure,
+                                    child_wait=repair_waits[0]),
             **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
             **({"cloud_refusal": cloud_refusal[0]} if cloud_refusal[0] is not None else {}),
             "lock_wait_s": waited, **stats}

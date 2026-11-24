@@ -1105,8 +1105,9 @@ def _previous_record(records, index, visited):
         return None
     found = [other for other, record in enumerate(records)
              if other not in visited and other != index and record["authority"]["after"] == before]
-    older = [other for other in found if other > index]
-    return (older or found or [None])[0]
+    # Only an older save can be the one it started from: a later save that restored the same
+    # state (a change reverted) matches by hash but came after.
+    return next((other for other in found if other > index), None)
 
 
 def _limit_change(record):
@@ -1134,7 +1135,8 @@ def _limit_audit(cfg, history=None):
         return {"last_limit_change": state("unavailable"), "limits_match_record": None}
     records = found["records"]
     if not records:
-        result["last_limit_change"] = state("no_record")
+        # every record rejected is unreadable history, not the absence of one
+        result["last_limit_change"] = state("unavailable" if found["rejected_records"] else "no_record")
     else:
         # The save that produced the current settings is the one whose state equals the authority's.
         head = next((index for index, record in enumerate(records)

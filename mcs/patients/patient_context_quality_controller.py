@@ -689,6 +689,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
         try:
             semantic_runtime._jev_window_check()
+        except (semantic_jev.JevError, ValueError, sqlite3.Error):
+            _note("jev_window_closed")
+            return "deferred", None
+        try:
             used = jev_usage_today(ledger)
         except (semantic_jev.JevError, ValueError, sqlite3.Error):
             _note("jev_usage_unread")
