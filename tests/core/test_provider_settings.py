@@ -1831,11 +1831,25 @@ def test_reader_opens_only_the_newest_stages_and_reports_a_save_in_progress(tmp_
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("2026-11-25t12:00:00+00:00", "2026-11-25t12:00:00+00:00"),   # a separator until_epoch accepts
-    ("2026-11-25T12:00:00Z", "2026-11-25T12:00:00Z"),
+    # Every separator until_epoch accepts, kept in one canonical form rather than as typed.
+    ("2026-11-25t12:00:00+00:00", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25X12:00:00+00:00", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25T12:00:00Z", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25T21:00:00+09:00", "2026-11-25T21:00:00+09:00"),
     ("not a time at all", settings.INVALID),
     ("2026-13-45T99:00:00+00:00", settings.INVALID),
+    ("2026-11-25T12:00:00", settings.INVALID),   # no offset: until_epoch refuses it
 ])
 def test_record_keeps_every_time_until_epoch_accepts(value, expected):
     assert settings._limit_value(value) == expected
     assert settings._stored_limit_ok(expected)
+
+
+def test_an_end_time_change_with_any_accepted_separator_is_a_change():
+    before = settings._limits({}, {}, {"until": "2026-11-25X12:00:00+00:00"})
+    after = settings._limits({}, {}, {"until": "2026-11-26X12:00:00+00:00"})
+    same = settings._limits({}, {}, {"until": "2026-11-25T12:00:00Z"})
+    assert (before["semantic.until"], after["semantic.until"]) == (
+        "2026-11-25T12:00:00+00:00", "2026-11-26T12:00:00+00:00")
+    assert [key for key in after if before[key] != after[key]] == ["semantic.until"]
+    assert same == before   # the same end time written another way is no change

@@ -818,7 +818,6 @@ _CHANGE_RECORD_KEYS = frozenset({"version", "operation", "saved_at", "origin", "
                                  "files", "authority", "limits", "changed"})
 _STAGE_NAME = re.compile(r"\.provider-settings-stage-([0-9a-f]{32})")
 _SAVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00")
-_TIME_TEXT = re.compile(r"[0-9TtZz:+.\- ]{10,64}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _BUDGET_FIELDS = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
 _JEV_LIMITS = ("daily_request_budget", "until")
@@ -862,13 +861,14 @@ def _limit_value(value):
         return ABSENT
     if value is None or _number(value):
         return value
-    if isinstance(value, str) and _TIME_TEXT.fullmatch(value):
+    if isinstance(value, str):
+        # An end time until_epoch accepts is kept in its canonical ISO form, never as typed:
+        # the record carries no settings text, and every accepted separator stays comparable.
         try:
             until_epoch(value)
+            return datetime.fromisoformat(value).isoformat()
         except (TypeError, ValueError, OverflowError):
             return INVALID
-        return value
-    # Any other value is never copied: the record carries no settings text.
     return INVALID
 
 
