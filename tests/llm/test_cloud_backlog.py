@@ -1791,6 +1791,55 @@ def test_both_pools_of_one_owner_share_one_memory_target(tmp_path, monkeypatch, 
         owner.close()
 
 
+@pytest.mark.parametrize("memory,limit", [(2, 2), (3, 4)])
+def test_stored_message_workers_take_each_place_a_stopping_context_child_frees(
+        tmp_path, monkeypatch, pool_children, memory, limit):
+    # A share the context pool frees is exact, not a noisy sample to hold one worker short of.
+    monkeypatch.setattr(backlog, "memory_workers", lambda cap: min(memory, cap))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(_reopened_cfg(limit))
+            _decide_again(owner)
+        context = len(owner.children)
+        assert len(owner.backlog.children) == memory - context
+        off = {**_reopened_cfg(limit), "extract": {"patient_context": {"enabled": False}}}
+        for stopped, child in enumerate(list(owner.children), start=1):
+            child.stopped = True     # each context child exits after its current unit
+            owner.sync(off)
+            _decide_again(owner)
+            assert _live_backlog(owner) == memory - context + stopped
+    finally:
+        owner.close()
+
+
+def _live_backlog(owner):
+    return backlog._live_children(owner.backlog)
+
+
+def test_context_children_leave_the_places_of_lingering_stored_message_workers(
+        tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda cap: min(2, cap))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(_reopened_cfg(2))
+            _decide_again(owner)
+        assert (len(owner.children), len(owner.backlog.children)) == (1, 1)
+        # The window closes (here a spend hold): its worker settles before it retires.
+        monkeypatch.setattr(backlog, "backlog_admits", lambda *a: False)
+        for _ in range(3):
+            owner.sync(_reopened_cfg(2))
+            _decide_again(owner)
+            assert len(owner.children) + _live_backlog(owner) <= 2
+        assert len(owner.children) == 1
+        owner.backlog.children[0].stopped = True
+        owner.sync(_reopened_cfg(2))
+        assert len(owner.children) == 2
+    finally:
+        owner.close()
+
+
 def test_stored_message_workers_use_the_whole_target_while_context_is_off(tmp_path, monkeypatch, pool_children):
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(4, limit))
     cfg = {**_reopened_cfg(8), "extract": {"patient_context": {"enabled": False}}}

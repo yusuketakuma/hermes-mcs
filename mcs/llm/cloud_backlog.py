@@ -378,6 +378,7 @@ class CloudBacklogPool:
         self.admitted = False
         self.spawned = 0
         self.share = CONTEXT_WORKERS_MAX
+        self.reserved = 0
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
@@ -440,16 +441,25 @@ class CloudBacklogPool:
         self.admitted = True
         self._reap(now)
         memory = memory_workers(settings["max_concurrency"])
-        target = max(0, memory - (reserve(memory) if reserve is not None else 0))
+        reserved = reserve(memory) if reserve is not None else 0
+        freed, self.reserved = reserved < self.reserved, reserved
+        target = max(0, memory - reserved)
         if self.context_only:
             # A fixed cap whose share the stored-message workers already leave free:
             # no hysteresis, or a pool down to one child of two would never refill.
-            self.share = context_workers(settings["max_concurrency"], _backlog_open(
-                self.root, cfg, settings, ledger))
+            backlog_open = _backlog_open(self.root, cfg, settings, ledger)
+            self.share = context_workers(settings["max_concurrency"], backlog_open)
             target = min(target, self.share)
-        elif self.children and target > 0 and abs(target - len(self.children)) <= 1 and not ramping:
-            # Keep one worker of hysteresis: its resident memory changes the sample.
-            # A pool still ramping up was cut short by the per-decision cap, not by the sample.
+            if not backlog_open and self.backlog is not None:
+                # Stored-message workers left over from a closed window (settling paid carry,
+                # or waiting out a spend hold) keep their places until they retire.
+                target = min(target, max(0, memory - _live_children(self.backlog)))
+        elif (self.children and target > 0 and abs(target - len(self.children)) <= 1 and not ramping
+              and not freed and memory < settings["max_concurrency"]):
+            # Keep one worker of hysteresis: its resident memory changes the sample. Only the
+            # memory sample is noisy: a target capped by max_concurrency, or raised by a share
+            # another pool just freed, is exact. A pool still ramping up was cut short by the
+            # per-decision cap.
             target = min(settings["max_concurrency"], len(self.children))
         if target <= len(self.children) or now < self.retry_at:
             return
