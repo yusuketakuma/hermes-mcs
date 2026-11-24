@@ -169,7 +169,9 @@ def test_candidate_cap_reports_omission_without_selecting_identity(store, tmp_pa
 
 
 def test_caps_and_deadline_never_emit_partial_matches(store, tmp_path, monkeypatch):
-    cfg = configured(store, tmp_path)
+    doc = deepcopy(DOCUMENT)
+    doc["dict_id"] = "fictional-caps"
+    cfg = configured(store, tmp_path, doc)
     deadline = time.monotonic() + 10
     assert drug_mentions.build(store.db, cfg, "キラナ", deadline=time.monotonic() - 1)["status"] == "incomplete"
     monkeypatch.setattr(drug_mentions, "MAX_ALIASES", 1)

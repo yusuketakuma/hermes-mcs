@@ -95,15 +95,14 @@ def _alias_table(dictionary, deadline):
     key = (dictionary.dict_id, dictionary.sha256)
     if _TABLE[0] == key:
         return None if _TABLE[1] is None or _TABLE[3] > MAX_ALIASES else (_TABLE[1], _TABLE[2])
-    aliases, scanned, partial = {}, 0, False
-    for entry in dictionary.entries.values():
-        if entry.kind == "class":
-            continue
+    entries = [entry for entry in dictionary.entries.values() if entry.kind != "class"]
+    scanned = sum(len(entry.aliases) for entry in entries)
+    if scanned > MAX_ALIASES:
+        _TABLE[:] = [key, None, False, scanned]
+        return None
+    aliases, partial = {}, False
+    for entry in entries:
         for alias in entry.aliases:
-            scanned += 1
-            if scanned > MAX_ALIASES:
-                _TABLE[:] = [key, None, False, scanned]
-                return None
             if time.monotonic() >= deadline:
                 return None
             if (not 2 <= len(alias) <= 80 or not _safe_label(alias) or any(c in "<>" for c in alias)
