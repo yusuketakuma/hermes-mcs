@@ -167,10 +167,13 @@ def test_latest_scan_lookup_skips_other_kind_rows(tmp_path):
     # Newer artifacts of other kinds must not be visited by the latest check.
     for _ in range(1500):
         ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
-    plan = db.execute(
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
-        + patient_context_status.latest_current_pred(), (context.SCAN, context.SCAN)).fetchall()
-    assert any('idx_artifacts_lookup' in row[3] and 'SEARCH b' in row[3] for row in plan)
+    explain = ("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+               + patient_context_status.latest_current_pred())
+    plan = db.execute(explain, (context.SCAN,) * explain.count('?')).fetchall()
+    # The old per-candidate NOT EXISTS is a correlated subquery on any plan;
+    # the grouped maximum is one uncorrelated list pass.
+    assert any('LIST SUBQUERY' in row[3] for row in plan)
+    assert not any('CORRELATED' in row[3] for row in plan)
     result, steps = _steps(db, context.lane_metrics)
     assert result['lanes']['C'] == {'length_stop': 0, 'unsupported': 0, 'other_failure': 0,
                                     'split': 0, 'repair': 0}
@@ -213,15 +216,18 @@ def test_latest_scan_lookup_stays_linear_with_same_kind_history(tmp_path):
     # Newer artifacts of other kinds must not be visited at all.
     for _ in range(1500):
         ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
-    plan = db.execute(
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
-        + patient_context_status.latest_current_pred(), (context.SCAN, context.SCAN)).fetchall()
-    assert any('idx_artifacts_lookup' in row[3] and 'SEARCH b' in row[3] for row in plan)
+    explain = ("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+               + patient_context_status.latest_current_pred())
+    plan = db.execute(explain, (context.SCAN,) * explain.count('?')).fetchall()
+    assert any('LIST SUBQUERY' in row[3] for row in plan)
+    assert not any('CORRELATED' in row[3] for row in plan)
     result, steps = _steps(db, context.lane_metrics)
     assert result['quality'] == {'none': 0, 'pending': 1, 'deferred': 1, 'held': 3,
                                  'failed': 1, 'unavailable': 0, 'unknown': 0,
                                  'budget': 0, 'disabled': 0, 'other': 0}
-    assert steps < 300000, steps   # ~97k for one pass over 600 rows; the rescan plan was 3.49M
+    # ~97k for one grouped pass; the correlated rescan was 205k on this corpus
+    # and ~3.49M under the same-kind index hint codex1 measured.
+    assert steps < 150000, steps
     ledger.close()
 
 
