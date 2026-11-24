@@ -20,7 +20,7 @@ from mcs_util import load_config, strict_json
 from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
 import semantic_runtime as runtime
-from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config
+from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config, waits_for_jev_quota
 
 QC_MAX_ITEMS = 16
 # Audited sections in round-robin order; allergies come last so earlier
@@ -382,6 +382,11 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             jev_client.last_error = error
         from semantic_audit import jev_skip_reason
         reason = jev_skip_reason(error)
+        if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
+            # QC has no resumable partial row: the job stays due, uncharged.
+            if diagnostics is not None:
+                diagnostics["jev_wait"] = reason
+            return "deferred"
         if reason is not None and hasattr(error, "partial_answers"):
             return write_skip(reason, error.partial_answers)
         cls = jev.failure_class(error)

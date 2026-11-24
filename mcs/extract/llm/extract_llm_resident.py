@@ -96,10 +96,11 @@ def _background_semantic(ledger, stop=None):
     """Serve the oldest semantic/QC work: one job, or a bounded drain when it needs Jev alone."""
     import semantic_drain
     cfg = load_config()
-    budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
     jev_only = _jev_only_semantic(cfg)
-    if jev_only:
-        budget = max(budget, _JEV_DRAIN_BUDGET_S)
+    # The drain's wall-clock cap is its own: each job keeps its per-job
+    # budget inside it, and a Jev-only job needs only Jev start room.
+    budget = (_JEV_DRAIN_BUDGET_S if jev_only
+              else semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30)
     # Called only when this worker has no carry work: a bounded wait is
     # free capacity the old non-blocking try always missed under a busy
     # lock. Keep room for one job so an acquired lock is never spent on

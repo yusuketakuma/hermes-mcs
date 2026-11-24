@@ -17,7 +17,7 @@ from mcs_util import load_config, strict_json
 from inference_version import (CURRENT_VERSION, is_current,
                                current_meta_pred, read_version, LEGACY_VERSION)
 import semantic_runtime as runtime
-from semantic_policy import (JOB_KIND, QC_JOB_KIND, runtime_config)
+from semantic_policy import (JOB_KIND, QC_JOB_KIND, needs_local_model, runtime_config)
 import semantic_notice
 
 from semantic_reprocess import (
@@ -398,7 +398,10 @@ _LONG_START_S = 60.0
 def _backlog_commit_reserve(scfg: dict) -> float:
     """The commit reserve the job budget affords while a long-output call
     still fits the work window: full from a ~1220 s budget, partial below
-    (220 s at 900 s), never squeezing the long call out."""
+    (220 s at 900 s), never squeezing the long call out. Jobs with no
+    local-model stage make no long call and keep the short-budget timing."""
+    if not needs_local_model(scfg):
+        return 0.0
     budget = float(scfg["job_budget_seconds"])
     return min(BACKLOG_COMMIT_RESERVE_S,
                max(0.0, budget - semantic_transport.LONG_MIN_CALL_S - _LONG_START_S))

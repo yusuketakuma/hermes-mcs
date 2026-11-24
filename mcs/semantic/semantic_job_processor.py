@@ -20,7 +20,7 @@ import semantic_publication as v4
 import semantic_conversion as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_loops import update_loops
-from semantic_policy import (KIND_ASSESS, KIND_AUDIT, needs_local_model,
+from semantic_policy import (KIND_ASSESS, KIND_AUDIT, needs_local_model, waits_for_jev_quota,
                              KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
                              KIND_DRAIN_RUN, KIND_FACT_PROJ,
                              KIND_FACTS, KIND_FACTS_V2,
@@ -530,6 +530,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             if target_verdicts is None:
                 error = getattr(jev_client, "last_error", None)
                 reason = semantic_audit.jev_skip_reason(error)
+                if reason == "daily_budget" and waits_for_jev_quota(scfg, lane):
+                    # _assess_target kept the answers obtained so far on its
+                    # wait row; the next quota window asks only the rest.
+                    diagnostics["jev_wait"] = reason
+                    incomplete = resource_wait = True
+                    break
                 if not hasattr(error, "partial_verdicts") or getattr(error, "partial_invalid", False):
                     reason = None
                 if reason is None:

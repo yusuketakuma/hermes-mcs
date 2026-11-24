@@ -3,6 +3,7 @@ resident turn, ahead of the local-model turn, still stopped by the Jev daily
 cap and backlog reserve; QC and semantic share the backlog window fairly.
 
 Synthetic only: temp ledger, Jev/LLM stubs, no services."""
+import json
 import os
 import time
 
@@ -12,6 +13,7 @@ import extract_llm
 import extract_llm_resident
 import semantic_drain
 import semantic_due_selection
+import semantic_jev
 import semantic_policy
 import writer_lock
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -198,3 +200,98 @@ def test_served_jobs_advance_the_fair_share(monkeypatch):
     assert turn["since_qc"] == semantic_due_selection._QC_FAIR_EVERY - 1   # bounded
     semantic_due_selection._note_backlog_turn(semantic_drain.QC_JOB_KIND)
     assert turn["since_qc"] == 0
+
+
+class _CappedJev(_FakeJev):
+    """Honors the per-pass request_cap the drain sets, as JevClient does."""
+    request_cap = None
+
+    def evaluate(self, state, questions, deadline):
+        if self.request_cap is not None and self.requests_made >= self.request_cap:
+            raise semantic_jev.JevError("budget_exceeded", "daily_cap", retryable=True)
+        return super().evaluate(state, questions, deadline)
+
+
+def _usage(monkeypatch, value):
+    monkeypatch.setattr(semantic_drain, "jev_usage_today", lambda ledger: value)
+
+
+def test_mid_job_daily_cap_leaves_the_semantic_job_due_with_its_answers(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        p = _patient(db, 1)
+        p.messages = [_message(10, pid=1)]
+        db.save_patient(p, notify={"source": "unread"}, semantic=True)
+        # 12 propositions in 3 requests; the backlog lane has 2 requests left
+        cfg = _cfg("shadow", budget=10, max_questions_per_request=4, **JEV_ONLY)
+        _usage(monkeypatch, 7)
+        jev = _CappedJev()
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert jev.requests_made == 2
+        assert out["done"] == 0 and out["budget_exhausted"] is True
+        job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                            (semantic_drain.JOB_KIND,)).fetchone()
+        assert tuple(job) == ("pending", 0)
+        rows = db.db.execute("SELECT content,meta FROM artifacts WHERE kind=?",
+                             (semantic_policy.KIND_ASSESS,)).fetchall()
+        assert all(json.loads(r["meta"])["technical_status"] != "skipped" for r in rows)
+        assert len(json.loads(rows[-1]["content"])["verdicts"]) == 8
+        # the next quota window asks only the unanswered propositions
+        _usage(monkeypatch, 0)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=0")
+        jev = _CappedJev()
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert out["done"] == 1 and jev.requests_made == 1
+    finally:
+        db.close()
+
+
+def test_mid_job_daily_cap_leaves_the_qc_job_due_and_uncharged(tmp_path, monkeypatch):
+    from extract_testkit import _hash, _v2_artifact
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1)])
+        content = {"meds": [{"name": f"合成薬M{i}", "action": "start", "subject": "patient"}
+                            for i in range(3)], "urgency": "routine"}
+        _v2_artifact(db, 1, _hash(db), content=content)
+        cfg = _cfg("shadow", budget=10, max_questions_per_request=1, extract_qc="annotate", **JEV_ONLY)
+        _usage(monkeypatch, 7)
+        jev = _CappedJev()
+        out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                                     jev_client=jev, llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+        assert jev.requests_made == 2
+        assert out["done"] == 0 and out["budget_exhausted"] is True
+        job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind=?",
+                            (semantic_drain.QC_JOB_KIND,)).fetchone()
+        assert tuple(job) == ("pending", 0)
+        assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind IN ('extract_qc','extract_qc_skipped')"
+                                 ).fetchall()
+    finally:
+        db.close()
+
+
+def test_a_long_job_budget_does_not_stretch_the_drain_or_block_its_jobs(threads, monkeypatch):
+    cfg = _cfg("shadow", job_budget_seconds=1260, **JEV_ONLY)
+    run_due = semantic_drain.run_due
+    drain = _background(monkeypatch, cfg)
+    assert drain["budget"] <= extract_llm_resident._JEV_DRAIN_BUDGET_S
+    scfg = semantic_policy.semantic_config(cfg)[0]
+    assert semantic_drain._backlog_commit_reserve(scfg) == 0.0
+    out = run_due(threads, cfg, {"errors": []},
+                  time.monotonic() + extract_llm_resident._JEV_DRAIN_BUDGET_S,
+                  jev_client=_FakeJev(), llm_fn=_no_local_model, lane="backlog", max_jobs=8)
+    assert out["done"] == 4 and not out["floor_skipped"]
+
+
+@pytest.mark.parametrize("stages,runs", [(JEV_ONLY, True), ({}, False)])
+def test_local_breaker_stops_only_work_that_needs_the_local_model(threads, monkeypatch, stages, runs):
+    monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda db: 120)
+    with threads.db:
+        threads.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.eligible',1)")
+    out = semantic_drain.run_due(threads, _cfg("shadow", **stages), {"errors": []}, time.monotonic() + 300,
+                                 jev_client=_FakeJev(), llm_fn=_no_local_model, lane="realtime", max_jobs=4)
+    assert (out["done"] == 4) is runs
+    assert ("circuit_open_s" in out) is not runs
