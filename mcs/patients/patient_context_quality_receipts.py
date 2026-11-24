@@ -60,6 +60,44 @@ def _profiled_summary_repair_exists(db, pid, input_key):
     return False
 
 
+# The confirmed reads below hydrate, bind and prove whole message rows for the
+# audit; each returns every column including ``updated_seen``, the maintenance
+# stamp a re-observation rewrites on every fetch. Only these reads may drop it
+# at this boundary: any other SQL — an explicit ``SELECT updated_seen``, or a
+# column merely named updated_seen — keeps raw-value matching.
+_SEEN_FULL_READS = frozenset({
+    "SELECT m.*,length(m.body_text) AS body_length FROM messages m WHERE project_id=? ORDER BY message_id",
+    "SELECT m.*,length(m.body_text) AS body_length FROM messages m "
+    "WHERE project_id=? AND message_id=? ORDER BY message_id",
+    "SELECT a.content,a.meta,a.model,m.* FROM artifacts a JOIN messages m "
+    "ON a.message_id=m.message_id AND (a.project_id IS NULL OR a.project_id=m.project_id) "
+    "WHERE a.artifact_id=? AND a.kind='extract_llm'",
+    "SELECT * FROM messages WHERE message_id IN (SELECT value FROM json_each(?))",
+})
+
+
+def _seen_narrowed_sql(sql, columns):
+    """The confirmed read returning the same rows without ``updated_seen``."""
+    if "m.*" in sql:
+        return sql.replace("m.*", ",".join("m." + column for column in columns), 1)
+    return sql.replace("SELECT *", "SELECT " + ",".join(columns), 1)
+
+
+class _SeenNarrowingDb:
+    """Forward everything to the reader connection except the confirmed reads."""
+    __slots__ = ("_db", "_narrowed")
+
+    def __init__(self, db, narrowed):
+        self._db = db
+        self._narrowed = narrowed
+
+    def execute(self, sql, parameters=()):
+        return self._db.execute(self._narrowed.get(sql, sql), parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 def _quality_read(ledger, deadline, read):
     """Seal the observed rows, keeping the original version fence for unrecordable reads."""
     from patient_context_refresh_sources import _candidate_reader, _scan_writer_wait
@@ -74,7 +112,11 @@ def _quality_read(ledger, deadline, read):
     if db.execute("PRAGMA database_list").fetchone()[2]:
         try:
             with _candidate_reader(ledger, deadline) as reader:
-                with Recording(reader.db, message_seen_volatile=True) as recording:
+                with Recording(reader.db) as recording:
+                    columns = [row[1] for row in reader.db.execute("PRAGMA table_info(messages)")
+                               if row[1] != "updated_seen"]
+                    narrowed = {sql: _seen_narrowed_sql(sql, columns) for sql in _SEEN_FULL_READS}
+                    reader.db = _SeenNarrowingDb(reader.db, narrowed)
                     value = read(reader)
                     witness = recording.seal()
         except sqlite3.DatabaseError as error:
