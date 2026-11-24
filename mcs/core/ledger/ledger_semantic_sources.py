@@ -353,7 +353,8 @@ class LedgerSemanticSourcesMixin:
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
         import semantic_intake_hold
         import semantic_notice
-        # Pause holds execution, not durable intake; OFF callers do not seed.
+        # Pause holds execution, not durable intake; callers with no result
+        # reader (semantic_policy.primary_verdicts_consumed) do not seed.
         if not message_ids:
             return
         semantic_intake_hold.validate_indexes(self.db)

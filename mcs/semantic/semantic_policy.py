@@ -320,9 +320,11 @@ def primary_verdicts_consumed(scfg: dict) -> bool:
     """Whether a feature reads semantic job results: only summaries and loops use them.
 
     Those are also the only stages after the Jev assessment, and the only
-    ones that call the local model. Without such a reader no semantic job is
-    queued, re-queued or run and patient context never waits on one;
-    extraction QC keeps its own lane."""
+    ones that call the local model. Without such a reader intake, explicit
+    reruns and reprocessing queue no semantic job, none is run and patient
+    context never waits on one; a confirmed intake-hold release still
+    replaces its held job, which then waits unrun. Extraction QC keeps its
+    own lane."""
     return scfg["mode"] != "off" and (scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off")
 
 

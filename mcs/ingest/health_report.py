@@ -539,9 +539,10 @@ def transfer_review_holds(cfg) -> list:
     is configured. Otherwise a cloud provider or Jev that the recorded review
     does not name is reported when its valid configuration would send with a
     patient in scope once approved; without a record nothing is withheld. An
-    explicit mode is reported whether or not its key is present: the missing
-    key is named (cloud_llm_no_api_key, semantic_jev_no_api_key) once the
-    review allows the send, while an omitted mode is held only with a key."""
+    explicit mode is reported whether or not its key is present, while an
+    omitted mode is held only with a key. A missing key is not a reason here:
+    cloud_stop_reason and the Jev block reasons report it once the review
+    allows the send."""
     import cloud_policy
     import external_transfer
     import semantic_policy
