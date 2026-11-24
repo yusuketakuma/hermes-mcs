@@ -146,6 +146,24 @@ _LEFT_ESTIMATE: dict = {}
 _LEFT_ESTIMATE_S = 600.0
 
 
+# A unit that fails the take-time permit re-proof is skipped for the rest of
+# the process, keyed by its approval command_id so a newer approval re-proves
+# at once. With no expiry, the bounded fan-out advances past a run of lapsed
+# heads to the tail regardless of how much time passes between passes.
+# An UNVERIFIED verdict, though, is transient — a dropped read mid-check —
+# not a state: it is skipped only for the one take after the round that saw
+# it, so a stalled read cannot park a live approval forever while the take
+# still moves on to the candidates behind it.
+_reproof_misses: dict = {}
+_reproof_round = 0
+
+
+# approved_adm_ids default: inherit the walk's (possibly windowed) admission.
+# An explicit None means the take's cohort is unlimited; an explicit set —
+# even an empty one — is a closed gate.
+_INHERIT_ADM = object()
+
+
 def _left_estimate_key(ledger) -> str:
     try:
         return ledger.db.execute("PRAGMA database_list").fetchone()[2] or ""
@@ -567,7 +585,9 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
                     cloud_only: bool = False, deadline: float | None = None,
-                    exclude_ids=None) -> tuple[list, int | None]:
+                    exclude_ids=None, approved_first: bool = False,
+                    approved_fill: bool = False,
+                    approved_adm_ids=_INHERIT_ADM) -> tuple[list, int | None]:
     deadline = deadline if cloud_only else None
     reader = None
     owner = ledger
@@ -602,6 +622,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                 archived_first=archived_first, fair_oldest=fair_oldest,
                 prioritize_patients=prioritize_patients, cloud_only=cloud_only,
                 receipt_check=receipt_check, deadline=deadline,
+                approved_first=approved_first, approved_fill=approved_fill,
+                approved_adm_ids=approved_adm_ids,
                 **({"exclude_ids": exclude_ids} if exclude_ids else {}))
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
@@ -639,7 +661,10 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          oldest_first: bool, *, archived_first: bool = False,
                          fair_oldest: bool = False, prioritize_patients: bool = False,
                          cloud_only: bool = False, receipt_check=None,
-                         deadline: float | None = None, exclude_ids=None) -> tuple[list, int | None]:
+                         deadline: float | None = None, exclude_ids=None,
+                         approved_first: bool = False,
+                         approved_fill: bool = False,
+                         approved_adm_ids=_INHERIT_ADM) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -655,29 +680,50 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never grant it an exception. Explicit admission sets from callers
     # stay inside the query so a large backlog cannot starve an admitted
     # message behind the LIMIT.
-    adm_sql = ""
-    adm_params: list = []
+    ids_sql = ""
+    ids_params: list = []
     if admitted_ids is not None:
         if len(admitted_ids) <= 30000:
             marks = ",".join("?" * len(admitted_ids)) or "NULL"
-            adm_sql = f" AND m.message_id IN ({marks})"
-            adm_params = sorted(admitted_ids)
+            ids_sql = f" AND m.message_id IN ({marks})"
+            ids_params = sorted(admitted_ids)
         else:
             # One JSON parameter keeps the admission gate before LIMIT
             # even when the manifest exceeds SQLite's variable limit.
-            adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
-            adm_params = [json.dumps(sorted(admitted_ids))]
+            ids_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
+            ids_params = [json.dumps(sorted(admitted_ids))]
+    adm_sql = ids_sql
+    adm_params = list(ids_params)
+    # approved_adm_ids is the take's cohort, kept distinct from the walk's
+    # admission: a caller that narrows admitted_ids to an arrival window
+    # passes the full set here so the approval take stays cohort-gated
+    # without joining the window. The default inherits the walk's admission;
+    # an explicit None lifts the gate entirely (an unlimited admission admits
+    # the approval too); an explicit empty set keeps it closed.
+    take_sql = ""
+    take_params: list = []
+    if approved_adm_ids is _INHERIT_ADM:
+        take_sql, take_params = ids_sql, list(ids_params)
+    elif approved_adm_ids is not None:
+        take_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
+        take_params = [json.dumps(sorted(approved_adm_ids))]
     if exclude_ids:
         if cloud_only:
             raise ValueError("cloud_selection_exclusion_invalid")
         # Only pass-local refusals are excluded; admission, source, shard and
         # quality gates remain in this same query before its SQL limit.
-        adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
-        adm_params.append(json.dumps(sorted(exclude_ids)))
+        tail_sql = " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+        tail_params = [json.dumps(sorted(exclude_ids))]
+    else:
+        tail_sql, tail_params = "", []
     # A closed extract.upgrade_scope keeps earlier-generation posts out of
     # both lanes before LIMIT; an open scope adds nothing to the SQL.
     scope_sql = upgrade_scope.selection_sql(upgrade_scope.live(), "llm")
-    adm_sql += scope_sql
+    tail_sql += scope_sql
+    adm_sql += tail_sql
+    adm_params += tail_params
+    take_sql += tail_sql
+    take_params += tail_params
     required_contract = None
     if cloud_only:
         raw_cfg = load_config()
@@ -713,19 +759,23 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     # Every approved local rebuild (active, adopted or lapsed and held) stays off the cloud
-    # follow-up: an approval never hands its unit back to the cloud.
+    # follow-up: an approval never hands its unit back to the cloud. The local
+    # walk uses the same set to lift approved units out of backlog order.
     try:
-        rebuilds = local_rebuild.approved_units(ledger.db) if cloud_only else {}
+        rebuilds = local_rebuild.approved_units(ledger.db)
     except sqlite3.Error:
-        raise _CloudSelectionIncomplete('reader_unavailable') from None
+        if cloud_only:
+            raise _CloudSelectionIncomplete('reader_unavailable') from None
+        rebuilds = {}   # unreadable approvals grant nothing; prepare decides the rest
 
-    def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
+    def _select(fresh, n, archived, rehold=None, scope="", scope_params=(), adm=None):
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
-        cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
+        sql, params = adm if adm is not None else (adm_sql, adm_params)
+        cursor = ledger.db.execute(_selection_sql(ledger.db, order, sql + scope,
                                                fresh, archived, rehold, bounded=not cloud_only,
                                                prioritize_patients=prioritize_patients, cloud_followup=cloud_only), (
-            *adm_params, *scope_params,
+            *params, *scope_params,
             shard[1] if shard else None,
             shard[1] if shard else 1,
             shard[0] if shard else 0,
@@ -867,6 +917,85 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
+    # An approved local rebuild is pending backlog the drainer serves on its
+    # non-dedicated turns: a normal pass lifts it to the head
+    # (approved_first), and a windowed pass — admitted_ids narrowed to the
+    # caller's arrival set — fills only the slots real arrivals leave
+    # (approved_fill). The admission set itself keeps the arrivals
+    # independent: a notified row always outranks an approval, and an
+    # approved unit that is itself notified competes as an ordinary
+    # arrival. Dedicated oldest/fair/archive turns and every
+    # non-background path keep their own selection. The same eligibility,
+    # admission, claim-lease and retry gates apply — only the posted_at
+    # order moves — and a unit re-proves ACTIVE under permit before being
+    # taken; the candidate read fans out by a small bounded factor and a
+    # unit that fails re-proof stays skipped for the rest of the process,
+    # so the per-unit re-verification never re-scans the same head of the
+    # receipt history on any later pass.
+    approved_scope = None
+    if ((approved_first or approved_fill)
+            and not oldest_first and not archived_first
+            and not cloud_only and rebuilds):
+        approved_scope = (" AND m.message_id IN (SELECT value FROM json_each(?))",
+                          [json.dumps(sorted(mid for _pid, mid in rebuilds))])
+
+    def _approved_take(n):
+        """Up to n approved candidates in walk order, each re-proven ACTIVE.
+        Rows already selected this pass are excluded so a notified approval
+        is never taken — or counted — twice. A candidate that fails the
+        re-proof for a hard verdict is skipped for the rest of the process
+        while its approval command stands, so a run of lapsed heads cannot
+        pin the same bounded fan-out on a later pass. A transient
+        UNVERIFIED skips only the next take: after one round it is re-proven,
+        so a one-off read failure heals without a restart or a re-approval
+        (the receipts API refuses a duplicate approval of the same post)."""
+        global _reproof_round
+        _reproof_round += 1
+        rnd = _reproof_round
+        if approved_scope is None or n <= 0:
+            return []
+        scope, params = approved_scope
+        # a miss sticks only while the same approval command is current:
+        # a superseding command_id re-proves on the very next take
+        skip = sorted({row["message_id"] for row in rows}
+                      | {mid for pid, mid, cmd in _reproof_misses
+                         if (unit := rebuilds.get((pid, mid))) is not None
+                         and unit["command_id"] == cmd
+                         and ((missed := _reproof_misses[(pid, mid, cmd)]) is True
+                              or rnd <= missed)})
+        if skip:
+            scope += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+            params = [*params, json.dumps(skip)]
+        taken = []
+        # the take always uses its own cohort gate — an empty take_sql is an
+        # explicit unlimited cohort, not a fall-back to the walk's window
+        for cand in _select(None, n * 4, None, scope=scope, scope_params=params,
+                            adm=(take_sql, take_params)):
+            verdict = local_rebuild.permit(ledger, cand["project_id"],
+                                           cand["message_id"], approvals=rebuilds)
+            if verdict == local_rebuild.ACTIVE:
+                taken.append(cand)
+                if len(taken) >= n:
+                    break
+            else:
+                unit = rebuilds.get((cand["project_id"], cand["message_id"]))
+                if unit is not None:
+                    _reproof_misses[(cand["project_id"], cand["message_id"],
+                                     unit["command_id"])] = (
+                        rnd + 1 if verdict == local_rebuild.UNVERIFIED else True)
+        return taken
+
+    if approved_first and approved_scope is not None:
+        selected = _approved_take(limit - len(rows))
+        if selected:
+            rows += selected
+            if fresh_selected is not None:
+                fresh_selected += ledger.db.execute(
+                    "SELECT COUNT(*) FROM messages m WHERE m.message_id IN "
+                    "(SELECT value FROM json_each(?)) AND " + _FRESH_SQL,
+                    (json.dumps([r["message_id"] for r in selected]),)).fetchone()[0]
+            adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+            adm_params.append(json.dumps(sorted({r["message_id"] for r in selected})))
     # Active patients normally precede archived ones; the resident's
     # archive fairness turn reverses those classes. Each class keeps its
     # usual fresh/re-extraction order, except that a fair oldest turn
@@ -895,4 +1024,15 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 rows += selected
                 if fresh_selected is not None and fresh:
                     fresh_selected += len(selected)
+    if approved_fill and len(rows) < limit:
+        # the recent window is drained: leftover slots may serve approved
+        # units (still admission-gated, still re-proven ACTIVE)
+        taken = _approved_take(limit - len(rows))
+        if taken:
+            rows += taken
+            if fresh_selected is not None:
+                fresh_selected += ledger.db.execute(
+                    "SELECT COUNT(*) FROM messages m WHERE m.message_id IN "
+                    "(SELECT value FROM json_each(?)) AND " + _FRESH_SQL,
+                    (json.dumps([r["message_id"] for r in taken]),)).fetchone()[0]
     return rows, fresh_selected

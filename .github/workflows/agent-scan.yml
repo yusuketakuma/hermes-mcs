@@ -64,7 +64,7 @@ jobs:
           echo "対象: ${areas:-なし（未確認の自動スキャン Issue が上限に達しているので調べません）}" >> "$GITHUB_STEP_SUMMARY"
       - id: claude
         if: steps.plan.outputs.areas != ''
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@f3b070c88125d33dbae5653df5f143101d4ea9dc  # v1.0.276
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The workflow token, read-only here: the scan cannot push, comment or file anything itself.

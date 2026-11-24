@@ -67,14 +67,14 @@ def valid_receipt(value):
 
 
 def database_identity(db):
-    """Pin the current file; supported database restores replace its inode."""
+    """Pin the current file by inode: restores replace it, while a reboot or remount only renumbers st_dev."""
     path = next((row[2] for row in db.execute('PRAGMA database_list') if row[1] == 'main'), None)
     if not path:
         raise ValueError('ocr_ack_database_unverified')
     info = os.stat(path, follow_symlinks=False)
     if not stat.S_ISREG(info.st_mode):
         raise ValueError('ocr_ack_database_unverified')
-    return payload_hash([info.st_dev, info.st_ino])
+    return payload_hash([info.st_ino])
 
 
 def _failure_target(db, artifact_id):

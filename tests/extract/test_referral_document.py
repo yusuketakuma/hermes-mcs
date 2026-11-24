@@ -51,7 +51,17 @@ def test_narrative_is_not_a_document(text):
     ("2020年2月", "2020-02", "month", True),
     ("2月29日", "--02-29", "month_day", True),
     ("2023年2月29日", None, "day", False),
+    ("2024年2月29日", "2024-02-29", "day", True),
     ("2026年13月", None, "month", False),
+    ("2026年00月", None, "month", False),
+    ("2026年00月1日", None, "day", False),
+    ("2026年11月0日", None, "day", False),
+    ("2026年00月00日", None, "day", False),
+    ("２０２６年００月００日", None, "day", False),
+    ("2026-00-01", None, "day", False),
+    ("2026/11/00", None, "day", False),
+    ("0月1日", None, "month_day", False),
+    ("11月0日", None, "month_day", False),
     ("令和元年5月1日", "2019-05-01", "day", True),
     ("令和元年4月30日", None, "day", False),
     ("平成31年5月1日", None, "day", False),
@@ -61,14 +71,12 @@ def test_narrative_is_not_a_document(text):
     ("大正元年7月30日", "1912-07-30", "day", True),
     ("明治45年7月30日", None, "day", False),
     ("令和0年", None, "year", False),
-    ("2026年00月00日", None, "day", False),
-    ("2026年11月0日", None, "day", False),
     ("2026年0月", None, "month", False),
-    ("２０２６年００月００日", None, "day", False),
     ("令和8年00月00日", None, "day", False),
     ("令和8年11月0日", None, "day", False),
     ("2026/00/00", None, "day", False),
-    ("2024年2月29日", "2024-02-29", "day", True),
+    ("令和8年00月", None, "month", False),
+    ("令和８年１１月０日", None, "day", False),
 ])
 def test_dates_keep_precision_and_validate_calendar_and_era(raw, value, precision, valid):
     row = _project("紹介状\n現病歴：" + raw + " 合成所見")["events"][0]
@@ -81,6 +89,23 @@ def test_header_dates_same_line_and_no_year_imputation():
     assert [r["dates"][0]["role"] for r in result["fields"] if r["dates"]][:2] == ["document", "birth"]
     assert result["events"][0]["time"]["value"] == "--11-01"
     assert result["events"][1]["time"] is None
+
+
+def test_zero_component_keeps_candidate_ambiguous_and_source_intact():
+    result = _project("紹介状\n現病歴：2026年00月00日と2026年11月1日 合成所見\n")
+    row = result["events"][0]
+    assert row["time_state"] == "ambiguous" and row["time"] is None
+    assert [d["raw"] for d in row["dates"]] == ["2026年00月00日", "2026年11月1日"]
+    assert row["dates"][0]["valid"] is False and row["dates"][0]["value"] is None
+    assert "2026年00月00日" in row["text"]
+
+
+def test_zero_date_in_header_fields_is_not_an_event():
+    result = _project("紹介状\n生年月日：2026年00月00日\n文書作成日：2026年11月0日\n")
+    assert not result["events"]
+    dates = [d for row in result["fields"] for d in row["dates"]]
+    assert [d["role"] for d in dates] == ["birth", "document"]
+    assert all(d["valid"] is False and d["value"] is None for d in dates)
 
 
 def test_range_multiple_dates_and_repeated_same_day():

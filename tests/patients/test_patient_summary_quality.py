@@ -241,6 +241,32 @@ def test_quality_denominator_keeps_historical_karte(tmp_path):
         led.close()
 
 
+def test_quality_read_rejects_expired_proof_and_foreign_database(runtime, tmp_path, monkeypatch):
+    import patient_context_refresh_sources
+
+    led, clock, _ = runtime
+    led.ensure_patient(1)
+    def read(reader):
+        return reader.db.execute('SELECT project_id FROM patients ORDER BY project_id').fetchall()
+    _, matches = patient_context_quality_receipts._quality_read(led, clock.mono + 60, read)
+    assert matches()
+    clock.mono += 60
+    assert not matches()
+
+    foreign_path = tmp_path / 'foreign'
+    foreign_path.mkdir()
+    foreign = _ledger(foreign_path)
+    try:
+        foreign.ensure_patient(2)
+        candidate = patient_context_refresh_sources._candidate_reader
+        monkeypatch.setattr(patient_context_refresh_sources, '_candidate_reader',
+                            lambda _owner, deadline: candidate(foreign, deadline))
+        with pytest.raises(ValueError, match='patient_summary_quality_source_changed'):
+            patient_context_quality_receipts._quality_read(led, clock.mono + 60, read)
+    finally:
+        foreign.close()
+
+
 def test_quality_answer_checkpoint_is_claimed_idempotent_and_source_fenced(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     try:
@@ -621,6 +647,40 @@ def test_failed_candidate_repairs_once_and_resume_reuses_saved_ids(repair):
     assert proof is not None and result.get('repair_ref')
     assert '合成の重要な変更。' not in saved['content']
     assert run() == ('candidate', result) and len(sent) == 1
+
+
+@pytest.mark.parametrize('change_answer', [False, True])
+def test_repair_reservation_revalidates_only_its_original_answers(repair, monkeypatch, change_answer):
+    from contextlib import closing
+    import sqlite3
+
+    led, run, _, _, sent, _, _ = repair
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    marker = led.artifact_add('synthetic_other', '{}', project_id=2)
+    acquire = patient_context_quality_receipts._acquire
+    changed = []
+
+    def intervene(*args, **kwargs):
+        if not changed:
+            with closing(sqlite3.connect(path)) as other, other:
+                if change_answer:
+                    rows = other.execute("UPDATE artifacts SET content='{}' WHERE kind=? AND project_id=1",
+                                         (patient_context_refresh_state.QUALITY,)).rowcount
+                    assert rows > 0
+                else:
+                    other.execute("UPDATE artifacts SET content='changed' WHERE artifact_id=?", (marker,))
+            changed.append(True)
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(patient_context_quality_receipts, '_acquire', intervene)
+    status, result = run()
+    assert changed
+    if change_answer:
+        assert status == 'deferred' and not sent
+        assert not led.artifacts('cloud_usage_reserve')
+    else:
+        assert status == 'candidate' and len(sent) == 1
+        assert run() == ('candidate', result) and len(sent) == 1
 
 
 @pytest.mark.parametrize('damage', ['none', 'answer', 'receipt', 'audit'])

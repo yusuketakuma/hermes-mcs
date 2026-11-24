@@ -14,9 +14,9 @@ AnthropicError = CloudError
 MODEL = "claude-haiku-5-5"
 ENDPOINT = bounded_http.ANTHROPIC_ENDPOINT
 KEY_ENV = "MCS_ANTHROPIC_API_KEY"
-PRICE_VERSION = "anthropic-haiku-5-5-2026-11-15"
-PRICE_CHECKED_ON = "2026-11-15"
-PRICE_VALID_UNTIL = "2026-12-15"
+PRICE_VERSION = "anthropic-haiku-5-5-2026-11-24"
+PRICE_CHECKED_ON = "2026-11-24"
+PRICE_VALID_UNTIL = "2026-12-24"
 PRICE_SOURCES = (
     "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
     "https://platform.claude.com/docs/en/models/overview",
@@ -111,7 +111,7 @@ validate_usage = _validate_usage_20261026
 
 
 SONNET_MODEL = "claude-sonnet-5-5"
-SONNET_PRICE_VERSION = "anthropic-sonnet-5-5-2026-11-15"
+SONNET_PRICE_VERSION = "anthropic-sonnet-5-5-2026-11-24"
 # Sonnet 5.5 has one price tier (no long-input step): its long_* rates equal the
 # base rates and its threshold is the 1M input bound, so no request is "long".
 SONNET_PRICES_20261115 = MappingProxyType({"input": "2", "output": "10", "long_input": "2",
@@ -186,20 +186,27 @@ def _haiku_snapshot(price_version, checked_on, valid_until):
     })
 
 
-# The 2026-11-15 recheck found the 2026-10-26 Haiku table unchanged; the older
-# version stays so receipts reserved under it keep their original definition.
-PRICE_SNAPSHOTS = MappingProxyType({
-    ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-10-26"): _haiku_snapshot(
-        "anthropic-haiku-5-5-2026-10-26", "2026-10-26", "2026-11-25"),
-    ("claude-haiku-5-5", PRICE_VERSION): _haiku_snapshot(PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL),
-    (SONNET_MODEL, SONNET_PRICE_VERSION): MappingProxyType({
-        "provider": "anthropic", "model": SONNET_MODEL, "price_version": SONNET_PRICE_VERSION,
-        "price_checked_on": "2026-11-15", "price_valid_until": "2026-12-15",
+def _sonnet_snapshot(price_version, checked_on, valid_until):
+    return MappingProxyType({
+        "provider": "anthropic", "model": SONNET_MODEL, "price_version": price_version,
+        "price_checked_on": checked_on, "price_valid_until": valid_until,
         "price_sources": ("https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
                           "https://platform.claude.com/docs/en/about-claude/pricing"),
         "prices": SONNET_PRICES_20261115, "long_input_threshold": 1048576,
         "validate_usage": _validate_usage_20261026, "max_tokens": 128000, "legacy_reservation": False,
-    }),
+    })
+
+
+# Retain each issued price version for reservations created before a recheck.
+PRICE_SNAPSHOTS = MappingProxyType({
+    (MODEL, "anthropic-haiku-5-5-2026-10-26"): _haiku_snapshot(
+        "anthropic-haiku-5-5-2026-10-26", "2026-10-26", "2026-11-25"),
+    (MODEL, "anthropic-haiku-5-5-2026-11-15"): _haiku_snapshot(
+        "anthropic-haiku-5-5-2026-11-15", "2026-11-15", "2026-12-15"),
+    (MODEL, PRICE_VERSION): _haiku_snapshot(PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL),
+    (SONNET_MODEL, "anthropic-sonnet-5-5-2026-11-15"): _sonnet_snapshot(
+        "anthropic-sonnet-5-5-2026-11-15", "2026-11-15", "2026-12-15"),
+    (SONNET_MODEL, SONNET_PRICE_VERSION): _sonnet_snapshot(SONNET_PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL),
 })
 
 

@@ -660,6 +660,158 @@ def test_stale_patient_removed(env, tmp_path):
     assert not (out / "patients" / "p1.md").exists()
 
 
+def _lose_access(conn, state="ok", reason=None):
+    conn.execute("UPDATE patients SET fetch_state=?,fetch_reason=? "
+                 "WHERE project_id=1", (state, reason))
+
+
+@pytest.mark.parametrize(("state", "reason"), [
+    ("forbidden", None),
+    ("ok", "forbidden"),
+    ("ok", "permission_denied"),
+    ("ok", "access_revoked"),
+])
+def test_permission_lost_patient_page_removed_and_signals_excluded(
+        env, state, reason):
+    """権限喪失（fetch_state=forbidden または権限系 fetch_reason）で既存
+    ページは削除され、その患者の open signal は全出力面から外れる。"""
+    snap, out = env
+    brain_export.run(out, snap)
+    assert (out / "patients/p1.md").exists()
+    with sqlite3.connect(snap) as conn:
+        _lose_access(conn, state, reason)
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 0 and res["excluded"] == 1 and res["signals"] == 0
+    assert not (out / "patients/p1.md").exists()      # 既存ページ削除
+    signals = (out / "signals/latest.md").read_text()
+    assert "open候補なし" in signals and "rx_period_expiry" not in signals
+    assert all(r["type"] != "signal" for r in _jsonl(out))
+    meta = (out / "meta.md").read_text()
+    assert "excluded patients (権限喪失): 1" in meta  # meta.md に除外実人数
+    # 2回目のexportでも同じ結果（再選択で復活しない）
+    res2 = brain_export.run(out, snap)
+    assert res2["excluded"] == 1 and not (out / "patients/p1.md").exists()
+
+
+def test_permission_regained_regenerates_page_and_signals(env):
+    """復権（fetch_state が通常値へ戻る）でページと signal 出力が再生成される。"""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        _lose_access(conn, "forbidden")
+    brain_export.run(out, snap)
+    assert not (out / "patients/p1.md").exists()
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET fetch_state='ok',fetch_reason=NULL "
+                     "WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 1 and res["excluded"] == 0 and res["signals"] == 1
+    page = (out / "patients/p1.md").read_text()
+    assert PATIENT_NAME in page and "- archived: true" not in page
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert "excluded patients (権限喪失): 0" in (out / "meta.md").read_text()
+
+
+def test_archived_patient_keeps_normal_page_with_archived_line(env):
+    """権限のある archive（is_archived のみ）は通常出力 + archived: true 1行。"""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 1 and res["excluded"] == 0 and res["signals"] == 1
+    page = (out / "patients/p1.md").read_text()
+    assert "- archived: true" in page and "アーカイブ済み" not in page
+    assert PATIENT_NAME in page  # 内容は従来どおり通常出力
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert "excluded patients (権限喪失): 0" in (out / "meta.md").read_text()
+
+
+def test_permission_lost_missing_rollup_never_blocks_export(env):
+    """権限失効と rollup 一時欠落を分ける — 権限失効の患者は rollup が
+    無くても export を止めず、既存ページは削除される。"""
+    snap, out = env
+    brain_export.run(out, snap)
+    assert (out / "patients/p1.md").exists()
+    with sqlite3.connect(snap) as conn:
+        _lose_access(conn, "forbidden")
+        # A second, accessible patient with neither a message nor a rollup does not block export.
+        conn.execute("INSERT INTO patients(project_id, fetch_state) VALUES (2, 'ok')")
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 0 and res["excluded"] == 1
+    assert not (out / "patients/p1.md").exists()
+    # 権限のある患者の rollup 欠落は従来どおり全体を止める（仕様の区別）
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET fetch_state='ok' WHERE project_id=1")
+    with pytest.raises(ValueError, match="patient_rollup_missing"):
+        brain_export.run(out, snap)
+
+
+def test_permission_loss_exclusion_is_per_patient(env):
+    """除外は権限を失った患者だけ — 他患者のページと signal は残る。"""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute(
+            "INSERT INTO patients(project_id,project_type,patient_name,disease,"
+            "station_name,url,fetch_state,fetch_reason,last_complete_fetch,"
+            "last_seen,is_archived,created_at) "
+            "SELECT 2,project_type,'SYNTH patient B',disease,station_name,url,"
+            "fetch_state,fetch_reason,last_complete_fetch,last_seen,is_archived,"
+            "created_at FROM patients WHERE project_id=1")
+        roll = json.loads(conn.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup'")
+            .fetchone()[0])
+        roll["project_id"] = 2
+        conn.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+            "VALUES ('patient_rollup',2,?,?,?)",
+            (json.dumps(roll), json.dumps({VERSION_KEY: CURRENT_VERSION}),
+             SNAP_TS))
+        sig = json.loads(conn.execute(
+            "SELECT content FROM artifacts WHERE kind='signal_v1'")
+            .fetchone()[0])
+        sig["project_id"] = 2
+        conn.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+            "VALUES ('signal_v1',2,?,?,?)",
+            (json.dumps(sig), json.dumps({"key": "sig-2"}), SNAP_TS))
+        _lose_access(conn, "forbidden")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 1 and res["excluded"] == 1 and res["signals"] == 1
+    assert not (out / "patients/p1.md").exists()
+    assert "- archived: true" not in (out / "patients/p2.md").read_text()
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert [r["project_id"] for r in _jsonl(out) if r["type"] == "signal"] == [2]
+
+
+@pytest.mark.parametrize("visible", [1, 200, 201])
+def test_signal_limit_and_counts_apply_to_visible_patients(env, visible):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("INSERT INTO patients(project_id, fetch_state) VALUES (2, 'forbidden')")
+        signal = json.loads(conn.execute("SELECT content FROM artifacts WHERE kind='signal_v1'").fetchone()[0])
+        # The fixture has one visible signal. All excluded signals precede it in the public list.
+        for pid, count in ((1, visible - 1), (2, 200)):
+            conn.executemany(
+                "INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES ('signal_v1',?,?,?,?)",
+                ((pid, json.dumps({**signal, "project_id": pid, "detected_at": SNAP_TS - i + pid * 1000}),
+                  json.dumps({"key": f"synthetic-{pid}-{i}"}), SNAP_TS) for i in range(count)))
+
+    result = brain_export.run(out, snap)
+    assert result["signals"] == visible and result["excluded"] == 1
+    signals = (out / "signals/latest.md").read_text()
+    assert "open候補なし" not in signals and "| rx_period_expiry | 2 |" not in signals
+    assert signals.count("| rx_period_expiry | 1 |") == min(visible, 200)
+    assert ("truncated:" in signals) == (visible > 200)
+    records = _jsonl(out)
+    listed = [row for row in records if row["type"] == "signal"]
+    assert len(listed) == min(visible, 200) and all(row["project_id"] == 1 for row in listed)
+    assert [row["total"] for row in records if row["type"] == "signals_truncated"] == (
+        [visible] if visible > 200 else [])
+    stats = (out / "stats/latest.md").read_text().splitlines()
+    metric = next(line for line in stats if "mcs.signals.open" in line)
+    assert f"| {visible} | count |" in metric
+
+
 def test_not_a_snapshot(tmp_path):
     bad = tmp_path / "live.db"
     conn = sqlite3.connect(str(bad))  # no snapshot_meta, user_version=0

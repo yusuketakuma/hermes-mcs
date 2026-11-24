@@ -255,7 +255,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if memory_code is not None:
         return _defer_result(counts, memory_code if stage == 'local' else None)
     root = attachment_ocr._data_root(ledger)
-    scope = upgrade_scope.resolve(cfg)
+    scope = upgrade_scope.intersect(upgrade_scope.resolve(cfg), upgrade_scope.live())
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
         return _defer_result(counts, 'inference_lock_busy' if stage == 'local' else None)
@@ -351,6 +351,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                     checkpoints = (_local_checkpoints(ledger, source, cfg, generation, deadline=deadline)
                                    if stage == 'local' else {})
                     routing = local_llm.background_scope(root) if stage == 'local' else nullcontext()
+                    # Only the reason this page call leaves behind may explain its own deferral.
+                    extract_llm._CALL_NOTES.defer_reason = None
                     with routing, extract_llm.pin_target(local_llm.resolve(cfg)):
                         result = extract_llm.llm_extract(source['body_text'], deadline=deadline, meta_out=meta,
                                                        posted_at=None, provider=unit,
@@ -360,8 +362,10 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                                      deadline=deadline)):
                         counts['deferred'] += 1
                         if stage == 'local':
-                            defer_reasons[attachment_inference_deferral.UNCLASSIFIED] = (
-                                defer_reasons.get(attachment_inference_deferral.UNCLASSIFIED, 0) + 1)
+                            code = (result is extract_llm._DEFERRED and attachment_inference_deferral.llm_reason(
+                                getattr(extract_llm._CALL_NOTES, 'defer_reason', None))
+                                or attachment_inference_deferral.UNCLASSIFIED)
+                            defer_reasons[code] = defer_reasons.get(code, 0) + 1
                     else:
                         counts['done'] += 1
                 except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, OSError, ValueError, sqlite3.Error) as err:

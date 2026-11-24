@@ -1,13 +1,15 @@
 """The rule pass skips closed-scope earlier-generation rows given by the caller's fragment.
 
-``rules/extract.py`` is deciding code and does not import ``upgrade_scope``;
-its caller builds the fragment with ``upgrade_scope.selection_sql``. Synthetic
-bodies and a temp DB only."""
+``run_pending`` takes the fragment its caller built with
+``upgrade_scope.selection_sql``; the manual entry point builds the same
+fragment from the live configuration. Synthetic bodies and a temp DB only."""
 import json
+import os
 
 import pytest
 
 import extract
+import mcs_util
 import upgrade_scope
 from extract_testkit import _hash, _ledger, _message
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -54,6 +56,30 @@ def test_rule_pass_follows_the_scope(tmp_path, value, expected):
                 if db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()}
         assert kept == set(old) - expected  # a skipped earlier row is kept as it was
         assert extract.run_pending(db, scope_sql=fragment)["done"] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, ALL), ("all", ALL), ("none", NEW_WORK), ({"project_ids": [1]}, NEW_WORK | {1}),
+    ({"project_ids": [2]}, NEW_WORK | {2}), ({"project_ids": "1"}, NEW_WORK), (False, NEW_WORK),
+], ids=repr)
+def test_rule_cli_follows_the_live_scope(tmp_path, monkeypatch, capsys, value, expected):
+    """``extract.py --all`` honours the live upgrade scope like the tick path."""
+    db = _ledger(tmp_path)
+    try:
+        _seed(db)
+        path = tmp_path / "config.json"
+        if value is not None:
+            path.write_text(json.dumps({"extract": {"upgrade_scope": value}}), encoding="utf-8")
+        monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
+        monkeypatch.setattr(extract, "DB", str(tmp_path / "ledger.db"))
+        lock_fd = os.open(tmp_path / "run.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        monkeypatch.setattr(extract, "acquire_run_lock", lambda: lock_fd)
+        monkeypatch.setattr(extract.sys, "argv", ["extract.py", "--all"])
+        assert extract.main() == 0
+        out = json.loads(capsys.readouterr().out.splitlines()[0])
+        assert out["extracted"] == len(expected) and _current(db) == expected
     finally:
         db.close()
 

@@ -61,6 +61,22 @@ def test_old_reservation_and_result_keep_original_prices_after_rotation(tmp_path
         assert cloud_cli._calibration(ledger.db, 0)["settled_requests_with_characters"] == 1
 
 
+def test_november_reservation_settles_after_its_table_expires(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        reservation = _reserve(ledger)
+        assert reservation["price_version"] == "anthropic-haiku-5-5-2026-11-15"
+        later = datetime(2026, 12, 16, 12, tzinfo=c.JST).timestamp()
+        monkeypatch.setattr(c.time, "time", lambda: later)
+        assert c.current_price_version(c.MODEL) == "anthropic-haiku-5-5-2026-11-24"
+        c.record_result(ledger, reservation, _result(reservation))
+        c.record_result(ledger, reservation, _result(reservation))
+        settled = ledger.artifacts("cloud_usage_result")
+        assert len(settled) == 1
+        meta = json.loads(settled[0]["meta"])
+        assert meta["price_version"] == reservation["price_version"]
+        assert Decimal(meta["cost_usd"]) == Decimal("0.000002")
+
+
 def test_unknown_historical_version_stops_accounting_and_new_reservations(tmp_path, now):
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         _reserve(ledger)
@@ -76,7 +92,8 @@ def test_unknown_historical_version_stops_accounting_and_new_reservations(tmp_pa
 
 
 def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp_path, now, monkeypatch):
-    old_model, old_version = c.openai_client.MODEL, c.OPENAI_PRICE_VERSION
+    old_model = c.openai_client.MODEL
+    old_version = "openai-gpt-6-luna-2026-11-15"
     previous = c.PRICE_DEFINITIONS[(old_model, old_version)]
     usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
              "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
@@ -85,6 +102,7 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
         body = c.openai_client.OpenAIClient("synthetic-key").body("synthetic prompt", 100, None)
         reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="patient_context",
                                       project_id=1, unit_key="openai-old")(body, 2)
+        assert reservation["price_version"] == old_version
         maximum = Decimal(reservation["max_cost_usd"])
         model, version = "synthetic-openai-next", "synthetic-openai-next-version"
         prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
@@ -124,7 +142,8 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
 
 
 def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_path, now, monkeypatch):
-    old_model, old_version = c.openai_client.MODEL, c.OPENAI_PRICE_VERSION
+    old_model = c.openai_client.MODEL
+    old_version = "openai-gpt-6-luna-2026-11-15"
     previous = c.PRICE_DEFINITIONS[(old_model, old_version)]
     details = {"cached_tokens": 2, "cache_write_tokens": 4,
                "cache_write_tokens_details": {"ttl_30m_tokens": 4, "ttl_12h_tokens": 0}}
@@ -134,6 +153,7 @@ def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_pa
         body = c.openai_client.OpenAIClient("synthetic-key").body("synthetic prompt", 100, None)
         reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="patient_context",
                                       project_id=1, unit_key="openai-cache")(body, 2)
+        assert reservation["price_version"] == old_version
         model, version = "synthetic-openai-next", "synthetic-openai-next-version"
         prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
         successor = MappingProxyType({**previous, "model": model, "price_version": version, "prices": prices})

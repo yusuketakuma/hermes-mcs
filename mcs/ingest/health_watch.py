@@ -1267,6 +1267,11 @@ _OCR_LLM_DEFER_JA = {
     "llm_quality_checkpoint_unverified": "品質確認の未検証",
     "llm_repair_unavailable": "修復呼出の不可",
 }
+# The same codes as the confirmed cause, when the page call itself deferred with it.
+_OCR_LOCAL_DEFER_JA.update({
+    code: (f"ページの解析が{label}で保留されました",
+           f"次回実行で再開します。続く場合は {_DOCTOR} で確認してください")
+    for code, label in _OCR_LLM_DEFER_JA.items()})
 
 
 def _ocr_llm_defer_text(reasons) -> str:

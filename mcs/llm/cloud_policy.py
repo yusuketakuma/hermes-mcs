@@ -1015,6 +1015,7 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
     every receipt parses, every reservation validates, and each result settles
     against exactly one reservation. Unverifiable rows raise — they never
     pass silently. Returns the reservation rows for the caller's own scan."""
+    # Each kind is processed separately. Ordering within kind lets SQLite seek by kind and patient.
     records = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
         "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
@@ -1022,7 +1023,7 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
         "WHEN (json_extract(meta,'$.route')=? OR json_type(meta,'$.route') IS NULL) AND "
         "(json_extract(meta,'$.unit_key')=? OR ? IN ('semantic_backlog','patient_context','reextract')) THEN 1 "
         "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
-        "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",
+        "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY kind,artifact_id",
         (KINDS[0], KINDS[1], project_id, message_id, route,
          route, unit_key, route)).fetchall()
     rows = [row for row in records if row['kind'] == KINDS[0]]

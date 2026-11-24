@@ -347,6 +347,12 @@ def _database_identity(db):
     return [stat.st_dev, stat.st_ino]
 
 
+def _same_database(db, recorded):
+    """The recorded [st_dev, st_ino] names this file: a replaced or copied database has a new
+    inode, while a reboot or remount only renumbers st_dev, which is therefore not compared."""
+    return _database_identity(db)[1] == recorded[1]
+
+
 def _valid_unit(unit):
     return (type(unit) is dict and set(unit) == {'project_id', 'message_id', 'source_binding', 'contract', 'proof'}
             and type(unit['project_id']) is int and unit['project_id'] > 0
@@ -409,7 +415,7 @@ def approve_tx(owner, req, now):
     ledger = owner if owner is not db else SimpleNamespace(db=db)
     try:
         with _bounded(db, APPROVE_SECONDS) as deadline:
-            if _database_identity(db) != plan['database']:
+            if not _same_database(db, plan['database']):
                 return 'local_rebuild_database_changed', {}
             approvals = approved_units(db)
             if not _tally_valid(ledger):
@@ -527,7 +533,7 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally
     if unit is None:
         return UNAPPROVED
     try:
-        if _database_identity(ledger.db) != unit['database']:
+        if not _same_database(ledger.db, unit['database']):
             return PROOF_CHANGED   # a copied or replaced database never inherits the approval
     except (OSError, ValueError):
         return UNVERIFIED

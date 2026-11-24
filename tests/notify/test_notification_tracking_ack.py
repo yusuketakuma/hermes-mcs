@@ -96,6 +96,18 @@ def test_duplicate_approvals_count_targets_once_and_survive_sweep_time_and_spec_
     assert health['active_total'] == 0
 
 
+def test_applied_ack_survives_later_schema_columns(past):
+    # Regression: an added column (2026-11-21 prior_remote_id) silently voided every stored ack.
+    assert tracking.apply(past.ledger, past.req, SLACK, NOW + 3)['outcome'] == 'applied'
+    with past.db:
+        past.db.execute('ALTER TABLE notification_render_parts ADD COLUMN synthetic_extra TEXT')
+        past.db.execute('ALTER TABLE notification_delivery_attempts ADD COLUMN synthetic_extra TEXT')
+    health = notify_scope.incomplete_parts_health(past.db, NOW + 4, SLACK)
+    assert health['active_total'] == 0 and health['acknowledged_unresolved_total'] == 1
+    replan = tracking.build_plan(past.db, past.failed['delivery_id'], past.part['part_id'], cfg=SLACK)
+    assert replan['targets'] == past.req['targets']
+
+
 @pytest.mark.parametrize('fault', ['part_hash', 'part_attempt', 'attempt_unknown', 'successor_scope', 'card_scope', 'restore_hold'])
 def test_changed_plan_is_rejected_without_mutating_transport_facts(past, fault):
     with past.db:
