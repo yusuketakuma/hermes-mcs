@@ -273,6 +273,11 @@ def runtime_review_held(cfg: dict, *, root=None) -> bool:
                        lambda: external_transfer.status(root))
 
 
+def needs_local_model(scfg: dict) -> bool:
+    """Whether a semantic job has a fact, loop or summary stage after its Jev assessment."""
+    return scfg["summary_mode"] != "off" or scfg["loop_mode"] != "off"
+
+
 def policy_fingerprint(scfg: dict) -> str:
     """Only interpretation settings invalidate cached analysis, not retry budgets."""
     policy = {key: scfg.get(key) for key in (

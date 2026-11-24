@@ -222,7 +222,7 @@ def test_binding_hold_refill_preserves_qc_kind_turn(jobs_db, monkeypatch):
     _job(jobs_db, 100, created=now, updated=now, next_try=now)
     _job(jobs_db, 999, created=now, updated=now, next_try=now)
     jobs_db.job_add('extract_qc', 1, 200, payload={VERSION_KEY: CURRENT_VERSION})
-    turn = {'kind': 'extract_qc'}
+    turn = {'since_qc': 0}
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', turn)
     monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', turn)
     monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *args: 0)
@@ -241,10 +241,12 @@ def test_binding_hold_refill_preserves_qc_kind_turn(jobs_db, monkeypatch):
             max_jobs=1, prioritize_patients=True)
     first = run()
     assert served == [100, 999] and not qc_served
-    assert first['done_by_kind'] == {'semantic': 1} and turn['kind'] == 'semantic'
+    # both served semantic rows count toward QC's fair share; the refill
+    # neither skips nor double-counts them
+    assert first['done_by_kind'] == {'semantic': 1} and turn['since_qc'] == 2
     second = run()
     assert qc_served == [200] and second['done_by_kind'] == {'extract_qc': 1}
-    assert turn['kind'] == 'extract_qc'
+    assert turn['since_qc'] == 0
 
 
 def test_realtime_serves_newest_seed_not_newest_defer(jobs_db, monkeypatch):

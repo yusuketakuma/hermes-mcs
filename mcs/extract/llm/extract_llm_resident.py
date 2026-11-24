@@ -71,6 +71,18 @@ _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
 # so a 60s window almost never sees a release; 150s matches the
 # run-check reacquire horizon while staying bounded by job budget.
 _SEMANTIC_LOCK_WAIT_S = 150.0
+# A Jev-only semantic/QC pass (no local-model stage) is its own bounded
+# drain: several jobs up to a time budget, ahead of the lane's local work.
+_JEV_DRAIN_MAX_JOBS = 8
+_JEV_DRAIN_BUDGET_S = 300.0
+# The daytime night lane has no local work: an empty drain waits this long.
+_JEV_DRAIN_IDLE_S = 60.0
+
+
+def _jev_only_semantic(cfg) -> bool:
+    """Whether due semantic and QC jobs need Jev alone, from the resolved semantic config."""
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    return scfg["mode"] != "off" and not semantic_policy.needs_local_model(scfg)
 
 
 def _recent_arrivals(ledger) -> set:
@@ -81,10 +93,13 @@ def _recent_arrivals(ledger) -> set:
 
 
 def _background_semantic(ledger, stop=None):
-    """Serve one oldest semantic/QC job on this worker's background slot."""
+    """Serve the oldest semantic/QC work: one job, or a bounded drain when it needs Jev alone."""
     import semantic_drain
     cfg = load_config()
     budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
+    jev_only = _jev_only_semantic(cfg)
+    if jev_only:
+        budget = max(budget, _JEV_DRAIN_BUDGET_S)
     # Called only when this worker has no carry work: a bounded wait is
     # free capacity the old non-blocking try always missed under a busy
     # lock. Keep room for one job so an acquired lock is never spent on
@@ -106,7 +121,7 @@ def _background_semantic(ledger, stop=None):
             deadline = min(deadline, stop)
         result = {"errors": []}
         out = semantic_drain.run_due(
-            ledger, cfg, result, deadline, max_jobs=1,
+            ledger, cfg, result, deadline, max_jobs=_JEV_DRAIN_MAX_JOBS if jev_only else 1,
             cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog",
             prioritize_patients=cloud_inference.resolve_cloud_settings(cfg)["mode"] == "on")
         out["errors"] = result["errors"]
@@ -426,7 +441,8 @@ def _main() -> int:
                          "— disjoint shards let two drainers share the "
                          "backlog without re-doing each other's rows")
     ap.add_argument("--semantic", action="store_true",
-                    help="with --all: alternate extraction and semantic/QC backlog")
+                    help="with --all: also serve the semantic/QC backlog "
+                         "(a bounded drain when it needs Jev alone)")
     ap.add_argument("--batch", type=int, default=_BATCH_K,
                     help="context-free single-chunk messages per "
                          "batched LLM call (0-8; 0 disables — every "
@@ -568,6 +584,25 @@ def _main() -> int:
                 print(json.dumps({"carry_waiting": True, "carried": len(carry), "lane": args.lane,
                                   "pid": os.getpid(), "ts": time.time()}), flush=True)
 
+            def semantic_pass():
+                # One background semantic/QC pass, logged; it reports whether semantic work ran.
+                nonlocal semantic_has_worked, semantic_first_until
+                started = time.monotonic()
+                sem = _background_semantic(led, stop)
+                llm_availability.record_semantic_turn(
+                    os.path.join(HOME, "data", llm_availability.SEMANTIC_TURNS_NAME),
+                    sem.get("skipped") == "lock_busy")
+                print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
+                                  "elapsed_s": round(time.monotonic() - started, 1),
+                                  "ts": time.time()},
+                                 ensure_ascii=False), flush=True)
+                ran = any(m.get("kind") == "semantic" and m.get("status") in _SEMANTIC_WORK
+                          for m in sem.get("job_metrics") or [])
+                if ran:
+                    semantic_has_worked = True
+                    semantic_first_until = time.monotonic() + SEMANTIC_FIRST_S
+                return sem, ran
+
             while True:
                 if not _writer_current(full=True):
                     return retire()
@@ -584,6 +619,15 @@ def _main() -> int:
                     elif not context_lane and local_role[0] is not None:
                         os.close(local_role[0])
                         local_role[0] = None
+                    sem, ran_semantic = None, False
+                    jev_drain = args.semantic and _jev_only_semantic(load_config())
+                    if jev_drain:
+                        # Jev-only semantic/QC work takes no local-model turn or
+                        # slot, so neither the extraction nor a carry waits on it.
+                        sem, ran_semantic = semantic_pass()
+                        if sem.get("run_lock_lost") in ("held", "updated"):
+                            _settle_carry(led, carry, write=False)
+                            return 0
                     if args.lane == 1:
                         import llm_slot_schedule
                         if not llm_slot_schedule.night():
@@ -591,7 +635,8 @@ def _main() -> int:
                             _settle_carry(led, carry, final=False, fence=context_state)
                             if carry:
                                 carry_waiting()
-                            pause(_IDLE_FLOOR_S)
+                            pause(1 if sem and (sem.get("done") or sem.get("progressed"))
+                                  else _JEV_DRAIN_IDLE_S if jev_drain else _IDLE_FLOOR_S)
                             continue
                     if carry and not context_lane:
                         resume_budget = _RESIDENT_WRITE_WAIT_S + 1
@@ -712,26 +757,9 @@ def _main() -> int:
                             carry = r.pop("carry") or []
                         return retire()
                     carry = r.pop("carry", None) or []  # internal; never logged
-                    sem = None
-                    ran_semantic = False
-                    if args.semantic and not carry:
-                        started = time.monotonic()
-                        sem = _background_semantic(led, stop)
-                        llm_availability.record_semantic_turn(
-                            os.path.join(HOME, "data", llm_availability.SEMANTIC_TURNS_NAME),
-                            sem.get("skipped") == "lock_busy")
-                        print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
-                                          "elapsed_s": round(time.monotonic() - started, 1),
-                                          "ts": time.time()},
-                                         ensure_ascii=False), flush=True)
-                        ran_semantic = any(
-                            m.get("kind") == "semantic"
-                            and m.get("status") in _SEMANTIC_WORK
-                            for m in sem.get("job_metrics") or [])
-                        if ran_semantic:
-                            semantic_has_worked = True
-                            semantic_first_until = (time.monotonic()
-                                                    + SEMANTIC_FIRST_S)
+                    if args.semantic and not jev_drain and not carry:
+                        # Work with a local-model stage keeps one job per extraction.
+                        sem, ran_semantic = semantic_pass()
                         if sem.get("run_lock_lost") in ("held", "updated"):
                             # an updater ran mid-transport: exit so launchd /
                             # the standalone host respawns this resident on
