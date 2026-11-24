@@ -583,8 +583,9 @@ def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypat
     ([5, 0], False, True, 2, True),
     ([5, 5, 5], True, True, 3, True),
     ([5, 5, 5], False, False, 3, True),
-    # exit 0 is not proof: the label must answer `print` afterwards
-    ([0], False, False, 1, False),
+    # exit 0 is not proof: the label must answer `print` afterwards — an
+    # unverifiable post-check is None, never a confirmed failure
+    ([0], False, None, 1, False),
 ])
 def test_agent_reconcile_retries_transient_bootstrap(
         monkeypatch, outcomes, late, ok, boots, loads):
@@ -686,7 +687,7 @@ def test_agent_reconcile_never_bootstraps_when_launchd_state_is_unknown(
                                         sleep=sleeps.append))
     assert service_management.agent_reconcile(
         'ai.mcs.x', '/p.plist', notes.append, False,
-        paths=mcs_setup._service_paths()) is None
+        paths=mcs_setup._service_paths()) is False
     assert "bootstrap" not in seen and "bootout" not in seen
     assert seen == ["print"]
     assert any("確認できない" in n for n in notes)
@@ -731,11 +732,33 @@ def test_converge_agent_keeps_the_plist_when_bootstrap_verify_is_unknown(
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda *a, **k: False)
     monkeypatch.setattr(service_management, 'launchd_bootstrap',
-                        lambda *a, **k: "bootstrap exited 0 but the label is not loaded")
+                        lambda *a, **k: service_management.BOOTSTRAP_UNVERIFIED)
     assert service_management._converge_agent(
         "ai.mcs.x", "new settings", manifest, lambda n: None, False,
         paths=paths) == 1
     assert dst.read_text() == "new settings"
+    assert manifest["agents"][0]["loaded"] is False
+
+
+def test_converge_agent_reverts_the_plist_when_launchd_refuses_it(
+        monkeypatch, tmp_path):
+    """A plist launchd rejected can never start the job — leaving it on
+    disk only fails again at next login, so the previous settings go
+    back."""
+    import dataclasses
+    paths = dataclasses.replace(mcs_setup._service_paths(),
+                                agents_dir=str(tmp_path))
+    dst = tmp_path / "ai.mcs.x.plist"
+    dst.write_text("old settings")
+    manifest = {"agents": []}
+    monkeypatch.setattr(service_management, 'agent_loaded',
+                        lambda *a, **k: False)
+    monkeypatch.setattr(service_management, 'launchd_bootstrap',
+                        lambda *a, **k: "Bootstrap failed: 5: Input/output error")
+    assert service_management._converge_agent(
+        "ai.mcs.x", "new settings", manifest, lambda n: None, False,
+        paths=paths) == 1
+    assert dst.read_text() == "old settings"
     assert manifest["agents"][0]["loaded"] is False
 
 
