@@ -40,7 +40,7 @@ from mcs_queries import (current_projection_id, current_v4_id, current_v4_pred,
 from semantic_policy import (SCHEMA_VERSION, JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
                              KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_FACT_PROJ,
                              KIND_FACT_REPAIR, KIND_LOOP, KIND_SUMMARY,
-                             policy_fingerprint)
+                             policy_fingerprint, primary_verdicts_consumed)
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
@@ -688,6 +688,9 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     scope = scfg.get("project_ids")
     if scope is not None and pid not in scope:
         return "out_of_scope"
+    if not primary_verdicts_consumed(scfg):
+        # the reprocess pass seeds the thread once a reader is enabled again
+        return "unconsumed"
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()

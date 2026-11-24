@@ -29,10 +29,18 @@ def _thread(tmp_path, *, attachment=False):
     return db, _drain(db)
 
 
+def _run(db, client):
+    # Only the assessment stage is under test. Without summary or loops no
+    # job runs at all, so it runs here as a reader of its results would have it.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(semantic_drain, "primary_verdicts_consumed", lambda scfg: True)
+        semantic_drain.run_due(db, CFG, {"errors": []}, time.monotonic() + 300, jev_client=client,
+                               llm_fn=lambda _: pytest.fail("must not call LLM"))
+
+
 def _drain(db):
     client = _FakeJev()
-    semantic_drain.run_due(db, CFG, {"errors": []}, time.monotonic() + 300, jev_client=client,
-                           llm_fn=lambda _: pytest.fail("must not call LLM"))
+    _run(db, client)
     assert db.job_state("semantic", 1, 1) == "done"
     return client.requests_made
 
@@ -107,8 +115,7 @@ def test_skip_row_names_its_request_so_a_carry_stops_at_it(tmp_path):
     try:
         reply = _message(3, parent=1, body="合成の追加返信です。", posted_at=POSTED[2])
         db.save_messages([reply], project_id=1, notify={"source": "history"}, semantic=True)
-        semantic_drain.run_due(db, CFG, {"errors": []}, time.monotonic() + 300, jev_client=None,
-                               llm_fn=lambda _: pytest.fail("must not call LLM"))
+        _run(db, None)
         scfg = semantic_policy.runtime_config(CFG)[0]
         policy = semantic_policy.policy_fingerprint(scfg)
         bundle = semantic_store.thread_bundle(db.db, 1, 1, [1, 2, 3])

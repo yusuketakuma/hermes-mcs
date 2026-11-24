@@ -17,7 +17,7 @@ from mcs_util import load_config, strict_json
 from inference_version import (CURRENT_VERSION, is_current,
                                current_meta_pred, read_version, LEGACY_VERSION)
 import semantic_runtime as runtime
-from semantic_policy import (JOB_KIND, QC_JOB_KIND, needs_local_model, runtime_config)
+from semantic_policy import (JOB_KIND, QC_JOB_KIND, primary_verdicts_consumed, runtime_config)
 import semantic_notice
 
 from semantic_reprocess import (
@@ -400,7 +400,7 @@ def _backlog_commit_reserve(scfg: dict) -> float:
     still fits the work window: full from a ~1220 s budget, partial below
     (220 s at 900 s), never squeezing the long call out. Jobs with no
     local-model stage make no long call and keep the short-budget timing."""
-    if not needs_local_model(scfg):
+    if not primary_verdicts_consumed(scfg):
         return 0.0
     budget = float(scfg["job_budget_seconds"])
     return min(BACKLOG_COMMIT_RESERVE_S,
@@ -525,9 +525,11 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                 (QC_JOB_KIND, time.time(), excluded_json, max_jobs)).fetchall()
         qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
         qc_jobs = list(qc_rows[:qc_share])
+        lane_kinds = tuple(k for k in kinds if k != QC_JOB_KIND) if qc_jobs else kinds
         arrivals, backfill, sched_mut = _due_lanes(
-            ledger, (JOB_KIND,) if qc_jobs else kinds,
-            max_jobs - len(qc_jobs), archived, excluded=excluded, turns=turns, held_after=held_after)
+            ledger, lane_kinds,
+            max_jobs - len(qc_jobs), archived, excluded=excluded, turns=turns,
+            held_after=held_after) if lane_kinds else ([], [], {"turn": None})
         # unused lane capacity flows back to QC — same rule the backfill
         # cohort uses against an idle arrival lane
         spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
@@ -539,7 +541,9 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
         eligible = _ELIGIBLE_SQL
         # Fresh arrivals use realtime. Background workers may also finish
         # older arrival-seeded jobs; a per-job flock excludes double work.
-        if lane == "realtime":
+        if lane == "realtime" and JOB_KIND not in kinds:
+            rows = []
+        elif lane == "realtime":
             # Newest SEED first (M6): a seed/re-seed/revival writes
             # next_try=updated_at, while every defer/retry pushes
             # next_try past updated_at — so a job that already took a

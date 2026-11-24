@@ -250,6 +250,26 @@ def test_observation_skips_invalid_job_json(tmp_path):
         db.close()
 
 
+def test_observation_marks_semantic_jobs_unread_without_result_consumer(tmp_path):
+    db_path = str(tmp_path / "ledger.db")
+    db = Ledger(db_path)
+    cfg = _cfg("assist", summary_mode="off", loop_mode="off")
+    try:
+        db.job_add("semantic", 1, 1,
+                   payload={"generation": "synthetic", "eligible": True})
+        db.db.commit()
+    finally:
+        db.close()
+
+    snapshot = semantic_observe.observe(db_path, cfg=cfg)
+    assert snapshot["semantic_results_consumed"] is False
+    assert snapshot["jobs"]["pending"] == 1
+    assert snapshot["unread_semantic_pending"] == 1
+    assert snapshot["runnable_semantic_pending"] == 0
+    assert snapshot["eligible_pending"] == 1
+    assert snapshot["runnable_eligible_pending"] == 0
+
+
 def test_recent_drain_window_and_llm_p90(tmp_path):
     from stats_math import percentile
     db_path = str(tmp_path / "ledger.db")

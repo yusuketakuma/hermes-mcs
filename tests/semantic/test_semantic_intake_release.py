@@ -59,6 +59,21 @@ def _state(db):
             for table in ('fetch_jobs', 'artifacts', 'notify_outbox')}
 
 
+def test_release_succeeds_when_no_feature_reads_verdicts(store):
+    _hold(store)
+    plan = hold.prepare_release(store, 1, 1)
+    cfg = _cfg('assist', summary_mode='off', loop_mode='off')
+    result = _release(store, plan, cfg=cfg)
+    assert result['released'] == 1 and result['job_id'] is not None
+    assert not hold.has_held_root(store.db, 1, 1)
+    assert _job(store)['state'] == 'pending'
+    jev = _FakeJev()
+    out = drain.run_due(store, cfg, {'errors': []}, time.monotonic() + 300,
+                        jev_client=jev)
+    assert out['left'] == 0 and jev.requests_made == 0
+    assert _job(store)['state'] == 'pending'
+
+
 def test_prepare_is_read_only_including_cli(store, tmp_path, monkeypatch, capsys):
     _hold(store)
     before = _state(store)

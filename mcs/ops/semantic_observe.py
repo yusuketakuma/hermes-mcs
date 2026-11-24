@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND, SCHED_KIND  # noqa: E402
+from semantic_policy import (JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND, SCHED_KIND,
+                             primary_verdicts_consumed, runtime_config)  # noqa: E402
 
 from operational_progress import progress_reason_label
 from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
@@ -173,6 +174,11 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
     jobs = dict(q(
         "SELECT state, COUNT(*) FROM fetch_jobs WHERE kind=? "
         "GROUP BY state", (JOB_KIND,)))
+    scfg, config_errors = runtime_config(cfg if isinstance(cfg, dict) else {})
+    results_consumed = (None if config_errors
+                        else primary_verdicts_consumed(scfg))
+    unread_semantic_pending = (jobs.get("pending", 0)
+                               if results_consumed is False else 0)
     history = audit_history(ledger, checkpoint=checkpoint)
     eligible_pending = q(
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
@@ -197,6 +203,12 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
         "ts": int(now),
         "jobs": jobs,
         "eligible_pending": eligible_pending,
+        "semantic_results_consumed": results_consumed,
+        "unread_semantic_pending": unread_semantic_pending,
+        "runnable_semantic_pending": (jobs.get("pending", 0)
+                                      if results_consumed is True else 0),
+        "runnable_eligible_pending": (eligible_pending
+                                      if results_consumed is True else 0),
         **history,
         "audit_statuses_scope": "history",
         "history": history,
@@ -454,7 +466,9 @@ def main() -> int:
     j = snap["jobs"]
     print(f"jobs: done={j.get('done',0)} pending={j.get('pending',0)} "
           f"failed={j.get('failed',0)} "
-          f"(notify-eligible pending: {snap['eligible_pending']})")
+          f"(runnable: {snap['runnable_semantic_pending']}, "
+          f"unread: {snap['unread_semantic_pending']}, "
+          f"notify-eligible queued: {snap['eligible_pending']})")
     print(f"audit history: {snap['audit_statuses'] or 'none yet'}")
     if snap["repaired_audits"]:
         print(f"repaired history: {snap['repaired_audits']}")

@@ -62,9 +62,10 @@ import semantic_runtime as runtime
 def seed(ledger, message_id: int, origin: str = "replay",
          cfg_path: str = CONF_PATH) -> int | None:
     """Explicit finite replay/retry seed — notification-free. OFF blocks
-    even this (no new job generation, AT-053)."""
+    even this (no new job generation, AT-053), and so does a configuration
+    in which no feature reads the job's results."""
     cfg, _ = semantic_policy.runtime_config(load_config(cfg_path), root=os.path.dirname(cfg_path))
-    if cfg["mode"] == "off":
+    if not semantic_policy.primary_verdicts_consumed(cfg):
         return None
     row = ledger.db.execute(
         "SELECT project_id, COALESCE(parent_id,message_id) r "

@@ -20,7 +20,7 @@ import semantic_publication as v4
 import semantic_conversion as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_loops import update_loops
-from semantic_policy import (KIND_ASSESS, KIND_AUDIT, needs_local_model, waits_for_jev_quota,
+from semantic_policy import (KIND_ASSESS, KIND_AUDIT, primary_verdicts_consumed, waits_for_jev_quota,
                              KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
                              KIND_DRAIN_RUN, KIND_FACT_PROJ,
                              KIND_FACTS, KIND_FACTS_V2,
@@ -594,7 +594,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 verdicts[mid] = partial
             else:
                 verdicts[mid] = target_verdicts
-        if not needs_local_model(scfg):
+        if not primary_verdicts_consumed(scfg):
             continue
         skip_state = {"reason": jev_skip}
         try:

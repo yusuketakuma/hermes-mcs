@@ -14,7 +14,7 @@ import json
 import time
 
 from mcs_util import loads_dict
-from semantic_policy import JOB_KIND
+from semantic_policy import JOB_KIND, primary_verdicts_consumed, runtime_config
 from semantic_publication import ENGINE_VERSION
 from stats_math import finite_number
 
@@ -185,8 +185,8 @@ def _source_current(ledger, item: dict) -> bool:
         item.get("source_fingerprint")
 
 
-def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
-    """Reserve each conversion job once within the lifetime item ceiling."""
+def run_cohort(ledger, cohort: str, now: float | None = None, *, cfg=None) -> dict:
+    """Reserve conversion jobs only when configured features read their verdicts."""
     now = time.time() if now is None else now
     if not finite_number(now):
         raise ValueError("cohort_time_invalid")
@@ -200,6 +200,16 @@ def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
         if doc["expires_at"] <= now:
             return {"cohort": cohort, "error": "cohort_expired",
                     "scheduled": 0, "remaining": 0}
+        if not isinstance(cfg, dict):
+            return {"cohort": cohort, "error": "config_not_supplied",
+                    "scheduled": 0}
+        scfg, errors = runtime_config(cfg)
+        if errors:
+            return {"cohort": cohort, "error": "config_invalid",
+                    "scheduled": 0}
+        if not primary_verdicts_consumed(scfg):
+            return {"cohort": cohort, "error": "no_result_reader",
+                    "scheduled": 0}
         done = cohort_items_done(ledger.db, cohort)
         scheduled = pending = 0
         for item in doc["items"]:
