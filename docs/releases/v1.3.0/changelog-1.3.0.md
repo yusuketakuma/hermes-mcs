@@ -389,7 +389,7 @@ v1.3.0は、ローカルの患者画面に在宅ケアの患者台帳・職員�
 - 使うモデルは semantic_jev.resolve_model が semantic.model から決め、Jevへの要求・policy_fingerprint・candidate_fingerprint・手動の診断・成果物と利用記録の model が同じ値を使う。
 - semantic.model には別の固定版ID（jev-X.Y.Z）も書けるようになった。latest などの別名と形式の違うIDは従来どおり設定誤り。以前の版が固定していた jev-1.13.0 は既定のモデルとして扱い、切替先には指定できない。
 - 切替は人承認操作 ops.jev_model_set として承認記録（変更前後の版と確認結果）を先に保存し、その後で config_edit.apply が設定を保存する。確認が不合格・未評価なら変更しない。保存を確認できなかった場合は同じ --command-id の再実行が、後の変更を上書きせずに保存する。
-- 一覧の結果は data/jev-models.json に保存し、mcs_setup.py jev-model（引数なし）は通信せずに表示する。一覧に固定版IDがない・取得失敗のときは確認できなかったと表示する。取得失敗の案内を先に示し、保存済みの一覧に使用中より新しい候補があれば補足として表示する。
+- 一覧の結果は data/jev-models.json に保存する。mcs_setup.py jev-model（引数なし）は通信せず、現在値・保存済みの新しい候補・取得エラーをJSONで返す。一覧に固定版IDがない場合や取得失敗は確認できなかったと表示する。mcs_setup.py check の通知では取得失敗を先に伝え、保存済みの一覧に新しい候補があれば補足に示す。
 - 固定環境で保存した評価がモデル名として JEV_MODEL を保持していても、使用中のモデルで再評価され、ジョブは失敗しない。mcs_setup.py jev-model の結果表示は、現在値が切替先の版なら published、切替前でもない版なら superseded と表示する。現在値が切替前の版のままのときは最新の適用 receipt を調べ、別の command_id が後に保存されていれば superseded（再実行は案内しない）、この receipt が最新なら unpublished と表示する。
 - 根拠: mcs/core/provider_settings.py、mcs/ops/setup/jev_model_setup.py、mcs/semantic/jev_model_updates.py、mcs/semantic/semantic_candidate.py、mcs/semantic/semantic_jev.py、mcs/semantic/semantic_usage_receipts.py
 
