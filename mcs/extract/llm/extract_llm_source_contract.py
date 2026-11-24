@@ -460,6 +460,11 @@ SEMANTIC_FIRST_S = 1800.0
 _SEMANTIC_RECENT_TURNS = 3
 
 
+# Every this-many recent-arrival turns under continuous semantic work, one
+# normal-order turn runs so an approved local rebuild gets a bounded slot.
+_APPROVED_FIRST_TURNS = 3
+
+
 _ARRIVAL_CARRY_S = 86400      # = run_check.REALTIME_CARRY_S (pinned by a test)
 
 
