@@ -12,6 +12,18 @@ COMMAND = "ops.card_part_tracking_ack"
 MAX_TARGETS = 20
 MAX_RECEIPTS = 4096
 _TARGET_KEYS = {"delivery_id", "part_id", "successor_id", "proof"}
+# Proof v1 binds exactly these columns; later schema columns must not change stored proofs.
+_PART_PROOF_COLUMNS = (
+    "delivery_id", "part_id", "kind", "idx", "payload_sha256", "bytes", "name",
+    "attachment_id", "state", "remote_id", "error_code", "attempt_id", "updated_at",
+    "remote_file_id")
+_ATTEMPT_PROOF_COLUMNS = (
+    "attempt_id", "delivery_id", "begin_command_id", "state", "message_id", "error_code",
+    "worker_id", "created_at", "finished_at")
+
+
+def _proof_row(row, columns):
+    return {key: row[key] for key in columns}
 
 
 def _valid_target(value):
@@ -131,7 +143,7 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None, resolution_comma
                              "AND kind='card' AND state='delivered' AND remote_id=?",
                              (candidate["delivery_id"], card["message_id"])).fetchall()
         if len(witness) == 1 and valid_text(witness[0]["remote_id"], 200):
-            successor, root = identity, dict(witness[0])
+            successor, root = identity, _proof_row(witness[0], _PART_PROOF_COLUMNS)
             break
     if successor is None:
         return {"error": "tracking_ack_successor_unverified"}
@@ -140,7 +152,8 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None, resolution_comma
         "transport", "profile", "application_id", "team_id", "guild_id", "channel_id",
         "message_id", "thread_id", "thread_state")}
     # Keep existing length-ack proofs byte-compatible with stored receipts.
-    evidence = [COMMAND, 1, dict(part), dict(attempt), sealed,
+    evidence = [COMMAND, 1, _proof_row(part, _PART_PROOF_COLUMNS),
+                _proof_row(attempt, _ATTEMPT_PROOF_COLUMNS), sealed,
                 stable_card, successor, root, notify_scope.route_epoch(cfg)]
     if resolution is not None:
         evidence[1] = 2
