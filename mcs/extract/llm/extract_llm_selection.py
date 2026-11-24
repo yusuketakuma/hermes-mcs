@@ -146,12 +146,17 @@ _LEFT_ESTIMATE: dict = {}
 _LEFT_ESTIMATE_S = 600.0
 
 
-# A unit that fails the take-time permit re-proof is skipped for this long,
-# keyed by its approval command_id so a newer approval re-proves at once.
-_REPROOF_MISS_S = 300.0
-
-
+# A unit that fails the take-time permit re-proof is skipped for the rest of
+# the process, keyed by its approval command_id so a newer approval re-proves
+# at once. With no expiry, the bounded fan-out advances past a run of lapsed
+# heads to the tail regardless of how much time passes between passes.
 _reproof_misses: dict = {}
+
+
+# approved_adm_ids default: inherit the walk's (possibly windowed) admission.
+# An explicit None means the take's cohort is unlimited; an explicit set —
+# even an empty one — is a closed gate.
+_INHERIT_ADM = object()
 
 
 def _left_estimate_key(ledger) -> str:
@@ -572,7 +577,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     cloud_only: bool = False, deadline: float | None = None,
                     exclude_ids=None, approved_first: bool = False,
                     approved_fill: bool = False,
-                    approved_adm_ids=None) -> tuple[list, int | None]:
+                    approved_adm_ids=_INHERIT_ADM) -> tuple[list, int | None]:
     deadline = deadline if cloud_only else None
     reader = None
     owner = ledger
@@ -649,7 +654,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          deadline: float | None = None, exclude_ids=None,
                          approved_first: bool = False,
                          approved_fill: bool = False,
-                         approved_adm_ids=None) -> tuple[list, int | None]:
+                         approved_adm_ids=_INHERIT_ADM) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -679,17 +684,19 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             ids_params = [json.dumps(sorted(admitted_ids))]
     adm_sql = ids_sql
     adm_params = list(ids_params)
-    # approved_adm_ids is the un-windowed cohort: a caller that narrows
-    # admitted_ids to an arrival window passes the full set here so the
-    # approval take stays cohort-gated without joining the window. When
-    # unset the take gate is the same admission set the walk used.
+    # approved_adm_ids is the take's cohort, kept distinct from the walk's
+    # admission: a caller that narrows admitted_ids to an arrival window
+    # passes the full set here so the approval take stays cohort-gated
+    # without joining the window. The default inherits the walk's admission;
+    # an explicit None lifts the gate entirely (an unlimited admission admits
+    # the approval too); an explicit empty set keeps it closed.
     take_sql = ""
     take_params: list = []
-    if approved_adm_ids is not None:
+    if approved_adm_ids is _INHERIT_ADM:
+        take_sql, take_params = ids_sql, list(ids_params)
+    elif approved_adm_ids is not None:
         take_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
         take_params = [json.dumps(sorted(approved_adm_ids))]
-    else:
-        take_sql, take_params = ids_sql, list(ids_params)
     if exclude_ids:
         if cloud_only:
             raise ValueError("cloud_selection_exclusion_invalid")
@@ -912,33 +919,39 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # admission, claim-lease and retry gates apply — only the posted_at
     # order moves — and a unit re-proves ACTIVE under permit before being
     # taken; the candidate read fans out by a small bounded factor and a
-    # unit that fails re-proof is skipped until its cooldown expires, so
-    # the per-unit re-verification never re-scans the same head of the
-    # receipt history every pass.
+    # unit that fails re-proof stays skipped for the rest of the process,
+    # so the per-unit re-verification never re-scans the same head of the
+    # receipt history on any later pass.
     approved_scope = None
-    if ((approved_first and not oldest_first and not archived_first
-         and approved_adm_ids is None)
-            or approved_fill) and not cloud_only and rebuilds:
+    if ((approved_first or approved_fill)
+            and not oldest_first and not archived_first
+            and not cloud_only and rebuilds):
         approved_scope = (" AND m.message_id IN (SELECT value FROM json_each(?))",
                           [json.dumps(sorted(mid for _pid, mid in rebuilds))])
 
     def _approved_take(n):
         """Up to n approved candidates in walk order, each re-proven ACTIVE.
-        Candidates that fail the re-proof are remembered for a cooldown so a
-        row of lapsed units cannot pin the same bounded fan-out every pass."""
+        Rows already selected this pass are excluded so a notified approval
+        is never taken — or counted — twice. Candidates that fail the
+        re-proof are skipped for the rest of the process, so a row of lapsed
+        units cannot pin the same bounded fan-out on a later pass either."""
         if approved_scope is None or n <= 0:
             return []
-        now_m = time.monotonic()
-        for key in [k for k, exp in _reproof_misses.items() if exp <= now_m]:
-            del _reproof_misses[key]
         scope, params = approved_scope
-        miss = sorted({mid for _pid, mid, _cmd in _reproof_misses})
-        if miss:
+        # a miss sticks only while the same approval command is current:
+        # a superseding command_id re-proves on the very next take
+        skip = sorted({row["message_id"] for row in rows}
+                      | {mid for pid, mid, cmd in _reproof_misses
+                         if (unit := rebuilds.get((pid, mid))) is not None
+                         and unit["command_id"] == cmd})
+        if skip:
             scope += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
-            params = [*params, json.dumps(miss)]
+            params = [*params, json.dumps(skip)]
         taken = []
+        # the take always uses its own cohort gate — an empty take_sql is an
+        # explicit unlimited cohort, not a fall-back to the walk's window
         for cand in _select(None, n * 4, None, scope=scope, scope_params=params,
-                            adm=(take_sql, take_params) if take_sql else None):
+                            adm=(take_sql, take_params)):
             if local_rebuild.permit(ledger, cand["project_id"], cand["message_id"],
                                     approvals=rebuilds) == local_rebuild.ACTIVE:
                 taken.append(cand)
@@ -948,7 +961,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 unit = rebuilds.get((cand["project_id"], cand["message_id"]))
                 if unit is not None:
                     _reproof_misses[(cand["project_id"], cand["message_id"],
-                                     unit["command_id"])] = now_m + _REPROOF_MISS_S
+                                     unit["command_id"])] = True
         return taken
 
     if approved_first and approved_scope is not None:

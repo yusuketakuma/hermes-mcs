@@ -670,11 +670,14 @@ def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
         extract_llm.main()
 
     narrowed = base if expire_window else ({7} if base is None else base & {7})
+    # every _APPROVED_FIRST_TURNS windowed turns the drainer runs one
+    # non-windowed turn (its own take decides whether an approval is
+    # actually served) — it keeps the full admission like every normal turn
     assert [(admission, oldest, archive, fair)
             for admission, oldest, archive, fair, _ in runs] == [
         (base, False, False, False), (narrowed, False, False, False),
         (narrowed, False, False, False), (narrowed, False, False, False),
-        (base, True, False, True), (narrowed, False, False, False),
+        (base, True, False, True), (base, False, False, False),
         (narrowed, False, False, False), (narrowed, False, False, False),
         (base, True, True, True), (narrowed, False, False, False)]
     assert len(semantic_passes) == 9
@@ -986,9 +989,14 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                 raise KeyboardInterrupt("synthetic stop")
             if pass_count[0] == 3:
                 # warm-up is over: the human approves a second rebuild now —
-                # a mid-run approval must still get a bounded slot
+                # a mid-run approval must still get a bounded slot. Its
+                # posted_at is newer than every backlog row and every arrival,
+                # so the oldest walk cannot reach it inside this pass budget:
+                # only the scheduled approved turn can adopt it. (An ISO
+                # timestamp — a bare number stores posted_at_ts NULL, which
+                # sorts FIRST on the oldest walk.)
                 db.save_messages([_message(mid=50, body="合成本文 50",
-                                           posted_at=wall_now - 5000)])
+                                           posted_at="2030-01-01T00:00:00+09:00")])
                 _paid(db, monkeypatch, 50)
                 plan = local_rebuild.preview(db)['plan']
                 assert [u['message_id'] for u in plan['units']] == [50]
@@ -1019,6 +1027,12 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
             rows, fresh_selected = extract_llm._select_pending(
                 ledger, kwargs["limit"], kwargs["admitted_ids"],
                 kwargs["shard"], kwargs["oldest_first"], **extra)
+            # a windowed turn is identified by its narrowed admission — the
+            # approval cohort itself is passed on every turn now
+            kind = ("oldest" if kwargs["oldest_first"]
+                    else "recent"
+                    if kwargs["admitted_ids"] != kwargs["approved_adm_ids"]
+                    else "normal")
             try:
                 if rows:
                     row = dict(rows[0])
@@ -1028,10 +1042,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                         report = extract_llm_runner.run_pending(
                             ledger, limit=1, budget_s=30, approved_first=True)
                         seen.append(row["message_id"])
-                        turn_kind.append("oldest" if kwargs["oldest_first"]
-                                         else "recent"
-                                         if kwargs.get("approved_adm_ids") is not None
-                                         else "normal")
+                        turn_kind.append(kind)
                         turn_fresh.append(fresh_selected)
                         return {"done": report["done"], "failed": 0,
                                 "left": 1, "selected": len(rows)}
@@ -1043,10 +1054,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                                      project_id=row["project_id"])
                         extract_llm._release(ledger, row, own_lease)
                         seen.append(mid)
-                        turn_kind.append("oldest" if kwargs["oldest_first"]
-                                         else "recent"
-                                         if kwargs.get("approved_adm_ids") is not None
-                                         else "normal")
+                        turn_kind.append(kind)
                         turn_fresh.append(fresh_selected)
                 return {"done": int(bool(rows)), "failed": 0,
                         "left": 1, "selected": len(rows)}
@@ -1072,9 +1080,13 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         assert approved_turn == 0                      # re-extraction, not fresh
         assert local_rebuild.permit(db, 1, 1) == local_rebuild.ADOPTED
         # the approval added after warm-up was adopted within a bounded span
-        # while arrivals and semantic work kept moving
+        # while arrivals and semantic work kept moving — and specifically on
+        # the scheduled non-windowed turn, not the oldest slot (its posted_at
+        # is unreachable there) and not a leftover recent slot (arrivals fill
+        # every one). Disabling the rotation leaves it pending → red.
         assert local_rebuild.permit(db, 1, 50) == local_rebuild.ADOPTED
         assert 50 in seen
+        assert turn_kind[seen.index(50)] == "normal"
         assert [tuple(r) for r in _usage(db)] == usage_snapshot[0]
         recent_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
                         if mid in range(100, 109) and kind == "recent"]

@@ -93,6 +93,7 @@ from extract_llm_qc import (
 )
 from extract_llm_selection import (
     _CloudSelectionIncomplete,
+    _INHERIT_ADM,
     _batch_need_s,
     _cloud_priority_discard,
     _gc_stale_artifacts,
@@ -346,7 +347,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 background: bool = False, cloud_only: bool = False,
                 prioritize_patients: bool = False, run_lock_fd: int | None = None,
                 approved_first: bool = False, approved_fill: bool = False,
-                approved_adm_ids=None) -> dict:
+                approved_adm_ids=_INHERIT_ADM) -> dict:
     """Extract up to `limit` pending/stale messages with bounded inference.
     Returns {'done': n, 'left': n, 'failed': n}.
 

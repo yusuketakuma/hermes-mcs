@@ -6,7 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
-import sqlite3
+
 import sys
 import functools
 import time
@@ -92,18 +92,6 @@ def _recent_arrivals(ledger) -> set:
     return {r[0] for r in ledger.db.execute(
         "SELECT message_id FROM messages WHERE notified_at >= ?",
         (time.time() - _ARRIVAL_CARRY_S,))}
-
-
-def _approved_pending(ledger) -> bool:
-    """Any approved local rebuild still holding an ACTIVE permit. An unreadable
-    approvals table counts as none (fail-closed: prepare grants nothing either)."""
-    try:
-        import extract_llm_local_rebuild as local_rebuild
-        units = local_rebuild.approved_units(ledger.db)
-        return any(local_rebuild.permit(ledger, pid, mid, approvals=units)
-                   == local_rebuild.ACTIVE for pid, mid in units)
-    except sqlite3.Error:
-        return False
 
 
 def _background_semantic(ledger, stop=None):
@@ -743,12 +731,16 @@ def _main() -> int:
                     # window, so a recent-only turn can run forever and an
                     # approval added after startup would never get a slot.
                     # Every _APPROVED_FIRST_TURNS windowed turns one normal
-                    # turn runs instead; arrivals lose at most that one turn.
+                    # turn runs instead — the turn's own approved take decides
+                    # whether an approval is actually served (it lifts only a
+                    # candidate the same bounded selection can prove ACTIVE),
+                    # so with nothing approved the slot just works the backlog
+                    # and arrivals lose at most that one turn.
                     approved_turn = False
                     if recent_window:
                         if approved_recent_turns >= _APPROVED_FIRST_TURNS:
                             approved_recent_turns = 0
-                            approved_turn = _approved_pending(led)
+                            approved_turn = True
                         else:
                             approved_recent_turns += 1
                         recent_window = not approved_turn
@@ -777,7 +769,7 @@ def _main() -> int:
                                     admitted_ids=adm if window is None else window,
                                     approved_first=not oldest_turn and not recent_window,
                                     approved_fill=recent_window,
-                                    approved_adm_ids=adm if recent_window else None,
+                                    approved_adm_ids=adm,
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)

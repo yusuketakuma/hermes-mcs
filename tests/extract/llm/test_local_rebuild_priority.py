@@ -116,11 +116,48 @@ def test_a_recent_only_turn_serves_the_arrival_then_the_approval(routed, monkeyp
     rows, _ = worker._select_pending(ledger, 1, set(), None, False,
                                      approved_fill=True, approved_adm_ids={2})
     assert rows == []
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                     approved_fill=True, approved_adm_ids=set())
+    assert rows == []                        # an explicitly empty cohort stays closed
+
+
+def test_an_unlimited_cohort_fills_even_with_an_empty_window(routed, monkeypatch):
+    """Unlimited admission (adm=None) with no recent arrivals: the take's
+    cohort is unlimited too, so an unnotified ACTIVE approval still fills —
+    distinct from an unset argument, which inherits the empty window."""
+    ledger, cfg, calls, reserved, results = routed
+    _approved(ledger, monkeypatch, mid=3, body="完全合成の別文3")
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET notified_at=0 WHERE message_id=3")
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                     approved_fill=True, approved_adm_ids=None)
+    assert [row["message_id"] for row in rows] == [3]
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                     approved_fill=True)
+    assert rows == []                        # default inherits the empty window
+
+
+def test_the_fill_never_retakes_a_row_the_walk_already_picked(routed, monkeypatch):
+    """mid2 is a notified approval inside the window, mid3 an unnotified one:
+    two slots must return each exactly once — a fill that ignored the rows
+    already selected would return [2, 2] and charge mid2's fresh count twice."""
+    ledger, cfg, calls, reserved, results = routed
+    _approved(ledger, monkeypatch, mid=2)
+    _approved(ledger, monkeypatch, mid=3, body="完全合成の別文3")
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET notified_at=0 WHERE message_id=3")
+        ledger.db.execute("UPDATE messages SET notified_at=? WHERE message_id=2", (time.time(),))
+    rows, fresh = worker._select_pending(ledger, 2, {2}, None, False,
+                                         approved_fill=True, approved_adm_ids={2, 3})
+    assert [row["message_id"] for row in rows] == [2, 3]
+    assert fresh == 0                        # both re-extractions — and neither double-counted
 
 
 def test_the_fill_take_advances_past_lapsed_approvals(routed, monkeypatch):
     """A run of lapsed approvals must not pin the bounded re-proof forever:
-    the next take skips them for a cooldown and reaches the ACTIVE unit."""
+    skipped candidates stay skipped for the rest of the process (keyed by
+    command_id), so the next take reaches the ACTIVE tail however much time
+    passes between passes."""
     ledger, cfg, calls, reserved, results = routed
     import uuid
     import mcs_requests
