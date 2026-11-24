@@ -803,8 +803,21 @@ def test_rolled_back_row_whose_id_is_reused_is_hashed_again(tmp_path, now, perio
         assert tally.prefix == tally.fingerprint(ledger, now)
 
 
-def test_guarded_tail_reads_a_primary_key_range(tmp_path):
-    # The tail must never walk the period through the kind/created_at index.
+@pytest.mark.parametrize('order_index', [True, False])
+def test_guarded_tail_reads_an_artifact_id_range(tmp_path, order_index):
+    # The tail must never walk the period through the kind/created_at index: it seeks the
+    # accounting-only order index when present, else the primary key.
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        plan = ledger.db.execute('EXPLAIN QUERY PLAN ' + c._GUARDED_TAIL_SQL, (1, 2, 0)).fetchall()
-        assert [row[3] for row in plan] == ['SEARCH artifacts USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)']
+        import ledger_schema
+        if order_index:
+            assert ledger_schema.install_cloud_usage_order_index(
+                ledger.db, deadline=time.monotonic() + 30) in ('created', 'present')
+        else:
+            ledger.db.execute('DROP INDEX IF EXISTS ' + ledger_schema.CLOUD_USAGE_ORDER_INDEX)
+        source = c._accounting_order_source(ledger.db)
+        sql = c._GUARDED_TAIL_SQL.format(source=source if source != 'artifacts' else 'artifacts NOT INDEXED')
+        plan = [row[3] for row in ledger.db.execute('EXPLAIN QUERY PLAN ' + sql, (1, 2, 0))]
+        expected = (f'SEARCH artifacts USING INDEX {ledger_schema.CLOUD_USAGE_ORDER_INDEX} '
+                    '(artifact_id>? AND artifact_id<?)' if order_index
+                    else 'SEARCH artifacts USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)')
+        assert plan == [expected]
