@@ -720,7 +720,8 @@ def _current_pair_newest(db, pid, mid, fp, policy, audit) -> bool:
 
 
 def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
-                  members: dict, final_status: str, policy: str, publication_mode: str) -> None:
+                  members: dict, final_status: str, policy: str, publication_mode: str,
+                  *, model=None) -> None:
     """Summary + audit artifact pair for one evaluated target — the
     durable record of this generation's outcome. The repair_count meta
     is the INV-10 budget: it survives restarts AND mid-job deferrals
@@ -783,7 +784,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     ledger.artifact_add_tx(
         KIND_AUDIT,
         json.dumps(audit_content, ensure_ascii=False),
-        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        project_id=pid, message_id=mid, model=model or jev.JEV_MODEL,
         meta={**audit_meta, "summary_artifact_id": summary_id})
 
 

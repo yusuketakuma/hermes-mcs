@@ -1080,7 +1080,8 @@ def test_current_raw_binding_supports_adopted_context_but_stale_binding_is_a_gap
         assert not stale['records'] and stale['gaps']
 
 
-def test_source_quality_proof_binds_actual_questions_and_receipts(store):
+@pytest.mark.parametrize('jev_model', [None, 'jev-1.15.0'])
+def test_source_quality_proof_binds_actual_questions_and_receipts(store, jev_model):
     import patient_context_plan as plan
     import patient_context_quality_identity
     import semantic_audit
@@ -1097,8 +1098,10 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
     facts = plan.source_facts(source, [{'category':'living', 'text':text, 'evidence':text,
                                         'subject':'patient', 'details':[]}], workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
     assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
-    policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
-    assert not errors
+    chosen = {} if jev_model is None else {'model': jev_model}
+    policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1], **chosen}},
+                                                     key_present=True)
+    assert not errors and policy['model'] == (jev_model or semantic_jev.JEV_MODEL)
     assessment = {'code': patient_context_quality_identity.patient_quality_assessment_code(),
                   'policy': semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key: policy.get(key) for key in
@@ -1107,7 +1110,8 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
                                                                        {'model':'synthetic'}, 'a' * 64, assessment)
     usage_ids, answer_ids = [], []
     for page in pages:
-        body = {'model': semantic_jev.JEV_MODEL, 'state': page['state'], 'questions': page['questions']}
+        # the request carries the model in use, as JevClient(model=scfg["model"]) sends it
+        body = {'model': policy['model'], 'state': page['state'], 'questions': page['questions']}
         reserve = semantic_runtime.patient_summary_usage_reserver(store, project_id=1, guard=lambda _stage: None,
             daily_request_budget=3000, identity=identity, purpose='source')
         reservation = reserve(body, 2)
@@ -1122,6 +1126,12 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
             assert semantic_runtime.patient_summary_resolve_request_tx(store, reservation, identity, answers, set(),
                                                                         project_id=1, purpose='source') == 1
         usage_ids.append(reservation.artifact_id)
+    assert {store.db.execute('SELECT model FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()[0]
+            for artifact_id in usage_ids} == {policy['model']}
+    with pytest.raises(ValueError, match='patient_source_request_invalid'):
+        semantic_runtime.patient_summary_usage_reserver(store, project_id=1, guard=lambda _stage: None,
+            daily_request_budget=3000, identity=identity, purpose='source')(
+            {'model': 'jev-latest', 'state': pages[0]['state'], 'questions': pages[0]['questions']}, 2)
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
         content = semantic_runtime.patient_source_pass_content(store.db, 1, identity, descriptor)

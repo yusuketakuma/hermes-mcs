@@ -700,8 +700,7 @@ def cmd_jev_value(args) -> int:
         return 1
     from contextlib import nullcontext
     key = jev.api_key(HOME)
-    context = (jev.live_client(key, operation="jev_value", root=HOME,
-                              model=jev.JEV_MODEL) if key else nullcontext(None))
+    context = (jev.live_client(key, operation="jev_value", root=HOME) if key else nullcontext(None))
     try:
         with context as jev_client:
             report = semantic_evaluation.evaluate_jev_incremental(

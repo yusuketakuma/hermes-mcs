@@ -91,7 +91,7 @@ def _candidate_rows(ledger, project_id, member_ids):
 
 
 def _refresh_candidates(ledger, project_id, bundle, members, member_ids,
-                        policy, facts_by_target):
+                        policy, facts_by_target, model):
     """Create/revive/invalidate this generation's candidates.
 
     Reads each re-evaluated target message's facts: an item the facts
@@ -166,7 +166,7 @@ def _refresh_candidates(ledger, project_id, bundle, members, member_ids,
                 continue
             ledger.artifact_add(
                 KIND_LOOP, json.dumps(candidate, ensure_ascii=False),
-                project_id=project_id, message_id=mid, model=jev.JEV_MODEL,
+                project_id=project_id, message_id=mid, model=model,
                 meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "candidate_fp": key,
                       "policy_fingerprint": policy,
                       "registry": jev.REGISTRY_VERSION})
@@ -185,7 +185,7 @@ def _refresh_candidates(ledger, project_id, bundle, members, member_ids,
 
 
 def _promote_prior_candidates(ledger, project_id, bundle, members, member_ids,
-                              policy, facts_by_target, seen_candidates):
+                              policy, facts_by_target, seen_candidates, model):
     """Promote still-valid prior-generation candidates to this generation.
 
     A new sibling/reply changes the whole-thread fingerprint.  Preserve
@@ -247,7 +247,7 @@ def _promote_prior_candidates(ledger, project_id, bundle, members, member_ids,
         ledger.artifact_add(
             KIND_LOOP, json.dumps(current, ensure_ascii=False),
             project_id=project_id, message_id=row["message_id"],
-            model=jev.JEV_MODEL,
+            model=model,
             meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "candidate_fp": key,
                   "policy_fingerprint": policy,
                   "registry": jev.REGISTRY_VERSION})
@@ -381,7 +381,7 @@ def _evaluate_relation_pairs(ledger, project_id, bundle, members, member_ids,
                          "trigger_revision": target["revision"],
                          "code": code}),
                     project_id=project_id, message_id=target["message_id"],
-                    model=jev.JEV_MODEL,
+                    model=jev.model_in_use(scfg),
                     meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                           "registry": jev.REGISTRY_VERSION,
                           "retry_scope": retry_scope, "jev_requests": 2})
@@ -409,7 +409,7 @@ def _evaluate_relation_pairs(ledger, project_id, bundle, members, member_ids,
             ledger.artifact_add(
                 KIND_LOOP_EVENT, json.dumps(event, ensure_ascii=False),
                 project_id=project_id, message_id=target["message_id"],
-                model=jev.JEV_MODEL,
+                model=jev.model_in_use(scfg),
                 meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                       "registry": jev.REGISTRY_VERSION,
                       "jev_requests": asked + 1})
@@ -443,10 +443,10 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
 
     created, seen_candidates = _refresh_candidates(
         ledger, project_id, bundle, members, member_ids, policy,
-        facts_by_target)
+        facts_by_target, jev.model_in_use(scfg))
     created += _promote_prior_candidates(
         ledger, project_id, bundle, members, member_ids, policy,
-        facts_by_target, seen_candidates)
+        facts_by_target, seen_candidates, jev.model_in_use(scfg))
     if jev_client is None:
         return created, True
     complete = _evaluate_relation_pairs(
