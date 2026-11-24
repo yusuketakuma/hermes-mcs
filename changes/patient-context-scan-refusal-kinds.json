@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト走査の中断理由を待機と読取障害に分けて記録",
+  "summary": "患者コンテキストの候補選定が台帳の書込みロック待ちや走査期限で止まったとき、記録上の理由がすべて read_sqlite（読取障害）に集約されていたため、実際には候補の読取りまで到達していない停止を読取障害と区別できませんでした。書込みロックの待ち切れを write_locked、候補側のロック待ちを read_locked、走査期限による中断を scan_interrupted として分けて記録し、本当の読取障害だけが read_sqlite になります。あわせて、最新行の確認が患者の新しい記録を種類に関係なくなめるのを同種の範囲に絞り、記録が多い患者でも観測系の読取りが期限内に終わるようにしました。",
+  "upgrade": "更新したワーカーに切り替えると適用されます。追加設定は不要です。",
+  "details": [
+    "走査の進捗書込み（BEGIN IMMEDIATE）が busy/locked で期限切れした場合は write_locked と記録します。待機として正しく扱われ、従来どおり後で再試行します。",
+    "候補読取り側の sqlite3.Error は errorcode で分類します。busy/locked は read_locked、中断は scan_interrupted、それ以外だけが read_sqlite です。いずれも走査の中断として扱われます。",
+    "監視の読取りで最新行を確かめる NOT EXISTS 照会に idx_artifacts_lookup を使わせ、別種類の新しい記録を読まないようにしました。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_status.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/patients/test_context_scan_integration.py",
+    "tests/patients/test_context_scan_writer_wait.py",
+    "tests/ops/test_patient_context_observation.py"
+  ]
+}

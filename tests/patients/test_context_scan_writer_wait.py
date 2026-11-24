@@ -40,3 +40,22 @@ def test_contended_scan_writer_respects_remaining_time_and_restores_timeout(runt
     finally:
         other.rollback()
         other.close()
+
+
+def test_contended_bookmark_write_reports_write_locked(runtime):
+    """A BEGIN IMMEDIATE that outlives its bounded wait is write-lock contention,
+    reported distinctly from a candidate read fault."""
+    ledger, _, _ = runtime
+    seed(ledger, mid=1, pid=1)
+    ledger.db.execute('PRAGMA busy_timeout=2000')
+    path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+    other = sqlite3.connect(path, timeout=0)
+    try:
+        other.execute('BEGIN IMMEDIATE')
+        result = step(runtime, seconds=refresh.COMMIT_MARGIN + 0.12)
+        assert result['status'] == 'deferred'
+        assert result['scanned'] == 0 and result['scan_interrupts'] == 1
+        assert result['scan_refusal'] == 'write_locked'
+    finally:
+        other.rollback()
+        other.close()

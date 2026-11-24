@@ -870,8 +870,8 @@ _CONTEXT_PASS_REASONS = frozenset({
 
 
 _SCAN_REFUSALS = frozenset({
-    "deadline", "admission", "writer_generation", "bookmark_cas",
-    "scan_interrupted", "read_sqlite", "read_io",
+    "deadline", "admission", "writer_generation", "bookmark_cas", "write_locked",
+    "scan_interrupted", "read_sqlite", "read_locked", "read_io",
     "invalid_bookmark", "invalid_source",
 })
 

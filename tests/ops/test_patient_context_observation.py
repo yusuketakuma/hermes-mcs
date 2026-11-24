@@ -150,6 +150,47 @@ def test_health_patient_context_records_invalid_rows_and_recomputes_old_cache(tm
     ledger.close()
 
 
+def test_latest_scan_lookup_uses_same_kind_index(tmp_path):
+    """A latest-row check reads only the patient's same-kind artifacts.
+
+    Before the index hint, each candidate row's NOT EXISTS walked every newer
+    artifact of the patient regardless of kind, so the bounded health read of a
+    busy patient timed out (observation_limit) while identical counts were
+    still correct.
+    """
+    import patient_context_status
+
+    def build(path, unrelated):
+        path.mkdir()
+        ledger = _ledger(path)
+        ledger.db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+        meta = {VERSION_KEY: CURRENT_VERSION}
+        ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'deferred'}),
+                            project_id=1, meta={**meta, 'source_key': 's1'})
+        # Newer artifacts of other kinds must not be visited by the latest check.
+        for _ in range(unrelated):
+            ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
+        return ledger
+
+    small, large = build(tmp_path / 'small', 10), build(tmp_path / 'large', 1500)
+    try:
+        plan = large.db.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+            + patient_context_status.latest_current_pred(), (context.SCAN,)).fetchall()
+        assert any('idx_artifacts_lookup' in row[3] and 'SEARCH b' in row[3] for row in plan)
+        _, small_steps = _steps(small.db, context.lane_metrics)
+        result, large_steps = _steps(large.db, context.lane_metrics)
+        assert result['lanes']['C'] == {'length_stop': 0, 'unsupported': 0, 'other_failure': 0,
+                                        'split': 0, 'repair': 0}
+        assert result['quality']['deferred'] == 1
+        # The same-kind range stays flat: without the hint the NOT EXISTS walks
+        # every newer artifact, so 1500 unrelated rows would cost ~3000 steps.
+        assert large_steps <= small_steps + 200, (small_steps, large_steps)
+    finally:
+        small.close()
+        large.close()
+
+
 def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
     """health.json's invalid_rows and doctor's states.invalid_rows see the same latest rows."""
     import patient_context_status

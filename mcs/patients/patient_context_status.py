@@ -90,7 +90,8 @@ def latest_current_pred(a="a", b="b"):
     def key(alias):
         return f"CASE WHEN json_valid({alias}.meta) THEN json_extract({alias}.meta,'$.source_key') END"
     return (current_meta_pred(f"{a}.meta", target=CURRENT_VERSION)
-            + f" AND NOT EXISTS (SELECT 1 FROM artifacts {b} WHERE {b}.kind={a}.kind "
+            + f" AND NOT EXISTS (SELECT 1 FROM artifacts {b} INDEXED BY idx_artifacts_lookup "
+            f"WHERE {b}.kind={a}.kind "
             f"AND {b}.project_id={a}.project_id AND {b}.artifact_id>{a}.artifact_id AND "
             + current_meta_pred(f"{b}.meta", target=CURRENT_VERSION)
             + f" AND {key(b)} IS {key(a)})")
