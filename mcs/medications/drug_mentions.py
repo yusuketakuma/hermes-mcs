@@ -87,20 +87,24 @@ def build(db, cfg, body, *, deadline):
 
 
 # (dict_id, sha256) -> folded alias table; a sha pin fixes the dictionary content.
+# A None table means the pinned aliases exceed MAX_ALIASES; a deadline stop is never cached.
 _TABLE: list = [None, None, False, 0]
 
 
 def _alias_table(dictionary, deadline):
     key = (dictionary.dict_id, dictionary.sha256)
     if _TABLE[0] == key:
-        return None if _TABLE[3] > MAX_ALIASES else (_TABLE[1], _TABLE[2])
+        return None if _TABLE[1] is None or _TABLE[3] > MAX_ALIASES else (_TABLE[1], _TABLE[2])
     aliases, scanned, partial = {}, 0, False
     for entry in dictionary.entries.values():
         if entry.kind == "class":
             continue
         for alias in entry.aliases:
             scanned += 1
-            if scanned > MAX_ALIASES or time.monotonic() >= deadline:
+            if scanned > MAX_ALIASES:
+                _TABLE[:] = [key, None, False, scanned]
+                return None
+            if time.monotonic() >= deadline:
                 return None
             if (not 2 <= len(alias) <= 80 or not _safe_label(alias) or any(c in "<>" for c in alias)
                     or not (any("\u30a0" <= c <= "\u30ff" or "\uff66" <= c <= "\uff9f"
