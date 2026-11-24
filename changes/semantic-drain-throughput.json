@@ -2,9 +2,9 @@
   "category": "changed",
   "title": "未読の意味解析jobを止め抽出QCだけをまとめて処理",
   "summary": "意味解析は有効だが要約・ループの結果readerがない設定では、意味解析jobを実行せず、extract_qc=annotateの抽出QCだけを常駐workerが最大8件・約5分の上限でまとめて処理します。readerがある設定では意味解析jobは1件ずつ処理し、Jev上限時にbacklogで待機するのは抽出QCだけです。新着用realtimeレーンの扱いは変更しません。",
-  "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。要約とループがともにoffの間、意味解析jobは実行されません。抽出QCはextract_qc=annotateの場合だけ実行されます。",
+  "upgrade": "設定変更は不要です。反映には常駐の抽出worker（ai.mcs.extract-drainer・extract-drainer-2・extract-drainer-night、standalone では抽出worker）の再起動が必要です。要約とループがともにoffの間、通常の取込・再処理では意味解析jobは作成・実行されません。明示的な保留解除は既存の検証後に置換jobを作り、readerが戻るまでpendingです。抽出QCはextract_qc=annotateの場合だけ実行されます。",
   "details": [
-    "意味解析jobの対象は semantic_policy.primary_verdicts_consumed で判定し、抽出QC jobは独立した extract_qc=annotate 設定で判定する。意味解析のreaderがない間は意味解析jobを作成・再投入・実行せず、抽出QCだけを維持する。",
+    "意味解析jobの対象は semantic_policy.primary_verdicts_consumed で判定し、抽出QC jobは独立した extract_qc=annotate 設定で判定する。readerがない間、通常の取込・再処理では意味解析jobを作成・再投入・実行しない。明示的な保留解除だけは例外で、既存の検証後に置換jobを作り、readerが戻るまでpendingに保つ。抽出QCは独立して維持する。",
     "常駐workerの最大8件・約300秒のまとめ処理は、意味解析が有効でreaderがない場合の抽出QCだけが対象。readerがある場合の意味解析jobは通常どおり1件ずつ処理する。",
     "まとめて処理する時間の上限（約300秒）はジョブごとの予算（job_budget_seconds）と別に持ち、長いジョブ予算でもこの上限を超えない。",
     "まとめて処理する間も run.lock は各Jev通信の前後で解放し、通信中は保持しない。",
