@@ -265,7 +265,8 @@ def _fingerprint(cfg: dict, omitted_extract: tuple) -> str:
     sem = dict(cfg.get('semantic') or {})
     # Explicit/default spelling must identify the same deployed candidate.
     defaults, _ = semantic_policy.semantic_config({})
-    defaults.update(sem)
+    # A stored Jev model pin is validated to name the fixed model (semantic_config).
+    defaults.update({key: value for key, value in sem.items() if key != 'model'})
     defaults.pop('fact_source_gate', None)
     defaults.pop('fact_source_evidence', None)
     defaults.pop('fact_source_approval', None)

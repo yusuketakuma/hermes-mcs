@@ -54,8 +54,19 @@ def _budget(value):
         raise ValueError("provider_budgets_invalid")
 
 
+# Jev model ids an earlier release fixed. A stored Jev ``model`` could only ever
+# equal the fixed id, so one of these names the fixed model, never another one.
+JEV_RETIRED_PINS = frozenset({"jev-1.13.0"})
+
+
+def jev_model_pin_ok(pin, jev_model) -> bool:
+    """Whether a stored Jev ``model`` names the fixed ``jev_model`` (or an id an earlier release fixed)."""
+    return (isinstance(pin, str) and isinstance(jev_model, str)
+            and (pin == jev_model or pin in JEV_RETIRED_PINS))
+
+
 def _jev_values(value, jev_model):
-    if "model" in value and (not isinstance(jev_model, str) or value["model"] != jev_model):
+    if "model" in value and not jev_model_pin_ok(value["model"], jev_model):
         raise ValueError("provider_model_invalid")
     for key, low, high in (("daily_request_budget", 0, 100000), ("max_attempts_per_try", 1, 3),
                            ("max_questions_per_request", 1, 48)):

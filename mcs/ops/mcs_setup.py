@@ -698,12 +698,10 @@ def cmd_jev_value(args) -> int:
     if not semantic_evaluation.bundled_synthetic_cases(cases):
         print("追加解析の評価: 配布されている完全合成の評価ケースを使用してください")
         return 1
-    cfg = mcs_util.load_config()
     from contextlib import nullcontext
-    scfg = cfg.get("semantic") or {}
     key = jev.api_key(HOME)
     context = (jev.live_client(key, operation="jev_value", root=HOME,
-                              model=scfg.get("model") or jev.JEV_MODEL) if key else nullcontext(None))
+                              model=jev.JEV_MODEL) if key else nullcontext(None))
     try:
         with context as jev_client:
             report = semantic_evaluation.evaluate_jev_incremental(
