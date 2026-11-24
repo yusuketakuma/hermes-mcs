@@ -26,7 +26,7 @@
 
 - `release_notes.py check`: 合格（CHANGELOG構造・版別詳細ファイル・画像URL）。
 - `release_notes.py build --version 1.3.0 --date 2026-11-24`: 既存版を上書きしないようcleanな一時worktreeで生成。候補側で更新済みの `jev-optional.json` と `semantic-drain-throughput.json` を用い、archive 37件がPR作業ツリーと完全一致することを確認。
-- `release_notes.py export --version 1.3.0`: 本文・タイトル出力成功。`release-notes-1.3.0.md`・`release-title-1.3.0.txt` に収録（本文115,091バイト、上限内）。
+- `release_notes.py export --version 1.3.0` で出力した本文とタイトルは `release-notes-1.3.0.md` と `release-title-1.3.0.txt` に収録しています。公開本文は37件をまとめた `21561f51c` で113,640バイト、Jevの説明を修正した `c0c2dd137` で114,939バイト、抽出QCの説明を統合した `64d3e62f9` で115,091バイトです。いずれも公開本文の上限内です。
 - `update_readme.py`: README生成ブロックは生成済み状態と一致（release・modules・signals・stats・cli）。
 - `readme_release.py --check`: 合格。
 - `check_drug_master_bundle.py`: 同梱 bundle は公式最新版 20261112（MHLW download menu の医薬品マスター最終更新日・令和8年11月12日・19,324件との一致を 2026-11-24 に確認）。有効化は要オペレーター承認で未実施。
@@ -41,7 +41,7 @@
 - 同じ合成台帳で候補のQA_VERSION 2を適用し、旧PASSが保存されたまま概要が一時的に非表示になることを確認する。
 - 独立した2ケースで背景再判定を進める。Jev対象内はstubの新しいPASS後に表示が戻ること、対象外はJev要求なしでsource/summaryの両方に `SKIPPED(out_of_scope)` が記録され、表示が戻ることを確認する。
 - 2026-11-24の合成probeでは上記2経路を確認。workerループは常駐レーンから `run_due` を呼ぶが、probe自体は処理単位を直接進めたため、サービス再起動・worker監督・画面を含む一連の統合動作は未検証。実Jev・実患者データ・本番DBは使っていない。
-- `release_owner_source.py --check`: 合格（main 取込後に manifest を再生成、digest `0602f939…`）。
+- `release_owner_source.py --check` は `41da58883` のソースで合格（digest `0602f939…`）。その後にmainから取り込んだ変更を含む PR #357 の `94a2b3237` のソース660件から、manifestを再生成しました（digest `9b0127a4…`）。
 
 ### 新規インストールの受入
 
@@ -98,10 +98,10 @@
 - head `a01066d2f4bdc78ba51c530d84218a913c90cc1d` のDevin Review `pr-review-job-e0abc6c08987494e968646dc766eeaf6` は完了。指摘3件のうち2件は前回レビューで既にrejected、1件は `jev-model` JSONの `model` が現在の設定値である説明不足で、今回CHANGELOG・変更記録を修正した。
 - このレビューの判定登録も未実施。旧triage担当セッション以外から操作しない。通常のPRレビューと必須CIはGitHub上の現行headで別に確認する。
 
-## PR #368 の統合候補境界（読み取り比較）
+## PR #368 のコミット `79cc372dd` と PR #357 の比較
 
 - PR #368 head `79cc372ddf755cce415ed258efa28c85e910c62f` は、PR #357 head `c0c2dd137ff5755acd907007dd93b9c2870ff984`、PR #366 head `dc88c5c52649ca04803631e75753e4a9106cb61d`、PR #367 head `54d435b5c86a7cc10dd5073ac4074d2b041279fd` を履歴に含む統合候補。PR #368自体は未取り込み。
-- 37件のarchiveは両headで同じ37ファイル・同一内容。各headの対応表は37件すべてのSHA256と一致し、差分は0件。
+- PR #357 の `c0c2dd137` と PR #368 の `79cc372dd` では、archiveの37ファイルがすべて一致しました。それぞれの対応表で、全37件のSHA256がファイルと一致しました。
 - 37件の外に患者コンテキスト変更記録が3件ある: 別患者の更新時も対象入力が一致すれば品質確認を続ける、保存直前に原文・回答・概況を再照合する、候補予約後に患者選定ロックを解放する。変更記録は未archiveの `patient-context-quality-concurrent-writes`、`patient-context-quality-foreign-commit`、`patient-context-selection-concurrency`。37件には加えず、#368統合headでの受入証跡も未確認。
 - 他に新しい未archive変更記録が14件ある。抽出・添付再処理（手動範囲、承認済み作り直し、OCR受付/保留理由）、薬剤・検査値、semantic待機、通知/スタンプ照合、archive患者export、権限の弱い `.env` 等で、患者コンテキスト機能とは別範囲。`homecare-local-backup.json` は既存37件のarchive側にあり、新規追加ではない。
 - PR #368本文に記された83件・254件のテストは各統合元の実行結果で、head `79cc372` の合格証跡ではない。ここでは読み取り比較だけを行い、#368のテストは実行していない。
