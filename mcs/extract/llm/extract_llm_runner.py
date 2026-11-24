@@ -1240,8 +1240,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
                     if not prepared:
                         for refused_row, reason in row_refused:
-                            if (reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
-                                    or reason in cloud_backlog._HOLD_DEFER_REASONS) \
+                            if (reason in cloud_backlog._HOLD_DEFER_REASONS
+                                    or reason == "prepare_context_load_superseded") \
                                     and time.monotonic() < deadline and _writer_current(full=True):
                                 # A refused head keeps a bounded claim — the next
                                 # pass sees the tail instead of re-blocking.
