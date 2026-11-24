@@ -5,7 +5,7 @@
   "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更は不要です。",
   "details": [
     "cloud_unit_unresolved で延期されたクラウド行は、ソース・所有者・リースが不変のときに限り release 時の CAS で next_try を復帰間隔（REVIVE_COOLDOWN_S、6時間）へ更新する。従来は claim をそのまま残して元のリース期限ごとに再選定されていた。不変を証明できない場合は従来どおり解放され、次の選定で通常経路に戻る。",
-    "クラウドの lookahead で prepare_context_load_superseded（複数片の旧世代保留行）にも _prepare_hold_s 経由の有界 claim を置く。従来は保持対象外で、パスごとに context の読み直しを繰り返していた。保留集合が引き続き旧世代だけと証明できる間は6時間、変われば短い準備待ち（60秒）で見直される。その他の準備拒否コードには従来どおり claim を置かない（次パスで即座に再選定される main の挙動を維持）。v4採用済み投稿は _source_writable の契約条件により claim 自体を取得できないため、旧世代保留を持つ採用済み投稿は従来どおり解放され次パスで見直される。",
+    "クラウドの lookahead で prepare_context_load_superseded（複数片の旧世代保留行）にも _prepare_hold_s 経由の有界 claim を置く。従来は保持対象外で、パスごとに context の読み直しを繰り返していた。保留集合が引き続き旧世代だけと証明できる間は6時間、変われば短い準備待ち（60秒）で見直される。その他の準備拒否コードには従来どおり claim を置かない（次パスで即座に再選定される main の挙動を維持）。必須クラウド契約が付かない旧世代保留の経路では、v4採用済み投稿は _source_writable の契約条件により claim を取得できず、従来どおり解放され次パスで見直される（契約付きの経路では採用済み投稿にも保持を許容する従来の判定は変わらない）。",
     "_release の _commit_hold は真偽値のほか保持秒数を値として受け取るようになった。真偽値は従来どおり短い準備待ち（_PREPARE_HOLD_S、60秒）を意味する。",
     "その他の保持理由（cloud_source_unverified・currentness_unverified・prepare_profile_unavailable・local_rebuild_*）と、verified repeat の refilled 判定・古いチェックポイント・支払い履歴の扱いは変わらない。",
     "extract_claim は配置時の投稿本文ハッシュ（payload の $.hash）に結ばれる。保留中に投稿が訂正されて本文ハッシュが変わると、その claim は異なる本文を対象としたものと証明できるため、訂正後の投稿が選定から隠されず、次の claim もそのまま引き継げる。訂正された投稿は従来どおり1回見直されたうえで改めて保持される。ハッシュを持たない従来形式の claim の扱いは変わらない。"
