@@ -261,6 +261,36 @@ def runtime_key_present(cfg, root) -> bool:
     return not explicit and bool(jev.api_key(root))
 
 
+def jev_available(scfg: dict, key_present) -> bool:
+    """Whether Jev may be asked now: semantic on, a key present, no review hold and a budget."""
+    return (bool(key_present) and scfg["mode"] != "off" and not scfg["jev_held"]
+            and scfg["daily_request_budget"] > 0)
+
+
+def _review_not_required():
+    return {"state": "not_required", "auto_enable": True}
+
+
+def jev_scope_policy(cfg: dict) -> tuple[dict, list]:
+    """Resolve the policy Jev would use with a key present, so scope decisions never depend on the key."""
+    # Records made with or without the key, and their later credential-free
+    # verification, then reach the same patient scope.
+    return semantic_config(cfg, key_present=True, transfer_status=_review_not_required)
+
+
+def jev_scope_excludes(scope_policy: dict, project_id) -> bool:
+    """Whether a policy from jev_scope_policy leaves this patient out of Jev's scope."""
+    scope = scope_policy["project_ids"]
+    return scope_policy["mode"] != "off" and scope is not None and project_id not in scope
+
+
+def patient_policy(policy: dict, cfg: dict, project_id) -> dict:
+    """The semantic policy one patient runs under: outside Jev's patient scope it is off, as without Jev."""
+    if policy["mode"] != "off" and jev_scope_excludes(jev_scope_policy(cfg)[0], project_id):
+        return {**policy, "mode": "off"}
+    return policy
+
+
 def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     return semantic_config(cfg, key_present=runtime_key_present(cfg, root), root=root)

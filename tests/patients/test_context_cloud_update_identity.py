@@ -202,3 +202,87 @@ def test_changed_input_reaches_full_paid_payload_and_updates_context(runtime, re
     assert all(row in after for row in before)
     view = readiness.context_view_input(ledger.db, 1, cfg=cfg)
     assert view and any(fact['quote'] == expected_body for fact in view['facts'])
+
+
+@pytest.mark.parametrize('receipt', ['kept', 'missing'])
+def test_install_without_jev_publishes_a_cloud_context_only_on_its_receipts(runtime, real_cloud, monkeypatch, receipt):
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    cfg.pop('semantic')   # a fresh install writes no semantic block and no Jev key
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: None)
+    monkeypatch.setattr(semantic_jev, 'JevClient',
+                        lambda **_kwargs: pytest.fail('an install without Jev must not construct a client'))
+    guard = cloud_policy.guard_context_origins
+    if receipt == 'missing':
+        def guard_without_receipt(ledger_, pid, origins):
+            return guard(ledger_, pid, [(*binding, {**meta, 'cloud_receipts': [
+                {'artifact_id': 10 ** 9, 'witness': ref['witness']} for ref in meta['cloud_receipts']]})
+                for *binding, meta in origins])
+        monkeypatch.setattr(cloud_policy, 'guard_context_origins', guard_without_receipt)
+    outcomes = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(30)]
+    skipped = ledger.artifacts(state.QUALITY_SKIP)
+    assert posts and not ledger.synthetic_jev_requests
+    assert not ledger.artifacts(state.QUALITY_PASS)
+    if receipt == 'kept':
+        assert outcomes[-1]['status'] == 'complete', outcomes[-3:]
+        assert [json.loads(row['content'])['reason'] for row in skipped] == ['disabled']
+        assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+    else:
+        # the source stage verifies the same receipts first and holds there
+        assert 'source_quality_unknown' in {result.get('reason') for result in outcomes}
+        assert outcomes[-1]['status'] != 'complete' and not skipped
+        assert not ledger.artifacts('patient_context_source_quality_skipped_v1')
+        assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is None
+
+
+
+def test_context_deferred_before_the_fix_publishes_without_a_jev_key(runtime, real_cloud, monkeypatch):
+    """A patient left waiting by the old scope rule is picked up again on its next retry."""
+    ledger, clock, _ = runtime
+    cfg, _posts = real_cloud
+    cfg.pop('semantic')
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: None)
+    import patient_context_quality_receipts as receipts_module
+    with monkeypatch.context() as before_fix:   # the old rule left every patient outside the scope
+        before_fix.setattr(receipts_module, '_quality_scope_allowed', lambda *_args: False)
+        held = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(5)]
+    assert 'source_quality_deferred' in {result.get('reason') for result in held}
+    for _ in range(12):   # one hour of ten-minute ticks
+        clock.wall += 300
+        clock.mono += 300
+        if step(runtime, cfg=cfg, local_admit=lambda: False)['status'] == 'complete':
+            break
+    else:
+        pytest.fail('the waiting context was not retried')
+    assert ledger.artifacts(state.QUALITY_SKIP)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+
+
+
+@pytest.mark.parametrize('semantic, jev_key', [
+    ({'project_ids': [2]}, None),   # setup may save a scope without a mode
+    ({'mode': 'assist', 'summary_mode': 'assist', 'project_ids': [2], 'daily_request_budget': 3000},
+     'synthetic-jev-key'),
+])
+def test_a_patient_outside_the_jev_scope_publishes_with_an_out_of_scope_skip(runtime, real_cloud, monkeypatch,
+                                                                              semantic, jev_key):
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    cfg['semantic'] = semantic   # cloud covers patient 1, the Jev scope does not
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: jev_key)
+    outcomes = []
+    for _ in range(30):
+        outcomes.append(step(runtime, cfg=cfg, local_admit=lambda: False))
+        if outcomes[-1]['status'] == 'complete':
+            break
+    else:
+        pytest.fail(repr(outcomes[:3] + outcomes[-1:]))
+    assert posts and not ledger.synthetic_jev_requests
+    assert not any('source_changed' in str(result.get('reason')) for result in outcomes)
+    # without a key semantic is off for everyone, so that reason comes first
+    assert [json.loads(row['content'])['reason'] for row in ledger.artifacts(state.QUALITY_SKIP)] == [
+        'disabled' if jev_key is None else 'out_of_scope']
+    assert ledger.artifacts('patient_context_source_quality_skipped_v1')
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+    snapshot, _, pending = readiness._pending(ledger.db, 1, cfg)
+    assert not any(pending.values())   # an out-of-scope skip is final, even with Jev available

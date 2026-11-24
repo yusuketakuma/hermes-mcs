@@ -45,6 +45,29 @@ def test_check_explicit_jev_mode_without_private_key_is_a_warning(monkeypatch):
     assert not any("no_api_key" in e for e in errors)
 
 
+@pytest.mark.parametrize("semantic, key, remedy", [
+    ({}, None, "TYPESAFE_API_KEYを登録"),
+    ({}, "synthetic-jev-key", None),
+    ({"mode": "off"}, None, "semantic.mode を off 以外に変更"),
+    ({"mode": "off"}, "synthetic-jev-key", "semantic.mode を off 以外に変更"),   # a key never overrides off
+])
+def test_check_warns_when_requested_qc_annotations_cannot_run(monkeypatch, semantic, key, remedy):
+    _linux_probe(monkeypatch)
+    monkeypatch.setattr(mcs_util, "private_env_value", lambda *a, **k: key)
+    cfg = {"notify_target": "slack", "semantic": {**semantic, "extract_qc": "annotate"}}
+    _, warnings = mcs_setup.check_environment(cfg)
+    found = [w for w in warnings if "extract_qc_inactive" in w]
+    assert (remedy in found[0]) if remedy else not found
+    assert environment_diagnostics.jev_notice(cfg, None) is None
+
+
+def test_check_install_without_jev_raises_no_jev_warning(monkeypatch):
+    _linux_probe(monkeypatch)
+    monkeypatch.setattr(mcs_util, "private_env_value", lambda *a, **k: None)
+    errors, warnings = mcs_setup.check_environment({"notify_target": "slack"})
+    assert not any("TYPESAFE_API_KEY" in line for line in errors + warnings)
+
+
 def test_check_environment_resolves_hermes_binary(monkeypatch,
                                                   tmp_path):
     """check must resolve the hermes CLI the way mcs_util.hermes_exe
@@ -446,6 +469,21 @@ def test_check_ok_prints_no_blocker_summary(monkeypatch, capsys):
     _check_only(monkeypatch)
     assert mcs_setup.cmd_check(None) == 0
     assert "動作を妨げる問題" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("key, cfg, shown", [
+    (None, {}, True),
+    ("synthetic-jev-key", {}, False),
+    (None, {"semantic": {"mode": "shadow", "project_ids": [1]}}, False),  # check_environment warns instead
+])
+def test_check_names_a_missing_jev_as_information(monkeypatch, capsys, key, cfg, shown):
+    _check_only(monkeypatch)
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, "private_env_value", lambda *a, **k: key)
+    assert mcs_setup.cmd_check(None) == 0
+    out = capsys.readouterr().out
+    assert ("情報: Jev: 未導入" in out) is shown
+    assert out.rstrip().endswith("（問題0件、注意0件）")
 
 
 def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):

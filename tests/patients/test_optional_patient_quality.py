@@ -255,3 +255,4 @@ def test_missing_jev_key_keeps_cloud_context_and_records_skips(runtime, cloud, m
     assert ledger.artifacts(refresh.QUALITY_SKIP)
     assert not ledger.artifacts(refresh.QUALITY_PASS)
     assert refresh.context_view_input(ledger.db, 1, cfg=CFG)
+

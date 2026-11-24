@@ -9,10 +9,18 @@ import patient_context_plan as context_plan
 import patient_context_refresh_state
 
 
-def _quality_scope_allowed(db, pid, policy, sources=None):
-    """Keep validated policy scope and canonical provenance separate from notification modes."""
+# A patient outside Jev's patient scope publishes like an install without Jev: its
+# quality check is recorded as not performed for this reason.
+OUT_OF_SCOPE = "out_of_scope"
+
+
+def _quality_scope_allowed(db, pid, cfg, sources=None):
+    """Keep validated policy and canonical provenance separate from notification modes."""
     from mcs_queries import paused
-    if paused(db, pid) or policy["project_ids"] is not None and pid not in policy["project_ids"]:
+    from semantic_policy import jev_scope_policy
+    # Jev's patient scope never blocks a record: outside it, the check is skipped (OUT_OF_SCOPE).
+    policy, errors = jev_scope_policy(cfg)
+    if errors or paused(db, pid):
         return False
     if sources is None:
         return True
@@ -237,7 +245,8 @@ def _quality_skip_receipt(db, pid, identity, selected, threshold):
         content, meta = strict_json(rows[0][0]), strict_json(rows[0][1])
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return None
-    from semantic_jev import SKIP_REASONS as reasons
+    from semantic_jev import SKIP_REASONS
+    reasons = SKIP_REASONS | {OUT_OF_SCOPE}
     if (not isinstance(content, dict) or set(content) != {"status", "reason", "fact_count", "purpose"}
             or content.get("status") != "SKIPPED" or content.get("reason") not in reasons
             or type(content.get("fact_count")) is not int or content["fact_count"] != len(identity["fact_ids"])
