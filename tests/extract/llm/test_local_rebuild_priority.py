@@ -303,3 +303,36 @@ def test_a_re_pending_adopted_unit_waits_in_normal_order(routed, monkeypatch):
     held = ledger.db.execute(
         "SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' AND message_id=1").fetchone()
     assert held and held[0] > time.time() + 60           # bounded hold, not a spin
+
+
+def test_a_transient_reproof_failure_recovers_after_one_round(routed, monkeypatch):
+    """A one-off read error during the re-proof surfaces as UNVERIFIED — a
+    transient verdict, not a state. The row is skipped for exactly the take
+    after the round that saw it (the fan-out still reaches the ACTIVE tail
+    behind it), then re-proven: the same approval recovers with no restart
+    and no re-approval — the receipts API refuses a duplicate approval of
+    the same post, so a permanent skip could never heal."""
+    ledger, cfg, calls, reserved, results = routed
+    _approved(ledger, monkeypatch, mid=1)              # ACTIVE walk-order tail
+    _approved(ledger, monkeypatch, mid=3, body="完全合成の別文3")  # newer head
+    real_permit = local_rebuild.permit
+    fired = [True]
+
+    def flaky(lgr, pid, mid, **kw):
+        if fired[0]:
+            fired[0] = False
+            return local_rebuild.UNVERIFIED      # one transient read failure
+        return real_permit(lgr, pid, mid, **kw)
+
+    monkeypatch.setattr(local_rebuild, "permit", flaky)
+    adm = {1, 3}
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                   approved_fill=True, approved_adm_ids=adm)
+    assert [row["message_id"] for row in rows] == [1]   # the head failed once; the tail still ran
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                   approved_fill=True, approved_adm_ids=adm)
+    assert [row["message_id"] for row in rows] == [1]   # mid3 skipped this one take
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                   approved_fill=True, approved_adm_ids=adm)
+    assert [row["message_id"] for row in rows] == [3]   # re-proven ACTIVE — healed
+    assert local_rebuild.permit(ledger, 1, 3) == local_rebuild.ACTIVE

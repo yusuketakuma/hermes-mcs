@@ -730,12 +730,12 @@ def _main() -> int:
                     # Continuous semantic success keeps extending the arrival
                     # window, so a recent-only turn can run forever and an
                     # approval added after startup would never get a slot.
-                    # Every _APPROVED_FIRST_TURNS windowed turns one normal
-                    # turn runs instead — the turn's own approved take decides
-                    # whether an approval is actually served (it lifts only a
-                    # candidate the same bounded selection can prove ACTIVE),
-                    # so with nothing approved the slot just works the backlog
-                    # and arrivals lose at most that one turn.
+                    # Every _APPROVED_FIRST_TURNS windowed turns one of them
+                    # adds an approved head take from the whole admission
+                    # cohort — the walk itself stays narrowed to the arrival
+                    # window, so a notified arrival is never outranked by an
+                    # unnotified newer post, and with nothing provable the
+                    # same pass's slots simply serve the arrivals it had.
                     approved_turn = False
                     if recent_window:
                         if approved_recent_turns >= _APPROVED_FIRST_TURNS:
@@ -743,7 +743,6 @@ def _main() -> int:
                             approved_turn = True
                         else:
                             approved_recent_turns += 1
-                        recent_window = not approved_turn
                     window = None
                     if recent_window:
                         recent = _recent_arrivals(led)
@@ -753,8 +752,8 @@ def _main() -> int:
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on"
                                      and cloud_policy.send_route("reextract") else 1)
-                    turn = ("oldest" if oldest_turn else "recent_only" if recent_window
-                            else "approved" if approved_turn else "normal")
+                    turn = ("oldest" if oldest_turn else "approved" if approved_turn
+                            else "recent_only" if recent_window else "normal")
                     started = time.monotonic()
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
@@ -767,7 +766,8 @@ def _main() -> int:
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm if window is None else window,
-                                    approved_first=not oldest_turn and not recent_window,
+                                    approved_first=(not oldest_turn
+                                                    and (not recent_window or approved_turn)),
                                     approved_fill=recent_window,
                                     approved_adm_ids=adm,
                                     allow_cloud=True, background=True,

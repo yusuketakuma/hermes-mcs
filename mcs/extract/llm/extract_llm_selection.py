@@ -150,7 +150,12 @@ _LEFT_ESTIMATE_S = 600.0
 # the process, keyed by its approval command_id so a newer approval re-proves
 # at once. With no expiry, the bounded fan-out advances past a run of lapsed
 # heads to the tail regardless of how much time passes between passes.
+# An UNVERIFIED verdict, though, is transient — a dropped read mid-check —
+# not a state: it is skipped only for the one take after the round that saw
+# it, so a stalled read cannot park a live approval forever while the take
+# still moves on to the candidates behind it.
 _reproof_misses: dict = {}
+_reproof_round = 0
 
 
 # approved_adm_ids default: inherit the walk's (possibly windowed) admission.
@@ -932,9 +937,16 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     def _approved_take(n):
         """Up to n approved candidates in walk order, each re-proven ACTIVE.
         Rows already selected this pass are excluded so a notified approval
-        is never taken — or counted — twice. Candidates that fail the
-        re-proof are skipped for the rest of the process, so a row of lapsed
-        units cannot pin the same bounded fan-out on a later pass either."""
+        is never taken — or counted — twice. A candidate that fails the
+        re-proof for a hard verdict is skipped for the rest of the process
+        while its approval command stands, so a run of lapsed heads cannot
+        pin the same bounded fan-out on a later pass. A transient
+        UNVERIFIED skips only the next take: after one round it is re-proven,
+        so a one-off read failure heals without a restart or a re-approval
+        (the receipts API refuses a duplicate approval of the same post)."""
+        global _reproof_round
+        _reproof_round += 1
+        rnd = _reproof_round
         if approved_scope is None or n <= 0:
             return []
         scope, params = approved_scope
@@ -943,7 +955,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         skip = sorted({row["message_id"] for row in rows}
                       | {mid for pid, mid, cmd in _reproof_misses
                          if (unit := rebuilds.get((pid, mid))) is not None
-                         and unit["command_id"] == cmd})
+                         and unit["command_id"] == cmd
+                         and ((missed := _reproof_misses[(pid, mid, cmd)]) is True
+                              or rnd <= missed)})
         if skip:
             scope += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
             params = [*params, json.dumps(skip)]
@@ -952,8 +966,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         # explicit unlimited cohort, not a fall-back to the walk's window
         for cand in _select(None, n * 4, None, scope=scope, scope_params=params,
                             adm=(take_sql, take_params)):
-            if local_rebuild.permit(ledger, cand["project_id"], cand["message_id"],
-                                    approvals=rebuilds) == local_rebuild.ACTIVE:
+            verdict = local_rebuild.permit(ledger, cand["project_id"],
+                                           cand["message_id"], approvals=rebuilds)
+            if verdict == local_rebuild.ACTIVE:
                 taken.append(cand)
                 if len(taken) >= n:
                     break
@@ -961,7 +976,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 unit = rebuilds.get((cand["project_id"], cand["message_id"]))
                 if unit is not None:
                     _reproof_misses[(cand["project_id"], cand["message_id"],
-                                     unit["command_id"])] = True
+                                     unit["command_id"])] = (
+                        rnd + 1 if verdict == local_rebuild.UNVERIFIED else True)
         return taken
 
     if approved_first and approved_scope is not None:

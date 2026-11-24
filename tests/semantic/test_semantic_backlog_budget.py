@@ -648,7 +648,8 @@ def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
     def record(*_args, **kwargs):
         runs.append((kwargs["admitted_ids"], kwargs["oldest_first"],
                      kwargs.get("archived_first", False),
-                     kwargs.get("fair_oldest", False), kwargs["budget_s"]))
+                     kwargs.get("fair_oldest", False), kwargs["budget_s"],
+                     kwargs.get("approved_first", False)))
         return {"done": 1, "failed": 0, "left": 1, "selected": 1}
 
     _resident(monkeypatch, [], background, ("--stop-after", "100000"))
@@ -670,18 +671,33 @@ def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
         extract_llm.main()
 
     narrowed = base if expire_window else ({7} if base is None else base & {7})
-    # every _APPROVED_FIRST_TURNS windowed turns the drainer runs one
-    # non-windowed turn (its own take decides whether an approval is
-    # actually served) — it keeps the full admission like every normal turn
-    assert [(admission, oldest, archive, fair)
-            for admission, oldest, archive, fair, _ in runs] == [
-        (base, False, False, False), (narrowed, False, False, False),
-        (narrowed, False, False, False), (narrowed, False, False, False),
-        (base, True, False, True), (base, False, False, False),
-        (narrowed, False, False, False), (narrowed, False, False, False),
-        (base, True, True, True), (narrowed, False, False, False)]
+    # every _APPROVED_FIRST_TURNS windowed turns one of them adds the
+    # approved head take — the walk itself keeps the arrival window, so the
+    # scheduled slot is a narrowed turn whose approved_first flag is set.
+    # Once the window expires every non-oldest turn is the un-narrowed
+    # normal turn (first=True); an oldest turn never lifts approvals.
+    if expire_window:
+        expected = [(base, False, False, False, True)] * 4 + [
+            (base, True, False, True, False)] + [
+            (base, False, False, False, True)] * 3 + [
+            (base, True, True, True, False),
+            (base, False, False, False, True)]
+    else:
+        expected = [
+            (base, False, False, False, True),
+            (narrowed, False, False, False, False),
+            (narrowed, False, False, False, False),
+            (narrowed, False, False, False, False),
+            (base, True, False, True, False),
+            (narrowed, False, False, False, True),   # scheduled approval slot
+            (narrowed, False, False, False, False),
+            (narrowed, False, False, False, False),
+            (base, True, True, True, False),
+            (narrowed, False, False, False, False)]
+    assert [(admission, oldest, archive, fair, first)
+            for admission, oldest, archive, fair, _, first in runs] == expected
     assert len(semantic_passes) == 9
-    assert all(0 < budget <= 900 for _, _, _, _, budget in runs)
+    assert all(0 < budget <= 900 for _, _, _, _, budget, _ in runs)
 
 
 @pytest.mark.parametrize("did_work", [False, True])
@@ -1028,11 +1044,13 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                 ledger, kwargs["limit"], kwargs["admitted_ids"],
                 kwargs["shard"], kwargs["oldest_first"], **extra)
             # a windowed turn is identified by its narrowed admission — the
-            # approval cohort itself is passed on every turn now
+            # approval cohort itself is passed on every turn now; the
+            # scheduled approval slot is the narrowed turn whose head take
+            # is also armed
+            narrowed = kwargs["admitted_ids"] != kwargs["approved_adm_ids"]
             kind = ("oldest" if kwargs["oldest_first"]
-                    else "recent"
-                    if kwargs["admitted_ids"] != kwargs["approved_adm_ids"]
-                    else "normal")
+                    else "approved" if narrowed and kwargs["approved_first"]
+                    else "recent" if narrowed else "normal")
             try:
                 if rows:
                     row = dict(rows[0])
@@ -1081,17 +1099,82 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         assert local_rebuild.permit(db, 1, 1) == local_rebuild.ADOPTED
         # the approval added after warm-up was adopted within a bounded span
         # while arrivals and semantic work kept moving — and specifically on
-        # the scheduled non-windowed turn, not the oldest slot (its posted_at
-        # is unreachable there) and not a leftover recent slot (arrivals fill
-        # every one). Disabling the rotation leaves it pending → red.
+        # the scheduled approval slot (a narrowed turn whose head take is
+        # armed), not the oldest slot (its posted_at is unreachable there)
+        # and not a leftover recent slot (arrivals fill every one).
+        # Disabling the rotation leaves it pending → red.
         assert local_rebuild.permit(db, 1, 50) == local_rebuild.ADOPTED
         assert 50 in seen
-        assert turn_kind[seen.index(50)] == "normal"
+        assert turn_kind[seen.index(50)] == "approved"
         assert [tuple(r) for r in _usage(db)] == usage_snapshot[0]
         recent_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
                         if mid in range(100, 109) and kind == "recent"]
         assert recent_fresh and all(f == 1 for f in recent_fresh)
         assert len({mid for mid in seen if mid in range(100, 109)}) >= 3   # arrivals advance
         assert 9 in seen or 11 in seen or 12 in seen         # backlog advances
+    finally:
+        real_close()
+
+
+def test_scheduled_approved_turn_keeps_the_arrival_window(tmp_path, monkeypatch):
+    """The scheduled approval slot arms the head take but must not widen the
+    walk: with nothing approvable, a notified older arrival still beats an
+    unnotified newer post — the approval turn serves the same window every
+    other recent-only turn does."""
+    from extract_testkit import _ledger, _message
+
+    db = _ledger(tmp_path)
+    real_close = db.close
+    clock = [1000.0]
+    scheduled, selected = [], []
+    pass_count = [0]
+    try:
+        # 80: the notified (older) arrival; 81: newer but never notified
+        db.save_messages([_message(mid=80, body="合成本文 80",
+                                   posted_at="2026-11-01T00:00:00+09:00"),
+                          _message(mid=81, body="合成本文 81",
+                                   posted_at="2030-01-01T00:00:00+09:00")])
+        with db.db:
+            db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=80",
+                          (time.time(),))
+
+        def background(*_args):
+            if pass_count[0] == 6:
+                raise KeyboardInterrupt("synthetic stop")
+            pass_count[0] += 1
+            return {"errors": [], "job_metrics": [
+                {"kind": "semantic", "status": "done"}]}
+
+        def record(ledger, **kwargs):
+            if (kwargs.get("approved_first")
+                    and kwargs["admitted_ids"] != kwargs["approved_adm_ids"]):
+                # the scheduled approval slot: narrowed walk + armed take
+                scheduled.append(kwargs["admitted_ids"])
+                rows, _ = extract_llm._select_pending(
+                    ledger, kwargs["limit"], kwargs["admitted_ids"],
+                    kwargs["shard"], kwargs["oldest_first"],
+                    approved_first=kwargs["approved_first"],
+                    approved_fill=kwargs.get("approved_fill", False),
+                    approved_adm_ids=kwargs["approved_adm_ids"])
+                selected.append([r["message_id"] for r in rows])
+            return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+
+        _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+        monkeypatch.setattr(db, "close", lambda: None)
+        monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+        monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
+        monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: {80, 81})
+        monkeypatch.setattr(extract_llm_admission, 'legacy_admissions',
+                            extract_llm.legacy_admissions)
+        monkeypatch.setattr(extract_llm_resident, 'legacy_admissions',
+                            extract_llm.legacy_admissions)
+        monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(extract_llm, "run_pending", record)
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+        with pytest.raises(KeyboardInterrupt):
+            extract_llm.main()
+
+        assert scheduled and all(admission == {80} for admission in scheduled)
+        assert selected and all(rows == [80] for rows in selected)
     finally:
         real_close()
