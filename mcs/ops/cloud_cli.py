@@ -1083,9 +1083,69 @@ def _time_value(text, *, end):
     return datetime.fromisoformat(text).isoformat()
 
 
+_LIMIT_HISTORY_MAX = 100
+_LIMIT_RECORD_NOTES = {
+    "legacy": "分割前の設定形式のため、上限の変更記録はありません",
+    "no_record": "変更記録はまだありません（この機能より前の保存には記録がありません）",
+    "unchanged": "記録のある保存では上限は変わっていません",
+    "unavailable": "変更記録を読み取れませんでした",
+}
+
+
+def _limit_change(record, *, previous=None):
+    before, after = record["limits"]["before"], record["limits"]["after"]
+    entry = {"committed_at": record["committed_at"], "origin": record["origin"],
+             "command_id": record["command_id"], "operation": record["operation"],
+             "changes": {key: {"before": before[key], "after": after[key]} for key in record["changed"]}}
+    if previous is not None:
+        # A save outside a recorded commit shows as a gap between neighbouring records.
+        shared = previous["limits"]["after"].keys() & before.keys()
+        entry["before_matches_previous"] = all(previous["limits"]["after"][key] == before[key] for key in shared)
+    return entry
+
+
+def _limit_audit(cfg, history=None):
+    """The newest recorded limit change and whether the current limits still match the newest record."""
+    import provider_settings
+
+    def state(name):
+        return {"state": name, "note": _LIMIT_RECORD_NOTES[name]}
+
+    path = str(mcs_util.CONF_PATH)
+    result = {"last_limit_change": state("legacy"), "limits_match_record": None}
+    try:
+        if not mcs_util._provider_config_active(path):
+            return result
+        found = provider_settings.change_records(Path(path).absolute().parent, provider_settings.CHANGE_RECORDS_MAX)
+        current = provider_settings.view_limits(cfg)
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        return {"last_limit_change": state("unavailable"), "limits_match_record": None}
+    records = found["records"]
+    if not records:
+        result["last_limit_change"] = state("no_record")
+    else:
+        recorded = records[0]["limits"]["after"]
+        differing = sorted(key for key in current.keys() & recorded.keys() if current[key] != recorded[key])
+        result["limits_match_record"] = not differing
+        if differing:
+            result["limits_differing_from_record"] = differing
+        changed = next((record for record in records if record["changed"]), None)
+        result["last_limit_change"] = (state("unchanged") if changed is None
+                                       else {"state": "changed", **_limit_change(changed)})
+    if history is not None:
+        result["limit_history"] = {
+            "records": [_limit_change(record, previous=records[index + 1] if index + 1 < len(records) else None)
+                        for index, record in enumerate(records[:history])],
+            "unrecorded_saves": found["unrecorded_saves"], "rejected_records": found["rejected_records"]}
+    return result
+
+
 def budget_command(args):
     """Show or set cloud cost caps and the run window in config.json."""
     try:
+        history = getattr(args, "history", None)
+        if history is not None and (type(history) is not int or not 1 <= history <= _LIMIT_HISTORY_MAX):
+            raise ValueError
         changes, defaults = {}, {}
         for option, key in _BUDGET_KEYS.items():
             text = getattr(args, option, None)
@@ -1125,7 +1185,7 @@ def budget_command(args):
                 defaults["cloud_llm.semantic_backlog_until"] = None
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
-              "解除は none で指定してください")
+              f"解除は none、--history は1〜{_LIMIT_HISTORY_MAX}の件数で指定してください")
         return 1
     import config_edit
     try:
@@ -1133,7 +1193,7 @@ def budget_command(args):
         if not isinstance(cfg, dict):
             raise ValueError("config_unreadable")
         if changes:
-            cfg, cloud_errors = config_edit.apply(changes, defaults)
+            cfg, cloud_errors = config_edit.apply(changes, defaults, origin="cloud_llm_budget")
             if cloud_errors:
                 print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
                 return 1
@@ -1165,11 +1225,11 @@ def budget_command(args):
                       "provider_budgets": settings["provider_budgets"],
                       "reextract_backlog_blockers": _backlog_setting_blockers(blocker_settings, "reextract"),
                       "semantic_backlog_blockers": _backlog_setting_blockers(blocker_settings, "semantic_backlog"),
-                      "saved": bool(changes)}, ensure_ascii=False))
+                      "saved": bool(changes), **_limit_audit(cfg, history)}, ensure_ascii=False))
     return 0
 
 
-def providers_command(args):
+def providers_command(args, *, origin="cloud_llm_providers"):
     """Configure provider selection and separate caps while retaining the combined limits."""
     import config_edit
     try:
@@ -1223,7 +1283,7 @@ def providers_command(args):
         if changes:
             callback_args = {key: getattr(args, key) for key in ("admission", "on_saved")
                              if getattr(args, key, None) is not None}
-            cfg, errors = config_edit.apply(changes, expected=cfg, **callback_args)
+            cfg, errors = config_edit.apply(changes, expected=cfg, origin=origin, **callback_args)
             if errors:
                 raise ValueError
         settings, errors = policy.resolve_settings(cfg)
@@ -1250,7 +1310,8 @@ def providers_command(args):
         "profiles": profiles, "profile_changes": profile_changes,
         "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
-        "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS}}, ensure_ascii=False))
+        "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS},
+        **_limit_audit(cfg)}, ensure_ascii=False))
     return 0
 
 
@@ -1291,7 +1352,7 @@ def provider_dialog(root, *, admission=None, on_saved=None):
         if on_saved is not None:
             values["on_saved"] = on_saved
         return providers_command(SimpleNamespace(provider={"1": "anthropic", "2": "openai", "3": "auto", "4": "auto"}[choice],
-            priority="openai,anthropic" if choice == "4" else "anthropic,openai", **values))
+            priority="openai,anthropic" if choice == "4" else "anthropic,openai", **values), origin="provider_dialog")
     except (EOFError, KeyboardInterrupt):
         return 130
     except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
@@ -1340,6 +1401,8 @@ def add_parsers(sub):
                    help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開。期間上限、または全体と提供元別の日額・月額上限が必要。none で終了")
     q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
                    help="意味解析の未処理分に限り、この日時までクラウド送信を再開。同じ費用上限が必要。none で終了")
+    q.add_argument("--history", type=int, metavar="N",
+                   help=f"上限の変更記録を新しい順にN件（1〜{_LIMIT_HISTORY_MAX}）表示。記録はこの版以降の分割形式の保存だけ")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))

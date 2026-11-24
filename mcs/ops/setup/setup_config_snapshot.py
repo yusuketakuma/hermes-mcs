@@ -264,14 +264,15 @@ def _reviewed_split_current(initial):
     return current
 
 
-def _publish_split_config(current, prepared, lock_fd):
+def _publish_split_config(current, prepared, lock_fd, *, origin):
+    """Commit prepared split settings under the held edit lock, naming the saving command."""
     import provider_settings
     import semantic_jev
 
     common, providers, selected = prepared
     return provider_settings.commit_locked(current[1]['root'], current[1]['state']['snapshot'], common, providers,
         selected_provider=selected, model_owners=current[1]['owners'], jev_model=semantic_jev.JEV_MODEL,
-        lock_fd=lock_fd)
+        lock_fd=lock_fd, origin=origin)
 
 
 def _cli_legacy_base():
@@ -379,7 +380,7 @@ def _require_review(root):
               '（設定で mode を指定しても同じです。docs/guides/COMPLIANCE.md）')
 
 
-def _init_save_config(cfg, initial, args):
+def _init_save_config(cfg, initial, args, *, origin='setup_init'):
     """Publish the reviewed config under the shared short-lived edit lock."""
     import config_backup
     import config_edit
@@ -395,13 +396,9 @@ def _init_save_config(cfg, initial, args):
             raise config_edit.ConfigConflict('config_changed')
         kind = initial[0]
         if kind == 'split':
-            import provider_settings
-            import semantic_jev
-            common, providers, selected = _init_split_changes(initial[1], cfg)
+            prepared = _init_split_changes(initial[1], cfg)
             args._config_publication_started = True
-            provider_settings.commit_locked(current[1]['root'], current[1]['state']['snapshot'], common, providers,
-                selected_provider=selected, model_owners=current[1]['owners'], jev_model=semantic_jev.JEV_MODEL,
-                lock_fd=lock_fd)
+            _publish_split_config(current, prepared, lock_fd, origin=origin)
             return
         if kind in ('missing', 'invalid_backup'):
             # Both publish a fresh config from the reviewed answers, so both start with the

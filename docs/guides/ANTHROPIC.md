@@ -57,6 +57,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm providers
 
 API別の上限と合計上限を同時に適用します。API別上限の合計が合計上限を超える設定は保存しません。
 API別予算を設定していない既存環境は、従来の合計上限を使います。API別予算を設定した場合、予算を割り当てていないAPIには送信しません。
+`providers` の出力にも、`budget` と同じ `last_limit_change`・`limits_match_record` を表示します（「件数・費用・対象を制限する」の「上限の変更記録」）。
 OpenAIはResponses APIの標準サービスを使い、応答の保存を `store=false`、プロンプトキャッシュを30分に指定します。
 これは保存契約やデータ保持条件を保証する設定ではありません。利用先の条件を確認してください。
 OpenAIの料金はモデルごとの版を記録し、LunaとSolの使用額を同じOpenAI予算と合計上限に算入します。価格の確認日と再確認期限は各モデルの料金定義で管理します。出典は[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)と[Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)の公式資料です。
@@ -138,10 +139,20 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none    
 python3 mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
 python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
 python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
+python3 mcs/ops/mcs_setup.py cloud-llm budget --history 10                       # 上限の変更記録を新しい順に10件
 ```
 
 設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
+
+**上限の変更記録**: 提供元別設定（`data/provider_settings/`）を使う環境では、設定を保存するたびに、その保存の作業フォルダ（`data/.provider-settings-stage-<操作ID>/change.json`、所有者だけが読める）へ変更記録を1件残します。記録は、保存した入口（`cloud_llm_budget`・`cloud_llm_providers`・`provider_dialog`・`settings`・`remote_access`・`jev_model`・`setup_init`・`setup_slack_channels`・`setup_fact_source`・`setup_features`・`update_migration`・`install_bootstrap`・`install_runtime`。経路を特定できない保存は `unattributed`）、保存日時（UTC）、保存前後の4ファイルのハッシュ、運用上限の保存前後の値と変わった項目です。Jevモデルの切り替えは承認記録の `command_id` も残します。上限を変えない保存でも記録します。
+
+- 対象の上限は、`cloud_llm` の運用上限（日額・月額・期間予算と開始・終了日時・件数・同時送信数・再開期限など）、API別の日額・月額、`semantic.daily_request_budget`・`semantic.until` です。値は数値、`null`（上限なし）、日時、`absent`（未設定のため既定値を使う）、`invalid`（数値・日時として読めない値。値そのものは残しません）のどれかで、`absent` と `null` を区別します。
+- 記録には設定の文字列・認証情報・`.env` の内容・患者情報を含めません。台帳DBには書きません。
+- `budget` と `providers` の出力の `last_limit_change` は、上限が変わった最新の記録（`state: "changed"`、入口・日時・変わった項目の前後）を示します。記録が1件も無い場合は `no_record`（この機能より前の保存には記録がありません）、記録はあるが上限が変わっていない場合は `unchanged`、従来形式の設定は `legacy`、記録を読み取れない場合は `unavailable` です。判定には新しい順に最大1000件の記録を使います。
+- `limits_match_record` は、最新の記録の保存後の上限と現在の設定が一致するかを示します（記録が無い場合は `null`）。`false` の場合は、記録の残らない方法で上限が変わったことを示し、`limits_differing_from_record` に項目名を表示します。
+- `budget --history N`（1〜100）は、新しい順にN件の記録を `limit_history` に表示します。`before_matches_previous: false` は、その保存の前に、記録されていない変更があったことを示します。記録の無い作業フォルダの数は `unrecorded_saves`、読み取らなかった不正な記録（リンク・大きすぎる・形式違い）の数は `rejected_records` です。
+- 記録はこの版以降の保存から始まります。従来形式（`config.json` だけ）の環境には記録を残しません。上限の変更に新たな承認は求めません。
 
 論理的な設定構造の例です。提供元別設定を使う環境では、この断片をファイルへ直接書かず、設定画面またはCLIを使ってください。
 

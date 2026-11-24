@@ -407,3 +407,15 @@ def test_split_editor_does_not_report_other_same_bytes_inode(split_conf, monkeyp
     with pytest.raises(ValueError, match='config_save_unverified'):
         config_edit.apply({'extract.prefilter': False}, on_saved=lambda *a: events.append(a))
     assert not events
+
+
+def test_legacy_saves_keep_no_change_record_and_refuse_unknown_origins(conf):
+    data = conf.parent / "data"
+    data.mkdir(mode=0o700)
+    raw = conf.read_bytes()
+    with pytest.raises(ValueError, match="provider_settings_origin_invalid"):
+        config_edit.apply({"extract.prefilter": False}, origin="synthetic")
+    assert conf.read_bytes() == raw
+    _, errors = config_edit.apply({"extract.prefilter": False}, origin="settings")
+    assert errors == [] and json.loads(conf.read_text())["extract"] == {"prefilter": False}
+    assert list(data.iterdir()) == []

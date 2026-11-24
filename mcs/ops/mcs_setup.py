@@ -462,7 +462,7 @@ def cmd_slack_channels(args):
         if validate_config(candidate)[0]:
             raise ValueError('slack_setup_unverified')
         slack_channel_setup.stage_config(HOME, cfg, candidate)
-        _init_save_config(candidate, initial, args)
+        _init_save_config(candidate, initial, args, origin='setup_slack_channels')
         slack_channel_setup.applied(HOME, cfg, candidate)
         slack_channel_setup.finish_runtime(HOME, candidate, args)
         return 0
@@ -645,7 +645,7 @@ def cmd_fact_source(args) -> int:
             if split_initial is not None:
                 prepared = _init_split_changes(split_initial[1], cfg)
                 publication_started = True
-                _publish_split_config(current, prepared, lock_fd)
+                _publish_split_config(current, prepared, lock_fd, origin='setup_fact_source')
             elif base is None:
                 publication_started = True
                 safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
@@ -1204,7 +1204,7 @@ def cmd_features(args) -> int:
             if split_initial is not None:
                 prepared = _init_split_changes(split_initial[1], cfg)
                 publication_started = True
-                _publish_split_config(current, prepared, lock_fd)
+                _publish_split_config(current, prepared, lock_fd, origin='setup_features')
             elif base is None:
                 # Publish an absent base exclusively, without replacing a concurrent creator.
                 publication_started = True

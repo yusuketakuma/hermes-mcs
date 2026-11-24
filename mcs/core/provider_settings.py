@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -803,20 +804,206 @@ def _edit_lock_at(root, expected):
         handle.close()
 
 
+# Each save of a split installation leaves CHANGE_RECORD in its own stage
+# directory: which entry point saved and how the operating limits changed. The
+# record holds only fixed codes, hashes, times and numbers, never settings text.
+SETTINGS_ORIGINS = frozenset({
+    "unattributed", "cloud_llm_budget", "cloud_llm_providers", "provider_dialog", "settings",
+    "remote_access", "jev_model", "setup_init", "setup_slack_channels", "setup_fact_source",
+    "setup_features", "update_migration", "install_bootstrap", "install_runtime"})
+CHANGE_RECORD = "change.json"
+CHANGE_RECORDS_MAX = 1000
+_CHANGE_RECORD_MAX_BYTES = 64 * 1024
+_CHANGE_RECORD_KEYS = frozenset({"version", "operation", "committed_at", "origin", "command_id",
+                                 "files", "limits", "changed"})
+_STAGE_NAME = re.compile(r"\.provider-settings-stage-([0-9a-f]{32})")
+_COMMITTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00")
+_TIME_TEXT = re.compile(r"[0-9TZ:+.\- ]{10,64}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_BUDGET_FIELDS = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
+_JEV_LIMITS = ("daily_request_budget", "until")
+# "absent" falls back to the code default; an explicit null means no limit.
+ABSENT, INVALID = "absent", "invalid"
+_MISSING, _MALFORMED = object(), object()
+
+
+def require_origin(origin, command_id=None):
+    """Refuse an entry point code outside SETTINGS_ORIGINS or a command id that is not a canonical UUID."""
+    try:
+        valid_command = command_id is None or isinstance(command_id, str) and str(uuid.UUID(command_id)) == command_id
+    except ValueError:
+        valid_command = False
+    if type(origin) is not str or origin not in SETTINGS_ORIGINS or not valid_command:
+        raise ValueError("provider_settings_origin_invalid")
+
+
+def _cloud_limit_keys():
+    # Imported on use: the run-window and spending keys belong to semantic_runtime,
+    # whose import reads and creates nothing, so a fresh install can load it too.
+    from semantic_runtime import CLOUD_OPERATING_LIMITS
+    return tuple(key for key in CLOUD_OPERATING_LIMITS if key != "provider_budgets")
+
+
+def _member(section, key):
+    if section is _MISSING:
+        return _MISSING
+    return section.get(key, _MISSING) if isinstance(section, dict) else _MALFORMED
+
+
+def _limit_value(value):
+    if value is _MISSING:
+        return ABSENT
+    if value is None:
+        return None
+    if type(value) in (int, float):
+        return value if math.isfinite(value) else INVALID
+    if isinstance(value, str) and _TIME_TEXT.fullmatch(value):
+        try:
+            until_epoch(value)
+        except (TypeError, ValueError, OverflowError):
+            return INVALID
+        return value
+    # Any other value is never copied: the record carries no settings text.
+    return INVALID
+
+
+def _limits(cloud, budgets, jev):
+    result = {"cloud_llm." + key: _limit_value(_member(cloud, key)) for key in _cloud_limit_keys()}
+    for name in CLOUD_PROVIDERS:
+        budget = _member(budgets, name)
+        for field in _BUDGET_FIELDS:
+            result[f"cloud_llm.provider_budgets.{name}.{field}"] = _limit_value(_member(budget, field))
+    for key in _JEV_LIMITS:
+        result["semantic." + key] = _limit_value(_member(jev, key))
+    return result
+
+
+def _split_limits(common, providers):
+    return _limits(common.get("cloud_llm", _MISSING),
+                   {name: providers[name]["budget"] for name in CLOUD_PROVIDERS if "budget" in providers[name]},
+                   providers["jev"])
+
+
+def view_limits(view):
+    """Operating limits of a legacy-shaped settings view, keyed as in change records."""
+    if not isinstance(view, dict):
+        raise ValueError("provider_config_invalid")
+    cloud = view.get("cloud_llm", _MISSING)
+    return _limits(cloud, _member(cloud, "provider_budgets"), view.get("semantic", _MISSING))
+
+
+def _source_limits(old, split, model_owners, jev_model):
+    # The bytes the commit verified under the edit lock, never a second read.
+    common = _document(old["config"])
+    if split:
+        providers = {name: _document(old[name]) for name in PROVIDERS}
+    else:
+        common, providers = split_legacy(common, model_owners, jev_model=jev_model)
+    return _split_limits(common, providers)
+
+
+def _change_record(operation, pending, before, after, origin, command_id):
+    return _json_bytes({
+        "version": 1, "operation": operation,
+        "committed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "origin": origin, "command_id": command_id,
+        "files": {"before": dict(pending["before"]), "after": dict(pending["after"])},
+        "limits": {"before": before, "after": after},
+        "changed": sorted(key for key in after if before.get(key, ABSENT) != after[key])},
+        limit=_CHANGE_RECORD_MAX_BYTES)
+
+
+def _stored_limit_ok(value):
+    return (value is None or value in (ABSENT, INVALID)
+            or type(value) in (int, float) and math.isfinite(value)
+            or isinstance(value, str) and _limit_value(value) == value)
+
+
+def _checked_record(record, operation):
+    files, limits = record.get("files"), record.get("limits")
+    if (record.keys() != _CHANGE_RECORD_KEYS or record["version"] != 1 or type(record["version"]) is not int
+            or record["operation"] != operation or not isinstance(record["committed_at"], str)
+            or _COMMITTED_AT.fullmatch(record["committed_at"]) is None
+            or not isinstance(files, dict) or files.keys() != {"before", "after"}
+            or any(not isinstance(side, dict) or side.keys() != set(_FILES)
+                   or any(value is not None and (not isinstance(value, str) or _SHA256.fullmatch(value) is None)
+                          for value in side.values()) for side in files.values())
+            or not isinstance(limits, dict) or limits.keys() != {"before", "after"}
+            or any(not isinstance(side, dict) or any(not isinstance(key, str) or not _stored_limit_ok(value)
+                                                     for key, value in side.items()) for side in limits.values())
+            or limits["before"].keys() != limits["after"].keys()
+            or record["changed"] != sorted(key for key in limits["after"]
+                                           if limits["before"][key] != limits["after"][key])):
+        raise ValueError("provider_record_invalid")
+    require_origin(record["origin"], record["command_id"])
+    return record
+
+
+def change_records(root, limit) -> dict:
+    """The newest ``limit`` change records of a split installation, read without changing anything.
+
+    A stage directory without a record (a save before records existed, or one
+    still held as pending) is counted, as is a record that is a link, too
+    large, not private or malformed; neither is ever returned."""
+    if type(limit) is not int or not 1 <= limit <= CHANGE_RECORDS_MAX:
+        raise ValueError("provider_record_limit_invalid")
+    root = Path(root)
+    if not root.is_absolute():
+        raise ValueError("provider_root_invalid")
+    handle = _RootHandle(root)
+    data_fd = None
+    records, unrecorded, rejected = [], 0, 0
+    try:
+        data_fd = _directory(handle.fd, "data")
+        stages = []
+        with os.scandir(data_fd) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 100000:
+                    raise ValueError("provider_artifact_scan_limit")
+                match = _STAGE_NAME.fullmatch(entry.name)
+                if match is not None:
+                    stages.append((entry.name, match.group(1)))
+        for name, operation in stages:
+            try:
+                stage_fd = _directory(data_fd, name, private=True)
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError):
+                rejected += 1
+                continue
+            try:
+                raw, _ = _read_file(stage_fd, CHANGE_RECORD, limit=_CHANGE_RECORD_MAX_BYTES)
+                if raw is None:
+                    unrecorded += 1
+                else:
+                    records.append(_checked_record(_document(raw), operation))
+            except (OSError, ValueError, RecursionError):
+                rejected += 1
+            finally:
+                os.close(stage_fd)
+        handle.check()
+    finally:
+        if data_fd is not None:
+            os.close(data_fd)
+        handle.close()
+    records.sort(key=lambda record: (record["committed_at"], record["operation"]), reverse=True)
+    return {"records": records[:limit], "unrecorded_saves": unrecorded, "rejected_records": rejected}
+
+
 def commit(root, expected_snapshot, common, providers, *, selected_provider, model_owners, jev_model=None,
-           config_limit=CONFIG_MAX_BYTES):
+           config_limit=CONFIG_MAX_BYTES, origin="unattributed", command_id=None):
     """Commit after taking the normal config editor lock."""
     return _commit(root, expected_snapshot, common, providers, selected_provider=selected_provider,
                    model_owners=model_owners, jev_model=jev_model, lock_fd=None, config_limit=config_limit,
-                   validate=_validate_standard)
+                   validate=_validate_standard, origin=origin, command_id=command_id)
 
 
 def commit_locked(root, expected_snapshot, common, providers, *, selected_provider, model_owners,
-                  lock_fd, jev_model=None, config_limit=CONFIG_MAX_BYTES):
+                  lock_fd, jev_model=None, config_limit=CONFIG_MAX_BYTES, origin="unattributed", command_id=None):
     """Commit using a borrowed editor lock descriptor without closing it."""
     return _commit(root, expected_snapshot, common, providers, selected_provider=selected_provider,
                    model_owners=model_owners, jev_model=jev_model, lock_fd=lock_fd, config_limit=config_limit,
-                   validate=_validate_standard)
+                   validate=_validate_standard, origin=origin, command_id=command_id)
 
 
 def _validate_standard(config):
@@ -854,7 +1041,8 @@ def bootstrap_locked(root, expected_snapshot, common, *, model_owners, lock_fd, 
     providers = {name: {} for name in PROVIDERS}
     return _commit(root, expected_snapshot, common, providers, selected_provider=CLOUD_PROVIDERS[0],
                    model_owners=model_owners, jev_model=jev_model, lock_fd=lock_fd,
-                   config_limit=CONFIG_MAX_BYTES, validate=_validate_bootstrap, configuration_state="bootstrap")
+                   config_limit=CONFIG_MAX_BYTES, validate=_validate_bootstrap, configuration_state="bootstrap",
+                   origin="install_bootstrap")
 
 
 def bootstrap_runtime_locked(root, expected_snapshot, changes, *, model_owners, lock_fd, jev_model=None):
@@ -873,11 +1061,12 @@ def bootstrap_runtime_locked(root, expected_snapshot, changes, *, model_owners, 
     return _commit(root, expected_snapshot, common, before["providers"], selected_provider=CLOUD_PROVIDERS[0],
                    model_owners=model_owners, jev_model=jev_model, lock_fd=lock_fd,
                    config_limit=CONFIG_MAX_BYTES, validate=_validate_bootstrap, configuration_state="bootstrap",
-                   require_completed_bootstrap=True)
+                   require_completed_bootstrap=True, origin="install_runtime")
 
 
 def _commit(root, expected_snapshot, common, providers, *, selected_provider, model_owners, jev_model, lock_fd,
-            config_limit, validate, configuration_state=None, require_completed_bootstrap=False):
+            config_limit, validate, configuration_state=None, require_completed_bootstrap=False,
+            origin="unattributed", command_id=None):
     """Commit four settings with durable pending evidence and independent backups.
 
     Initial migration requires the updater's verified quiescence before new
@@ -887,9 +1076,14 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
     A rollback after a failure restores the bytes, but rename and link change
     the restored files' ctime, so callers must re-read before retrying; a stale
     snapshot or identity proof is refused as a change.
+
+    The last write before pending is removed is the stage's CHANGE_RECORD:
+    ``origin``, ``command_id`` and the operating limits before (from the
+    verified old bytes) and after; a rollback removes it with the stage.
     """
     if configuration_state not in (None, "bootstrap"):
         raise ValueError("provider_configuration_state_invalid")
+    require_origin(origin, command_id)
     config_limit = _config_limit(config_limit)
     effective = execution_view(common, providers, selected_provider=selected_provider,
                                model_owners=model_owners, jev_model=jev_model)
@@ -947,6 +1141,8 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             if require_completed_bootstrap:
                 for name in (".provider-bootstrap-fresh.json", ".provider-bootstrap-complete.json"):
                     _must_be_absent(data_fd, name)
+            limits_before = _source_limits(old, authority_snapshot is not None, model_owners, jev_model)
+            limits_after = _split_limits(common, providers)
             operation = uuid.uuid4().hex
             pending = {"version": 1, "operation": operation,
                        "before": {name: actual["files"][name]["sha256"] if actual["files"][name] else None for name in _FILES},
@@ -1017,6 +1213,12 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                     for name in (*_FILES, "authority"):
                         try:
                             os.unlink(".provider-settings-backup-" + operation + "-" + name + ".bin", dir_fd=data_fd)
+                        except FileNotFoundError:
+                            pass
+                    if stage_fd is not None:
+                        # This operation's own record; a rolled-back save leaves no trace.
+                        try:
+                            os.unlink(CHANGE_RECORD, dir_fd=stage_fd)
                         except FileNotFoundError:
                             pass
                     try:
@@ -1099,6 +1301,11 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             authority_raw = _json_bytes(authority)
             authority_snapshot = _replace(data_fd, ".provider-settings-authority.json", authority_raw,
                                           stage_fd, authority_snapshot, "authority", moved, True, CONFIG_MAX_BYTES)
+            check()
+            # Written while pending still holds readers, so a failure rolls back like any other write.
+            _write_new(stage_fd, CHANGE_RECORD,
+                       _change_record(operation, pending, limits_before, limits_after, origin, command_id),
+                       limit=_CHANGE_RECORD_MAX_BYTES)
             check()
             os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
             undo = None

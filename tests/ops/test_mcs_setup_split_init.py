@@ -437,3 +437,21 @@ def test_new_config_is_published_only_after_the_external_ai_hold(tmp_path, monke
         mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
     assert not conf.exists()
     assert external_transfer.status(tmp_path)['state'] == 'pending'
+
+
+@pytest.mark.parametrize('origin', [None, 'setup_slack_channels'])
+def test_split_setup_save_records_the_saving_command(split, origin):
+    root, _, _ = split
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cfg['cloud_llm']['daily_cost_limit_usd'] = 4
+    options = {} if origin is None else {'origin': origin}
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False), **options)
+    record, = provider_settings.change_records(root, 1)['records']
+    assert record['origin'] == (origin or 'setup_init')
+    assert record['changed'] == ['cloud_llm.daily_cost_limit_usd']
+    assert record['limits']['after']['cloud_llm.provider_budgets.openai.daily_cost_limit_usd'] == 0
+
+
+def test_split_setup_publication_requires_a_named_command(split):
+    with pytest.raises(TypeError):
+        setup_config_snapshot._publish_split_config(None, None, None)

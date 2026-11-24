@@ -252,14 +252,14 @@ def test_split_provider_cli_expected_detects_concurrent_change(verified_split, m
     conf, providers, directory, authority, key = verified_split
     original = config_edit.apply
     previous = {path: path.read_bytes() for path in [*directory.iterdir(), key]}
-    def concurrent(changes, defaults=None, *, expected=None):
+    def concurrent(changes, defaults=None, *, expected=None, origin):
         common = json.loads(conf.read_text())
         common["cloud_llm"]["mode"] = "off"
         conf.write_text(json.dumps(common))
         proof = json.loads(authority.read_text())
         proof["common_policy_sha256"] = provider_settings.common_policy_digest(common)
         authority.write_text(json.dumps(proof))
-        return original(changes, defaults, expected=expected)
+        return original(changes, defaults, expected=expected, origin=origin)
     monkeypatch.setattr(config_edit, "apply", concurrent)
     assert cli.providers_command(SimpleNamespace(provider="openai")) != 0
     state = _verified_state(conf)
@@ -377,3 +377,111 @@ def test_profile_parser_aliases_and_finite_values():
     assert args.anthropic_backlog_profile == "haiku-medium"
     with pytest.raises(SystemExit):
         parser.parse_args(["cloud-llm", "providers", "--patient-context-profile", "unknown-profile"])
+
+
+def _records(conf):
+    return provider_settings.change_records(conf.parent, 10)["records"]
+
+
+def test_split_saves_record_their_origin_and_changed_limits(verified_split, capsys):
+    conf, providers, _, _, _ = verified_split
+    assert cli.providers_command(SimpleNamespace(provider=None, openai_daily_usd="0.5")) == 0
+    shown = json.loads(capsys.readouterr().out)
+    record, = _records(conf)
+    assert record["origin"] == "cloud_llm_providers" and record["command_id"] is None
+    assert record["changed"] == ["cloud_llm.provider_budgets.openai.daily_cost_limit_usd"]
+    assert record["limits"]["before"]["cloud_llm.provider_budgets.openai.daily_cost_limit_usd"] == 0
+    assert record["limits"]["after"]["cloud_llm.provider_budgets.openai.daily_cost_limit_usd"] == 0.5
+    assert shown["limits_match_record"] is True
+    assert shown["last_limit_change"]["origin"] == "cloud_llm_providers"
+    assert _run(daily="5", monthly="none") == 0
+    shown = json.loads(capsys.readouterr().out)
+    record = _records(conf)[0]
+    assert record["origin"] == "cloud_llm_budget"
+    assert record["changed"] == ["cloud_llm.daily_cost_limit_usd", "cloud_llm.monthly_cost_limit_usd"]
+    before, after = record["limits"]["before"], record["limits"]["after"]
+    # Never set before (the default applies) versus explicitly removed (no cap).
+    assert (before["cloud_llm.monthly_cost_limit_usd"], after["cloud_llm.monthly_cost_limit_usd"]) == ("absent", None)
+    assert (before["cloud_llm.daily_cost_limit_usd"], after["cloud_llm.daily_cost_limit_usd"]) == ("absent", 5)
+    assert after["semantic.until"] is None and after["semantic.daily_request_budget"] == 0
+    assert shown["last_limit_change"] == {"state": "changed", "committed_at": record["committed_at"],
+        "origin": "cloud_llm_budget", "command_id": None, "operation": record["operation"],
+        "changes": {"cloud_llm.daily_cost_limit_usd": {"before": "absent", "after": 5},
+                    "cloud_llm.monthly_cost_limit_usd": {"before": "absent", "after": None}}}
+    assert cli.budget_command(SimpleNamespace(until="2026-12-31")) == 0
+    capsys.readouterr()
+    record = _records(conf)[0]
+    assert record["changed"] == ["cloud_llm.until"]
+    assert record["limits"]["after"]["cloud_llm.until"] == "2026-12-31T23:59:59+09:00"
+    assert len(_records(conf)) == 3
+
+
+def test_limit_record_states_distinguish_no_record_from_no_change(conf, verified_split, capsys):
+    assert _run() == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["last_limit_change"]["state"] == "no_record" and shown["limits_match_record"] is None
+    assert cli.providers_command(SimpleNamespace(provider="openai")) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert _records(conf)[0]["changed"] == []
+    assert shown["last_limit_change"]["state"] == "unchanged" and shown["limits_match_record"] is True
+
+
+def test_legacy_config_reports_that_it_keeps_no_records(conf, capsys):
+    assert _run(daily="3") == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["last_limit_change"]["state"] == "legacy" and shown["limits_match_record"] is None
+    assert not list(conf.parent.glob("data/.provider-settings-stage-*"))
+
+
+def test_a_change_outside_a_recorded_save_is_reported_as_drift(verified_split, capsys):
+    conf, _, _, authority, _ = verified_split
+    assert _run(daily="2") == 0
+    capsys.readouterr()
+    common = json.loads(conf.read_text())
+    common["cloud_llm"]["daily_cost_limit_usd"] = 1.5
+    conf.write_text(json.dumps(common))
+    proof = json.loads(authority.read_text())
+    proof["common_policy_sha256"] = provider_settings.common_policy_digest(common)
+    authority.write_text(json.dumps(proof))
+    assert _run() == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["daily_cost_limit_usd"] == 1.5 and shown["limits_match_record"] is False
+    assert shown["limits_differing_from_record"] == ["cloud_llm.daily_cost_limit_usd"]
+    assert _run(monthly="50") == 0
+    capsys.readouterr()
+    assert cli.budget_command(SimpleNamespace(history=5)) == 0
+    shown = json.loads(capsys.readouterr().out)
+    newest, older = shown["limit_history"]["records"]
+    assert newest["changes"] == {"cloud_llm.monthly_cost_limit_usd": {"before": "absent", "after": 50}}
+    assert newest["before_matches_previous"] is False and "before_matches_previous" not in older
+    assert older["changes"] == {"cloud_llm.daily_cost_limit_usd": {"before": "absent", "after": 2}}
+    assert (shown["limit_history"]["unrecorded_saves"], shown["limit_history"]["rejected_records"]) == (0, 0)
+    assert shown["limits_match_record"] is True
+
+
+@pytest.mark.parametrize("history", [0, 101, "5"])
+def test_history_count_is_bounded(verified_split, capsys, history):
+    assert cli.budget_command(SimpleNamespace(history=history)) == 1
+    assert "--history" in capsys.readouterr().out
+
+
+def test_parser_reads_history_count():
+    parser = argparse.ArgumentParser()
+    cli.add_parsers(parser.add_subparsers())
+    assert parser.parse_args(["cloud-llm", "budget", "--history", "3"]).history == 3
+
+
+def test_change_records_hold_no_secret_or_settings_text(verified_split, capsys):
+    conf, _, _, _, key = verified_split
+    assert _run(daily="2") == 0
+    assert cli.providers_command(SimpleNamespace(provider="openai", anthropic_monthly_usd="20")) == 0
+    assert cli.budget_command(SimpleNamespace(until="2026-12-31")) == 0
+    capsys.readouterr()
+    canary = key.read_text().split("=", 1)[1].strip().encode()
+    staged = [path for path in conf.parent.glob("data/.provider-settings-stage-*/**/*") if path.is_file()]
+    assert staged and all(canary not in path.read_bytes() for path in staged)
+    records = [path for path in staged if path.name == provider_settings.CHANGE_RECORD]
+    assert len(records) == 3
+    for path in records:
+        raw = path.read_bytes()
+        assert b"synthetic-login" not in raw and b"synthetic-target" not in raw and b"mode" not in raw
