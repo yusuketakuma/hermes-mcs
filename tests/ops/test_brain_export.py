@@ -660,44 +660,92 @@ def test_stale_patient_removed(env, tmp_path):
     assert not (out / "patients" / "p1.md").exists()
 
 
-def test_archived_patient_page_is_kept_and_marked(env):
-    """An archived room (権限喪失) keeps its exported page — marked archived,
-    never pruned — and its open signals leave every export surface."""
+def _lose_access(conn, state="ok", reason=None):
+    conn.execute("UPDATE patients SET fetch_state=?,fetch_reason=? "
+                 "WHERE project_id=1", (state, reason))
+
+
+@pytest.mark.parametrize(("state", "reason"), [
+    ("forbidden", None),
+    ("ok", "forbidden"),
+    ("ok", "permission_denied"),
+    ("ok", "access_revoked"),
+])
+def test_permission_lost_patient_page_removed_and_signals_excluded(
+        env, state, reason):
+    """権限喪失（fetch_state=forbidden または権限系 fetch_reason）で既存
+    ページは削除され、その患者の open signal は全出力面から外れる。"""
     snap, out = env
     brain_export.run(out, snap)
-    assert "- archived: true" not in (out / "patients/p1.md").read_text()
+    assert (out / "patients/p1.md").exists()
     with sqlite3.connect(snap) as conn:
-        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+        _lose_access(conn, state, reason)
     res = brain_export.run(out, snap)
-    assert res["patients"] == 1 and res["archived"] == 1 and res["signals"] == 0
-    page = (out / "patients/p1.md").read_text()
-    assert "- archived: true" in page and "アーカイブ済み" in page
-    assert PATIENT_NAME in page  # content still renders from the frozen rollup
+    assert res["patients"] == 0 and res["excluded"] == 1 and res["signals"] == 0
+    assert not (out / "patients/p1.md").exists()      # 既存ページ削除
     signals = (out / "signals/latest.md").read_text()
     assert "open候補なし" in signals and "rx_period_expiry" not in signals
     assert all(r["type"] != "signal" for r in _jsonl(out))
-    assert "mcs.patients.archived" in (out / "stats/latest.md").read_text()
+    meta = (out / "meta.md").read_text()
+    assert "excluded patients (権限喪失): 1" in meta  # meta.md に除外実人数
+    # 2回目のexportでも同じ結果（再選択で復活しない）
+    res2 = brain_export.run(out, snap)
+    assert res2["excluded"] == 1 and not (out / "patients/p1.md").exists()
 
 
-def test_unarchived_patient_page_and_signals_regenerate(env):
-    """復権（archive 解除）で通常ページと signal 出力が再生成される。"""
+def test_permission_regained_regenerates_page_and_signals(env):
+    """復権（fetch_state が通常値へ戻る）でページと signal 出力が再生成される。"""
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        _lose_access(conn, "forbidden")
+    brain_export.run(out, snap)
+    assert not (out / "patients/p1.md").exists()
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET fetch_state='ok',fetch_reason=NULL "
+                     "WHERE project_id=1")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 1 and res["excluded"] == 0 and res["signals"] == 1
+    page = (out / "patients/p1.md").read_text()
+    assert PATIENT_NAME in page and "- archived: true" not in page
+    assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert "excluded patients (権限喪失): 0" in (out / "meta.md").read_text()
+
+
+def test_archived_patient_keeps_normal_page_with_archived_line(env):
+    """権限のある archive（is_archived のみ）は通常出力 + archived: true 1行。"""
     snap, out = env
     with sqlite3.connect(snap) as conn:
         conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
-    brain_export.run(out, snap)
-    assert "- archived: true" in (out / "patients/p1.md").read_text()
-    with sqlite3.connect(snap) as conn:
-        conn.execute("UPDATE patients SET is_archived=0 WHERE project_id=1")
     res = brain_export.run(out, snap)
-    assert res["archived"] == 0 and res["signals"] == 1
+    assert res["patients"] == 1 and res["excluded"] == 0 and res["signals"] == 1
     page = (out / "patients/p1.md").read_text()
-    assert "- archived: true" not in page and "アーカイブ済み" not in page
+    assert "- archived: true" in page and "アーカイブ済み" not in page
+    assert PATIENT_NAME in page  # 内容は従来どおり通常出力
     assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
+    assert "excluded patients (権限喪失): 0" in (out / "meta.md").read_text()
 
 
-def test_archived_signals_exclusion_is_per_patient(env):
-    """Signal filtering is scoped to the archived patient — another
-    patient's open signal and normal page are untouched."""
+def test_permission_lost_missing_rollup_never_blocks_export(env):
+    """権限失効と rollup 一時欠落を分ける — 権限失効の患者は rollup が
+    無くても export を止めず、既存ページは削除される。"""
+    snap, out = env
+    brain_export.run(out, snap)
+    assert (out / "patients/p1.md").exists()
+    with sqlite3.connect(snap) as conn:
+        _lose_access(conn, "forbidden")
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    res = brain_export.run(out, snap)
+    assert res["patients"] == 0 and res["excluded"] == 1
+    assert not (out / "patients/p1.md").exists()
+    # 権限のある患者の rollup 欠落は従来どおり全体を止める（仕様の区別）
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE patients SET fetch_state='ok' WHERE project_id=1")
+    with pytest.raises(ValueError, match="patient_rollup_missing"):
+        brain_export.run(out, snap)
+
+
+def test_permission_loss_exclusion_is_per_patient(env):
+    """除外は権限を失った患者だけ — 他患者のページと signal は残る。"""
     snap, out = env
     with sqlite3.connect(snap) as conn:
         conn.execute(
@@ -724,13 +772,13 @@ def test_archived_signals_exclusion_is_per_patient(env):
             "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
             "VALUES ('signal_v1',2,?,?,?)",
             (json.dumps(sig), json.dumps({"key": "sig-2"}), SNAP_TS))
-        conn.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+        _lose_access(conn, "forbidden")
     res = brain_export.run(out, snap)
-    assert res["patients"] == 2 and res["archived"] == 1 and res["signals"] == 1
+    assert res["patients"] == 1 and res["excluded"] == 1 and res["signals"] == 1
+    assert not (out / "patients/p1.md").exists()
+    assert "- archived: true" not in (out / "patients/p2.md").read_text()
     assert "rx_period_expiry" in (out / "signals/latest.md").read_text()
     assert [r["project_id"] for r in _jsonl(out) if r["type"] == "signal"] == [2]
-    assert "- archived: true" in (out / "patients/p1.md").read_text()
-    assert "- archived: true" not in (out / "patients/p2.md").read_text()
 
 
 def test_not_a_snapshot(tmp_path):
