@@ -271,6 +271,8 @@ python3 mcs/ops/mcs_setup.py jev-model --to jev-X.Y.Z --confirm-human --reason '
 - 承認記録を先に保存し、その後で設定を保存します。設定の保存を確認できなかった場合は承認記録のUUIDを表示するので、
   同じ `--to` に `--command-id <UUID>` を付けて再実行します。確認を送り直さずに、まだ反映されていない設定だけを保存します。
   その後に別の切替があった場合は、後の変更を上書きしません。
+- 提供元別設定（`provider_settings`）の保存中断で保留記録が残っていると、設定の読み込みは承認記録の検索より先に止まります。
+  全ファイルが保存済みなら、先に `provider-pending-finalize` で保留記録を確定してください（INSTALLATION.md）。
 - 解析結果の採用方法が `canonical`（検証済み結果）の間は切り替えません。canonical の承認は使用中のモデルを含む候補の識別子に結び付いているためです。
   先に `mcs_setup.py fact-source shadow` に戻し、モデルを切り替えてから新しいモデルで評価をやり直し、合格した評価証拠で canonical を承認し直します。
 - Jevの配線確認（`semantic_jev.py --smoke --live`）・`semantic_bench`・`mcs_setup.py jev-value` も、使用中のモデルへ送ります（切替前の確認だけは切替先の版へ送ります）。
