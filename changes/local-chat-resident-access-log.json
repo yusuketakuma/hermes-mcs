@@ -2,9 +2,9 @@
   "category": "changed",
   "title": "遠隔接続の患者画面で、MCS の記録の閲覧を閲覧記録に残す",
   "summary": "Tailscale 経由の常駐モードで患者一覧・投稿・検索・記録のまとめを開くと、表示の前に Tailscale のログイン名・患者ID・時刻を `data/access_log/` へ記録します。検索語・本文・患者名は記録しません。記録できないときは表示しません。この Mac だけで開く秘密URLのモードと、在宅ケア台帳の表示は対象外です。",
-  "upgrade": "`mcs setup remote` で設定した Mac は、更新後に常駐サービス `ai.mcs.local-chat` を再起動すると有効になります（追加の設定は不要）。`--tailnet-host` を手で指定して起動している場合は、`--access-log-dir <MCSのdataフォルダ>` を足してください。指定が無いと起動しません。",
+  "upgrade": "`mcs setup remote` で設定した Mac は、更新後に常駐サービス `ai.mcs.local-chat` を再起動すると有効になります（追加の設定は不要）。`--tailnet-host` を手で指定して起動している場合は、`--access-log-dir` に MCS の data フォルダを指定してください。指定が無いと起動しません。",
   "details": [
-    "記録は `/mcs` 操作と同じハッシュ連鎖の閲覧記録で、利用者は `tailscale:<ログイン名>`、経路は `local_chat`。",
+    "記録は `/mcs` 操作と同じハッシュ連鎖の閲覧記録で、利用者は `tailscale:` に続けたログイン名、経路は `local_chat`。",
     "範囲外の患者を指定して拒否された要求も記録する。",
     "薬の一覧など患者の記録を含まない応答は記録しない。"
   ],
