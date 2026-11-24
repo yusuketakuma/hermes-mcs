@@ -812,7 +812,7 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
 
 def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, config_path=None):
     """Reserve every explicit live-evaluation HTTP against the same MCS daily count."""
-    from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
+    from semantic_jev import DAILY_REQUEST_LIMIT, JevError, model_in_use
     if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e",
                          "jev_model_probe", "jev_model_check"}:
         raise ValueError("manual_jev_operation_invalid")
@@ -833,7 +833,8 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, 
                 raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
 
         def write():
-            artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", model=JEV_MODEL,
+            # a request body names its model; a model-list GET counts under the default
+            artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", model=model_in_use(body),
                 meta={"jev_requests": 1, "reserved": True, "operation": operation,
                       "request_fp": payload_hash(body), "timeout_seconds": float(timeout),
                       "reservation_id": uuid.uuid4().hex})
@@ -854,7 +855,7 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, 
 
 def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget, identity, purpose="summary"):
     """Reserve one patient-summary Jev request under the shared daily budget."""
-    from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
+    from semantic_jev import DAILY_REQUEST_LIMIT, JevError, model_in_use
     from semantic_policy import BACKLOG_BUDGET_RESERVE
     if (type(project_id) is not int or project_id <= 0 or not callable(guard)
             or type(daily_request_budget) is not int or daily_request_budget < 0):
@@ -892,7 +893,7 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
                 raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
         def write():
             artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", project_id=project_id,
-                model=JEV_MODEL, meta={"jev_requests": 1, "reserved": True,
+                model=model_in_use(body), meta={"jev_requests": 1, "reserved": True,
                     "operation": operation, "request_fp": payload_hash(body),
                     "timeout_seconds": float(timeout), "reservation_id": uuid.uuid4().hex,
                     "quality_request": request})

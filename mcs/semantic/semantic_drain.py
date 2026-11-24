@@ -864,7 +864,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if (job_jev is not None
                     and getattr(jev_client, "supports_attempt_hooks", False)):
                 reserve_fn = runtime.usage_reserver(
-                    ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
+                    ledger, token, kind=KIND_USAGE, model=jev.model_in_use(scfg),
                     project_id=job["project_id"], message_id=job["message_id"],
                     daily_request_budget=lane_cap, config_path=cfg_path)
             reservation = None
@@ -1023,7 +1023,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 ledger.artifact_add(
                     KIND_USAGE, json.dumps({"job_id": job["job_id"]}),
                     project_id=job["project_id"],
-                    message_id=job["message_id"], model=jev.JEV_MODEL,
+                    message_id=job["message_id"], model=jev.model_in_use(scfg),
                     meta={"jev_requests": used})
             if status is None:
                 continue

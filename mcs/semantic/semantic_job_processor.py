@@ -71,7 +71,7 @@ def _fixed_stop_reason(reason, fallback):
 def _assessment_meta(scfg, bundle, mid, fp, policy) -> dict:
     """Binding shared by every primary assessment row written for one target."""
     return {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
-            "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION, "schema": SCHEMA_VERSION,
+            "model": jev.model_in_use(scfg), "registry": jev.REGISTRY_VERSION, "schema": SCHEMA_VERSION,
             "jev_input": semantic_store.assessment_input(bundle, mid, scfg)}
 
 
@@ -91,7 +91,7 @@ def _carry_assessment(ledger, scfg, bundle, pid, mid, fp, policy, rows, guard):
         KIND_ASSESS,
         json.dumps({"target_message_id": mid, "verdicts": target_verdicts, "detail": {}},
                    ensure_ascii=False),
-        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
         meta={**meta, "technical_status": "complete", "jev_requests": 0,
               "carried_fingerprint": carried["meta"]["fingerprint"]})
     return target_verdicts
@@ -127,7 +127,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
         ledger.artifact_add(
             KIND_ASSESS,
             json.dumps({"target_message_id": mid, "verdicts": {}, "detail": {}}, ensure_ascii=False),
-            project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+            project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
             meta={**meta_base, "technical_status": "complete", "jev_requests": 0,
                   "skipped": "prefilter_no_signal"})
         return {}, flag
@@ -179,7 +179,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                             "verdicts": partial},
                            ensure_ascii=False),
                 project_id=pid, message_id=mid,
-                model=jev.JEV_MODEL, meta=meta_base)
+                model=jev.model_in_use(scfg), meta=meta_base)
         return None, flag
     target_verdicts = {k: {"noul": a["noul"],
                            "verdict": jev.verdict_for(
@@ -203,7 +203,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
         json.dumps({"target_message_id": mid,
                     "verdicts": target_verdicts,
                     "detail": {}}, ensure_ascii=False),
-        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+        project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
         meta={**meta_base, "technical_status": "complete"})
     return target_verdicts, flag
 
@@ -434,7 +434,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     json.dumps({"status": "STALE", "findings": [],
                                 "target_message_id": root},
                                ensure_ascii=False),
-                    project_id=pid, message_id=root, model=jev.JEV_MODEL,
+                    project_id=pid, message_id=root, model=jev.model_in_use(scfg),
                     meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "audit_status": "STALE",
                           "technical_status": "stale"})
@@ -475,7 +475,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     if current_artifact(ledger.db, KIND_BUNDLE, root, fp, policy) is None:
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False, separators=(',', ':')),
-            project_id=pid, message_id=root, model=jev.JEV_MODEL,
+            project_id=pid, message_id=root, model=jev.model_in_use(scfg),
             meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
     all_targets = [t for t in (targets or [root])
                    if any(m["message_id"] == t
@@ -505,7 +505,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 or previous["content"].get("verdicts") != partial):
             ledger.artifact_add(
                 KIND_ASSESS, json.dumps({"target_message_id": mid, "verdicts": partial}, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
                 meta={**meta, "technical_status": "skipped", "jev_skip_reason": reason})
 
     def activate_skip(reason):
@@ -684,7 +684,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         or previous["meta"].get("fact_input_binding") != fact_binding):
                     ledger.artifact_add(
                         KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
-                        project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                        project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
                         meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
                               "fact_input_binding": fact_binding,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
@@ -1045,7 +1045,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     guard("repair_reservation_tx")
                     if not empty_repair:
                         _write_result(ledger, pid, mid, repair_pending, fp, members,
-                                      "PENDING", policy, scfg["summary_mode"])
+                                      "PENDING", policy, scfg["summary_mode"], model=jev.model_in_use(scfg))
                     repair_id = ledger.artifact_add_tx(
                         KIND_REPAIR, json.dumps({"target_message_id": mid}),
                         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
@@ -1083,7 +1083,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             if not empty_repair:
                                 repair_pending["repaired"] = False
                                 _write_result(ledger, pid, mid, repair_pending, fp, members,
-                                              "PENDING", policy, scfg["summary_mode"])
+                                              "PENDING", policy, scfg["summary_mode"], model=jev.model_in_use(scfg))
                     if isinstance(error, (runtime.LLMNotSent,
                                           runtime.RuntimeBudget)):
                         if getattr(error, "stage", None) in semantic_transport.MEMBER_HOLD_STAGES:
@@ -1200,7 +1200,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 for mid, r in results.items():
                     if r["fresh"]:
                         _write_result(ledger, pid, mid, r, fp, members,
-                                      r["status"], policy, scfg["summary_mode"])
+                                      r["status"], policy, scfg["summary_mode"], model=jev.model_in_use(scfg))
                     v4.publish_target_tx(ledger, pid, mid, fp, policy, members,
                                 v2_docs_by_target, r["status"],
                                 r.get("findings") or [],
@@ -1274,7 +1274,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             final_status = "STALE" if stale else r["status"]
             if r["fresh"]:
                 _write_result(ledger, pid, mid, r, fp, members,
-                              final_status, policy, scfg["summary_mode"])
+                              final_status, policy, scfg["summary_mode"], model=jev.model_in_use(scfg))
             # T18 S8: v4 publication/diagnostic commits in the SAME
             # transaction as the status receipt — a crash cannot leave
             # a PASS result without its read-model row, nor a non-PASS
@@ -1318,7 +1318,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                'skip_reason': jev_skip if status == 'SKIPPED' else None, 'skip_ref': skip_ref}
                     for mid in targets:
                         ledger.artifact_add_tx(KIND_LOOP_COMPLETION, json.dumps(content, ensure_ascii=False),
-                            project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                            project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
                             meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
                                   'policy_fingerprint': policy, 'schema': SCHEMA_VERSION,
                                   'target_revision': members[mid]['revision'],

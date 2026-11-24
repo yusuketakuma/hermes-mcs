@@ -96,31 +96,45 @@ def resolve_model(configured=None) -> str | None:
     return provider_settings.effective_jev_model(configured, JEV_MODEL)
 
 
+def model_in_use(scfg) -> str:
+    """The resolved model a semantic config carries: what every Jev record and request names."""
+    model = scfg.get("model") if isinstance(scfg, dict) else None
+    return model if isinstance(model, str) and resolve_model(model) == model else JEV_MODEL
+
+
 def api_key(root=None):
     """Read this MCS installation's TypeSafe key only from its private dotenv."""
     from mcs_util import private_env_value
     return private_env_value("TYPESAFE_API_KEY", root)
 
 
-def _live_request_budget(home):
+def _live_semantic(home):
+    """The installation's ``semantic`` block for explicit live tools, failing closed when unreadable."""
     import mcs_util
 
     config_path = home / "config.json"
+    config_seen = os.path.lexists(config_path)
     try:
-        config_seen = os.path.lexists(config_path)
-        try:
-            cfg = mcs_util._load_config(str(config_path))
-        except FileNotFoundError:
-            # Only a genuinely unconfigured legacy installation keeps the old
-            # default; an observed split read failure remains fail-closed.
-            if config_seen or os.path.lexists(config_path) or mcs_util._provider_config_active(str(config_path)):
-                raise ValueError("semantic_config_unreadable") from None
-            cfg = {}
-        if not isinstance(cfg, dict):
-            raise ValueError("semantic_config_unreadable")
-        semantic = cfg.get("semantic", {})
-        if not isinstance(semantic, dict):
-            raise ValueError
+        cfg = mcs_util._load_config(str(config_path))
+    except FileNotFoundError:
+        # Only a genuinely unconfigured legacy installation keeps the old
+        # default; an observed split read failure remains fail-closed.
+        if config_seen or os.path.lexists(config_path) or mcs_util._provider_config_active(str(config_path)):
+            raise ValueError("semantic_config_unreadable") from None
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise ValueError("semantic_config_unreadable")
+    semantic = cfg.get("semantic", {})
+    if not isinstance(semantic, dict):
+        raise ValueError
+    return semantic
+
+
+def _live_request_budget(home):
+    import mcs_util
+
+    try:
+        semantic = _live_semantic(home)
         limit = semantic.get("daily_request_budget",
                              0 if "mode" in semantic else DAILY_REQUEST_LIMIT)
         if type(limit) is not int or not 0 <= limit <= DAILY_REQUEST_BUDGET_MAX:
@@ -128,6 +142,19 @@ def _live_request_budget(home):
     except (OSError, ValueError, TypeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         raise JevError("budget_exceeded", "semantic_daily_budget_invalid") from None
     return limit
+
+
+def _live_model(home):
+    """The model in use for explicit live tools: the same resolver as the scheduled path."""
+    import mcs_util
+
+    try:
+        model = resolve_model(_live_semantic(home).get("model"))
+    except (OSError, ValueError, TypeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        model = None
+    if model is None:
+        raise JevError("budget_exceeded", "semantic_model_invalid")
+    return model
 
 
 def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, config_seen=False):
@@ -196,8 +223,12 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
 
 
 @contextmanager
-def live_client(key, *, operation, root=None, **options):
-    """Bind explicit live tools to the shared MCS per-HTTP cap, including model GETs."""
+def live_client(key, *, operation, root=None, guard=None, **options):
+    """Bind explicit live tools to the shared MCS per-HTTP cap, including model GETs.
+
+    Without an explicit ``model`` the client uses the installation's model in
+    use (resolve_model), so diagnostics check what the scheduled path sends.
+    ``guard(stage)`` runs before each attempt, also after its reservation."""
     from mcs_util import HOME
     from semantic_runtime import bind_jev
     from writer_lock import code_stamp
@@ -208,9 +239,11 @@ def live_client(key, *, operation, root=None, **options):
     expected_code_stamp = code_stamp()
     config_seen = os.path.lexists(home / "config.json")
     _live_request_budget(home)
+    if "model" not in options:
+        options["model"] = _live_model(home)
     def reserve(body, timeout):
         return _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, config_seen)
-    yield bind_jev(JevClient(api_key=key, **options), lambda stage: None, reserve,
+    yield bind_jev(JevClient(api_key=key, **options), guard or (lambda stage: None), reserve,
                    config_path=home / "config.json")
 
 

@@ -66,21 +66,40 @@ def newer_models(models, current) -> list[str]:
 
 
 def in_use(cfg, root) -> dict | None:
-    """The effective model and whether Jev may be asked for its list, or None for an invalid config."""
+    """The model in use and whether Jev may be asked for its list now, or None for an invalid config."""
     import semantic_policy
     scfg, errors = semantic_policy.runtime_config(cfg, root=root)
     if errors:
         return None
     key = jev.api_key(root)
-    return {"model": scfg["model"], "key": key,
-            "askable": bool(key) and scfg["daily_request_budget"] > 0 and not scfg["jev_held"]}
+    return {"model": scfg["model"], "key": key, "askable": semantic_policy.jev_available(scfg, key)}
 
 
-def refresh(root, key, *, now=None, force=False, client_factory=None) -> dict | None:
+def _still_askable(root, load_config):
+    """A guard re-reading the configuration before each attempt, also after its reservation waited."""
+    def guard(stage):
+        if stage != "jev_attempt":
+            return
+        try:
+            use = in_use(load_config(), root)
+        except (OSError, ValueError, TypeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+            use = None
+        if use is None or not use["askable"]:
+            raise jev.JevError("budget_exceeded", "jev_unavailable" if use is not None else "semantic_config_unreadable")
+    return guard
+
+
+def _load_config(root):
+    return mcs_util._load_config(str(Path(root) / "config.json"))
+
+
+def refresh(root, key, *, now=None, force=False, client_factory=None, load_config=None) -> dict | None:
     """Ask Jev for its model list unless that was done within CHECK_INTERVAL_S.
 
     A busy writer leaves the last result as it is so the next check asks
-    again; any other failure is kept with its code and also waits a day."""
+    again; any other failure is kept with its code and also waits a day.
+    The guard re-checks Jev's availability (facility review, mode, budget)
+    right before the GET, after its reservation."""
     now = time.time() if now is None else now
     state = read_state(root)
     if not force and state is not None and 0 <= now - state["checked_at"] < CHECK_INTERVAL_S:
@@ -88,8 +107,10 @@ def refresh(root, key, *, now=None, force=False, client_factory=None) -> dict | 
     if not key or not os.path.isdir(Path(root) / "data"):
         return state
     factory = client_factory or jev.live_client
+    guard = _still_askable(root, load_config or (lambda: _load_config(root)))
+    kept = state["models"] if state is not None else []
     try:
-        with factory(key, operation="jev_model_check", root=root, max_attempts=1) as client:
+        with factory(key, operation="jev_model_check", root=root, max_attempts=1, guard=guard) as client:
             listed = client.models()
         models = sorted({m for m in listed if provider_settings.jev_model_version(m) is not None},
                         key=provider_settings.jev_model_version, reverse=True)[:MAX_LISTED]
@@ -97,11 +118,10 @@ def refresh(root, key, *, now=None, force=False, client_factory=None) -> dict | 
     except jev.JevError as error:
         if error.detail in ("usage_lock_busy", "usage_ledger_busy"):
             return state
-        fresh = {"version": STATE_VERSION, "checked_at": now,
-                 "models": state["models"] if state is not None else [], "error": error.kind}
+        code = error.detail if error.detail in ("jev_unavailable", "semantic_config_unreadable") else error.kind
+        fresh = {"version": STATE_VERSION, "checked_at": now, "models": kept, "error": code}
     except (OSError, ValueError):
-        fresh = {"version": STATE_VERSION, "checked_at": now,
-                 "models": state["models"] if state is not None else [], "error": "unavailable"}
+        fresh = {"version": STATE_VERSION, "checked_at": now, "models": kept, "error": "unavailable"}
     try:
         _write_state(root, fresh)
     except OSError:
@@ -110,16 +130,25 @@ def refresh(root, key, *, now=None, force=False, client_factory=None) -> dict | 
 
 
 def notice(current: str, state: dict | None) -> str | None:
-    """Information naming a newer listed model, or None when there is nothing to say."""
+    """Information naming a newer listed model, or saying it could not be determined.
+
+    The provider's model list is documented for aliases; whether it lists
+    fixed version ids is unverified, so an empty or failed listing is never
+    reported as "up to date"."""
     if state is None:
         return None
     newer = newer_models(state["models"], current)
-    if not newer:
-        return None
-    return (f"Jev: 新しいモデル {newer[0]} を利用できます（使用中: {current}）。自動では切り替えません。"
-            f"切り替える場合は `python3 mcs/ops/mcs_setup.py jev-model --to {newer[0]} --confirm-human "
-            "--reason '理由'` を実行します（合成データの確認に合格したときだけ切り替わり、"
-            "完了済みの意味解析は新しいモデルでやり直されます）")
+    if newer:
+        return (f"Jev: 新しいモデル {newer[0]} を利用できます（使用中: {current}）。自動では切り替えません。"
+                f"切り替える場合は `python3 mcs/ops/mcs_setup.py jev-model --to {newer[0]} --confirm-human "
+                "--reason '理由'` を実行します（合成データの確認に合格したときだけ切り替わり、"
+                "完了済みの意味解析は新しいモデルでやり直されます）")
+    if state["error"] is not None:
+        return (f"Jev: 新しいモデルの有無を確認できませんでした（{state['error']}）。"
+                f"使用中: {current}。翌日以降の確認で再度問い合わせます")
+    if not state["models"]:
+        return (f"Jev: モデル一覧に固定版のIDが含まれず、新しいモデルの有無を確認できませんでした（使用中: {current}）")
+    return None
 
 
 def check(cfg, root, *, now=None, client_factory=None) -> str | None:

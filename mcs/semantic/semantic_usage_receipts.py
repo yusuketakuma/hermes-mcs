@@ -93,8 +93,14 @@ def _quality_request(identity, body, *, purpose="summary"):
     except (KeyError, TypeError, ValueError):
         raise ValueError("patient_summary_request_invalid") from None
     if purpose == "source":
+        import semantic_jev
         from semantic_audit import patient_source_question_keys
-        computed = patient_source_question_keys(body, source_input_key=keys["source_input_key"],
+        # Question keys are planned under the code default's name; the assessment
+        # policy binds the resolved model, so any model the resolver selects may send.
+        if not isinstance(body, dict) or semantic_jev.resolve_model(body.get("model")) != body.get("model"):
+            raise ValueError("patient_source_request_invalid")
+        computed = patient_source_question_keys({**body, "model": semantic_jev.JEV_MODEL},
+                                                source_input_key=keys["source_input_key"],
                                                 assessment=keys["assessment"])
         passing = "complete" if body["state"]["target"]["id"] == "source_coverage" else "supports"
         if (set(computed) != set(mapping.values()) or any(
@@ -608,7 +614,7 @@ def patient_source_pass_content(db, pid, identity, descriptor):
     import hashlib
     import patient_context_quality_identity
     import semantic_policy
-    from semantic_jev import JEV_MODEL
+    from semantic_jev import resolve_model
 
     if not db.in_transaction:
         raise ValueError('patient_source_snapshot_required')
@@ -620,7 +626,7 @@ def patient_source_pass_content(db, pid, identity, descriptor):
         raise ValueError('patient_source_descriptor_invalid')
     policy = descriptor['policy']
     lo, hi = policy['nomatch_threshold'], policy['match_threshold']
-    if (policy['model'] != JEV_MODEL or type(lo) not in (int, float) or type(hi) not in (int, float)
+    if (resolve_model(policy['model']) != policy['model'] or type(lo) not in (int, float) or type(hi) not in (int, float)
             or not math.isfinite(lo) or not math.isfinite(hi) or not 0 <= lo < hi <= 1
             or policy['fact_source'] not in ('legacy', 'shadow', 'canonical')
             or policy['calibration_version'] is not None and (
