@@ -311,20 +311,22 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
         path = standalone_service_path(paths=paths)
         if not os.path.exists(path):
             warnings.append('独立動作の常駐設定が未導入です。`mcs_setup.py services`を実行してください。個別の起動方法: 常駐管理ツールから`python -m mcs_standalone run`を起動してください')
-        elif standalone_loaded(paths=paths) is None:
-            warnings.append('独立動作の常駐処理の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
-        elif not standalone_loaded(paths=paths):
-            errors.append('独立動作の常駐処理は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください')
         else:
-            try:
-                from mcs_standalone.service import render
-                _, desired = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
-                if Path(path).read_text(encoding='utf-8') != desired:
-                    errors.append('独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください')
-            except run_log_install.LogInstallError as e:
-                errors.append(log_helper_problem(e, paths=paths))
-            except (OSError, ValueError):
-                errors.append('独立動作の常駐設定を確認できません')
+            loaded = standalone_loaded(paths=paths)
+            if loaded is None:
+                warnings.append('独立動作の常駐処理の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
+            elif not loaded:
+                errors.append('独立動作の常駐処理は導入済みですが読み込まれていません。`mcs_setup.py services`を実行してください')
+            else:
+                try:
+                    from mcs_standalone.service import render
+                    _, desired = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
+                    if Path(path).read_text(encoding='utf-8') != desired:
+                        errors.append('独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください')
+                except run_log_install.LogInstallError as e:
+                    errors.append(log_helper_problem(e, paths=paths))
+                except (OSError, ValueError):
+                    errors.append('独立動作の常駐設定を確認できません')
         if os.path.exists(path):
             e, w = check_standalone_health(paths=paths)
             errors += e
@@ -452,9 +454,14 @@ def _defer_reload(script: str, label: str, dst: str, *, paths: ServicePaths) -> 
 
 def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool | None:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
-    Converges loaded state to rendered content (R6). None when launchd
-    cannot answer the pre-check — the job may still run old settings, so
-    it is not proof of absence (the caller keeps the old plist visible)."""
+    Converges loaded state to rendered content (R6).
+
+    Returns True when the job converges to the plist on disk. None only
+    when bootstrap exited 0 but the post-check could not answer: the job
+    may already run the new settings, so the plist stays. False means the
+    new settings definitely do not run — the pre-check could not answer
+    (a loaded job would still run the old settings) or launchd refused
+    the plist — and the caller restores the previous file."""
     uid = paths.uid
     if os.environ.get('XPC_SERVICE_NAME') == label:
         note(f'常駐処理{label}: この設定処理の終了後に読み込み直します')
@@ -467,7 +474,7 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
         # of absence: bootstrap over a loaded job fails to apply the new plist,
         # yet a late `print` answering 0 would still record it as loaded.
         note(f'常駐処理{label}: 読み込み状態を確認できないため、起動・再読込は行いません')
-        return None
+        return False
     if loaded:
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
@@ -483,9 +490,12 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
     if dry:
         return True
     err = launchd_bootstrap(label, dst, lifecycle_io.run_bounded)
-    if err:
-        note(f'  起動に失敗しました。常駐処理の状態を確認してください: {err}')
-    return err is None
+    if err is None:
+        return True
+    note(f'  起動に失敗しました。常駐処理の状態を確認してください: {err}')
+    if err == BOOTSTRAP_UNVERIFIED:
+        return None
+    return False
 
 def load_manifest(*, paths: ServicePaths) -> dict:
     return mcs_util.load_config(paths.manifest_path)
@@ -577,12 +587,12 @@ def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths, st
     if changed or stale or not agent_loaded(label, paths=paths):
         outcome = agent_reconcile(label, dst, note, dry, paths=paths)
         loaded = bool(outcome)
-        if outcome is None and changed and not dry:
+        if outcome is False and changed and not dry:
             # Only an unverifiable pre-state can hide a stale job: put back
             # what was on disk so the pending reload stays visible next run
-            # and the job keeps its launchd registration. A failed bootstrap
-            # keeps the new file — a loaded job already runs it, and an
-            # absent one is retried by `not agent_loaded` next run.
+            # and the job keeps its launchd registration. A refused plist
+            # can never start, so it goes back too — while a post-bootstrap
+            # verify flake keeps the new file: a loaded job already runs it.
             if cur is None:
                 with suppress(OSError):
                     os.unlink(dst)
@@ -851,10 +861,12 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
             break
     if not installed:
         warnings.append('独立動作の稼働監視が未導入です。本体が停止しても警報が出ません。`mcs_setup.py services`を実行してください')
-    elif standalone_health_loaded(paths=paths) is None:
-        warnings.append('独立動作の稼働監視の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
-    elif not standalone_health_loaded(paths=paths):
-        errors.append('独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください')
+    else:
+        health_loaded = standalone_health_loaded(paths=paths)
+        if health_loaded is None:
+            warnings.append('独立動作の稼働監視の読み込み状態を確認できません（launchctl が応答しません）。時間を置いて`mcs_setup.py check`で再確認してください')
+        elif not health_loaded:
+            errors.append('独立動作の稼働監視は導入済みですが、読み込まれていません — `mcs_setup.py services`を実行してください')
     try:
         import health_watch
         _, reasons, details = health_watch.standalone_host_reasons(paths.root, time.time(), mcs_util.load_config())
@@ -1202,6 +1214,12 @@ def retire_to_snapshot(desired: dict, *, cfg, paths: ServicePaths) -> list[str]:
     return problems
 
 
+# launchd_bootstrap's failure detail when bootstrap exited 0 but the
+# post-check could not answer — the job may already run the new settings,
+# so callers keep the new plist instead of restoring the previous one.
+BOOTSTRAP_UNVERIFIED = "bootstrap exited 0 but the label is not loaded"
+
+
 def launchd_bootstrap(label: str, plist: str, run) -> str | None:
     """Bootstrap a LaunchAgent and verify it is loaded — the canonical
     success criterion for mcs_setup/mcs_update (mcs_recover.py and
@@ -1225,4 +1243,4 @@ def launchd_bootstrap(label: str, plist: str, run) -> str | None:
         time.sleep(1)
     if run(["launchctl", "print", f"gui/{uid}/{label}"]).returncode == 0:
         return None
-    return err or "bootstrap exited 0 but the label is not loaded"
+    return err or BOOTSTRAP_UNVERIFIED
