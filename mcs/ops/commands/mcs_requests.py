@@ -227,7 +227,7 @@ def apply_local_operation(req):
     """Apply one human-confirmed projectless ops.* command from a local CLI.
 
     Shared by the CLI entries: validate before opening a writer, take run.lock
-    (5 s bounded wait), refuse during an update or restore hold, then the
+    (bounded wait, locked_command.WAIT_SECONDS), refuse during an update or restore hold, then the
     receipt-first transaction. Returns the receipt, or None when the writer
     stayed busy."""
     import locked_command
