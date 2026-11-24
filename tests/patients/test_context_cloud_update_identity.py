@@ -202,3 +202,75 @@ def test_changed_input_reaches_full_paid_payload_and_updates_context(runtime, re
     assert all(row in after for row in before)
     view = readiness.context_view_input(ledger.db, 1, cfg=cfg)
     assert view and any(fact['quote'] == expected_body for fact in view['facts'])
+
+
+@pytest.mark.parametrize('receipt', ['kept', 'missing'])
+def test_install_without_jev_publishes_a_cloud_context_only_on_its_receipts(runtime, real_cloud, monkeypatch, receipt):
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    cfg.pop('semantic')   # a fresh install writes no semantic block and no Jev key
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: None)
+    monkeypatch.setattr(semantic_jev, 'JevClient',
+                        lambda **_kwargs: pytest.fail('an install without Jev must not construct a client'))
+    guard = cloud_policy.guard_context_origins
+    if receipt == 'missing':
+        def guard_without_receipt(ledger_, pid, origins):
+            return guard(ledger_, pid, [(*binding, {**meta, 'cloud_receipts': [
+                {'artifact_id': 10 ** 9, 'witness': ref['witness']} for ref in meta['cloud_receipts']]})
+                for *binding, meta in origins])
+        monkeypatch.setattr(cloud_policy, 'guard_context_origins', guard_without_receipt)
+    outcomes = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(30)]
+    skipped = ledger.artifacts(state.QUALITY_SKIP)
+    assert posts and not ledger.synthetic_jev_requests
+    assert not ledger.artifacts(state.QUALITY_PASS)
+    if receipt == 'kept':
+        assert outcomes[-1]['status'] == 'complete', outcomes[-3:]
+        assert [json.loads(row['content'])['reason'] for row in skipped] == ['disabled']
+        assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+    else:
+        # the source stage verifies the same receipts first and holds there
+        assert 'source_quality_unknown' in {result.get('reason') for result in outcomes}
+        assert outcomes[-1]['status'] != 'complete' and not skipped
+        assert not ledger.artifacts('patient_context_source_quality_skipped_v1')
+        assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is None
+
+
+
+def test_context_deferred_before_the_fix_publishes_without_a_jev_key(runtime, real_cloud, monkeypatch):
+    """A patient left waiting by the old scope rule is picked up again on its next retry."""
+    import semantic_policy
+    ledger, clock, _ = runtime
+    cfg, _posts = real_cloud
+    cfg.pop('semantic')
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: None)
+    with monkeypatch.context() as before_fix:
+        before_fix.setattr(semantic_policy, 'jev_scope_excludes', lambda *_args: True)
+        held = [step(runtime, cfg=cfg, local_admit=lambda: False) for _ in range(5)]
+    assert 'source_quality_deferred' in {result.get('reason') for result in held}
+    for _ in range(12):   # one hour of ten-minute ticks
+        clock.wall += 300
+        clock.mono += 300
+        if step(runtime, cfg=cfg, local_admit=lambda: False)['status'] == 'complete':
+            break
+    else:
+        pytest.fail('the waiting context was not retried')
+    assert ledger.artifacts(state.QUALITY_SKIP)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+
+
+def test_a_semantic_scope_without_a_mode_or_key_is_verified_like_it_was_decided(runtime, real_cloud, monkeypatch):
+    """Setup may save semantic.project_ids alone; without a key a patient outside it waits as with one."""
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    cfg['semantic'] = {'project_ids': [2]}   # cloud covers patient 1, the semantic scope does not
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_args: None)
+    reasons = {step(runtime, cfg=cfg, local_admit=lambda: False).get('reason') for _ in range(20)}
+    assert posts and not ledger.synthetic_jev_requests
+    assert 'source_quality_deferred' in reasons
+    assert not any('source_changed' in str(reason) for reason in reasons), reasons
+    assert not ledger.artifacts('patient_context_source_quality_skipped_v1')
+    assert not ledger.artifacts(state.QUALITY_SKIP)
+    import patient_context_quality_receipts as receipts_module
+    with ledger.db:
+        for pid, allowed in ((1, False), (2, True)):
+            assert receipts_module._quality_scope_allowed(ledger.db, pid, cfg) is allowed

@@ -1587,7 +1587,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     changed = repaired["facts_sig"]
                     projected = repaired["temporal_view"]
                 quality_policy, problems = semantic_policy.runtime_config(cfg)
-                if problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
+                if problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, cfg, snapshot["sources"]):
                     raise patient_context_refresh_state.Deferred("summary_quality_promotion")
                 meta["quality_audit_key"] = quality_identity["audit_key"]
                 if quality_skipped:
@@ -1882,7 +1882,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         quality_identity['assessment'], snapshot['route'])
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
-                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
+                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_cfg, fresh["sources"])
                         or quality_keys != patient_context_refresh_state._credential_tag(
                             semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or quality_identity["assessment"] != patient_context_refresh_state._quality_assessment(live_policy)
@@ -1896,7 +1896,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
-                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
+                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_cfg, fresh["sources"])
                         or source_quality_keys != patient_context_refresh_state._credential_tag(
                             semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or source_quality_identity["assessment"] != patient_context_refresh_state._quality_assessment(live_policy)
@@ -2094,7 +2094,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     and patient_context_refresh_state._digest(extract_llm.load_config()) == adoption_cfg
                     and source_quality_keys == patient_context_refresh_state._credential_tag(
                         semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, extract_llm.load_config()))
-                    and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, [final_source])
+                    and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, extract_llm.load_config(), [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and patient_context_refresh_state.time.monotonic() < deadline
                     and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version

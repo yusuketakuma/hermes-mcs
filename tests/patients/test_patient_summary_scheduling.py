@@ -162,17 +162,19 @@ def test_partial_cloud_draft_uses_only_audited_sources_then_expands(cloud_schedu
     ('legacy', True, False), ('shadow', True, False),
     ('canonical', True, True), ('canonical', False, False),
 ])
-def test_quality_scope_tracks_actual_fact_provenance_without_notification_enforce(runtime, fact_source, canonical, allowed):
+def test_quality_scope_tracks_actual_fact_provenance_without_notification_enforce(runtime, monkeypatch, fact_source, canonical, allowed):
+    import semantic_policy
     led, _, _ = runtime
     seed(led)
     policy = {'mode': 'assist', 'project_ids': [1], 'fact_source': fact_source}
+    monkeypatch.setattr(semantic_policy, 'jev_scope_policy', lambda cfg: (policy, []))
     source = {'source': 'chat', 'body_state': 'full', 'body_text': 'synthetic',
               'canonical_context': canonical}
-    assert patient_context_quality_receipts._quality_scope_allowed(led.db, 1, policy, [source]) is allowed
-    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 2, policy, [source])
+    assert patient_context_quality_receipts._quality_scope_allowed(led.db, 1, {}, [source]) is allowed
+    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 2, {}, [source])
     with led.db:
         led.artifact_add_tx('semantic_control', 'paused', project_id=1)
-    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 1, policy, [source])
+    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 1, {}, [source])
 
 
 def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkeypatch):

@@ -525,14 +525,18 @@ def test_jev_available_needs_mode_key_and_budget(semantic, key, available):
     assert semantic_policy.jev_available({**scfg, "jev_held": True}, key) is False
 
 
-def test_jev_scope_applies_only_while_semantic_is_on():
+@pytest.mark.parametrize("semantic, excluded", [
+    (None, set()),                                   # no semantic block: no Jev scope
+    ({"project_ids": [1]}, {2}),                     # setup can save a scope without a mode
+    ({"mode": "off"}, set()),
+    ({"mode": "assist", "project_ids": [1]}, {2}),
+])
+@pytest.mark.parametrize("key", [None, "synthetic-jev-key"])
+def test_jev_scope_never_depends_on_the_key(monkeypatch, semantic, excluded, key):
+    import semantic_jev
     import semantic_policy
-    off, _ = semantic_policy.semantic_config({}, key_present=False,
-                                             transfer_status=_no_review)
-    assert off["mode"] == "off" and off["project_ids"] == []
-    assert not semantic_policy.jev_scope_excludes(off, 1)
-    on, _ = semantic_policy.semantic_config(
-        {"semantic": {"mode": "assist", "project_ids": [1]}}, key_present=False,
-        transfer_status=_no_review)
-    assert not semantic_policy.jev_scope_excludes(on, 1)
-    assert semantic_policy.jev_scope_excludes(on, 2)
+    monkeypatch.setattr(semantic_jev, "api_key", lambda *_args: key)
+    cfg = {} if semantic is None else {"semantic": semantic}
+    scope_policy, errors = semantic_policy.jev_scope_policy(cfg)
+    assert not errors
+    assert {pid for pid in (1, 2) if semantic_policy.jev_scope_excludes(scope_policy, pid)} == excluded

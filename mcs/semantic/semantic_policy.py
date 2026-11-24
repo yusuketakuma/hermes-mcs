@@ -267,10 +267,21 @@ def jev_available(scfg: dict, key_present) -> bool:
             and scfg["daily_request_budget"] > 0)
 
 
-def jev_scope_excludes(scfg: dict, project_id) -> bool:
-    """Whether the Jev patient scope leaves this patient out; with semantic off there is no scope."""
-    scope = scfg["project_ids"]
-    return scfg["mode"] != "off" and scope is not None and project_id not in scope
+def _review_not_required():
+    return {"state": "not_required", "auto_enable": True}
+
+
+def jev_scope_policy(cfg: dict) -> tuple[dict, list]:
+    """Resolve the policy Jev would use with a key present, so scope decisions never depend on the key."""
+    # Records made with or without the key, and their later credential-free
+    # verification, then reach the same patient scope.
+    return semantic_config(cfg, key_present=True, transfer_status=_review_not_required)
+
+
+def jev_scope_excludes(scope_policy: dict, project_id) -> bool:
+    """Whether a policy from jev_scope_policy leaves this patient out of Jev's scope."""
+    scope = scope_policy["project_ids"]
+    return scope_policy["mode"] != "off" and scope is not None and project_id not in scope
 
 
 def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:

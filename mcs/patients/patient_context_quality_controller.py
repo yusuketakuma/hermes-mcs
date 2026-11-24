@@ -637,7 +637,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 OSError, RecursionError, OverflowError):
             return "unknown", None
     if (not cloud_key and not optional_quality or jev_off and not optional_quality
-            or semantic_policy.jev_scope_excludes(scfg, pid)):
+            or semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(cfg)[0], pid)):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
         scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
@@ -667,7 +667,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     candidate_ref=source_candidate_ref)
                    if source is not None else
                    patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, summary, assessment, display_projection, source_keys=source_keys))
-        if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, scfg, initial["sources"]):
+        if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, cfg, initial["sources"]):
             return "deferred", None
     finally:
         ledger.db.rollback()
@@ -717,7 +717,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     or paused(ledger.db, pid)
                     or cloud_policy.stopped(ledger)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
-                    or semantic_policy.jev_scope_excludes(live_semantic, pid)
+                    or semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(live)[0], pid)
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
                 denied = True
                 return False
@@ -738,7 +738,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                              patient_context_refresh_sources._quality_capture(ledger.db, pid, live, workday_id, summary, assessment, display_projection, source_keys=source_keys))
                 if (refreshed["identity"] != identity
                         or source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]
-                        or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"])):
+                        or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live, refreshed["sources"])):
                     denied = True
                     return False
                 ledger.db.rollback()

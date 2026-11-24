@@ -718,7 +718,7 @@ def _source_quality_verified(db, pid, source, route, cfg, scan, *, scan_proof=No
     import semantic_policy
     try:
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
-        if errors or not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy):
+        if errors or not patient_context_quality_receipts._quality_scope_allowed(db, pid, cfg):
             return False
         db.execute("SAVEPOINT source_quality_read")
         try:
@@ -729,7 +729,7 @@ def _source_quality_verified(db, pid, source, route, cfg, scan, *, scan_proof=No
             if (context_plan.source_signature(captured["sources"][0]) != context_plan.source_signature(source)
                     or captured["chunks_sig"] != scan.get("_chunks_sig")
                     or scan.get("source_quality_audit_key") != identity["audit_key"]
-                    or not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy, captured["sources"])
+                    or not patient_context_quality_receipts._quality_scope_allowed(db, pid, cfg, captured["sources"])
                     or patient_context_quality_receipts._quality_failed(db, pid, identity)):
                 return False
             import semantic_runtime

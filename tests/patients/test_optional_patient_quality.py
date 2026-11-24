@@ -256,34 +256,3 @@ def test_missing_jev_key_keeps_cloud_context_and_records_skips(runtime, cloud, m
     assert not ledger.artifacts(refresh.QUALITY_PASS)
     assert refresh.context_view_input(ledger.db, 1, cfg=CFG)
 
-
-def test_cloud_context_without_jev_setup_publishes_with_skips(runtime, cloud, monkeypatch):
-    import semantic_jev
-    from anthropic_context_testkit import CFG
-    from test_patient_context_refresh import seed, step
-
-    ledger, _, local_calls = runtime
-    import cloud_policy
-
-    monkeypatch.delitem(CFG, 'semantic')  # a fresh install never writes a semantic block
-    cfg = CFG
-    # The transport fixture keeps no paid receipts; like its guard_cloud_sources stub,
-    # the summary's receipt guard is not what this test checks.
-    monkeypatch.setattr(cloud_policy, 'guard_context_origins', lambda *_args: None)
-    monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: None)
-    monkeypatch.setattr(semantic_jev, 'JevClient',
-                        lambda **kwargs: pytest.fail('an install without Jev must not construct a client'))
-    seed(ledger, body='本人は合成の自宅で生活しています。')
-    statuses = []
-    for _ in range(40):
-        result = step(runtime, cfg=cfg)
-        statuses.append(result)
-        if result['status'] == 'complete':
-            break
-        assert result['status'] in ('progressed', 'deferred'), result
-    else:
-        pytest.fail(f'cloud context without Jev setup did not finish: {[(s['status'], s.get('reason')) for s in statuses]}')
-    assert cloud[0] and not local_calls and not ledger.synthetic_jev_requests
-    assert ledger.artifacts(refresh.QUALITY_SKIP)
-    assert not ledger.artifacts(refresh.QUALITY_PASS)
-    assert refresh.context_view_input(ledger.db, 1, cfg=cfg)

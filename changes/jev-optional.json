@@ -2,13 +2,15 @@
   "category": "fixed",
   "title": "Jev を導入していない環境で外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
   "summary": "外部AIのキーだけを設定し、Jev（TYPESAFE_API_KEY）と semantic の設定がない環境で、外部AIが作った患者コンテキストが Jev の品質確認を待ち続けて公開されませんでした。意味解析が無効のときは確認を未実施（disabled）として記録して公開します。外部AIの受領記録の検証は従来どおりです。Jev キーがないだけの環境では mcs_setup.py check が警告せず「情報: Jev: 未導入」を1行表示します。mode を明示した設定でキーがない場合の警告は残ります。",
-  "upgrade": "追加操作は不要です。更新後の次回の患者コンテキスト処理から反映され、待ちになっていた患者も自動で公開に進みます。Jev を使う設定（semantic.mode を明示、またはキーを登録して mode を省略）の動作・予算・対象患者は変わりません。",
+  "upgrade": "追加操作は不要です。更新後、確認待ちになっていた患者は次の再試行で確認を未実施として記録し、公開に進みます。Jev のキーを登録している環境の動作・予算・対象患者は変わりません。semantic.project_ids を設定している場合、その外の患者は従来どおり確認待ちのままです。",
   "details": [
     "Jev を呼べるか（意味解析が有効・キーあり・施設の確認で保留されていない・1日の上限が0より大きい）の判定を semantic_policy.jev_available に集約し、患者コンテキストの再確認判定から使う。",
-    "Jev の対象患者（semantic.project_ids）の判定を semantic_policy.jev_scope_excludes に集約する。意味解析が無効のときは Jev の対象範囲を適用しない。",
+    "Jev の対象患者（semantic.project_ids）の判定を semantic_policy.jev_scope_policy / jev_scope_excludes に集約し、キーの有無で変えない（キーがある場合に Jev が使う範囲で決める）。意味解析が無効のときは対象範囲を適用しない。セットアップが mode なしで保存した project_ids は、キーなしでもキーありと同じく対象外の患者を確認待ちにする（作成時と公開時の判定の食い違いで公開されない問題を防ぐ）。",
     "意味解析が無効のとき、受領記録を検証できた外部AIの要約も、ローカルで作った要約と同じく確認を未実施として記録できるようにする（実行中の再確認でも同じ条件を使う）。",
     "品質確認の途中でキーが変わったことを検出するため、キーの値そのものではなくハッシュを保持して比較する。",
-    "Jev を使う設定で、キー・上限・対象患者が揃っている場合は従来どおり Jev の確認が終わるまで公開を待つ。"
+    "Jev を使う設定で、キー・上限・対象患者が揃っている場合は従来どおり Jev の確認が終わるまで公開を待つ。",
+    "対象範囲の判定は品質確認の識別値（QA_VERSION）に含めず、従来どおり照合のたびに現在の設定で確かめる。答えの解釈と記録の受入れ規則は変えていないため、保存済みの確認記録は作り直さない。mode=off に切り替えた環境では、以前の PASS による公開版を対象範囲で隠さなくなる。",
+    "semantic.extract_qc=annotate を設定していても意味解析が無効な環境では、mcs_setup.py check が監査注記を作れないことを警告する（extract_qc_inactive）。"
   ],
   "refs": [
     "mcs/semantic/semantic_policy.py",
@@ -17,6 +19,7 @@
     "mcs/patients/patient_context_refresh.py",
     "mcs/patients/patient_context_refresh_readiness.py",
     "mcs/ops/diagnostics/environment_diagnostics.py",
-    "mcs/ops/mcs_setup.py"
+    "mcs/ops/mcs_setup.py",
+    "docs/specs/patient-context.md"
   ]
 }

@@ -161,11 +161,16 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     return out
 
 
+def _extract_qc_requested(cfg: dict) -> bool:
+    block = cfg.get("semantic")
+    return isinstance(block, dict) and block.get("extract_qc") == "annotate"
+
+
 def jev_notice(cfg: dict, root) -> str | None:
     """Name an install that never set up Jev as information, since local-only use is supported."""
     block = cfg.get("semantic")
-    if block is not None and (not isinstance(block, dict) or "mode" in block):
-        return None   # an explicit mode is checked by check_environment
+    if block is not None and (not isinstance(block, dict) or "mode" in block) or _extract_qc_requested(cfg):
+        return None   # an explicit mode or a requested QC is checked by check_environment
     if mcs_util.private_env_value("TYPESAFE_API_KEY", root):
         return None
     return "Jev: 未導入（Jev への送信は行いません）"
@@ -296,6 +301,10 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
         warnings.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
                         "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                         "no_api_key")
+    elif sem["mode"] == "off" and _extract_qc_requested(cfg):
+        warnings.append("抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません。"
+                        "使う場合は semantic.mode を設定するか、TYPESAFE_API_KEYを登録してください。"
+                        "エラーコード: extract_qc_inactive")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
     labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
     if labels:

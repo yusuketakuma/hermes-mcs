@@ -690,7 +690,8 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | Hermes コマンドが見つかりません | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
 | Hermes の通知接続が常駐管理されていません | `services` を実行（`hermes gateway install`+`start` で常駐化） |
 | 通知接続が更新前のプログラムで動いています（注意） | `hermes gateway restart`（§A-6） |
-| 意味解析は有効ですが、TYPESAFE_API_KEYを取得できません（no_api_key） | `semantic.mode` を明示した環境で必須 — `~/.mcs/.env` に登録。mode を省略しキーがない環境は Jev を使わず、警告も出ません |
+| 意味解析は有効ですが、TYPESAFE_API_KEYを取得できません（no_api_key） | `semantic.mode` を `off` 以外に明示した環境で必須 — `~/.mcs/.env` に登録。`mode=off` と、mode を省略しキーがない環境は Jev を使わず、この警告は出ません（後者は「情報: Jev: 未導入」を1行表示） |
+| 抽出の監査注記（semantic.extract_qc=annotate）は、意味解析が無効のため作成されません（extract_qc_inactive） | `semantic.mode` を設定するか TYPESAFE_API_KEY を登録する。注記が不要なら `extract_qc` を外す |
 
 
 ### 7-3. その他の症状

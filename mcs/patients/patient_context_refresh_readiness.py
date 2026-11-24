@@ -97,7 +97,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
         # Key availability controls new calls; cached evidence uses the configured scope.
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
         route = _publication_route(cfg, meta)
-        if errors or route is None or not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy):
+        if errors or route is None or not patient_context_quality_receipts._quality_scope_allowed(db, pid, cfg):
             return False
         assessment = patient_context_refresh_state._quality_assessment(policy)
         owns_read = not db.in_transaction
@@ -110,7 +110,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
             patient_context_quality_receipts._quality_integrity(db, pid)
             captured = patient_context_refresh_sources._quality_capture(db, pid, cfg, meta.get("workday_id") or meta.get("night_id"), doc.get("summary"), assessment,
                                         doc.get("temporal_view"), route=route, read_proof=read_proof, source_keys=meta.get('source_scope'))
-            if not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy, captured["sources"]):
+            if not patient_context_quality_receipts._quality_scope_allowed(db, pid, cfg, captured["sources"]):
                 return False
             identity = captured["identity"]
             if (meta.get("quality_audit_key") != identity["audit_key"]
