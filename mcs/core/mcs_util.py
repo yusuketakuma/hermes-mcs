@@ -16,7 +16,7 @@ import urllib.request
 from contextlib import suppress
 
 from error_codes import KNOWN_ERROR_CODES
-from safe_io import read_regular_nofollow
+from safe_io import read_private_bytes, read_regular_nofollow
 
 
 HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
@@ -36,6 +36,7 @@ CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CONFIG_MAX_BYTES = 1024 * 1024
 DOTENV_MAX_BYTES = 64 * 1024
 _weak_warned: set = set()
+_env_unusable_warned: set = set()
 
 
 def _read_local(path: str, limit: int) -> bytes:
@@ -255,9 +256,22 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     for path in (paths if paths is not None else
                  (os.path.join(HOME, ".env"),
                   os.path.expanduser("~/.hermes/.env"))):
+        # A dotenv must be a private file (owner-only, regular, bounded):
+        # a weak mode/owner or oversized one is never opened for values —
+        # warn once per path and fall back like a missing file.
+        try:
+            raw = read_private_bytes(path, DOTENV_MAX_BYTES)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            if path not in _env_unusable_warned:
+                _env_unusable_warned.add(path)
+                print(f"mcs: local_file_permissions_weak ({os.path.basename(path)})",
+                      file=sys.stderr)
+            continue
         # an undecodable (non-UTF-8) dotenv is skipped like an unreadable one
-        with suppress(OSError, ValueError):
-            for line in _read_local(path, DOTENV_MAX_BYTES).decode(
+        with suppress(ValueError):
+            for line in raw.decode(
                     "utf-8").splitlines(keepends=True):
                 if line.startswith(key + "="):
                     v = line.split("=", 1)[1].strip()

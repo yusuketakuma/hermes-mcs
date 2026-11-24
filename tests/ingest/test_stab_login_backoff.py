@@ -127,6 +127,7 @@ def test_env_credential_revision_follows_the_dotenv_file(adapter, tmp_path, monk
     monkeypatch.delenv("MCS_PASSWORD", raising=False)
     before = adapter._credential_fp("synthetic-id", "env")
     (home / ".env").write_text("MCS_PASSWORD=synthetic\n")
+    (home / ".env").chmod(0o600)
     assert adapter._credential_fp("synthetic-id", "env") != before
     assert adapter._credential_fp("synthetic-id", "browser") \
         != adapter._credential_fp("synthetic-id", "env")
