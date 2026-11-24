@@ -708,11 +708,14 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     # Every approved local rebuild (active, adopted or lapsed and held) stays off the cloud
-    # follow-up: an approval never hands its unit back to the cloud.
+    # follow-up: an approval never hands its unit back to the cloud. The local
+    # walk uses the same set to lift approved units out of backlog order.
     try:
-        rebuilds = local_rebuild.approved_units(ledger.db) if cloud_only else {}
+        rebuilds = local_rebuild.approved_units(ledger.db)
     except sqlite3.Error:
-        raise _CloudSelectionIncomplete('reader_unavailable') from None
+        if cloud_only:
+            raise _CloudSelectionIncomplete('reader_unavailable') from None
+        rebuilds = {}   # unreadable approvals grant nothing; prepare decides the rest
 
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
         if deadline is not None and time.monotonic() >= deadline:
@@ -862,6 +865,21 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
+    # An approved local rebuild is pending backlog but must not wait behind
+    # it: the approval grants a local attempt, so the unit takes the first
+    # slots of the pass. The same eligibility, admission, claim-lease and
+    # retry gates apply — only the posted_at order is lifted. Unapproved
+    # messages are never in the set, adopted units fail pending_pred, and a
+    # held or proof-changed unit is refused in prepare under its own verdict.
+    if not cloud_only and rebuilds:
+        priority_ids = sorted({mid for _pid, mid in rebuilds})
+        selected = _select(None, limit - len(rows), None,
+                           scope=" AND m.message_id IN (SELECT value FROM json_each(?))",
+                           scope_params=[json.dumps(priority_ids)])
+        if selected:
+            rows += selected
+            adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+            adm_params.append(json.dumps(sorted({r["message_id"] for r in selected})))
     # Active patients normally precede archived ones; the resident's
     # archive fairness turn reverses those classes. Each class keeps its
     # usual fresh/re-extraction order, except that a fair oldest turn

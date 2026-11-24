@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import functools
 import time
@@ -90,6 +91,22 @@ def _recent_arrivals(ledger) -> set:
     return {r[0] for r in ledger.db.execute(
         "SELECT message_id FROM messages WHERE notified_at >= ?",
         (time.time() - _ARRIVAL_CARRY_S,))}
+
+
+def _priority_admitted(ledger, admitted):
+    """The admission set of a new-arrival-priority turn: recent arrivals plus
+    approved local rebuilds. An approval is pending backlog and the recent-only
+    window must not bury it; when the caller's set is a real gate (canonical
+    cohort) it still applies — the union only re-admits ids that gate already
+    holds. An unreadable approvals table adds nothing (fail-closed: prepare
+    grants nothing either)."""
+    recent = _recent_arrivals(ledger)
+    try:
+        import extract_llm_local_rebuild as local_rebuild
+        recent |= {mid for _pid, mid in local_rebuild.approved_units(ledger.db)}
+    except sqlite3.Error:
+        pass
+    return recent if admitted is None else admitted & recent
 
 
 def _background_semantic(ledger, stop=None):
@@ -724,8 +741,7 @@ def _main() -> int:
                     oldest_turn = (args.semantic and semantic_has_worked
                                    and semantic_recent_turns >= _SEMANTIC_RECENT_TURNS)
                     if semantic_priority and not oldest_turn:
-                        recent = _recent_arrivals(led)
-                        adm = recent if adm is None else adm & recent
+                        adm = _priority_admitted(led, adm)
                     cloud_turn = oldest_turn or not args.semantic
                     cloud_cfg = cloud_inference.resolve_cloud_settings(load_config())
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
