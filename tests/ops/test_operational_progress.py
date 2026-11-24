@@ -164,7 +164,7 @@ def test_disabled_processing_has_no_eta_even_with_recorded_completions(led):
 
 
 def test_unread_semantic_queue_is_not_estimated_as_runnable(led):
-    cfg = _cfg("assist", summary_mode="off", loop_mode="off")
+    cfg = _cfg("assist", summary_mode="off", loop_mode="off", extract_qc="annotate")
     job(led, 1, state="pending", kind="semantic")
     job(led, 2, state="pending", kind=progress.QC_JOB_KIND)
 
@@ -176,6 +176,23 @@ def test_unread_semantic_queue_is_not_estimated_as_runnable(led):
     assert out["queues"]["backfill"]["runnable_pending"] == 0
     assert out["queues"]["backfill"]["estimate"]["reason"] == "no_result_reader"
     assert out["queues"]["qc"]["runnable_pending"] == 1
+
+
+def test_disabled_qc_and_unclassified_jobs_are_not_counted_as_runnable_or_unread(led):
+    cfg = _cfg("assist", summary_mode="off", loop_mode="off", extract_qc="off")
+    qc = job(led, 1, state="pending", kind=progress.QC_JOB_KIND)
+    unknown = job(led, 2, state="pending", kind="semantic")
+    led.db.execute("UPDATE fetch_jobs SET payload='broken' WHERE job_id IN (?,?)",
+                   (qc["job_id"], unknown["job_id"]))
+
+    out = snapshot(led, cfg)
+    assert out["queues"]["qc"]["pending"] == 1
+    assert out["queues"]["qc"]["runnable_pending"] == 0
+    assert out["queues"]["qc"]["estimate"]["reason"] == "qc_disabled"
+    assert out["queues"]["unclassified"]["pending"] == 1
+    assert out["queues"]["unclassified"]["unread_pending"] == 0
+    assert out["queues"]["unclassified"]["estimate"]["reason"] == "unclassified_jobs"
+    assert out["unread_semantic_pending"] == 0
 
 
 def room(led, pid, *, coverage=NOW - 1000, state="pending", updated=NOW - 10,
