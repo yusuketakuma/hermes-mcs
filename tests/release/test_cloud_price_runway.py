@@ -7,16 +7,25 @@ to a recheck deadline. Historical snapshots are never gated: they stay so
 stored reservations keep resolving by the ``price_version`` name they were
 written with (``record_result`` looks the version up through
 ``_price_definition``), and by-name lookups never check expiry.
+
+release-notes.yml runs this directory through ``python3 -m unittest
+discover``, so the file must be unittest-style and bootstrap the flat-import
+path itself — pytest conftest does not run there.
 """
 
 from datetime import date, datetime, timedelta
 import re
 from pathlib import Path
+import sys
+import unittest
 
-import anthropic_client
-import cloud_usage_accounting as accounting
-import openai_client
-import provider_registry
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
+import _mcs_path  # noqa: E402,F401 - registers the flat-import module dirs
+
+import anthropic_client  # noqa: E402
+import cloud_usage_accounting as accounting  # noqa: E402
+import openai_client  # noqa: E402
+import provider_registry  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNWAY_DAYS = 21
@@ -52,35 +61,44 @@ def _runway_ok(now):
                for model in _current_models())
 
 
-def test_gate_covers_exactly_the_four_current_models():
-    assert _current_models() == CURRENT_MODELS
+class CloudPriceRunwayTest(unittest.TestCase):
+    def test_gate_covers_exactly_the_four_current_models(self):
+        self.assertEqual(_current_models(), CURRENT_MODELS)
+
+    def test_current_price_runway_at_the_release_reference_date(self):
+        now = _at(_reference_date())
+        short = {model: accounting.price_info(model, now=now)
+                 for model in sorted(_current_models())
+                 if accounting.price_info(model, now=now)["price_days_remaining"] <= RUNWAY_DAYS}
+        self.assertFalse(
+            short,
+            "official prices must be rechecked and the price tables updated first: "
+            + ", ".join(f"{model} expires {info['price_valid_until']} "
+                        f"({info['price_days_remaining']} days left)"
+                        for model, info in short.items()))
+
+    def test_runway_boundary_is_21_days_fail_and_22_pass(self):
+        deadline = min(date.fromisoformat(accounting.price_info(model)["price_valid_until"])
+                       for model in _current_models())
+        self.assertFalse(_runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS))))
+        self.assertTrue(_runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS + 1))))
+
+    def test_every_snapshot_resolves_by_version_name_for_reservation_reconciliation(self):
+        for provider, module in provider_registry.PROVIDER_MODULES.items():
+            self.assertLessEqual(set(module.CURRENT_PRICE_VERSIONS.items()),
+                                 set(module.PRICE_SNAPSHOTS))
+            self.assertGreater(
+                len(module.PRICE_SNAPSHOTS), len(module.CURRENT_PRICE_VERSIONS),
+                "a recheck with unchanged prices keeps the older table so stored "
+                "reservations reconcile")
+            for (model, version), snapshot in module.PRICE_SNAPSHOTS.items():
+                definition = accounting._price_definition(model, version)
+                self.assertIs(definition, accounting.PRICE_DEFINITIONS[(model, version)])
+                self.assertEqual(dict(definition["prices"]), dict(snapshot["prices"]))
+                self.assertGreater(
+                    accounting.usage_cost(USAGE[provider], model=model,
+                                          price_version=version), 0)
 
 
-def test_current_price_runway_at_the_release_reference_date():
-    now = _at(_reference_date())
-    short = {model: accounting.price_info(model, now=now)
-             for model in sorted(_current_models())
-             if accounting.price_info(model, now=now)["price_days_remaining"] <= RUNWAY_DAYS}
-    assert not short, ("official prices must be rechecked and the price tables updated first: "
-                       + ", ".join(f"{model} expires {info['price_valid_until']} "
-                                   f"({info['price_days_remaining']} days left)"
-                                   for model, info in short.items()))
-
-
-def test_runway_boundary_is_21_days_fail_and_22_pass():
-    deadline = min(date.fromisoformat(accounting.price_info(model)["price_valid_until"])
-                   for model in _current_models())
-    assert not _runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS)))
-    assert _runway_ok(_at(deadline - timedelta(days=RUNWAY_DAYS + 1)))
-
-
-def test_every_snapshot_resolves_by_version_name_for_reservation_reconciliation():
-    for provider, module in provider_registry.PROVIDER_MODULES.items():
-        assert set(module.CURRENT_PRICE_VERSIONS.items()) <= set(module.PRICE_SNAPSHOTS)
-        assert len(module.PRICE_SNAPSHOTS) > len(module.CURRENT_PRICE_VERSIONS), \
-            "a recheck with unchanged prices keeps the older table so stored reservations reconcile"
-        for (model, version), snapshot in module.PRICE_SNAPSHOTS.items():
-            definition = accounting._price_definition(model, version)
-            assert definition is accounting.PRICE_DEFINITIONS[(model, version)]
-            assert dict(definition["prices"]) == dict(snapshot["prices"])
-            assert accounting.usage_cost(USAGE[provider], model=model, price_version=version) > 0
+if __name__ == "__main__":
+    unittest.main()
