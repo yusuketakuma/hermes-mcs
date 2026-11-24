@@ -60,6 +60,7 @@ from extract_llm_source_contract import (
     _RESIDENT_STARTUP_POLL_S,
     _RESIDENT_STARTUP_WAIT_S,
     _RESIDENT_WRITE_WAIT_S,
+    _APPROVED_FIRST_TURNS,
     _SEMANTIC_RECENT_TURNS,
     _writer_current,
     _writer_current_diagnostic,
@@ -93,20 +94,16 @@ def _recent_arrivals(ledger) -> set:
         (time.time() - _ARRIVAL_CARRY_S,))}
 
 
-def _priority_admitted(ledger, admitted):
-    """The admission set of a new-arrival-priority turn: recent arrivals plus
-    approved local rebuilds. An approval is pending backlog and the recent-only
-    window must not bury it; when the caller's set is a real gate (canonical
-    cohort) it still applies — the union only re-admits ids that gate already
-    holds. An unreadable approvals table adds nothing (fail-closed: prepare
-    grants nothing either)."""
-    recent = _recent_arrivals(ledger)
+def _approved_pending(ledger) -> bool:
+    """Any approved local rebuild still holding an ACTIVE permit. An unreadable
+    approvals table counts as none (fail-closed: prepare grants nothing either)."""
     try:
         import extract_llm_local_rebuild as local_rebuild
-        recent |= {mid for _pid, mid in local_rebuild.approved_units(ledger.db)}
+        units = local_rebuild.approved_units(ledger.db)
+        return any(local_rebuild.permit(ledger, pid, mid, approvals=units)
+                   == local_rebuild.ACTIVE for pid, mid in units)
     except sqlite3.Error:
-        pass
-    return recent if admitted is None else admitted & recent
+        return False
 
 
 def _background_semantic(ledger, stop=None):
@@ -585,6 +582,7 @@ def _main() -> int:
             # Waiting or an expired priority window must not reset it.
             semantic_has_worked = False
             semantic_recent_turns = 0
+            approved_recent_turns = 0
             semantic_archive_turn = False
             context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
@@ -740,15 +738,31 @@ def _main() -> int:
                                          and time.monotonic() < semantic_first_until)
                     oldest_turn = (args.semantic and semantic_has_worked
                                    and semantic_recent_turns >= _SEMANTIC_RECENT_TURNS)
-                    if semantic_priority and not oldest_turn:
-                        adm = _priority_admitted(led, adm)
+                    recent_window = semantic_priority and not oldest_turn
+                    # Continuous semantic success keeps extending the arrival
+                    # window, so a recent-only turn can run forever and an
+                    # approval added after startup would never get a slot.
+                    # Every _APPROVED_FIRST_TURNS windowed turns one normal
+                    # turn runs instead; arrivals lose at most that one turn.
+                    approved_turn = False
+                    if recent_window:
+                        if approved_recent_turns >= _APPROVED_FIRST_TURNS:
+                            approved_recent_turns = 0
+                            approved_turn = _approved_pending(led)
+                        else:
+                            approved_recent_turns += 1
+                        recent_window = not approved_turn
+                    window = None
+                    if recent_window:
+                        recent = _recent_arrivals(led)
+                        window = recent if adm is None else adm & recent
                     cloud_turn = oldest_turn or not args.semantic
                     cloud_cfg = cloud_inference.resolve_cloud_settings(load_config())
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on"
                                      and cloud_policy.send_route("reextract") else 1)
-                    turn = ("oldest" if oldest_turn else "recent_only" if semantic_priority
-                            else "normal")
+                    turn = ("oldest" if oldest_turn else "recent_only" if recent_window
+                            else "approved" if approved_turn else "normal")
                     started = time.monotonic()
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
@@ -760,9 +774,10 @@ def _main() -> int:
                                     vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
-                                    admitted_ids=adm,
-                                    approved_first=not oldest_turn and not semantic_priority,
-                                    approved_fill=semantic_priority,
+                                    admitted_ids=adm if window is None else window,
+                                    approved_first=not oldest_turn and not recent_window,
+                                    approved_fill=recent_window,
+                                    approved_adm_ids=adm if recent_window else None,
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)

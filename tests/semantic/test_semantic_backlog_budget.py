@@ -982,7 +982,7 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
 
         def background(*_args):
-            if pass_count[0] == 6:
+            if pass_count[0] == 9:
                 raise KeyboardInterrupt("synthetic stop")
             if pass_count[0] == 3:
                 # warm-up is over: the human approves a second rebuild now —
@@ -999,23 +999,23 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                     'reason': '完全合成の確認', 'plan': plan})
                 assert receipt['outcome'] == 'applied'
                 usage_snapshot[0] = [tuple(r) for r in _usage(db)]
-            if pass_count[0] < 4:
-                # arrivals stop after warm-up: the recent windows that follow
-                # must hand their leftover slots to the new approval
-                mid = 100 + pass_count[0]
-                db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
-                with db.db:
-                    db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
-                                  (wall_now, mid))
+            # arrivals never stop: the approval must still reach a bounded
+            # turn of its own — leftover slots alone would starve it
+            mid = 100 + pass_count[0]
+            db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
+            with db.db:
+                db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
+                              (wall_now, mid))
             pass_count[0] += 1
             clock[0] += extract_llm.SEMANTIC_FIRST_S / 2 + 1
             return {"errors": [], "job_metrics": [
                 {"kind": "semantic", "status": "done"}]}
 
         def select_and_complete(ledger, **kwargs):
-            extra = {key: True for key in ("archived_first", "fair_oldest",
-                                           "approved_first", "approved_fill")
-                     if kwargs.get(key)}
+            extra = {key: kwargs[key] for key in ("archived_first", "fair_oldest",
+                                                  "approved_first", "approved_fill",
+                                                  "approved_adm_ids")
+                     if kwargs.get(key) is not None}
             rows, fresh_selected = extract_llm._select_pending(
                 ledger, kwargs["limit"], kwargs["admitted_ids"],
                 kwargs["shard"], kwargs["oldest_first"], **extra)
@@ -1029,6 +1029,8 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                             ledger, limit=1, budget_s=30, approved_first=True)
                         seen.append(row["message_id"])
                         turn_kind.append("oldest" if kwargs["oldest_first"]
+                                         else "recent"
+                                         if kwargs.get("approved_adm_ids") is not None
                                          else "normal")
                         turn_fresh.append(fresh_selected)
                         return {"done": report["done"], "failed": 0,
@@ -1042,6 +1044,8 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
                         extract_llm._release(ledger, row, own_lease)
                         seen.append(mid)
                         turn_kind.append("oldest" if kwargs["oldest_first"]
+                                         else "recent"
+                                         if kwargs.get("approved_adm_ids") is not None
                                          else "normal")
                         turn_fresh.append(fresh_selected)
                 return {"done": int(bool(rows)), "failed": 0,
@@ -1072,10 +1076,10 @@ def test_resident_mixed_turns_advance_each_kind_with_fresh_counting(tmp_path, mo
         assert local_rebuild.permit(db, 1, 50) == local_rebuild.ADOPTED
         assert 50 in seen
         assert [tuple(r) for r in _usage(db)] == usage_snapshot[0]
-        normal_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
-                        if mid in range(100, 106) and kind == "normal"]
-        assert normal_fresh and all(f == 1 for f in normal_fresh)
-        assert any(mid in range(100, 106) for mid in seen)   # arrivals advance
+        recent_fresh = [f for mid, kind, f in zip(seen, turn_kind, turn_fresh)
+                        if mid in range(100, 109) and kind == "recent"]
+        assert recent_fresh and all(f == 1 for f in recent_fresh)
+        assert len({mid for mid in seen if mid in range(100, 109)}) >= 3   # arrivals advance
         assert 9 in seen or 11 in seen or 12 in seen         # backlog advances
     finally:
         real_close()

@@ -146,6 +146,14 @@ _LEFT_ESTIMATE: dict = {}
 _LEFT_ESTIMATE_S = 600.0
 
 
+# A unit that fails the take-time permit re-proof is skipped for this long,
+# keyed by its approval command_id so a newer approval re-proves at once.
+_REPROOF_MISS_S = 300.0
+
+
+_reproof_misses: dict = {}
+
+
 def _left_estimate_key(ledger) -> str:
     try:
         return ledger.db.execute("PRAGMA database_list").fetchone()[2] or ""
@@ -563,7 +571,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
                     cloud_only: bool = False, deadline: float | None = None,
                     exclude_ids=None, approved_first: bool = False,
-                    approved_fill: bool = False) -> tuple[list, int | None]:
+                    approved_fill: bool = False,
+                    approved_adm_ids=None) -> tuple[list, int | None]:
     deadline = deadline if cloud_only else None
     reader = None
     owner = ledger
@@ -599,6 +608,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                 prioritize_patients=prioritize_patients, cloud_only=cloud_only,
                 receipt_check=receipt_check, deadline=deadline,
                 approved_first=approved_first, approved_fill=approved_fill,
+                approved_adm_ids=approved_adm_ids,
                 **({"exclude_ids": exclude_ids} if exclude_ids else {}))
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
@@ -638,7 +648,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          cloud_only: bool = False, receipt_check=None,
                          deadline: float | None = None, exclude_ids=None,
                          approved_first: bool = False,
-                         approved_fill: bool = False) -> tuple[list, int | None]:
+                         approved_fill: bool = False,
+                         approved_adm_ids=None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -654,29 +665,48 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never grant it an exception. Explicit admission sets from callers
     # stay inside the query so a large backlog cannot starve an admitted
     # message behind the LIMIT.
-    adm_sql = ""
-    adm_params: list = []
+    ids_sql = ""
+    ids_params: list = []
     if admitted_ids is not None:
         if len(admitted_ids) <= 30000:
             marks = ",".join("?" * len(admitted_ids)) or "NULL"
-            adm_sql = f" AND m.message_id IN ({marks})"
-            adm_params = sorted(admitted_ids)
+            ids_sql = f" AND m.message_id IN ({marks})"
+            ids_params = sorted(admitted_ids)
         else:
             # One JSON parameter keeps the admission gate before LIMIT
             # even when the manifest exceeds SQLite's variable limit.
-            adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
-            adm_params = [json.dumps(sorted(admitted_ids))]
+            ids_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
+            ids_params = [json.dumps(sorted(admitted_ids))]
+    adm_sql = ids_sql
+    adm_params = list(ids_params)
+    # approved_adm_ids is the un-windowed cohort: a caller that narrows
+    # admitted_ids to an arrival window passes the full set here so the
+    # approval take stays cohort-gated without joining the window. When
+    # unset the take gate is the same admission set the walk used.
+    take_sql = ""
+    take_params: list = []
+    if approved_adm_ids is not None:
+        take_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
+        take_params = [json.dumps(sorted(approved_adm_ids))]
+    else:
+        take_sql, take_params = ids_sql, list(ids_params)
     if exclude_ids:
         if cloud_only:
             raise ValueError("cloud_selection_exclusion_invalid")
         # Only pass-local refusals are excluded; admission, source, shard and
         # quality gates remain in this same query before its SQL limit.
-        adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
-        adm_params.append(json.dumps(sorted(exclude_ids)))
+        tail_sql = " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+        tail_params = [json.dumps(sorted(exclude_ids))]
+    else:
+        tail_sql, tail_params = "", []
     # A closed extract.upgrade_scope keeps earlier-generation posts out of
     # both lanes before LIMIT; an open scope adds nothing to the SQL.
     scope_sql = upgrade_scope.selection_sql(upgrade_scope.live(), "llm")
-    adm_sql += scope_sql
+    tail_sql += scope_sql
+    adm_sql += tail_sql
+    adm_params += tail_params
+    take_sql += tail_sql
+    take_params += tail_params
     required_contract = None
     if cloud_only:
         raw_cfg = load_config()
@@ -872,39 +902,53 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             + ",".join("?" * len(focus)) + "))") if focus else ""
     # An approved local rebuild is pending backlog the drainer serves on its
     # non-dedicated turns: a normal pass lifts it to the head
-    # (approved_first), and a recent-only window fills only the slots real
-    # arrivals leave (approved_fill — a notified row always outranks it, so
-    # it can never displace an actual arrival). Dedicated oldest/fair/
-    # archive turns and every non-background path keep their own selection.
-    # The same eligibility, admission, claim-lease and retry gates apply —
-    # only the posted_at order moves — and a unit re-proves ACTIVE under
-    # permit before being taken; the candidate read fans out by a small
-    # bounded factor, so the per-unit re-verification never scans the whole
-    # receipt history.
+    # (approved_first), and a windowed pass — admitted_ids narrowed to the
+    # caller's arrival set — fills only the slots real arrivals leave
+    # (approved_fill). The admission set itself keeps the arrivals
+    # independent: a notified row always outranks an approval, and an
+    # approved unit that is itself notified competes as an ordinary
+    # arrival. Dedicated oldest/fair/archive turns and every
+    # non-background path keep their own selection. The same eligibility,
+    # admission, claim-lease and retry gates apply — only the posted_at
+    # order moves — and a unit re-proves ACTIVE under permit before being
+    # taken; the candidate read fans out by a small bounded factor and a
+    # unit that fails re-proof is skipped until its cooldown expires, so
+    # the per-unit re-verification never re-scans the same head of the
+    # receipt history every pass.
     approved_scope = None
-    if ((approved_first and not oldest_first and not archived_first)
+    if ((approved_first and not oldest_first and not archived_first
+         and approved_adm_ids is None)
             or approved_fill) and not cloud_only and rebuilds:
         approved_scope = (" AND m.message_id IN (SELECT value FROM json_each(?))",
                           [json.dumps(sorted(mid for _pid, mid in rebuilds))])
-    # On a fill turn the competition excludes the approved units up front so
-    # they cannot outrank arrivals; they only re-enter through _approved_take.
-    walk_adm = None
-    if approved_fill and not cloud_only and rebuilds:
-        walk_adm = (adm_sql + " AND m.message_id NOT IN (SELECT value FROM json_each(?))",
-                    [*adm_params, json.dumps(sorted(mid for _pid, mid in rebuilds))])
 
     def _approved_take(n):
-        """Up to n approved candidates in walk order, each re-proven ACTIVE."""
-        taken = []
+        """Up to n approved candidates in walk order, each re-proven ACTIVE.
+        Candidates that fail the re-proof are remembered for a cooldown so a
+        row of lapsed units cannot pin the same bounded fan-out every pass."""
         if approved_scope is None or n <= 0:
-            return taken
-        for cand in _select(None, n * 4, None,
-                            scope=approved_scope[0], scope_params=approved_scope[1]):
+            return []
+        now_m = time.monotonic()
+        for key in [k for k, exp in _reproof_misses.items() if exp <= now_m]:
+            del _reproof_misses[key]
+        scope, params = approved_scope
+        miss = sorted({mid for _pid, mid, _cmd in _reproof_misses})
+        if miss:
+            scope += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+            params = [*params, json.dumps(miss)]
+        taken = []
+        for cand in _select(None, n * 4, None, scope=scope, scope_params=params,
+                            adm=(take_sql, take_params) if take_sql else None):
             if local_rebuild.permit(ledger, cand["project_id"], cand["message_id"],
                                     approvals=rebuilds) == local_rebuild.ACTIVE:
                 taken.append(cand)
                 if len(taken) >= n:
                     break
+            else:
+                unit = rebuilds.get((cand["project_id"], cand["message_id"]))
+                if unit is not None:
+                    _reproof_misses[(cand["project_id"], cand["message_id"],
+                                     unit["command_id"])] = now_m + _REPROOF_MISS_S
         return taken
 
     if approved_first and approved_scope is not None:
@@ -933,8 +977,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                         if len(rows) >= limit:
                             return rows, fresh_selected
                         rows += _select(False, limit - len(rows), False, rehold,
-                                        scope=" AND m.project_id=?", scope_params=(pid,),
-                                        adm=walk_adm)
+                                        scope=" AND m.project_id=?", scope_params=(pid,))
             # a never-extracted body has no hold, so fresh needs no split
             for rehold in ((None,) if fresh or (oldest_first and fair_oldest)
                            else (False, True)):
@@ -943,8 +986,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 scoped = fresh is False and not archived and focus
                 selected = _select(fresh, limit - len(rows), archived, rehold,
                                    scope=rest if scoped else "",
-                                   scope_params=focus if scoped else (),
-                                   adm=walk_adm)
+                                   scope_params=focus if scoped else ())
                 rows += selected
                 if fresh_selected is not None and fresh:
                     fresh_selected += len(selected)

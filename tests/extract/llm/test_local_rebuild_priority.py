@@ -11,7 +11,6 @@ import time
 import extract_llm as worker
 import extract_llm_engine
 import extract_llm_local_rebuild as local_rebuild
-import extract_llm_resident as resident
 import mcs_queries
 from extract_testkit import _hash, _message, _v2_artifact
 from test_anthropic_runtime import routed
@@ -94,28 +93,59 @@ def test_an_oldest_turn_keeps_its_oldest_candidate(routed, monkeypatch):
 
 
 def test_a_recent_only_turn_serves_the_arrival_then_the_approval(routed, monkeypatch):
-    """The recent-only window serves real arrivals first; an approval
-    re-admitted into it takes only the slots the arrivals leave."""
+    """A notified approval keeps its arrival rank inside the recent window;
+    an unnotified approval never outranks an actual arrival and takes only
+    the slots the arrivals leave."""
     ledger, cfg, calls, reserved, results = routed
-    _approved(ledger, monkeypatch)
-    _freshes(ledger, (2,))
+    _approved(ledger, monkeypatch, mid=2)                     # notified + approved
+    _approved(ledger, monkeypatch, mid=3, body="完全合成の別文3")  # approved, never notified
     with ledger.db:
-        ledger.db.execute("UPDATE messages SET notified_at=0 WHERE message_id=1")
+        ledger.db.execute("UPDATE messages SET notified_at=0 WHERE message_id=3")
         ledger.db.execute("UPDATE messages SET notified_at=? WHERE message_id=2", (time.time(),))
-    adm = resident._priority_admitted(ledger, None)
-    assert adm == {1, 2}                   # the approval is re-admitted although nothing notified it
-    # A real admission gate still bounds the union: the cohort wins.
-    assert resident._priority_admitted(ledger, {2, 9}) == {2}
-    # a competing actual arrival keeps the slot — the approval never outranks it
-    rows, _ = worker._select_pending(ledger, 1, adm, None, False,
-                                   approved_fill=True)
+    # the window is the caller's narrowed admission — mid 2 keeps its rank,
+    # mid 3 is not an arrival and cannot take its slot
+    rows, _ = worker._select_pending(ledger, 1, {2}, None, False,
+                                     approved_fill=True, approved_adm_ids={2, 3})
     assert [row["message_id"] for row in rows] == [2]
     # once the arrival is served (or absent), the leftover slot is the approval's
     _v2_artifact(ledger, 2, _hash(ledger, 2), {"summary": "合成"})
-    rows, _ = worker._select_pending(ledger, 1, adm, None, False,
-                                   approved_fill=True)
-    assert [row["message_id"] for row in rows] == [1]
-    rows, _ = worker._select_pending(ledger, 1, {1}, None, False)
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                     approved_fill=True, approved_adm_ids={2, 3})
+    assert [row["message_id"] for row in rows] == [3]
+    # the un-windowed cohort still gates the take: outside it grants nothing
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                     approved_fill=True, approved_adm_ids={2})
+    assert rows == []
+
+
+def test_the_fill_take_advances_past_lapsed_approvals(routed, monkeypatch):
+    """A run of lapsed approvals must not pin the bounded re-proof forever:
+    the next take skips them for a cooldown and reaches the ACTIVE unit."""
+    ledger, cfg, calls, reserved, results = routed
+    import uuid
+    import mcs_requests
+    for i, mid in enumerate((10, 11, 12, 13)):
+        # newer posted_at than every other row: the lapsed units lead the take
+        ledger.save_messages([_message(mid, f"完全合成の失效{mid}",
+                                     posted_at=f"2027-01-0{i + 1}T00:00:00+09:00")])
+        ledger.artifact_add(worker.KIND, "{}", project_id=1, message_id=mid,
+                            meta={"hash": _hash(ledger, mid),
+                                  "extract_version": worker.EXTRACT_VERSION - 1})
+        _paid(ledger, monkeypatch, mid)
+        plan = local_rebuild.preview(ledger)['plan']
+        receipt = mcs_requests.apply_command(ledger, {
+            'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
+            'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
+            'reason': '完全合成の確認', 'plan': plan})
+        assert receipt['outcome'] == 'applied'
+        _paid(ledger, monkeypatch, mid)          # usage after approval: proof changed
+    _approved(ledger, monkeypatch, mid=1)        # ACTIVE, the walk-order tail
+    adm = {1, 10, 11, 12, 13}
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                   approved_fill=True, approved_adm_ids=adm)
+    assert rows == []                            # the four lapsed heads were re-proven once
+    rows, _ = worker._select_pending(ledger, 1, set(), None, False,
+                                   approved_fill=True, approved_adm_ids=adm)
     assert [row["message_id"] for row in rows] == [1]
 
 
