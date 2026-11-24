@@ -18,7 +18,7 @@
 - 推奨番号: `1.3.0`（機能アップデート版）。最大区分は MINOR。
 - 根拠: 在宅ケア・医薬品検索に加え、患者コンテキストの品質確認と患者選定を改善し、抽出・添付・クラウド処理・通知・スタンプ等の変更を含む。非互換なCLI/JSON/設定/保存データの変更は記録に無い。内部改善の件数・行数・schema番号は区分の代理に使っていない。
 - 互換性・必要な操作: `QA_VERSION` 1→2で旧PASSは保存されますが現行版の確認として再利用されず、背景再判定まで患者概要が一時的に非表示になります。通常の更新手順に含まれるサービス再起動・設定確認と、薬剤マスターのオペレーター承認（配布のみで有効化は別承認）は従来どおりです。患者ごとの手動再判定は不要ですが、実サービスでの再起動後の進行・表示回復は未確認です。
-- 未確認事項: 最新統合treeの保留CI、独立QA証跡の適用性、54件外の2記録とmainコードの範囲不一致、fresh-install、実機対象の同一性・適用・rollback、本人の実使用・明示Release承認、tagと画像assetの公開到達確認。
+- 未確認事項: 最新統合treeの保留CI、Issue #198現行候補への差分QA結果（Reliability QA実施中）、54件外の2記録とmainコードの範囲不一致、fresh-install、実機対象の同一性・適用・rollback、本人の実使用・明示Release承認、tagと画像assetの公開到達確認。
 
 ## 今回の対象
 
@@ -80,10 +80,12 @@
 
 [Reliability QAの結果](https://app.devin.ai/sessions/6cbdca77960645d7978b33ef5698e8f8)はこのSHA・上記範囲に限ります。Issue #198全体の受入やv1.3.0の公開合格を示すものではありません。性能78項目、LLM候補生成、実データ、実サービス、脆弱性再現、負荷試験は対象外で、追加の機能QAは重複実行していません。
 
+2026-11-25時点で、現候補のコードSHA `eef171b37423df490c8e8ce537671eb21dbf0664` では臨床値抽出と関連テストが変わっています。旧QAの結果を流用せず、差分の影響を受ける既存の合成ケースのみReliability QAが再確認中です。結果は未着で、このPRから重複実行していません。
+
 ## 未実行・残条件
 
 - PR #368統合tree `42b2b6d91e2e7a57a2f99d6dd9324b111ae12c27` は旧候補より `mcs/extract/clinical/clinical_values.py` と関連テストが変わった。head/mergeでtree同一だが、headの必須 `merge-gate` は未完了。
-- Issue #198の独立QAは旧候補 `6845138a8c027f2a68cc7290650497434573c3fd`。現統合treeでは `mcs/extract/clinical/clinical_values.py` と関連テストも変更されているため、旧QAの数値だけで統合treeの臨床値経路を合格とはしない。現行treeでの関連CI待ちで、QAの重複依頼・全suiteの追加実行はしていない。
+- Issue #198の旧独立QAは旧候補 `6845138a8c027f2a68cc7290650497434573c3fd` に限ります。現統合treeでは `mcs/extract/clinical/clinical_values.py` と関連テストが変更されたため、旧QAの数値だけで現候補を合格とはしません。現候補コードSHA `eef171b37423df490c8e8ce537671eb21dbf0664` の差分限定QAをReliability QAが実施中で、結果待ちです。重複QA・全suiteの追加実行はしていません。
 - 旧head `937a429` の資料テスト（59 tests + 128 subtests）は追補前の履歴。2026-11-25の現作業treeでは `release_notes.py check`、`readme_release.py --check`、`update_readme.py --check` が成功し、`scripts/run_tests.sh tests/release/` は63 tests・128 subtestsが成功。これはローカル文書・release testの結果で、main統合tree CIや全体受入ではない。
 - `jev-health-qc-recovery` と `semantic-unread-verdicts` は選択54件外のactive recordsで、mainの関連コードを含む。どちらを収録するか、または候補からコードを除くかが未決定。現状を54件のみの完全なRelease範囲と扱わない。
 - PR #365の修正は現統合treeに含まれる。旧PRではCI 24成功・0失敗・9 skipを記録しているが、現統合treeのCIは上記のとおり保留中。旧Devin Reviewの指摘・資料対応記録は後段に残し、未登録triageを代理承認していない。
