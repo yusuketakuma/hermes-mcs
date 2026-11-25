@@ -648,7 +648,7 @@ select_model_profile() {
         # them. Without an active agent the largest complete set is kept.
         # The hardware ladder below only chooses the first model for a machine.
         _smp_pick=""
-        _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1)"
+        _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1 | sed -e 's|&quot;|"|g' -e 's|&apos;|'"'"'|g' -e 's|&lt;|<|g' -e 's|&gt;|>|g' -e 's|&amp;|\&|g')"
         # Only a model inside this mode's MODEL_DIR counts: after a mode switch
         # the old agent still names the previous home, whose bytes are elsewhere.
         if [ -n "$_smp_active" ] && [ "${_smp_active%/*}" = "$MODEL_DIR" ]; then
@@ -1146,7 +1146,7 @@ preflight() {
         *) if [ "$_free_kb" -ge "$_need_kb" ]; then
                pf_ok "ディスク: 空き $((_free_kb / 1024 / 1024)) GB（必要容量は約 $_need_gb GB）"
            else
-               pf_ng "ディスク: $HOME の空きは $((_free_kb / 1024 / 1024)) GB です（必要容量は約 $_need_gb GB、モデルは$MODEL_SIZE_TEXT）" "空き容量を増やして再実行してください"
+               pf_ng "ディスク: $HOME の空きは $((_free_kb / 1024 / 1024)) GB です（必要容量は約 $_need_gb GB、モデルは${MODEL_SIZE_TEXT}）" "空き容量を増やして再実行してください"
            fi ;;
     esac
     pf_net github.com https://github.com "$_need_clone"
@@ -1255,10 +1255,10 @@ dry_run_plan() {
             plan_line "4/6 ローカルAI" "ポート8080の既存サーバーを保持（追加導入なし）"
         else
             if model_files_present; then
-                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [$(state "$MODEL_FILE")] （$MODEL_NAME・全ファイル導入済み）"
+                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [$(state "$MODEL_FILE")] （${MODEL_NAME}・全ファイル導入済み）"
             else
                 _dr_missing_gb=$(( ($(model_missing_bytes) + 999999999) / 1000000000 ))
-                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [未取得] （$MODEL_NAME・残り約 ${_dr_missing_gb} GBを取得）"
+                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [未取得] （${MODEL_NAME}・残り約 ${_dr_missing_gb} GBを取得）"
             fi
             plan_line "" "起動設定 $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver 未起動の場合に起動"
         fi
