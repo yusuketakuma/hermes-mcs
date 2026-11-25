@@ -722,6 +722,8 @@ request_id(BuildRequest) = H("publication-request", {repository_id,tag,tag_oid,c
 attempt_key = H("automatic-attempt", {scope,source_target_commit,profile_sha256,config_contract_sha256,data_contract_sha256})
 ```
 
+attempt_keyの`config_contract_sha256`/`data_contract_sha256`は、対象releaseの**検証済みCompatibility payloadに含まれる値**をそのまま使う。端末はconfig/data契約文書からdigestを計算しない・配備値としても配置しない。端末は`MetadataRequest(kind=compatibility)`で取得し署名検証・offer.selectedとの相互照合を済ませたpayloadの2項目だけを使い、同一targetへの自動STARTでは常に同じ値になるためattempt_keyの安定性は中央の署名済みmetadataに帰着する。Compatibilityに無いdigest・未検証のpayload・selected不一致ではstageへ進まずfail-closedとする。
+
 attempt_keyにtag、publication ID、日付、policy epoch、artifactの再圧縮digest、operation IDを入れて消費済み枠を迂回させない。通常の同じtarget commitへの自動STARTは同じattempt_keyとなる。
 Publicationの同一tag予約はrequest_idより強いunique制約を持つ。後でacceptanceが更新されても同じtagで新しいbytesを公開しない。
 
