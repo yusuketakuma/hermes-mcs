@@ -270,6 +270,7 @@ def _fresh_root(tmp_path, common):
 @pytest.mark.parametrize("common", [
     {}, {"runtime_mode": "hermes"}, {"runtime_mode": "standalone", "install_args": []},
     {"recovery_python": "/synthetic-recovery/python", "install_args": []},
+    {"local_llm": {"model": "Qwen3.8-27B"}},
     {"unknown": "synthetic"},
     {"runtime_mode": "hermes", "future_synthetic": {"nested": [None, False, 0, "例"]}},
 ])

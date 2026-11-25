@@ -120,7 +120,7 @@ install.sh が作る venv インタプリタを使う）
 | `__RECOVERY__` | install.sh・mcs_setup services（配置済み監視の修正時） | 復旧ツール dir（`~/.mcs-recovery`） |
 | `__RECOVERY_PYTHON__` | install.sh・mcs_setup services | 更新対象から独立した、検証済みPythonの絶対パス |
 | `__LLAMA_BIN__` | install.sh | llama-server バイナリ（例 `/opt/homebrew/bin/llama-server`） |
-| `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`） |
+| `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`。分割GGUFは先頭ファイル） |
 | `__HERMES_HOME__` | install.sh | runtime home（Hermesは`~/.hermes`、standaloneは`~/.mcs`） |
 
 > 注意: パス変更時は plist の ProgramArguments と cron wrapper の双方を
