@@ -902,8 +902,15 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             finally:
                 os.close(fd)
 
+        # In-band retries stay pinned to one send here: this path's usage
+        # reserver cannot distinguish a retried send from an unresolved
+        # unknown-outcome send, so retrying inside one operation would weaken
+        # the duplicate-billing contract. Cross-tick retries remain bounded by
+        # the quality failure backoff; unifying this path needs logical-request
+        # accounting in semantic_usage first.
         client = semantic_jev.JevClient(api_key=key, model=scfg["model"],
-            attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"])
+            attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
+            max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
             _note("jev_client_hooks")
             return "deferred", None
