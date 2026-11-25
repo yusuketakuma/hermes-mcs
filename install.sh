@@ -649,7 +649,9 @@ select_model_profile() {
         # The hardware ladder below only chooses the first model for a machine.
         _smp_pick=""
         _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1)"
-        if [ -n "$_smp_active" ]; then
+        # Only a model inside this mode's MODEL_DIR counts: after a mode switch
+        # the old agent still names the previous home, whose bytes are elsewhere.
+        if [ -n "$_smp_active" ] && [ "${_smp_active%/*}" = "$MODEL_DIR" ]; then
             _smp_pick="$(profile_key_for_first_file "${_smp_active##*/}")"
         fi
         if [ -z "$_smp_pick" ]; then

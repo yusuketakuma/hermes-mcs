@@ -301,6 +301,20 @@ def test_non_mcs_model_ownership_does_not_inspect_or_replace_existing_model(tmp_
     assert not any(c.startswith("curl") and "huggingface.co" in c for c in _calls(stub_root))
 
 
+def test_fresh_install_disk_check_creates_model_dir_in_production_mode(tmp_path):
+    """Production mode (no hash override) must pass the whole-model disk check
+    on a clean machine where the models directory does not exist yet; the run
+    then fails at hash verification of the synthetic bytes, not before."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    del env["MCS_MODEL_SHA256"]
+    assert not (hermes_home / "models").exists()
+    r = _run(env, hermes_home)
+    assert r.returncode == 1
+    assert "空き容量を確認できません" not in r.stderr
+    assert "空き容量が不足" not in r.stderr
+    assert "モデルの整合性が確認できません" in r.stderr
+
+
 def test_model_download_is_pinned_and_verified_by_default(tmp_path):
     """The GGUF comes from a fixed revision and is checked against its
     published sha256 even when MCS_MODEL_SHA256 is not set."""
