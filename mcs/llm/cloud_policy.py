@@ -790,6 +790,23 @@ def route_open(route, cfg):
                                and window(cfg))
 
 
+def semantic_summary_route_open(cfg):
+    """Whether the bounded semantic window permits a summary-stage send.
+
+    Unlike facts extraction, summary generation is phase-bound in the
+    reservation owner, so non-worker backlog passes may use the same window
+    without widening extraction or realtime traffic."""
+    return send_route("semantic_backlog") or semantic_backlog_window(cfg)
+
+
+def route_open_for_owner(route, cfg, owner=None):
+    """Route permission for one owner-bound request."""
+    return (route_open(route, cfg)
+            or (route == "semantic_backlog" and isinstance(owner, dict)
+                and owner.get("semantic_phase") == "summary"
+                and semantic_summary_route_open(cfg)))
+
+
 def eligible(cfg, route, project_id):
     """Allow new cloud inference only for an open route within its scope."""
     return route_open(route, cfg) and in_scope(cfg, route, project_id)
@@ -1702,8 +1719,8 @@ def _circuit_on_pricing_error(ledger, error, model, since):
         _circuit_result(ledger, error)
 
 
-def block_reason(ledger, cfg, route, project_id, *, model=None):
-    if not eligible(cfg, route, project_id):
+def block_reason(ledger, cfg, route, project_id, *, model=None, owner=None):
+    if not route_open_for_owner(route, cfg, owner) or not in_scope(cfg, route, project_id):
         return "scope"
     return global_block_reason(ledger, model=_cfg(cfg)["model"] if model is None else model)
 
@@ -2176,7 +2193,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
             if _tally(ledger).invalid:
                 raise _classified(AnthropicError("pricing_unverified", "cloud_unit_unresolved"),
                                   "receipt_inconsistent")
-            return (block_reason(ledger, c, route, project_id, model=candidate['model'])
+            return (block_reason(ledger, c, route, project_id, model=candidate['model'], owner=owner)
                     or setting_block_reason(c)
                     or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
                                            input_bound=input_bound(body), selection=selection))
@@ -2223,7 +2240,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
 
         def check():
             _guard_repeated_request(ledger, meta, current_body=body)
-            reason = block_reason(ledger, c, route, project_id, model=model)
+            reason = block_reason(ledger, c, route, project_id, model=model, owner=owner)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)
             reason = budget_block_reason(ledger, c, max_tokens=tokens, input_bound=bound, selection=selection)
