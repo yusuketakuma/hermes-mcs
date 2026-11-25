@@ -10,7 +10,8 @@ def test_without_summary_or_loops_no_semantic_job_runs(tmp_path):
     db = _seeded(tmp_path)
     calls = []
     try:
-        cfg = {"semantic": {"mode": "shadow", "daily_request_budget": 50, "project_ids": [1]}}
+        cfg = {"semantic": {"mode": "shadow", "daily_request_budget": 50, "project_ids": [1],
+                            "summary_mode": "off", "loop_mode": "off"}}
         client = _FakeJev()
         out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
                               jev_client=client, llm_fn=lambda p: calls.append(p))
