@@ -18,6 +18,7 @@ import uuid
 
 from mcs_util import CONFIG_MAX_BYTES, _provider_artifact_present, _weak_warned, canonical, strict_json, until_epoch
 from safe_io import create_exclusive, fdopen_owned
+from llm_retry import CLOUD_MAX_ATTEMPTS
 
 
 PROVIDERS = ("anthropic", "openai", "jev")
@@ -89,7 +90,7 @@ def jev_model_pin_ok(pin, jev_model) -> bool:
 def _jev_values(value, jev_model):
     if "model" in value and not jev_model_pin_ok(value["model"], jev_model):
         raise ValueError("provider_model_invalid")
-    for key, low, high in (("daily_request_budget", 0, 100000), ("max_attempts_per_try", 1, 3),
+    for key, low, high in (("daily_request_budget", 0, 100000), ("max_attempts_per_try", 1, CLOUD_MAX_ATTEMPTS),
                            ("max_questions_per_request", 1, 48)):
         if key in value and (type(value[key]) is not int or not low <= value[key] <= high):
             raise ValueError("provider_config_invalid")

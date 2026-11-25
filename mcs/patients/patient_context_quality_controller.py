@@ -210,7 +210,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         current=lambda: current() and patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim),
         dispatch=lambda fn, **_kwargs: fn(), owner=owner,
         reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
-        max_attempts=1, purpose="quality_repair", selection=selection,
+        purpose="quality_repair", selection=selection,
         input_binding=patient_context_refresh_state._digest([identity, patient_context_refresh_state._cloud_input_binding(ledger.db, pid, patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys))]))
     try:
         response = []
@@ -455,7 +455,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         message_id=source['message_id'] or None, unit_key=unit_key, deadline=deadline,
         current=lambda: current() and patient_context_quality_receipts._quality_owns(ledger.db, pid, identity['input_key'], claim),
         dispatch=lambda fn, **_kwargs:fn(), reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
-        owner={'repair_input_key':repair_key,'unit_key':unit_key}, max_attempts=1,
+        owner={'repair_input_key':repair_key,'unit_key':unit_key},
         purpose='quality_repair', selection=selection, input_binding=patient_context_refresh_state._digest(origin))
     try:
         response = []
@@ -903,8 +903,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 os.close(fd)
 
         client = semantic_jev.JevClient(api_key=key, model=scfg["model"],
-            attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
-            max_attempts=1)
+            attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"])
         if not getattr(client, "supports_attempt_hooks", False):
             _note("jev_client_hooks")
             return "deferred", None

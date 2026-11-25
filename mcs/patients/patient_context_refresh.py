@@ -151,6 +151,13 @@ from patient_context_quality_controller import (
 )
 
 
+_VALIDATION_FAILURES = frozenset({
+    'patient_context_length_stop',
+    'patient_context_invalid_response',
+    'patient_context_unsupported_summary',
+})
+
+
 def _completed_cloud_receipts(ledger, provider, *, answered_only=False):
     """Recheck the existing paid receipts before retaining or adopting a unit."""
     import cloud_policy
@@ -1118,6 +1125,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     cloud_refusal = ["cloud_worker_unavailable" if takeover else None]
     # Paid requests this commit recorded as replaced by local work.
     replaced = []
+    # The latest paid answer of each validation-failed cloud generation step.
+    validation_failures = []
     selected_source = [None]
     selected_occurrence = [None]
     # What a paid answer may be taken up for. The overview and the audit read every source of
@@ -1551,6 +1560,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 generation_contacted = generation_contacted or paid
                 unresolved = getattr(provider, 'unresolved', paid)
                 generation_uncertain = generation_uncertain or bool(unresolved)
+                validation_failure = (str(error) if isinstance(error, ValueError)
+                                      and str(error) in _VALIDATION_FAILURES else None)
+                if validation_failure and getattr(provider, 'answered_reservations', None):
+                    item = (validation_failure, copy.deepcopy(provider.answered_reservations[-1]))
+                    if item not in validation_failures:
+                        validation_failures.append(item)
                 if changed:
                     provider.discard()
                     if paid:
@@ -2198,9 +2213,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     left = None
                 extract_llm._cloud_compare_tx(ledger, route="patient_context", project_id=pid,
                     left=left, right=None, rejected=None, held=None, repairs=None, unit=shadow_unit, pending=True)
+            for failure_reason, reservation in validation_failures:
+                cloud_policy.record_validation_failure_tx(
+                    ledger, reservation, failure_reason=failure_reason)
             if generation_claim is not None:
                 outcome = ('complete' if not failure and deferred_reason is None else
-                    'failed' if (failure in ('patient_context_length_stop', 'patient_context_invalid_response', 'patient_context_unsupported_summary')
+                    'failed' if (failure in _VALIDATION_FAILURES
                     or deferred_reason == 'summary_quality_failed') and not generation_uncertain else 'unknown')
                 if not context_quota.finish_tx(ledger.db, pid, generation_claim,
                         now=patient_context_refresh_state.time.time(), outcome=outcome):

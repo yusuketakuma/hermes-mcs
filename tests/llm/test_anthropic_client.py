@@ -319,20 +319,35 @@ def test_each_retry_reserves_and_accounts_http_failures(monkeypatch):
     assert "private response" not in json.dumps(results)
 
 
-def test_a_provider_5xx_is_accounted_once_and_handed_to_local(monkeypatch):
-    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("a 5xx is not waited on"))
+def test_retryable_http_failures_use_shared_first_attempt_plus_five_retries(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: None)
+    reservations, results, calls = [], [], []
+
+    client = a.AnthropicClient(
+        "synthetic", post_fn=lambda *args: calls.append(1) or (429, {"Retry-After": "0"}, b"{}"))
+    with pytest.raises(a.AnthropicError, match="rate_limited"):
+        client.complete("synthetic", deadline=time.monotonic() + 10,
+                        reserve_fn=lambda *args: reservations.append(1) or len(reservations),
+                        after_result=lambda r, meta, **_answer: results.append(meta))
+    assert len(calls) == len(reservations) == len(results) == 6
+    assert all(meta["http_class"] == "http_429" and meta["error_kind"] == "rate_limited" for meta in results)
+
+
+def test_a_provider_5xx_retries_within_the_shared_limit_and_accounts_each_attempt(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     reservations, results = [], []
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (529, {"Retry-After": "30"}, b"busy"))
     with pytest.raises(a.AnthropicError, match="transport"):
         client.complete("synthetic", deadline=time.monotonic() + 60,
                         reserve_fn=lambda *args: reservations.append(1) or len(reservations),
                         after_result=lambda r, meta, **_answer: results.append(meta))
-    assert reservations == [1] and [meta["http_class"] for meta in results] == ["http_529"]
+    assert len(reservations) == 6
+    assert [meta["http_class"] for meta in results] == ["http_529"] * 6
 
 
 @pytest.mark.parametrize("error", [TimeoutError("synthetic"), ConnectionResetError("synthetic"),
                                    ConnectionRefusedError("synthetic"), OSError("synthetic")])
-def test_a_failure_that_may_have_been_sent_is_never_retried(monkeypatch, error):
+def test_a_failure_that_may_have_been_sent_uses_the_shared_retry_limit(monkeypatch, error):
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls, results = [], []
 
@@ -342,16 +357,17 @@ def test_a_failure_that_may_have_been_sent_is_never_retried(monkeypatch, error):
 
     client = a.AnthropicClient("synthetic", post_fn=post)
     with pytest.raises(a.AnthropicError):
-        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: {"r": 1},
                         after_result=lambda r, meta, **_answer: results.append(meta))
-    # one attempt only: its reservation stays counted as possibly billed, never as not_sent
-    assert len(calls) == 1 and results[0]["http_class"] != "not_sent"
+    # every retry stays counted as possibly billed, never as not_sent
+    assert len(calls) == 6 and len(results) == 6
+    assert all(meta["http_class"] != "not_sent" for meta in results)
 
 
 @pytest.mark.parametrize("error", [OSError("http worker transport"), ConnectionRefusedError("http worker connection refused")])
-def test_the_real_request_path_never_resends_a_transport_failure(monkeypatch, error):
-    # bounded_http's parent re-raises the worker's classification as these generic types,
-    # whatever stage failed: no type proves the request never left.
+def test_the_real_request_path_retries_a_transport_failure_within_the_shared_limit(monkeypatch, error):
+    # bounded_http's parent re-raises the worker's classification as these generic types;
+    # retries are bounded and each possibly-sent attempt stays visible in accounting.
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls = []
 
@@ -362,17 +378,16 @@ def test_the_real_request_path_never_resends_a_transport_failure(monkeypatch, er
     monkeypatch.setattr(a.AnthropicClient, "request", request)
     client = a.AnthropicClient("synthetic")
     with pytest.raises(a.AnthropicError):
-        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: {"r": 1},
                         after_result=lambda r, meta, **_answer: None)
-    assert calls == ["POST"]
+    assert calls == ["POST"] * 6
 
 
-# A cloud 5xx/529 is not retried: the shared reservation guard refuses a second send of the same
-# request anyway, so waiting only held the slot (owner decision 2026-11-15: hand it to local now).
+# Retryable provider failures use the shared first attempt plus five retries.
 @pytest.mark.parametrize("status,kind,retries", [(401,"auth_error",1), (403,"auth_error",1),
                                                 (402,"payment_required",1), (400,"contract_error",1),
-                                                (429,"rate_limited",3), (529,"transport",1),
-                                                (503,"transport",1)])
+                                                (429,"rate_limited",6), (529,"transport",6),
+                                                (503,"transport",6)])
 def test_cloud_retry_classes(monkeypatch, status, kind, retries):
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls = []
@@ -391,7 +406,7 @@ def test_anthropic_quota_shaped_429_keeps_existing_rate_limit_behavior(monkeypat
         calls.append(True) or 429, {"Retry-After": "0"}, body))
     with pytest.raises(a.AnthropicError, match="rate_limited"):
         provider.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
-    assert len(calls) == 3
+    assert len(calls) == 6
 
 
 @pytest.mark.parametrize("request_id,expected", [("req_test-ABC_12", "req_test-ABC_12"),
@@ -461,7 +476,7 @@ def test_retry_after_alone_paces_retries(monkeypatch):
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (429, {"Retry-After": "2"}, b""))
     with pytest.raises(a.AnthropicError, match="rate_limited"):
         client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: None)
-    assert slept == [2, 2]
+    assert slept == [2] * 5
 
 
 @pytest.mark.parametrize("wait_fn", [False, 0, "sleep", [], {}])

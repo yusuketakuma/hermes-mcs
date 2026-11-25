@@ -249,6 +249,54 @@ def test_restart_reuses_atomic_paid_answer_without_capacity_reservation_or_new_b
         assert len(calls) == len(locks) == 1
 
 
+def test_validation_failed_paid_answer_is_not_reused_and_allows_bounded_retry(paid):
+    path, _cfg, calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(path)) as ledger:
+        with legacy_cloud_routes():
+            first = _ask(unit(ledger))
+        reservation = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            artifact_id = cloud_policy.record_validation_failure_tx(
+                ledger, reservation, failure_reason='validation', repair_issues={'evidence': 2})
+            assert artifact_id == cloud_policy.record_validation_failure_tx(
+                ledger, reservation, failure_reason='validation', repair_issues={'evidence': 2})
+        with legacy_cloud_routes():
+            second = _ask(unit(ledger, owner='retry-after-validation'))
+        assert second['text'] == first['text'] and 'reused_response' not in second
+        assert len(calls) == 2
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        failure = ledger.artifacts(cloud_policy.VALIDATION_FAILURE_KIND)[0]
+        failure_meta = json.loads(failure['meta'])
+        assert failure_meta['validation_failure'] is True
+        assert failure_meta['failure_reason'] == 'validation'
+        assert failure_meta['repair_issues'] == {'evidence': 2}
+
+
+def test_validation_failure_binding_mismatch_fails_closed(paid):
+    path, _cfg, _calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(path)) as ledger:
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
+        reservation = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            cloud_policy.record_validation_failure_tx(
+                ledger, reservation, failure_reason='validation')
+        row = ledger.artifacts(cloud_policy.VALIDATION_FAILURE_KIND)[0]
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.unit_key','tampered') "
+                              "WHERE artifact_id=?", (row['artifact_id'],))
+        with pytest.raises(cloud_policy.AnthropicError) as caught:
+            cloud_policy.recover_response(
+                ledger, route=reservation['route'], project_id=1, message_id=1,
+                unit_key=reservation['unit_key'], input_binding=reservation['input_binding'],
+                request_fp=reservation['request_fp'],
+                logical_request_fp=reservation['logical_request_fp'],
+                model=reservation['model'], effort=reservation.get('effort'))
+        assert (caught.value.kind, caught.value.detail) == ('pricing_unverified', 'usage_invalid')
+
+
 def test_recovery_keeps_a_known_rejected_attempt_and_reuses_the_later_paid_answer(paid):
     path, _cfg, calls, locks, state, unit, _restart = paid
     state['reject_first'] = True
@@ -316,16 +364,17 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding'),content='{}' "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
-        if damage == 'tokens':
-            # An output-bound change rewrites the envelope fingerprint, but a settled
-            # answer for the same prompt/model/effort is reused: no resend is needed.
-            answer = _ask(unit(ledger, route='patient_context', purpose='patient_context'),
-                          tokens=101)
-            assert isinstance(answer, dict)
+        if damage in ('input', 'tokens'):
+            # A binding/output-envelope change does not bill the identical prompt again:
+            # the settled paid answer is reused and current validation decides whether it applies.
+            answer = _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input',
+                               route='patient_context' if damage == 'tokens' else 'reextract',
+                               purpose='patient_context' if damage == 'tokens' else None),
+                          tokens=101 if damage == 'tokens' else 100)
+            assert isinstance(answer, dict) and answer['reused_response'] is True
         else:
             with pytest.raises(cloud_client.CloudNotSent):
-                _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
-                     tokens=101 if damage == 'tokens' else 100)
+                _ask(unit(ledger), tokens=100)
         assert len(calls) == 1
         assert len(ledger.artifacts('cloud_usage_reserve')) == (0 if damage == 'missing_reservation' else 1)
 

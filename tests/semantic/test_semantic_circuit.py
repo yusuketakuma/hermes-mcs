@@ -24,7 +24,7 @@ def _state(db):
     return None if row is None else json.loads(row["content"])
 
 
-def test_circuit_persists_three_failures_and_expires_after_restart(tmp_path):
+def test_circuit_persists_the_shared_failure_limit_and_expires_after_restart(tmp_path):
     path = tmp_path / "ledger.db"
     db = Ledger(str(path))
 
@@ -33,13 +33,19 @@ def test_circuit_persists_three_failures_and_expires_after_restart(tmp_path):
         db, _error("transport"), now=1000.0)
     assert not runtime.record_circuit_result(
         db, _error("timeout"), now=1001.0)
-    assert not runtime.circuit_open(db, now=1001.0)
+    assert not runtime.record_circuit_result(
+        db, _error("transport"), now=1001.5)
+    assert not runtime.record_circuit_result(
+        db, _error("timeout"), now=1001.8)
+    assert not runtime.record_circuit_result(
+        db, _error("transport"), now=1001.9)
+    assert not runtime.circuit_open(db, now=1001.95)
     assert runtime.record_circuit_result(
         db, _error("rate_limited", status=429), now=1002.0)
     assert runtime.circuit_open(db, now=1002.1)
 
     state = _state(db)
-    assert state["consecutive_failures"] == 3
+    assert state["consecutive_failures"] == 6
     assert state["open_until"] == 1302.0
     assert "TOP_SECRET" not in json.dumps(state)
     db.close()
@@ -68,17 +74,22 @@ def test_only_retryable_jev_classes_count_and_success_resets(tmp_path):
         assert not runtime.record_circuit_result(db, error, now=2000.0)
     assert _state(db) is None
 
-    assert not runtime.record_circuit_result(
-        db, _error("rate_limited", status=429), now=2001.0)
-    assert not runtime.record_circuit_result(
-        db, _error("transport", status=529), now=2002.0)
+    failures = (
+        _error("rate_limited", status=429),
+        _error("transport", status=529),
+        _error("timeout"),
+        _error("transport"),
+        _error("timeout"),
+    )
+    for offset, error in enumerate(failures):
+        assert not runtime.record_circuit_result(db, error, now=2001.0 + offset)
     assert runtime.record_circuit_result(
-        db, _error("transport", status=500), now=2003.0)
-    assert runtime.circuit_open(db, now=2003.1)
+        db, _error("transport", status=500), now=2006.0)
+    assert runtime.circuit_open(db, now=2006.1)
 
     # A successful Jev result clears both the open state and the count.
-    assert not runtime.record_circuit_result(db, None, now=2004.0)
-    assert not runtime.circuit_open(db, now=2004.0)
+    assert not runtime.record_circuit_result(db, None, now=2307.0)
+    assert not runtime.circuit_open(db, now=2307.0)
     assert _state(db)["consecutive_failures"] == 0
     db.close()
 
@@ -108,18 +119,18 @@ def test_malformed_latest_record_has_bounded_fail_closed_window(tmp_path):
 
 def test_payment_required_opens_and_reads_back_as_a_valid_state(tmp_path):
     # HTTP 402 is not retryable within a job, yet every call fails until
-    # the account is settled: three in a row open the circuit, and the
+    # the account is settled: the shared retry limit opens the circuit, and the
     # persisted class reads back intact (not as a malformed record)
     import semantic_jev as jev
     db = Ledger(str(tmp_path / "ledger.db"))
     err = jev.JevError("payment_required", "http_402", status=402)
-    assert not runtime.record_circuit_result(db, err, now=1000.0)
-    assert not runtime.record_circuit_result(db, err, now=1001.0)
-    assert runtime.record_circuit_result(db, err, now=1002.0)
-    assert runtime.circuit_open(db, now=1002.1)
+    for offset in range(5):
+        assert not runtime.record_circuit_result(db, err, now=1000.0 + offset)
+    assert runtime.record_circuit_result(db, err, now=1005.0)
+    assert runtime.circuit_open(db, now=1005.1)
     state = _state(db)
     assert state["failure_class"] == "http_402"
-    assert state["consecutive_failures"] == 3 and state["open_until"] == 1302.0
+    assert state["consecutive_failures"] == 6 and state["open_until"] == 1305.0
     # a success closes it again
     assert not runtime.record_circuit_result(db, None, now=1500.0)
     assert not runtime.circuit_open(db, now=1500.0)

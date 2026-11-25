@@ -61,6 +61,7 @@ from semantic_loops import update_loops as update_loops
 import writer_lock
 import llm_availability  # noqa: E402
 import semantic_store
+from llm_retry import CLOUD_MAX_RETRIES
 import semantic_transport
 from semantic_summary_stages import (
     _shadow_v2_generation as _shadow_v2_generation,
@@ -1201,7 +1202,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
 # Each revival grants exactly one more attempt (manual_attempt_limit =
 # attempts + 1); an input change still resets everything as before.
 REVIVE_MAX = 20
-REVIVE_PER_INPUT = 3
+REVIVE_PER_INPUT = CLOUD_MAX_RETRIES
 REVIVE_COOLDOWN_S = 6 * 3600
 
 

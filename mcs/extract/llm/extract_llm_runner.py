@@ -25,6 +25,7 @@ from extraction_provenance import (
 )
 from mcs_util import load_config, loads_dict
 from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb
+from llm_retry import CLOUD_MAX_ATTEMPTS
 
 from extract_llm_admission import (
     _llm_call_stats,
@@ -722,6 +723,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_discard"] = provider.discard
                     r["_cloud_generation"] = provider.generation
                     if result is None:
+                        observation = {}
+                        for key in ("failure_reason", "failed_chunk", "repair_issues"):
+                            if key in meta:
+                                observation[key] = copy.deepcopy(meta[key])
+                        if observation:
+                            r["_failure_observation"] = observation
                         raise cloud_inference.CloudFallback("cloud_validation_failed")
                     return result
             except cloud_client.CloudNotSent as error:
@@ -744,6 +751,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return _DEFERRED
             except cloud_inference.CloudFallback as error:
                 _CALL_NOTES.fallback_code = str(error)
+                observation = dict(r.get("_failure_observation") or {})
+                observation["fallback_code"] = str(error)
+                refusal = getattr(provider, "refusal", None)
+                if isinstance(refusal, tuple) and len(refusal) == 2:
+                    observation["refusal_stage"], observation["refusal_code"] = refusal
+                receipts = []
+                for reservation in getattr(provider, "completed_reservations", [])[-CLOUD_MAX_ATTEMPTS:]:
+                    if isinstance(reservation, dict) and type(reservation.get("reservation_id")) is str:
+                        receipts.append(reservation["reservation_id"])
+                if receipts:
+                    observation["cloud_receipt_ids"] = receipts
+                if str(error) in {"cloud_validation_failed", "cloud_invalid_response",
+                                  "cloud_incomplete_response", "cloud_repair_invalid"}:
+                    r["_cloud_failure_reservations"] = copy.deepcopy(
+                        getattr(provider, "answered_reservations", [])[-CLOUD_MAX_ATTEMPTS:])
+                r["_failure_observation"] = observation
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
                 # An unknown send keeps its source/backend claim; only a known outcome can fall back.

@@ -155,6 +155,21 @@ def test_retryable_status_backoff():
     assert out["answers"]["a"]["noul"] == 0.8 and len(calls) == 2
 
 
+def test_retryable_status_uses_shared_first_attempt_plus_five_retries(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda delay: None)
+    calls = []
+
+    def post(body, timeout):
+        calls.append(1)
+        return 429, {"Retry-After": "0"}, b"{}"
+
+    c = jev.JevClient(api_key="k", post_fn=post)
+    with pytest.raises(jev.JevError, match="rate_limited"):
+        c.evaluate({}, {"a": jev.noul_question("i", "t", "f")},
+                   time.monotonic() + 30)
+    assert len(calls) == 6
+
+
 def test_payment_required_is_a_resource_wait_not_a_contract_error():
     import semantic_runtime
     calls = []

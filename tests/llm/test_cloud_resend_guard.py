@@ -47,20 +47,18 @@ def _result(reservation, status, error):
 
 
 @pytest.mark.parametrize('provider', ['anthropic', 'openai'])
-def test_unknown_attempt_blocks_same_prompt_even_after_provider_switch(tmp_path, monkeypatch, provider):
+def test_transport_failure_retries_same_logical_prompt_even_after_provider_switch(tmp_path, monkeypatch, provider):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         reservation = _reserve(ledger, 'synthetic prompt')
         cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
-        with pytest.raises(anthropic_client.AnthropicError) as caught:
-            _reserve(ledger, 'synthetic prompt', provider)
-        assert caught.value.detail == 'cloud_unit_unresolved'
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
-        assert cloud_policy.usage_report(ledger)['unresolved_requests'] == 1
+        _reserve(ledger, 'synthetic prompt', provider)
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        assert cloud_policy.usage_report(ledger)['unresolved_requests'] == 2
 
 
 @pytest.mark.parametrize('legacy', [False, True])
-def test_patient_unknown_remains_blocked_across_source_and_night_changes(tmp_path, monkeypatch, legacy):
+def test_patient_transport_failure_retries_only_when_the_logical_prompt_is_verified(tmp_path, monkeypatch, legacy):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         reservation = _reserve(ledger, 'synthetic prompt', route='patient_context', unit='old-unit',
@@ -70,11 +68,17 @@ def test_patient_unknown_remains_blocked_across_source_and_night_changes(tmp_pat
             with ledger.db:
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
-        with pytest.raises(anthropic_client.AnthropicError) as caught:
-            _reserve(ledger, 'synthetic prompt', 'openai', route='patient_context', unit='new-unit',
-                     owner={'workday_id': 'new', 'source_sig': 'new'}, message_id=1)
-        assert caught.value.detail == 'cloud_unit_unresolved'
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        def retry():
+            return _reserve(ledger, 'synthetic prompt', 'openai', route='patient_context', unit='new-unit',
+                            owner={'workday_id': 'new', 'source_sig': 'new'}, message_id=1)
+        if legacy:
+            with pytest.raises(anthropic_client.AnthropicError) as caught:
+                retry()
+            assert caught.value.detail == 'cloud_unit_unresolved'
+            assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        else:
+            retry()
+            assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
 def test_patient_unknown_does_not_block_distinct_message(tmp_path, monkeypatch):
@@ -147,8 +151,7 @@ def test_openai_verified_quota_retries_only_after_receipted_human_resume(tmp_pat
 
 
 @pytest.mark.parametrize('status,error', [('http_429', 'payment_required'),
-                                          ('http_402', 'payment_required'),
-                                          ('transport', 'transport')])
+                                          ('http_402', 'payment_required')])
 def test_old_unconfirmed_receipt_still_blocks_after_resume(tmp_path, monkeypatch, status, error):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
@@ -283,18 +286,16 @@ def test_actual_reservation_lookup_with_many_other_targets(tmp_path, monkeypatch
         assert ticks[0] < 2000
 
 
-def test_semantic_retry_across_job_units_does_not_repeat_paid_prompt(tmp_path, monkeypatch):
+def test_semantic_retry_across_job_units_uses_the_same_logical_failure_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         owner = {'semantic_target_id': 1, 'semantic_source': 'source',
                  'semantic_generation': 'generation', 'semantic_phase': 'facts'}
         reservation = _reserve(ledger, 'synthetic prompt', unit='older-job', owner=owner)
         cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
-        with pytest.raises(anthropic_client.AnthropicError) as caught:
-            _reserve(ledger, 'synthetic prompt', unit='newer-job', owner=owner)
-        assert caught.value.detail == 'cloud_unit_unresolved'
+        _reserve(ledger, 'synthetic prompt', unit='newer-job', owner=owner)
         _reserve(ledger, 'a different synthetic chunk', unit='newer-job', owner=owner)
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 3
 
 
 @pytest.mark.parametrize('change', ['source', 'phase', 'model'])
@@ -337,7 +338,8 @@ def _openai_usage():
 
 @pytest.mark.parametrize('route', ['reextract', 'semantic_backlog', 'patient_context'])
 @pytest.mark.parametrize('legacy', [False, True])
-def test_unknown_survives_generation_unit_and_effort_changes(tmp_path, monkeypatch, route, legacy):
+def test_transport_failure_survives_generation_unit_and_effort_changes_with_prompt_proof(
+        tmp_path, monkeypatch, route, legacy):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         owner = _owner() if route == 'semantic_backlog' else {'workday_id': 'old', 'source_sig': 'old'}
@@ -351,11 +353,9 @@ def test_unknown_survives_generation_unit_and_effort_changes(tmp_path, monkeypat
         selected = _medium_selection(route)
         owner = _owner('new-generation') if route == 'semantic_backlog' else {
             'workday_id': 'new', 'source_sig': 'new'}
-        with pytest.raises(anthropic_client.AnthropicError) as caught:
-            _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='new', owner=owner,
-                     max_tokens=selected['max_tokens'], selection=selected)
-        assert caught.value.detail == 'cloud_unit_unresolved'
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='new', owner=owner,
+                 max_tokens=selected['max_tokens'], selection=selected)
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
 @pytest.mark.parametrize('route', ['reextract', 'semantic_backlog', 'patient_context'])
@@ -373,22 +373,27 @@ def test_validated_legacy_low_success_allows_same_model_medium(tmp_path, monkeyp
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
-def test_semantic_generation_change_unknown_never_posts_or_reserves_again(tmp_path, monkeypatch):
+def test_semantic_generation_change_transport_failure_retries_with_a_new_reservation(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     selected = _medium_selection('semantic_backlog')
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'openai'}}
     posts = []
+
+    def post(*args):
+        posts.append(True)
+        raise TimeoutError('synthetic')
+
     with closing(_db(tmp_path)) as ledger:
         old = _reserve(ledger, 'synthetic prompt', 'openai', unit='old', owner=_owner())
         cloud_policy.record_result(ledger, old, _result(old, 'timeout', 'timeout'))
         reserve = cloud_policy.usage_reserver(ledger, cfg, route='semantic_backlog', project_id=1,
             message_id=1, unit_key='new', owner=_owner('new-generation'), selection=selected)
         instance = openai_client.OpenAIClient('synthetic', model=selected['model'], effort=selected['effort'],
-            post_fn=lambda *args: posts.append(True))
+            max_attempts=1, post_fn=post)
         with pytest.raises(anthropic_client.AnthropicError):
             instance.complete('synthetic prompt', deadline=time.monotonic() + 10,
                               max_tokens=selected['max_tokens'], reserve_fn=reserve)
-        assert posts == [] and len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert posts == [True] and len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
 def test_legacy_success_without_prompt_proof_cannot_authorize_model_change(tmp_path, monkeypatch):
@@ -718,25 +723,26 @@ def _refusal_of(ledger, prompt):
     return getattr(caught.value, 'history_refusal', None)
 
 
-@pytest.mark.parametrize('status,error,usage,expected', [
-    ('timeout', 'timeout', None, 'repeat_unsettled'),
-    ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
+@pytest.mark.parametrize('status,error,usage,expected,failed_sends', [
+    ('timeout', 'timeout', None, 'repeat_unsettled', 6),
+    ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success', 1),
 ])
 def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
-        tmp_path, monkeypatch, status, error, usage, expected):
+        tmp_path, monkeypatch, status, error, usage, expected, failed_sends):
     """The guard's refusal keeps its kind and detail; the class only tells which
-    validated branch refused, and grants nothing (still one reservation)."""
+    validated branch refused. Retryable transport loss refuses after the shared cap."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
-        reservation = _reserve(ledger, 'synthetic prompt')
-        cloud_policy.record_result(ledger, reservation, {**_result(reservation, status, error), 'usage': usage})
+        for _ in range(failed_sends):
+            reservation = _reserve(ledger, 'synthetic prompt')
+            cloud_policy.record_result(ledger, reservation, {**_result(reservation, status, error), 'usage': usage})
         assert _refusal_of(ledger, 'synthetic prompt') == expected
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert len(ledger.artifacts('cloud_usage_reserve')) == failed_sends
 
 
 def test_a_settled_paid_failure_allows_a_new_billed_resend(tmp_path, monkeypatch):
     """A settled failure left the unit unanswered: resending is a separate billed
-    attempt, not a duplicate. Success and unsettled results still refuse."""
+    attempt, not a duplicate. A success still refuses another send."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         reservation = _reserve(ledger, 'synthetic prompt')
@@ -754,37 +760,89 @@ def _settled_failure(ledger, prompt='synthetic prompt'):
     return reservation
 
 
-def test_settled_failure_resends_stop_at_the_third_billed_attempt(tmp_path, monkeypatch):
-    """Owner rule 2026-11-21: the same logical request bills at most three settled
-    failures, the first send included; the fourth verified repeat refuses."""
+def test_settled_failure_resends_stop_after_five_retries(tmp_path, monkeypatch):
+    """The same logical request bills the first send plus at most five settled-failure
+    retries; the seventh verified repeat refuses."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
-        _settled_failure(ledger)
-        _settled_failure(ledger)
-        third = _reserve(ledger, 'synthetic prompt')
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 3
-        cloud_policy.record_result(ledger, third, {
-            **_result(third, 'http_200', 'contract_error'),
+        for _ in range(5):
+            _settled_failure(ledger)
+        sixth = _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
+        cloud_policy.record_result(ledger, sixth, {
+            **_result(sixth, 'http_200', 'contract_error'),
             'usage': {'input_tokens': 10, 'output_tokens': 2}})
         assert _refusal_of(ledger, 'synthetic prompt') == 'repeat_failed'
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 3
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
 
 
-@pytest.mark.parametrize('status,error,usage,expected', [
-    ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
-    ('timeout', 'timeout', None, 'repeat_unsettled'),
-])
-def test_settled_failure_keeps_other_verified_outcomes_refused(
-        tmp_path, monkeypatch, status, error, usage, expected):
-    """The resend allowance covers settled failures only: a proven success or an
-    unsettled outcome in the same request's history keeps the old refusal."""
+@pytest.mark.parametrize('status,error', [
+    ('transport', 'transport'), ('timeout', 'timeout'),
+    ('http_529', 'transport'), ('http_429', 'rate_limited')])
+def test_cloud_send_failures_share_the_first_plus_five_retry_cap(tmp_path, monkeypatch, status, error):
+    """Transport loss, provider 5xx and rate limiting all consume the same bounded sends."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        for _ in range(5):
+            reservation = _reserve(ledger, 'synthetic prompt')
+            cloud_policy.record_result(ledger, reservation, _result(reservation, status, error))
+        sixth = _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
+        cloud_policy.record_result(ledger, sixth, _result(sixth, status, error))
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
+
+
+def test_guarded_transport_retries_reserve_and_record_every_send(tmp_path, monkeypatch):
+    """The real client/reserver path reaches first send plus five retries without hiding cost."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    posts = []
+
+    def post(*args):
+        posts.append(True)
+        raise TimeoutError('synthetic')
+
+    with closing(_db(tmp_path)) as ledger:
+        cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'}}
+        reserve = cloud_policy.usage_reserver(ledger, cfg, route='semantic_backlog', project_id=1,
+                                              message_id=1, unit_key='synthetic-unit')
+        client = anthropic_client.AnthropicClient('synthetic', post_fn=post, wait_fn=lambda delay: None)
+        with pytest.raises(anthropic_client.AnthropicError, match='timeout'):
+            client.complete('synthetic prompt', deadline=time.monotonic() + 60, reserve_fn=reserve,
+                            after_result=lambda reservation, meta, **_answer: cloud_policy.record_result(
+                                ledger, reservation, meta))
+        assert len(posts) == 6
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
+        assert len(ledger.artifacts('cloud_usage_result')) == 6
+
+
+def test_a_success_in_the_failure_history_still_refuses(tmp_path, monkeypatch):
+    """Even below the retry cap, one verified successful answer remains reusable evidence."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         _settled_failure(ledger)
         other = _reserve(ledger, 'synthetic prompt')
-        cloud_policy.record_result(ledger, other, {**_result(other, status, error), 'usage': usage})
-        assert _refusal_of(ledger, 'synthetic prompt') == expected
+        cloud_policy.record_result(ledger, other, {
+            **_result(other, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        assert _refusal_of(ledger, 'synthetic prompt') == 'repeat_success'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def test_mixed_failure_kinds_share_one_retry_cap(tmp_path, monkeypatch):
+    """Paid contract failures and transport loss consume the same logical request budget."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _settled_failure(ledger)
+        second = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, second, _result(second, 'timeout', 'timeout'))
+        for _ in range(4):
+            reservation = _reserve(ledger, 'synthetic prompt')
+            cloud_policy.record_result(ledger, reservation, {
+                **_result(reservation, 'http_200', 'contract_error'),
+                'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        assert _refusal_of(ledger, 'synthetic prompt') == 'repeat_failed'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 6
 
 
 def test_a_settled_refusal_is_refused_and_never_counted(tmp_path, monkeypatch):
@@ -807,7 +865,7 @@ def test_a_settled_refusal_is_refused_and_never_counted(tmp_path, monkeypatch):
 def test_a_refusal_in_the_history_blocks_later_resends(tmp_path, monkeypatch):
     """A resendable failure followed by a provider refusal still refuses: the
     refusal row is excluded from the allowance and never spends the count, so
-    a third attempt is denied even though fewer than three failures exist."""
+    another attempt is denied even though fewer than five failures exist."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         _settled_failure(ledger)
