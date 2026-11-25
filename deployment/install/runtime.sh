@@ -358,11 +358,17 @@ if [ "$_fresh_authorized" -eq 1 ]; then
 fi
 # Create the initial local config, or persist explicitly selected settings.
 _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+INSTALL_LOCAL_MODEL=""
+if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$HERMES_LLAMA_PLIST" ]; then
+    if ! { llm_serving && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; }; then
+        INSTALL_LOCAL_MODEL="$MODEL_NAME"
+    fi
+fi
 CONFIG_CREATION_PROOF=""
 if [ -n "$_split_runtime_token" ]; then
     verify_split_runtime
 elif [ "$CONFIG_ABSENT" -eq 1 ] || [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
-    CONFIG_CREATION_PROOF=$(MCS_INSTALL_LEGACY_UNINITIALIZED="$_legacy_uninitialized" MCS_INSTALL_RESUME_UNCONFIGURED="$RESUME_UNCONFIGURED" MCS_INSTALL_CONFIG_BASE="$CONFIG_BASE" "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
+    CONFIG_CREATION_PROOF=$(MCS_INSTALL_LOCAL_MODEL="$INSTALL_LOCAL_MODEL" MCS_INSTALL_LEGACY_UNINITIALIZED="$_legacy_uninitialized" MCS_INSTALL_RESUME_UNCONFIGURED="$RESUME_UNCONFIGURED" MCS_INSTALL_CONFIG_BASE="$CONFIG_BASE" "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
 import hashlib, json, os, secrets, stat, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
@@ -380,6 +386,9 @@ if sys.argv[4] == "1":
         cfg["runtime_mode"] = sys.argv[2]
     if sys.argv[3]:
         cfg["recovery_python"] = sys.argv[3]
+    local_model = os.environ.get("MCS_INSTALL_LOCAL_MODEL", "")
+    if local_model:
+        cfg["local_llm"] = {"model": local_model}
     why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
     if why:
         raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
@@ -454,9 +463,12 @@ if sys.argv[4] == "1":
                                 or identity(closed) != identity(current)):
                             raise ValueError
                         winner = parse_config(raw)
+                        winner_local = winner.get("local_llm") if isinstance(winner, dict) else None
+                        winner_model = winner_local.get("model") if isinstance(winner_local, dict) else None
                         if (not isinstance(winner, dict) or winner.get("runtime_mode", "hermes") != sys.argv[2]
                                 or sys.argv[3] and winner.get("recovery_python") != sys.argv[3]
-                                or sys.argv[6] and runtime_inspection.recovery_python(winner) != sys.argv[6]):
+                                or sys.argv[6] and runtime_inspection.recovery_python(winner) != sys.argv[6]
+                                or local_model and winner_model != local_model):
                             raise ValueError
                         from mcs_config import validate_config
                         errors, _ = validate_config(winner)
@@ -513,6 +525,10 @@ try:
         cfg["runtime_mode"] = sys.argv[2]
         if sys.argv[3]:
             cfg["recovery_python"] = sys.argv[3]
+        if os.environ.get("MCS_INSTALL_RESUME_UNCONFIGURED") == "1":
+            local_model = os.environ.get("MCS_INSTALL_LOCAL_MODEL", "")
+            if local_model:
+                cfg["local_llm"] = {"model": local_model}
         why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
         if why:
             raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
@@ -631,24 +647,33 @@ else
         if [ -z "$LLAMA_BIN" ] || [ ! -x "$LLAMA_BIN" ]; then
             die "llama-server が見つかりません。brew install llama.cpp で導入して再実行してください（別サーバーをポート8080で動かす場合は --no-llm）"
         fi
-        if [ -f "$MODEL_FILE" ]; then
-            _got="$(shasum -a 256 < "$MODEL_FILE" | awk '{print $1}')"
-            if [ "$_got" != "$MODEL_SHA256" ]; then
-                die "既存モデルの整合性が確認できません（SHA256: ${_got}）。ファイルは保持しました。出典と内容を確認し、固定版のモデルを別途準備して再実行してください（別サーバーを使う場合は --no-llm）"
+        fetch_model_file() {
+            _fm_name="$1"
+            _fm_url="$2"
+            _fm_sha="$3"
+            _fm_size="$4"
+            if [ -n "$MODEL_SHA256_OVERRIDE" ]; then _fm_sha="$MODEL_SHA256_OVERRIDE"; fi
+            _fm_path="$MODEL_DIR/$_fm_name"
+            if [ -f "$_fm_path" ]; then
+                _got="$(shasum -a 256 < "$_fm_path" | awk '{print $1}')"
+                if [ "$_got" != "$_fm_sha" ]; then
+                    die "既存モデルの整合性が確認できません（SHA256: ${_got}）。ファイルは保持しました。出典と内容を確認し、固定版のモデルを別途準備して再実行してください（別サーバーを使う場合は --no-llm）: $_fm_path"
+                fi
+                skip "AI モデルは取得済みで、整合性を確認しました"
+                return 0
             fi
-            skip "AI モデルは取得済みで、整合性を確認しました"
-        else
-            printf '  AI モデルを取得中（約5.7 GB、中断後に再開できます）: %s\n' "$MODEL_FILE"
+            printf '  AI モデルを取得中（%s・全体で%s、中断後に再開できます）: %s\n' \
+                "$MODEL_NAME" "$MODEL_SIZE_TEXT" "$_fm_path"
             mkdir -p "$MODEL_DIR"
             # .part is kept on failure so the next run resumes (-C -).
             # A .part that already holds every byte (interrupted between
             # the transfer and the rename) is not re-requested: a range
             # past the end answers 416 and would fail every re-run.
             _have=0; _want=""
-            if [ -f "$MODEL_FILE.part" ] && [ ! -L "$MODEL_FILE.part" ]; then
-                _have="$(wc -c < "$MODEL_FILE.part" | tr -d ' ')"
+            if [ -f "$_fm_path.part" ] && [ ! -L "$_fm_path.part" ]; then
+                _have="$(wc -c < "$_fm_path.part" | tr -d ' ')"
                 case "$_have" in ''|*[!0-9]*) _have=0 ;; esac
-                _want="$(curl -fsIL -m 60 --retry 3 "$MODEL_URL" 2>/dev/null \
+                _want="$(curl -fsIL -m 60 --retry 3 "$_fm_url" 2>/dev/null \
                     | tr -d '\r' | awk '
                         toupper($1) ~ /^HTTP\// { code=$2; v=""; bad=0; next }
                         tolower($1) == "content-length:" {
@@ -659,17 +684,35 @@ else
                     ')"
                 case "$_want" in ''|*[!0-9]*) _want="" ;; esac
             fi
-            if [ "$_have" -gt 0 ] && [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+            _complete_part=0
+            if [ -n "$MODEL_SHA256_OVERRIDE" ]; then
+                # Hash overrides exist for synthetic and verification runs, whose
+                # bytes need not have the production GGUF's exact size. Keep the
+                # old HEAD-length completion rule only on that explicitly opted-in path.
+                if [ "$_have" -gt 0 ] && [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+                    _complete_part=1
+                fi
+            else
+                if [ "$_have" -gt "$_fm_size" ]; then
+                    die "取得途中のファイルが固定版の容量を超えています: $_fm_path.part。内容を確認して削除し、install.sh を再実行してください"
+                fi
+                if [ "$_have" -gt 0 ] && [ "$_have" = "$_fm_size" ]; then
+                    _complete_part=1
+                fi
+            fi
+            if [ "$_complete_part" -eq 1 ]; then
                 printf '  取得途中のファイルは全容量を取得済みです（%s バイト）\n' "$_have"
             else
-                # Keep about 1 GB free beside the remaining bytes. Only a final HTTP 200
-                # Content-Length >= the partial file reduces the estimate; a missing or
-                # smaller length falls back to the full 6 GiB bound so free space is
-                # never overestimated.
-                if [ -n "$_want" ] && [ "$_want" -ge "$_have" ]; then
-                    _rem_bytes=$((_want - _have))
+                # Keep about 1 GB free beside the remaining bytes. The exact
+                # pinned size bounds production downloads even when HEAD is unavailable.
+                if [ -n "$MODEL_SHA256_OVERRIDE" ]; then
+                    if [ -n "$_want" ] && [ "$_want" -ge "$_have" ]; then
+                        _rem_bytes=$((_want - _have))
+                    else
+                        _rem_bytes=6442450944
+                    fi
                 else
-                    _rem_bytes=6442450944
+                    _rem_bytes=$((_fm_size - _have))
                 fi
                 _need_kb=$(( _rem_bytes / 1024 + 1048576 ))
                 _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
@@ -680,17 +723,40 @@ else
                     || die "$MODEL_DIR の空き容量が不足しています（空き約 $((_free_kb / 1048576)) GB、必要約 $(((_need_kb + 1048575) / 1048576)) GB）。空き容量を増やして install.sh を再実行してください。取得途中のファイルは保持しています"
                 # A stalled transfer stops (and resumes on re-run) instead of waiting forever.
                 curl -fL --retry 5 --retry-delay 5 -C - --speed-limit 1024 --speed-time 300 --progress-bar \
-                        -o "$MODEL_FILE.part" "$MODEL_URL" \
-                    || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $MODEL_FILE.part）"
+                        -o "$_fm_path.part" "$_fm_url" \
+                    || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $_fm_path.part）"
             fi
-            _got="$(shasum -a 256 < "$MODEL_FILE.part" | awk '{print $1}')"
-            if [ "$_got" != "$MODEL_SHA256" ]; then
-                rm -f "$MODEL_FILE.part"
+            _got="$(shasum -a 256 < "$_fm_path.part" | awk '{print $1}')"
+            if [ "$_got" != "$_fm_sha" ]; then
+                rm -f "$_fm_path.part"
                 die "モデルの整合性が確認できません（SHA256: ${_got}）。取得途中のファイルを削除しました。install.sh を再実行してください"
             fi
-            mv -f "$MODEL_FILE.part" "$MODEL_FILE"
+            mv -f "$_fm_path.part" "$_fm_path"
             ok "AI モデルを取得しました"
+        }
+        # Budget the whole set before the first byte of a split model: failing
+        # the last shard after tens of GB is worse than failing before the first.
+        # The directory is created first: on a clean Mac df cannot report a path
+        # that does not exist yet.
+        if [ -z "$MODEL_SHA256_OVERRIDE" ]; then
+            mkdir -p "$MODEL_DIR"
+            _missing_total="$(model_missing_bytes)"
+            if [ "$_missing_total" -gt 0 ]; then
+                _need_kb=$(( _missing_total / 1024 + 1048576 ))
+                _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+                case "$_free_kb" in ''|*[!0-9]*)
+                    die "$MODEL_DIR の空き容量を確認できません。モデルの取得は開始していません" ;;
+                esac
+                [ "$_free_kb" -ge "$_need_kb" ] \
+                    || die "$MODEL_DIR の空き容量が不足しています（空き約 $((_free_kb / 1048576)) GB、モデル全体で必要約 $(((_need_kb + 1048575) / 1048576)) GB）。空き容量を増やして install.sh を再実行してください。モデルの取得は開始していません"
+            fi
         fi
+        while IFS='|' read -r _model_file _model_url _model_sha _model_size; do
+            [ -n "$_model_file" ] || continue
+            fetch_model_file "$_model_file" "$_model_url" "$_model_sha" "$_model_size"
+        done <<EOF_MODEL_SPECS
+$MODEL_SPECS
+EOF_MODEL_SPECS
         mkdir -p "$AGENTS_DIR" "$RUNTIME_HOME/logs"
         sed -e "s|__LLAMA_BIN__|$(xml_sed "$LLAMA_BIN")|g" \
             -e "s|__PYTHON__|$(xml_sed "$MCS_PY")|g" \
