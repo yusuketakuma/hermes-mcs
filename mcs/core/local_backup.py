@@ -9,6 +9,7 @@ Health reads only names, stat and the ``.ok`` marker; nothing here opens
 the live ledger for writing. Encrypted off-device bundles are ``mcs_backup``.
 """
 import glob
+import gzip
 import json
 import math
 import os
@@ -17,7 +18,7 @@ import sqlite3
 import stat
 import tempfile
 import time
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 from pathlib import Path
 from time import monotonic
 
@@ -43,6 +44,9 @@ PREUPDATE_GRACE_S = 86400
 BACKUP_RATE_BPS = 32 * 1024 * 1024
 BACKUP_MARGIN_S = 5.0
 BACKUP_STEP_PAGES = 256    # copy granularity the deadline is checked at
+# gzip level 6 measured ~66 MB/s compress+read on a ledger backup; budget it
+# at the copy rate so deadline estimates stay conservative.
+COMPRESS_CHUNK = 1 << 20
 BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 
 
@@ -168,6 +172,69 @@ def _write_ok_marker(dest: str) -> None:
         with suppress(OSError):   # marker is only a fast path
             atomic_write(dest + ".ok", lambda f: f.write(sig), mode=0o600)
 
+
+
+def _compress_gz(src: str, dst: str, deadline: float | None = None) -> None:
+    """Streaming gzip (level 6, mtime=0 as in mcs_backup) of ``src`` into
+    ``dst``, private from creation; deadline-aware so a watchdog-bound copy
+    can abandon mid-stream. Never compresses in place."""
+    with open(src, "rb") as fin, open(dst, "xb") as fout:
+        os.chmod(dst, 0o600)
+        with gzip.GzipFile(filename="", mode="wb", fileobj=fout, mtime=0) as gz:
+            while True:
+                if deadline is not None and monotonic() >= deadline:
+                    raise MaintenanceError("backup_deadline_exceeded")
+                chunk = fin.read(COMPRESS_CHUNK)
+                if not chunk:
+                    break
+                gz.write(chunk)
+
+
+@contextmanager
+def materialize_backup(path: str):
+    """Yield a real uncompressed sqlite path for a backup copy: ``path``
+    itself when uncompressed, else a private decompressed staging copy of a
+    ``.gz`` backup, removed on exit. A stranded copy matches the staging
+    sweep pattern, so a hard kill cannot leak it. Consumers of a backup file
+    (restore, validation, loss reports) must use this rather than opening
+    the stored path directly."""
+    if not path.endswith(".gz"):
+        yield path
+        return
+    fd, tmp = tempfile.mkstemp(
+        prefix="materialize-", suffix=".db.tmp",
+        dir=os.path.dirname(path) or BACKUP_DIR)
+    try:
+        with os.fdopen(fd, "wb") as fout, gzip.open(path, "rb") as fin:
+            shutil.copyfileobj(fin, fout, COMPRESS_CHUNK)
+        os.chmod(tmp, 0o600)
+        yield tmp
+    finally:
+        with suppress(OSError):
+            os.unlink(tmp)
+
+
+def _compress_published(dest: str, deadline: float | None = None) -> str:
+    """Compress one freshly published+marked backup in place: ``dest`` is
+    replaced by ``dest.gz`` carrying its own .ok marker, and the uncompressed
+    file is dropped. Crash-safe at every step: until the uncompressed copy is
+    unlinked it remains a complete valid backup; the compressed copy reaches
+    its final name only by atomic publish of a fully written stream."""
+    gz_tmp = dest + ".gz.tmp"
+    gz_dest = dest + ".gz"
+    try:
+        _compress_gz(dest, gz_tmp, deadline)
+        publish_tmp(gz_tmp, gz_dest)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(gz_tmp)
+        raise
+    _write_ok_marker(gz_dest)
+    with suppress(OSError):
+        os.unlink(dest)
+    with suppress(OSError):
+        os.unlink(dest + ".ok")
+    return gz_dest
 
 def daily_backup(db_path: str, *, deadline: float | None = None):
     """One VERIFIED sqlite .backup of the ledger per day — write to tmp,
