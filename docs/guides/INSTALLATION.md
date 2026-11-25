@@ -305,7 +305,7 @@ macOS 標準の `/usr/bin/python3` は3.9系で古い）
 非対話でも実行できる（CI・再現用）。standaloneのSlackの例:
 
 ```bash
-# secrets は対話入力か安全な端末で環境変数に準備し、履歴に平文を残さない
+# MCS_SETUP_PASSWORD と通知先トークンは対話入力か安全な端末で環境変数に準備し、履歴に平文を残さない
 ~/.local/bin/mcs setup init --yes \
     --login-id <ID> --notify-target slack:<チャンネルID> \
     --set 'notify.interactive="slack"' \
