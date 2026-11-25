@@ -122,21 +122,37 @@ def test_multi_send_unit_with_later_503_finishes_locally(runtime, real_cloud, mo
     body_hash = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
     ledger.artifact_add("extract_v1", json.dumps({"summary": '完全合成の補助要約。' * 1500}, ensure_ascii=False),
         project_id=1, message_id=1, model="synthetic-rules", meta={VERSION_KEY: CURRENT_VERSION, "hash": body_hash})
-    sent = _wire(monkeypatch, lambda index, payload, limit: 503 if index == 1 else None)
+    # the second prompt fails on every one of its bounded attempts while the
+    # cloud otherwise answers: the retry contract exhausts its ceiling on that
+    # prompt (posts 1..cap) before the unit falls back to local
+    sent = _wire(monkeypatch, lambda index, payload, limit: 503 if 1 <= index <= 6 else None)
     first = step(runtime, cfg=cfg)
     scans = [payload for payload in sent if 'source' in payload]
-    assert len(scans) == 2 and all(payload.get('derived_summaries') for payload in scans)
+    cap = 6  # CLOUD_MAX_ATTEMPTS: one initial send plus five bounded retries
+    assert len(scans) == 1 + cap and all(payload.get('derived_summaries') for payload in scans)
     assert first['status'] == 'progressed' and first['cloud_refusal'] == 'http_5xx'
     paid = _usage(ledger)
-    assert len(paid) == 4
-    answered, rejected = _reservations(ledger, 'scan:1')
+    assert len(paid) == 2 + cap * 2
+    reservations = _reservations(ledger, 'scan:1')
+    answered, rejected = reservations[0], reservations[1:]
+    assert len(rejected) == cap
     assert _dispositions(ledger) == [(answered, 'superseded_local')]
-    _drain(runtime, cfg)
+    clock = runtime[1]
+    for _ in range(40):
+        outcome = step(runtime, cfg=cfg)
+        if outcome['status'] == 'complete':
+            break
+        clock.wall += 301
+        clock.mono += 301
+    else:
+        pytest.fail('drain with clock advancement did not complete')
+    assert outcome['status'] == 'complete'
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
     assert readiness.inference_coverage(ledger.db, 1, cfg)['complete']
-    # The source was asked twice in the cloud and never again; local work answered both prompts.
-    assert len([payload for payload in sent if 'source' in payload]) == 2
-    assert _reservations(ledger, 'scan:1') == [answered, rejected]
+    # The source was asked once plus the bounded retries and never again;
+    # local work answered both prompts.
+    assert len([payload for payload in sent if 'source' in payload]) == 1 + cap
+    assert _reservations(ledger, 'scan:1') == reservations
     assert [payload.get('derived_summaries') for payload in _local_sources(local_calls)[:2]] == [
         payload['derived_summaries'] for payload in scans]
     assert _dispositions(ledger) == [(answered, 'superseded_local')]
@@ -161,15 +177,17 @@ def _partial_cloud_scan(runtime, cfg, monkeypatch, *, adopted=1, script=None):
 def test_adopted_partial_scan_then_503_rebuilds_locally(runtime, real_cloud, monkeypatch, adopted):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
+    # the chunk after the adopted ones is rejected on every bounded attempt:
+    # posts adopted..adopted+5 are its initial send plus five retries
     sent = _partial_cloud_scan(runtime, cfg, monkeypatch, adopted=adopted,
-                               script=lambda index, payload, limit: 503 if index == adopted else None)
+                               script=lambda index, payload, limit: 503 if adopted <= index < adopted + 6 else None)
     kept = _reservations(ledger, 'scan:1')
     outcomes = _drain(runtime, cfg)
     assert all(outcome['status'] != 'failed' for outcome in outcomes)
     assert readiness.inference_coverage(ledger.db, 1, cfg)['complete']
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
-    # The cloud was asked once more (the rejected chunk) and never for this source again.
-    assert len([payload for payload in sent if 'source' in payload]) == adopted + 1
+    # The cloud was asked the bounded ceiling for the rejected chunk and never for this source again.
+    assert len([payload for payload in sent if 'source' in payload]) == adopted + 6
     spans = [tuple(payload['source_identity']['span']) for payload in _local_sources(local_calls)]
     assert len(spans) == len(set(spans)) and ''.join(
         payload['source'] for payload in _local_sources(local_calls)) == LONG
@@ -187,7 +205,7 @@ def test_local_continuation_never_redoes_a_unit_whose_checkpoint_was_lost(runtim
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
     _partial_cloud_scan(runtime, cfg, monkeypatch, adopted=2,
-                        script=lambda index, payload, limit: 503 if index == 2 else None)
+                        script=lambda index, payload, limit: 503 if 2 <= index < 8 else None)
     _drain(runtime, cfg, until=lambda outcome: len(_local_sources(local_calls)) == 2)
     row = ledger.artifacts(state.SCAN)[-1]
     content, meta = json.loads(row['content']), json.loads(row['meta'])
@@ -804,8 +822,10 @@ def test_supersede_is_rolled_back_with_a_failed_commit(runtime, real_cloud, monk
         _drain(runtime, cfg, until=lambda outcome: outcome.get('lane') == 'C' and outcome['status'] == 'progressed')
         monkeypatch.setattr(refresh.context_quota, 'finish_tx', lambda *args, **kwargs: False)
     else:
+        # the second chunk is rejected on every bounded attempt: posts 1..6 are
+        # its initial send plus five retries, after which local work replaces it
         _partial_cloud_scan(runtime, cfg, monkeypatch,
-                            script=lambda index, payload, limit: 503 if index == 1 else None)
+                            script=lambda index, payload, limit: 503 if 1 <= index < 7 else None)
         original = state._replace
 
         def broken(ledger, kind, *args, **kwargs):
@@ -1096,9 +1116,11 @@ def test_failed_send_of_a_unit_with_cloud_work_goes_local_at_once(runtime, real_
     adopted, = _reservations(ledger, 'scan:1')
     paid = _usage(ledger)
     outcome = step(runtime, cfg=cfg)
-    # The failed request was sent once; the stored cloud position does not make the unit wait.
+    # The stored cloud position does not make the unit wait. A retryable 5xx is
+    # bounded-retried to the shared ceiling; auth/contract/protocol failures are not.
     assert outcome['status'] == 'progressed' and outcome['cloud_refusal'] == code, outcome
-    assert len(sent) == 2 and len(_local_sources(local_calls)) == 1 and _local_fallback_scans(ledger)
+    expected_posts = 7 if code == 'http_529' else 2
+    assert len(sent) == expected_posts and len(_local_sources(local_calls)) == 1 and _local_fallback_scans(ledger)
     assert _dispositions(ledger)[0] == (adopted, 'superseded_local') and _usage(ledger)[:len(paid)] == paid
 
 
