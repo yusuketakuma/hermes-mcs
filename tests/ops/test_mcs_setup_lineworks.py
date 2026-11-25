@@ -29,8 +29,9 @@ def config():
 def test_accept_lineworks_and_existing_slack():
     assert mcs_setup.validate_config(config()) == ([], [])
     cfg = config()
-    cfg["notify"] = {"interactive": "slack", "slack": {
-        "profile": "default", "application_id": "A1", "team_id": "T1", "channel_id": "C1"}}
+    cfg["notify"]["interactive"] = "slack"
+    cfg["notify"]["slack"] = {
+        "profile": "default", "application_id": "A1", "team_id": "T1", "channel_id": "C1"}
     assert mcs_setup.validate_config(cfg) == ([], [])
     assert mcs_setup._apply_plugin_integration(config(), SimpleNamespace()) is True
 
