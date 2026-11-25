@@ -31,7 +31,11 @@ def _slack_connect_on(cfg):
 
 
 def _lineworks_on(cfg):
-    return transport_enabled(cfg, "lineworks")
+    # LINE WORKS text delivery uses the independent adapter in both runtimes,
+    # so a text-only target needs the same connection scope as cards.
+    return transport_enabled(cfg, "lineworks") or any(
+        isinstance(cfg.get(key), str) and cfg[key].strip().startswith("lineworks:")
+        for key in ("notify_target", "notify_system_target"))
 
 
 def _cards_on(cfg):
