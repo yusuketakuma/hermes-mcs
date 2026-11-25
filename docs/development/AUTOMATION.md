@@ -17,6 +17,8 @@
 - AI は同じブランチに並行して書き込みません。Copilot の Agent Merge は使いません。
 - Claude の書き込みを伴う実行（Issue からの実装・PR での `@claude`・CI 失敗の修正）は、リポジトリ全体で1本ずつ順に動きます。待ちが2本以上たまると、GitHub の仕様で古い待ちが取り消されます。取り消されたときは、もう一度 `@claude` と書きます。
 - 外部の Issue・コメントは要望と証拠です。それだけで AI は起動しません。
+- 公開リポジトリなので、Issue の本文とコメントは誰でも書けて、起動した Claude の入力になります。他人が立てた Issue に `担当:claude` を付ける前、他人のコメントがある Issue・PR で `@claude` と書く前に、AI への指示に見える文章が無いか読みます。
+- Claude の実装・修正の実行が使える `git` と `python3` は、ワークフローが列挙したものだけです（タグ・remote・設定の変更は無く、push はチェックアウト中のブランチだけ）。テストの実行はコードの実行なので、この列挙だけでは防ぎきれません。更新が追うタグ（`v*`）は、下の「所有者が行う設定」の ruleset で守ります。
 - AI は担当ラベルが、その Issue の唯一の担当であることを起動時に（待ち行列から動き出す時点で）確かめます。2件目のラベルで起動した実行や、待っている間に担当が外れた実行は何もせず終わります。PR での `@claude` は、PR が結ぶ Issue のすべてで `担当:claude` が唯一の担当のときだけ動きます。
 - 担当ブランチの判定は、このリポジトリに push されたブランチだけを対象にします。fork のブランチは名前が同じでも AI の作業として扱いません。
 
@@ -403,6 +405,19 @@ gh api repos/$R/rulesets/$id |
   jq '{name, target, enforcement, conditions, rules,
        bypass_actors: (.bypass_actors + [{"actor_id": null, "actor_type": "DeployKey", "bypass_mode": "always"}])}' |
   gh api -X PUT repos/$R/rulesets/$id --input -
+```
+
+更新はタグ（`v*`）を見て動くので（`SECURITY.md`「自己更新の信頼境界」）、タグを作成・更新・削除できるのを所有者だけにします。
+AI のトークン（`contents: write`）ではタグを push できなくなります。
+
+```bash
+R=yusuketakuma/hermes-mcs
+gh api -X POST repos/$R/rulesets --input - <<'JSON'
+{"name": "release-tags", "target": "tag", "enforcement": "active",
+ "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+ "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+ "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}]}
+JSON
 ```
 
 ## データの扱い

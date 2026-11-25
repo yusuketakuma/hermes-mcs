@@ -4,6 +4,8 @@ updates:
   # discord.py bumps are gated by design: adapters/discord/cards.py runs its
   # single-post guard only for versions in _VERIFIED_SDK, so a bump PR fails
   # the standalone-sdk job until the SDK retry loop is re-verified.
+  # Every bump also needs deployment/requirements-standalone.lock regenerated (the command is in its
+  # header); tests/meta/test_standalone_sdk_hashes.py fails until the two files name the same versions.
   - package-ecosystem: "pip"
     directory: "/deployment"
     schedule:

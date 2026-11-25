@@ -172,7 +172,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="b82cf9c569f841055309d01d784e26e7e34aa5b6069b297f87603d9cce96b4ca"
+INSTALL_RUNTIME_SHA256="b81958d324ba1e877c03151dc0d588d6c6aad0251d90ff1cbfc4a75b33fe5881"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
