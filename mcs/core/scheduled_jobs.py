@@ -13,6 +13,7 @@ CRON_JOBS = [
     ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),
+    ("MCS v3 release owner tick", "*/10 * * * *", "mcs_release_auto.sh"),
 ]
 
 

@@ -1,12 +1,12 @@
 # スケジューリング構成
 
-`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ7定期ジョブ、
+`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ8定期ジョブ、
 cmd/cmd_int取込、抽出worker3本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
 併用しない。LLMとrepo外復旧watchdogは別のnative serviceを維持する。
 導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
 以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
 
-収集ジョブは **hermes cron（標準スケジューラ）7件 + launchd 6件** の
+収集ジョブは **hermes cron（標準スケジューラ）8件 + launchd 6件** の
 ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
@@ -24,6 +24,7 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | 失敗ジョブの bounded retry 登録 | `0 */6 * * *`（解析は常駐worker） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
 | 更新チェック `mcs_update.py check` | `10 5 * * *` | hermes cron (`mcs_update.sh`) |
+| v3自動更新owner tick `mcs_update.py auto-tick --jitter 120` | `*/10 * * * *` | hermes cron (`mcs_release_auto.sh`) |
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPathsに加え、StartInterval/ThrottleIntervalを5秒に設定（通常のサービス再配置で反映） | launchd `local.mcs-int` |
@@ -37,7 +38,7 @@ MCSサーバーの負荷対策として、定期的なMCSアクセスを5分か�
 添付OCRの毎分ジョブも保存済み資料だけを読み、MCSサーバーへ取りに行かない。
 実行中のOCRジョブがあれば重ねず、次回に処理を引き継ぐ。
 
-`runtime_mode: "standalone"`では同じ時刻の7ジョブを単一hostが実行し、
+`runtime_mode: "standalone"`では同じ時刻の8ジョブを単一hostが実行し、
 wrapperは`~/.mcs/scripts/`、Pythonは`~/.mcs/venv/bin/python3`になる。
 通知接続の有無にかかわらず`ai.mcs.standalone`を配置し、個別のcalendar agentは登録しない。
 モード変更時はmanifestの所有ジョブを照合する。Hermesへ戻す際は新cronの検証後に
@@ -51,7 +52,7 @@ wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO_
 
 **自動化（推奨）**: `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services` が下記の
 手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 5件の
-bootstrap と hermes cron 7件の登録は既存分をスキップする。plist 本文・
+bootstrap と hermes cron 8件の登録は既存分をスキップする。plist 本文・
 cron スケジュールの差分は reconcile する（loaded でも内容が違えば
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 所有 agent/cron は削除）。実績は `data/service_manifest.json` に記録

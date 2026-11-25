@@ -9,8 +9,9 @@ A module counts as **wired** when it is reachable from a pinned set of
 product entry points through non-test imports. Reachability is deliberately
 shallow evidence: ``release_auto_consent`` importing ``_det_uuid`` from the
 owner marks the owner wired, it does not make ``owner.tick`` live. The tick
-and ``recover_tick`` drivers are still W14 work, so the census additionally
-pins that no product file invokes them — test files and helper-function
+driver is live through ``release_auto_driver`` and ``update_cli auto-tick``;
+``recover_tick`` is still W14 work, so the census additionally pins that no
+product file outside the driver invokes them — test files and helper-function
 imports are never evidence of a running tick.
 """
 
@@ -37,19 +38,20 @@ PRODUCT_ENTRIES = {
 V3_ENTRIES = {'scripts/development/release_publish.py'}
 
 WIRED = {
-    'release_auto_consent', 'release_auto_contract', 'release_auto_health',
-    'release_auto_owner', 'release_auto_state', 'release_auto_status',
-    'release_auto_transport', 'release_auto_wire', 'runtime_entry',
+    'release_auto_apply', 'release_auto_backup', 'release_auto_consent',
+    'release_auto_contract', 'release_auto_deps', 'release_auto_drain',
+    'release_auto_driver', 'release_auto_evidence', 'release_auto_git',
+    'release_auto_health', 'release_auto_holds', 'release_auto_journal',
+    'release_auto_local', 'release_auto_locks', 'release_auto_offer',
+    'release_auto_owner', 'release_auto_revoke', 'release_auto_services',
+    'release_auto_stage', 'release_auto_state', 'release_auto_status',
+    'release_auto_transport', 'release_auto_wire', 'release_auto_witness',
+    'release_quarantine', 'release_runtime_proof', 'runtime_entry',
 }
 
 WAITING = {
-    'release_auto_apply', 'release_auto_backup', 'release_auto_bridge',
-    'release_auto_deps', 'release_auto_drain', 'release_auto_evidence',
-    'release_auto_git', 'release_auto_holds', 'release_auto_journal',
-    'release_auto_local', 'release_auto_locks', 'release_auto_migration',
-    'release_auto_offer', 'release_auto_recovery', 'release_auto_revoke',
-    'release_auto_services', 'release_auto_stage', 'release_auto_witness',
-    'release_publish_api', 'release_quarantine', 'release_runtime_proof',
+    'release_auto_bridge', 'release_auto_migration', 'release_auto_recovery',
+    'release_publish_api',
 }
 
 # Entry -> v3 modules it imports today; any edit of these references is
@@ -60,8 +62,8 @@ ENTRY_IMPORTS = {
     'lineworks_adapter/__main__.py': {'runtime_entry'},
     'mcs/ops/mcs_setup.py': {'release_auto_status', 'runtime_entry'},
     'mcs/ops/update_cli.py': {'release_auto_consent', 'release_auto_contract',
-                              'release_auto_state', 'release_auto_status',
-                              'runtime_entry'},
+                              'release_auto_driver', 'release_auto_state',
+                              'release_auto_status', 'runtime_entry'},
     'mcs_standalone/__main__.py': {'runtime_entry'},
     'mcs_standalone/runtime.py': {'runtime_entry'},
 }
@@ -153,31 +155,45 @@ def test_entry_reference_changes_are_named():
             f"(added {sorted(actual - expected)}, removed {sorted(expected - actual)})")
 
 
-def test_no_product_file_invokes_owner_tick_or_recover_tick():
-    """Helper imports may mark a module wired; only a tick call is liveness."""
+def test_tick_invocation_stays_at_single_driver_boundary():
+    """owner.tick is live only through release_auto_driver; recover_tick stays waiting."""
+    driver = ROOT / 'mcs/ops/release_auto_driver.py'
     trees = {p: _parse(p) for p in _files()}
-    offenders = []
+    owner_offenders = []
+    recovery_offenders = []
     for path, tree in trees.items():
         if tree is None:
             continue
-        tick_names = set()
+        owner_names = set()
+        recovery_names = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module in (
-                    'release_auto_owner', 'release_auto_recovery'):
-                tick_names |= {a.asname or a.name for a in node.names
-                               if a.name in ('tick', 'recover_tick')}
+            if isinstance(node, ast.ImportFrom):
+                if node.module == 'release_auto_owner':
+                    owner_names |= {a.asname or a.name for a in node.names
+                                    if a.name == 'tick'}
+                if node.module == 'release_auto_recovery':
+                    recovery_names |= {a.asname or a.name for a in node.names
+                                       if a.name == 'recover_tick'}
             elif isinstance(node, ast.Import):
                 for a in node.names:
-                    if a.name in ('release_auto_owner', 'release_auto_recovery'):
-                        tick_names.add((a.asname or a.name.split('.')[-1]) + '.tick')
+                    if a.name == 'release_auto_owner':
+                        owner_names.add((a.asname or 'release_auto_owner') + '.tick')
+                    if a.name == 'release_auto_recovery':
+                        recovery_names.add((a.asname or 'release_auto_recovery') + '.recover_tick')
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            if isinstance(func, ast.Name) and func.id in tick_names:
-                offenders.append(path)
-            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) \
-                    and f"{func.value.id}.{func.attr}" in tick_names:
-                offenders.append(path)
-    assert not offenders, \
-        f"product files invoking tick/recover_tick: {[str(p) for p in offenders]}"
+            called = None
+            if isinstance(func, ast.Name):
+                called = func.id
+            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                called = f'{func.value.id}.{func.attr}'
+            if called in owner_names and path != driver:
+                owner_offenders.append(path)
+            if called in recovery_names:
+                recovery_offenders.append(path)
+    assert not owner_offenders, \
+        f"owner.tick invoked outside driver: {[str(p) for p in owner_offenders]}"
+    assert not recovery_offenders, \
+        f"recover_tick invoked: {[str(p) for p in recovery_offenders]}"
