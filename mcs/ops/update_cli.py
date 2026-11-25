@@ -298,8 +298,8 @@ def cmd_auto_disable(_args) -> int:
     """v3 auto-updateのlocal撤回(spec 02 §revocationのauto-disable)。
 
     consentをenabled=false・local_consent_epoch増分でowner stateへ先に
-    耐久保存する。中央consent-revokeは本番wire配線後のtrusted経路が担う
-    ため、ここではlocal撤回のみを行い結果をJSONで返す。
+    耐久保存する。wireが組み立てられる場合は中央consent-revokeも
+    冪等requestで送り、組み立てられない/送信失敗でもlocal撤回は維持する。
     """
     root = _v3_state_root()
     if root is None or not os.path.isdir(root):
@@ -310,8 +310,9 @@ def cmd_auto_disable(_args) -> int:
     try:
         from adapters.sdc.storage import Store
         import release_auto_consent as v3_consent
+        wire = _v3_consent_wire()
         with Store(root) as store:
-            result = v3_consent.disable_auto(store)
+            result = v3_consent.disable_auto(store, wire=wire)
     except Exception as e:
         print(json.dumps({"status": "error",
                           "code": getattr(e, "code", "AUTO_DISABLE_FAILED")},
