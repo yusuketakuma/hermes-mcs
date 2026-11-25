@@ -154,7 +154,7 @@
 | profile | 常駐/定期process | writer経路 |
 |---|---|---|
 | **hermes** | `ai.mcs.extract-drainer`×**3**（day/night/-2 — 固定2workerではない）、`ai.mcs.llamaserver`（共有LLM daemon、更新対象外区分）、`local.mcs-cmd`（cmd取込）、`local.mcs-health`（300s health_watch）、`local.mcs-int`（5s interval job）、`local.mcs-sdc`（300s `sdc_tick.py`→`sdc_cli.tick`→`Store.lock()`=tick.lock）、`org.mcs.recovery`（900s独立復旧）、cron `mcs_update.sh`（日次check）・`mcs_check.sh`・`mcs_ocr.sh`・`mcs_offsite.sh`等 | drainers=結果write毎run.lock、cmd/semantic/ingest各job=run.lock保持writer、sdc tick=tick.lock系列、updater=U/R(+G/A/O release経路)系列 |
-| **standalone** | `ai.mcs.standalone`→`mcs_standalone/runtime.py` 単一host・7定期job・cmd取込・抽出worker3本 | runtime.pyがschedulerとして各job起動、個々のjobは同じwriter_lock経路 |
+| **standalone** | `ai.mcs.standalone`→`mcs_standalone/runtime.py` 単一host・8定期job・cmd取込・抽出worker3本 | runtime.pyがschedulerとして各job起動。通常jobは同じwriter_lock経路、v3 owner tickだけはdriver mutexとowner mutation lockの専用系列 |
 | **lineworks** | `lineworks_adapter/` 独立CLI（interactive="lineworks"） | adapter→ledger writerのrun.lock遵守は**未確認**（M3/W06で確認） |
 | 監視・復旧自身 | `health_watch.py`（local.mcs-health）、`org.mcs.recovery` | 更新・復旧を「止めない」側。v3のQ/drain対象に含めるかはprofile設計で要判断（spec: 監視・復旧自身を区別） |
 
