@@ -34,7 +34,7 @@ def test_context_refresh_options_accept_explicit_booleans(value):
     assert not any('extract.patient_context' in e for e in errors)
 
 
-_KEYS = {'status', 'enabled', 'publication', 'counts', 'lanes', 'states'}
+_KEYS = {'status', 'enabled', 'publication', 'counts', 'partial', 'lanes', 'states'}
 
 
 def _healthy_states(total=1):
@@ -42,10 +42,19 @@ def _healthy_states(total=1):
             'partition': {**dict.fromkeys(patient_context_status.PARTITION, 0), 'published': total}}
 
 
-def _refresh(status=None, lanes=None):
-    """Stub the heavy refresh engine; each stub fails loudly unless the test provides it."""
+def _refresh(status=None, lanes=None, *, scan=True):
+    """Stub the heavy refresh engine; each stub fails loudly unless the test provides it.
+
+    A ``status(db, cfg)`` stub that reports no scan has checked every patient,
+    unless ``scan`` is False (the stub's raw value is returned as it is)."""
+    def scanned(db, cfg, *, deadline):
+        assert isinstance(deadline, (int, float))
+        raw = status(db, cfg)
+        if scan and isinstance(raw, dict) and 'scan' not in raw:
+            raw = {**raw, 'scan': {'checked': 1, 'total': 1, 'complete': True}}
+        return raw
     return SimpleNamespace(options=patient_context_refresh.options,
-                           status=status or (lambda *a: pytest.fail('status not expected')),
+                           status=scanned if status else (lambda *a, **k: pytest.fail('status not expected')),
                            lane_metrics=lanes or (lambda db: {'lanes': None}))
 
 
@@ -53,7 +62,7 @@ def test_unprobed_diagnostic_does_not_open_database(monkeypatch):
     monkeypatch.setattr(sqlite3, 'connect', lambda *a, **k: pytest.fail('DB access'))
     assert mcs_setup._doctor_context_refresh({}, probe=False) == {
         'status': 'not_checked', 'enabled': True, 'publication': True, 'counts': None,
-        'lanes': None, 'states': None}
+        'partial': None, 'lanes': None, 'states': None}
 
 
 @pytest.fixture
@@ -81,7 +90,7 @@ def test_probe_uses_readonly_connection_and_whitelists_counts(synthetic_database
     report = mcs_setup._doctor_context_refresh({'extract': {'patient_context': {
         'enabled': True, 'publication': False}}}, probe=True)
     assert report == {'status': 'warning', 'enabled': True, 'publication': False,
-                      'counts': counts, 'lanes': None, 'states': _healthy_states()}
+                      'counts': counts, 'partial': None, 'lanes': None, 'states': _healthy_states()}
     assert 'private' not in json.dumps(report)
 
 
@@ -150,7 +159,7 @@ def test_doctor_respects_explicit_data_probe_and_invalid_config(tmp_path, monkey
     def diagnose(cfg, *, probe):
         calls.append(probe)
         return {'status': 'not_checked', 'enabled': False, 'publication': False, 'counts': None,
-                'lanes': None, 'states': None}
+                'partial': None, 'lanes': None, 'states': None}
     monkeypatch.setattr(mcs_setup, '_doctor_context_refresh', diagnose)
     import card_worker_status
     monkeypatch.setattr(card_worker_status, 'diagnose', lambda *a, **k: {
@@ -320,3 +329,75 @@ def test_doctor_uses_engine_defaults_and_fails_closed(settings, expected):
     result = mcs_setup._doctor_context_refresh({'extract': {'patient_context': settings}}, probe=False)
     assert {key: result[key] for key in expected} == expected
     assert result['status'] == 'not_checked' and result['counts'] is None
+
+
+def _partial(checked=2, total=5, **counts):
+    return {**dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 0), **counts,
+            'scan': {'checked': checked, 'total': total, 'complete': checked == total}}
+
+
+def test_partial_scan_is_reported_as_partial_and_stays_unknown(synthetic_database, monkeypatch, healthy_states):
+    raw = _partial(initial_pending=1, complete=1)
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: raw))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['status'] == 'unknown'
+    assert report['partial'] == {'checked': 2, 'total': 5, 'counts': {
+        key: raw[key] for key in mcs_setup._CONTEXT_REFRESH_COUNTS}}
+    first = mcs_setup._context_refresh_lines(report)[0]
+    assert first.startswith('作業待ちの件数: 患者5人のうち2人まで確認')
+    assert '確認した範囲の件数' in first and '0件とは扱いません' in first and '初回未生成1件' in first
+
+
+@pytest.mark.parametrize('code', ['failed', 'invalid'])
+def test_partial_scan_problem_is_a_warning(synthetic_database, monkeypatch, healthy_states, code):
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: _partial(**{code: 1})))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['partial'] and report['status'] == 'warning'
+
+
+@pytest.mark.parametrize('scan', [None, {'checked': 6, 'total': 5, 'complete': False},
+                                  {'checked': 2, 'total': 5, 'complete': True},
+                                  {'checked': 5, 'total': 5, 'complete': False},
+                                  {'checked': '2', 'total': 5, 'complete': False}])
+def test_malformed_scan_is_unknown_not_counts(synthetic_database, monkeypatch, healthy_states, scan):
+    raw = {**_partial(), 'scan': scan}
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: raw, scan=False))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['partial'] is None and report['status'] == 'unknown'
+
+
+def test_status_gets_the_same_deadline_as_its_sql_budget(synthetic_database, monkeypatch, healthy_states):
+    monkeypatch.setattr(mcs_setup.time, 'monotonic', lambda: 100.0)
+    seen = []
+    def status(db, cfg, *, deadline):
+        seen.append(deadline)
+        return _partial(5, 5)
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(
+        options=patient_context_refresh.options, status=status, lane_metrics=lambda db: {'lanes': None}))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert seen == [101.0] and report['status'] == 'healthy' and report['partial'] is None
+
+
+def test_real_scan_past_its_deadline_is_partial_never_totals(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_setup, 'HOME', str(tmp_path))
+    ledger = make_ledger(tmp_path, data_dir=True)
+    ledger.db.executemany("INSERT INTO patients(project_id,patient_name) VALUES (?,'synthetic')",
+                          [(pid,) for pid in range(1, 4)])
+    ledger.db.commit()
+    ledger.close()
+    monkeypatch.setattr(patient_context_status, 'state_counts', lambda db: _healthy_states(3))
+    _slow_clock(monkeypatch)
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['status'] == 'unknown'
+    # a scan stopped before its first patient is no reading; otherwise only the checked part
+    partial = report['partial']
+    assert partial is None or (partial['total'] == 3 and 0 < partial['checked'] < 3)
+    if partial is None:
+        assert '時間内に確認できませんでした' in mcs_setup._context_refresh_lines(report)[0]
+
+
+def test_scan_stopped_before_any_patient_is_no_reading(synthetic_database, monkeypatch, healthy_states):
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: _partial(0, 5)))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] is None and report['partial'] is None and report['status'] == 'unknown'
+    assert mcs_setup._context_refresh_lines(report)[0] == '作業待ちの件数: 時間内に確認できませんでした（0件とは扱いません）'

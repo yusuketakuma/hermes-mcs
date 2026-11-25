@@ -89,6 +89,21 @@ def test_verified_older_occurrence_preserves_other_model_and_aba_history(frame_s
     assert dict(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (first['artifact_id'],)).fetchone()) == saved
 
 
+def test_earlier_auto_retry_frame_remains_ignorable_source_history(frame_store):
+    from test_drug_context_frame import OPTIONS
+    ledger, row, hints = frame_store
+    first_attempt = {**OPTIONS['attempt'], 'auto_retry': 0}
+    first = frames.prepare(ledger, row, **{**OPTIONS, 'attempt': first_attempt},
+                           base_context=None, version=11, medication_hints=hints)
+    ledger.save_messages([replace(_message(body=row['body_text']), sender_name='合成の別の投稿者')])
+    current = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
+    current['_source_binding'] = source_binding(ledger.db, 1, 1)
+    retry_attempt = {**first_attempt, 'auto_retry': 1}
+    after = frames.prepare(ledger, current, **{**OPTIONS, 'attempt': retry_attempt},
+                           base_context=None, version=11, medication_hints=hints)
+    assert after['artifact_id'] != first['artifact_id']
+
+
 @pytest.mark.parametrize('new_source', [False, True])
 @pytest.mark.parametrize('damage', ['digest', 'source_meta', 'source_shape', 'model', 'hints', 'refs', 'refs_rehashed'])
 def test_unproven_or_tampered_frame_never_becomes_ignorable_history(frame_store, new_source, damage):

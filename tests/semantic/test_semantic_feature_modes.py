@@ -36,7 +36,7 @@ def test_enforcement_requires_explicit_calibration_and_feature_flags():
     cfg, errors = semantic_policy.semantic_config(_cfg("enforce", summary_mode="off", loop_mode="off"))
     assert not errors and cfg["mode"] == "enforce"
     assert cfg["summary_mode"] == cfg["loop_mode"] == "off"
-    cfg, errors = semantic_policy.semantic_config(_cfg("shadow", max_attempts_per_try=4))
+    cfg, errors = semantic_policy.semantic_config(_cfg("shadow", max_attempts_per_try=7))
     assert cfg["mode"] == "off"
     assert "config: semantic_max_attempts_per_try_invalid" in errors
     cfg, errors = semantic_policy.semantic_config({"semantic": {"mode": "shadow", "daily_request_budget": 50}})

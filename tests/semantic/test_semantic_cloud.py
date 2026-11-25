@@ -120,16 +120,51 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
             assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
             assert len(calls) == 1
             prompt = calls[0]["messages"][0]["content"]
-            # the same paid logical request stays fenced: the refusal is a definite
-            # not-sent that defers the unit instead of failing or falling back
-            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
-                chat(prompt)
+            # The paid length-stop answer is annotated as a validation failure,
+            # so the same logical request is not reused; the bounded retry sends again.
+            validation_failures = rows(led, "cloud_usage_validation_failure")
+            assert len(validation_failures) == 1
+            assert json.loads(validation_failures[0]["meta"])["failure_reason"] == "length_stop"
+            assert chat(prompt) is None and transport.last_llm_failure() == "length_stop"
     reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
-    assert len(calls) == len(reserves) == len(results) == 1
-    result = json.loads(results[0]["meta"])
-    assert result["error_kind"] is None and result["usage"]["output_tokens"] == 10
-    assert float(result["cost_usd"]) > 0 and "synthetic-hidden" not in json.dumps(result)
+    assert len(calls) == len(reserves) == len(results) == 2
+    assert len(rows(led, "cloud_usage_validation_failure")) == 2
+    for row in results:
+        result = json.loads(row["meta"])
+        assert result["error_kind"] is None and result["usage"]["output_tokens"] == 10
+        assert float(result["cost_usd"]) > 0 and "synthetic-hidden" not in json.dumps(result)
     assert semantic_runtime._circuit_state(led, kind="cloud_circuit")["consecutive_failures"] == 0
+
+
+def test_invalid_json_paid_answer_is_annotated_and_retried(cloud, monkeypatch):
+    import semantic_store
+    led, cfg, job, calls = cloud
+
+    def request(self, method, body, timeout, **kwargs):
+        calls.append(body)
+        return 200, {}, json.dumps({"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "not json"}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    bundle = semantic_store.thread_bundle(led.db, 1, 1)
+    scfg = semantic_drain.runtime_config(cfg)[0]
+    deadline = time.monotonic() + 120
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, deadline, lambda: True, direct,
+                                         local_fallback=lambda *a, **kw: pytest.fail("paid local fallback")) as chat:
+            summary, reason, error, sent_error, _ = semantic_drain._obtain_summary(
+                led, scfg, bundle, chat, lambda *args: None, 1, 1, bundle["source_fingerprint"],
+                "synthetic-policy", [], {}, None, deadline, diagnostics={})
+            assert summary is None and reason == "model" and sent_error is None
+            assert error["code"] == "json_object_invalid"
+            validation_failures = rows(led, "cloud_usage_validation_failure")
+            assert len(calls) == len(validation_failures) == 2
+            assert [json.loads(row["meta"])["failure_reason"] for row in validation_failures] == [
+                "json_object_invalid", "json_object_invalid"]
+            prompt = calls[0]["messages"][0]["content"]
+            assert chat(prompt) == "not json"
+    assert len(calls) == len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 3
 
 
 @pytest.mark.parametrize("detail,stage", [
@@ -1377,6 +1412,9 @@ def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monke
                 owner={'semantic_thread_root': 1},
                 unit_key=f"semantic:{job['job_id']}:{json.loads(job['payload']).get('generation', '')}",
                 reservation_id='d' * 32)
+    # Keep this cloned row on the legacy path so the test can first bind it to
+    # member 3's exact envelope; logical-fingerprint recovery is covered elsewhere.
+    meta.pop('logical_request_fp', None)
     with led.db:
         led.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "

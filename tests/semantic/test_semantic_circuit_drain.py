@@ -15,7 +15,9 @@ def test_drain_circuit_preserves_jobs_and_resumes_after_cooldown(tmp_path, monke
     db = _seeded(tmp_path)
     failing = _FakeJev(error=jev.JevError("transport", retryable=True))
     try:
-        for mid in (1, 3, 4):
+        # the unified cloud ceiling: the circuit opens at CLOUD_MAX_ATTEMPTS
+        # consecutive failures, so the outage must persist through six drains
+        for mid in (1, 3, 4, 7, 8, 9):
             if mid != 1:
                 db.save_messages([_message(mid)], project_id=1, semantic=True)
             completed = semantic_drain.run_due(

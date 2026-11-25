@@ -478,18 +478,19 @@ def test_unknown_model_price_or_output_never_becomes_success(doc, kind):
     assert records[0][1]["error_kind"] == kind
 
 
-def test_uncertain_send_is_recorded_once_and_never_retried():
+def test_uncertain_send_is_recorded_on_each_bounded_retry():
     sent, records = [], []
 
     def post(*a):
         sent.append(True)
         raise TimeoutError("synthetic")
 
-    provider = client.OpenAIClient("synthetic-private", post_fn=post)
+    provider = client.OpenAIClient("synthetic-private", post_fn=post, wait_fn=lambda delay: None)
     with pytest.raises(AnthropicError):
-        provider.complete("synthetic JSON", deadline=time.monotonic() + 10,
+        provider.complete("synthetic JSON", deadline=time.monotonic() + 60,
             after_result=lambda *a, **_answer: records.append(a), reserve_fn=lambda *args: None)
-    assert len(sent) == len(records) == 1 and records[0][1]["usage"] is None
+    assert len(sent) == len(records) == 6
+    assert all(record[1]["usage"] is None for record in records)
 
 
 @pytest.mark.parametrize("fields,expected", [
@@ -538,7 +539,7 @@ def test_unknown_429_keeps_legacy_status_class_without_leaking_body(body):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
                           after_result=lambda *args, **_answer: records.append(args), reserve_fn=lambda *args: None)
     assert caught.value.kind == "rate_limited" and caught.value.retryable
-    assert len(calls) == len(records) == 3 and delays == [0.25, 0.25]
+    assert len(calls) == len(records) == 6 and delays == [0.25] * 5
     assert all("openai_error_code" not in meta for _, meta in records)
     assert "synthetic-secret-canary" not in repr(records) + repr(caught.value)
     assert "future_synthetic_secret" not in repr(records) + repr(caught.value)
@@ -600,7 +601,7 @@ def test_known_openai_rate_limit_keeps_bounded_retry_after():
     with pytest.raises(AnthropicError, match="rate_limited"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
                           after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
-    assert len(calls) == len(recorded) == 3 and delays == [0.25, 0.25]
+    assert len(calls) == len(recorded) == 6 and delays == [0.25] * 5
     assert all(item["openai_429_diagnostic"] == "rate_limit_exceeded" for item in recorded)
 
 

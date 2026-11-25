@@ -485,10 +485,10 @@ def test_cloud_circuit_concurrent_failures_preserve_counts_and_terminal_stop(tmp
         finally:
             db.close()
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        list(pool.map(failure, ["transport"] * 3))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(failure, ["transport"] * 6))
     db = Ledger(path)
-    assert runtime._circuit_state(db, kind="cloud_circuit")["consecutive_failures"] == 3
+    assert runtime._circuit_state(db, kind="cloud_circuit")["consecutive_failures"] == 6
     assert runtime.circuit_open(db, kind="cloud_circuit")
     runtime.record_circuit_result(db, None, kind="cloud_circuit", reset=True)
     db.close()

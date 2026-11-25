@@ -20,7 +20,7 @@ def _reserve(ledger, unit_key='synthetic'):
 
 def _open(ledger, now):
     error = AnthropicError('rate_limited', retryable=True, status=429)
-    for _ in range(3):
+    for _ in range(6):
         runtime.record_circuit_result(ledger, error, now=now, kind='cloud_circuit')
 
 
@@ -64,7 +64,7 @@ def test_cloud_explicit_reset_and_expired_success_still_close_circuit(tmp_path):
 def test_jev_success_keeps_existing_reset_behavior(tmp_path):
     with closing(Ledger(str(tmp_path / 'ledger.db'))) as ledger:
         error = AnthropicError('rate_limited', retryable=True, status=429)
-        for _ in range(3):
+        for _ in range(6):
             runtime.record_circuit_result(ledger, error, now=1000)
         assert not runtime.record_circuit_result(ledger, None, now=1001)
         assert not runtime.circuit_open(ledger, now=1001)
@@ -101,7 +101,10 @@ def test_cloud_failure_class_change_keeps_the_consecutive_count(tmp_path):
     with closing(Ledger(str(tmp_path / 'ledger.db'))) as ledger:
         runtime.record_circuit_result(ledger, rate, now=1000, kind='cloud_circuit')
         runtime.record_circuit_result(ledger, server, now=1001, kind='cloud_circuit')
-        assert runtime.record_circuit_result(ledger, rate, now=1002, kind='cloud_circuit')
+        runtime.record_circuit_result(ledger, rate, now=1002, kind='cloud_circuit')
+        runtime.record_circuit_result(ledger, server, now=1003, kind='cloud_circuit')
+        runtime.record_circuit_result(ledger, rate, now=1004, kind='cloud_circuit')
+        assert runtime.record_circuit_result(ledger, server, now=1005, kind='cloud_circuit')
 
 
 def test_cloud_refusal_is_a_unit_failure_and_never_opens_the_circuit(tmp_path):

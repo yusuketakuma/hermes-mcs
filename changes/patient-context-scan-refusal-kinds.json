@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト走査の中断理由を待機と読取障害に分けて記録",
+  "summary": "患者コンテキストの候補選定が台帳の書込みロック待ちや走査期限で止まったとき、記録上の理由がすべて read_sqlite（読取障害）に集約されていたため、実際には候補の読取りまで到達していない停止を読取障害と区別できませんでした。ロック待ち・期限による中断は既存の scan_interrupted として記録し、本当の読取障害だけが read_sqlite になります。待機の扱いは従来どおりで、いずれの場合も後で再試行します。",
+  "upgrade": "更新したワーカーに切り替えると適用されます。追加設定は不要です。",
+  "details": [
+    "走査の進捗書込み（BEGIN IMMEDIATE）が busy/locked で待ち切れた場合は、読取障害ではなく中断された走査（scan_interrupted）として扱います。",
+    "候補読取り側の sqlite3.Error は errorcode で分類します。busy/locked は scan_interrupted、走査期限前の中断とそれ以外の失敗は read_sqlite です。SQLite のエラー名を記録し、時間上限を過ぎた中断だけは従来どおり scan_interrupted に集約します。",
+    "候補を選んだ後の引受け書込みが sqlite3.Error で止まった場合も同じ分類で理由を記録します（これまでは理由なしで scan_incomplete にまとまっていました）。OSの入出力失敗は、候補選定では従来どおり read_io、引受け書込みでも今回から read_io として記録します。",
+    "記録に使う拒否コードの集合は変えていません（既存の scan_interrupted/read_sqlite を使い回します）。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "tests/patients/test_context_scan_integration.py",
+    "tests/patients/test_context_scan_writer_wait.py"
+  ]
+}

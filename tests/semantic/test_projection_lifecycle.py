@@ -57,6 +57,23 @@ def test_projection_expiry_and_rollup_eviction_rollback_together(tmp_path):
         ledger.close()
 
 
+def test_projection_expiry_without_candidates_skips_the_rowid_walk(tmp_path):
+    ledger = _seeded(tmp_path)
+    seen = []
+    try:
+        assert ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind IN ('canonical_projection','semantic_facts_v4') LIMIT 1"
+        ).fetchone() is None
+        ledger.db.set_trace_callback(seen.append)
+        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 0
+        ledger.db.set_trace_callback(None)
+        assert any("SELECT 1 FROM artifacts WHERE kind IN" in statement for statement in seen)
+        assert not any("+a.kind" in statement for statement in seen)
+    finally:
+        ledger.db.set_trace_callback(None)
+        ledger.close()
+
+
 def test_projection_expiry_pages_reads_but_commits_once(tmp_path, monkeypatch):
     """Peak memory: artifacts are read one page at a time, while the decisions
     still commit in one transaction, so a failure on a later page keeps none."""
