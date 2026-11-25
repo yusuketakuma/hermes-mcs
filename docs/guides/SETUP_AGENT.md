@@ -463,7 +463,7 @@ LINE WORKSのカード・操作では独立host内でアダプターが起動す
 
 旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
 手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
-独立hostは7定期ジョブ・3抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
+独立hostは8定期ジョブ・3抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
 
 `check`の失敗は想定内として無視しません。モード・専用venv・scope・資格情報・常駐状態・
 文書生成とのdriftを確認し、固定エラーコードで原因を報告します。

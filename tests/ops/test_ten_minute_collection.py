@@ -31,10 +31,11 @@ def test_services_migrate_existing_fetch_jobs_without_duplicates(tmp_path, monke
     assert [call for call in calls if call[1:3] in (
         ["cron", "create"], ["cron", "edit"], ["cron", "remove"])] == mutations
     rows = service_management.inspect_cron('/x/hermes')
-    assert len(rows) == len({row['script'] for row in rows}) == 7
+    assert len(rows) == len({row['script'] for row in rows}) == 8
     assert {row['script'] for row in rows} == {
         'mcs_check.sh', 'mcs_health.sh', 'mcs_deep.sh', 'mcs_ocr.sh',
-        'mcs_llm_catchup.sh', 'llamacpp_restart_if_idle.sh', 'mcs_update.sh'}
+        'mcs_llm_catchup.sh', 'llamacpp_restart_if_idle.sh', 'mcs_update.sh',
+        'mcs_release_auto.sh'}
     assert actual['mcs_ocr.sh']['schedule'] == '* * * * *'
 
 
