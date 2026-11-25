@@ -59,6 +59,13 @@ def test_missing_scope_and_explicit_auto_scope():
     # The runtime adapter additionally requires a published scope snapshot.
 
 
+def test_lineworks_target_requires_the_notify_block():
+    cfg = config()
+    del cfg["notify"]
+    assert any("notify.lineworks: LINE WORKS送信には接続設定が必要です" in e
+               for e in mcs_setup.validate_config(cfg)[0])
+
+
 @pytest.mark.parametrize("runtime", [None, "hermes", "standalone"])
 def test_text_only_lineworks_target_requires_connection_scope(runtime):
     cfg = config()

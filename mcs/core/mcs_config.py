@@ -498,20 +498,6 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                     "mineは操作したユーザーの指定が必要です。station:/project:/days:を使ってください"))
     if isinstance(cfg.get("notify"), dict):
         errors.extend(validate_notify(cfg["notify"]))
-        lineworks_scope = cfg["notify"].get("lineworks")
-        lineworks_target = any(
-            isinstance(cfg.get(key), str) and cfg[key].strip().startswith("lineworks:")
-            for key in ("notify_target", "notify_system_target"))
-        if lineworks_target and not isinstance(lineworks_scope, dict):
-            errors.append("notify.lineworks: LINE WORKS送信には接続設定が必要です")
-        if isinstance(lineworks_scope, dict) and isinstance(lineworks_scope.get("channel_id"), str):
-            expected = "lineworks:" + lineworks_scope["channel_id"]
-            for key in ("notify_target", "notify_system_target"):
-                target = cfg.get(key)
-                if isinstance(target, str) and target.strip().startswith("lineworks:") \
-                        and target.strip() != expected:
-                    errors.append(
-                        f"{key}: LINE WORKSの送信先はnotify.lineworks.channel_idと同じトークルームを指定してください")
         # a scope block for the transport that is NOT active is stale —
         # keep it as a warning so a discord->slack switch leaves a
         # visible note instead of a silently ignored config
@@ -553,6 +539,20 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         errors.extend(_validate_update(cfg["update"]))
     if isinstance(cfg.get("health"), dict):
         errors.extend(_validate_health(cfg["health"]))
+    lineworks_scope = ntf.get("lineworks")
+    lineworks_target = any(
+        isinstance(cfg.get(key), str) and cfg[key].strip().startswith("lineworks:")
+        for key in ("notify_target", "notify_system_target"))
+    if lineworks_target and not isinstance(lineworks_scope, dict):
+        errors.append("notify.lineworks: LINE WORKS送信には接続設定が必要です")
+    if isinstance(lineworks_scope, dict) and isinstance(lineworks_scope.get("channel_id"), str):
+        expected = "lineworks:" + lineworks_scope["channel_id"]
+        for key in ("notify_target", "notify_system_target"):
+            target = cfg.get(key)
+            if isinstance(target, str) and target.strip().startswith("lineworks:") \
+                    and target.strip() != expected:
+                errors.append(
+                    f"{key}: LINE WORKSの送信先はnotify.lineworks.channel_idと同じトークルームを指定してください")
     if cfg.get("runtime_mode") == "standalone":
         errors.extend(validate_standalone(cfg))
         errors.extend(validate_standalone_scope(cfg))
