@@ -12,6 +12,8 @@
 
 v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横断検索を追加します。患者コンテキストの品質確認と患者選定の競合を修正し、Jev 1.14.0への更新、抽出・添付・通知・スタンプ・クラウド処理の改善も含みます。更新時は各記録に示す適用条件を確認してください。
 
+**この版は初めて外部へ公開するリリースです。** 社内運用で検証してきた内容を、外部の事業所でも導入できる形に整えたものとして公開します。
+
 | 以前 | v1.3.0 | 利用者のメリット |
 | --- | --- | --- |
 | 在宅ケアの患者台帳・職員・訪問・処方歴をローカルで一元管理する画面がない | 患者画面に台帳と訪問・処方歴を追加 | 患者ごとの在宅ケア情報をまとめて確認・記録できます |
@@ -61,6 +63,13 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **薬局から医師への照会・提案の返答待ちをアラートで知らせる**
   自局から医師へ出した処方・薬の照会や処方提案に、スレッド内の他の人の返信もルーム内の医師の投稿も見つからないまま3日（request_response_days）を過ぎると、アラート「照会の返答未記録」の候補にします。返事待ちの照会を覚えておく負担を減らします。電話・FAXなど記録外の返答は判定に含みません。自局の照会は「処方依頼」（rx_request_visibility）には出なくなります。
 
+- **Macの性能に応じて導入するローカルAIモデルを自動選択**
+  新規導入時、32GB以上のMacではQwen3.8-27B、48GB以上ではQwen3.6-35B-A3B、128GB以上のMax/UltraチップではQwen3.5-122B-A10B、512GB以上のUltraチップではQwen3.5-397B-A17Bを選びます。低スペックや検出不能のMacでも下限は従来のQwen3.5-9Bです。すでに対応済みのQwenモデルが導入されているMacでは、そのモデルを維持します。
+
+- **v3自動更新のownerを定期観測する**
+  v3自動更新に移行済みの端末では、10分ごとの定期処理がownerを1回だけ観測し、届いている作業の再開・証拠送付・health報告を行います。未移行の端末では何もせず終了し、従来の自動更新経路へ fallback しません。
+
+
 ### 改善
 
 - **クラウド4モデルの料金を再確認し、確認期限を12月24日に更新**
@@ -98,6 +107,10 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - **送信から1時間後も自分のスタンプが操作どおりの状態にないと確認できた場合に操作を終了**
   送信から1時間以上たった時点で、MCS上の自分のスタンプが操作どおりの状態になっていないと確認できた場合は、その操作を終了します。自動では再送しません。終了後は同じ投稿で新しい操作ができます。自分のスタンプの状態を取得できない間は「確認中」が続きます。
+
+- **使われない意味解析の判定を作らない**
+  要約（summary_mode）とループ（loop_mode）がともに off の設定では、通常の取込・再処理で意味解析ジョブを作らず、待機中のものも実行しません。人が確認した保留解除は既存の解除契約どおり置換jobを保留状態で残し、患者コンテキストは保留解除後にそのjobを待たずに進みます。
+
 
 ### 不具合修正
 
@@ -190,6 +203,22 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - **適用済みの通知の追跡終了が監視件数に反映されない問題を修正**
   2026-11-21 の更新で通知部品の表に列が増えてから、人の承認で適用済みだった通知の追跡終了がすべて無効と判定され、未完了の通知部品が再び監視件数に数えられていました。追跡終了の証明が、証明を作った時点の列だけを使うように直しました。既存の承認記録はそのまま有効に戻り、再送や再承認は発生しません。新しい承認や送信の条件は変わりません。
+
+- **抽出QCでJevの回復を確認したときに古い障害警告を解除**
+  意味解析がJevの障害を記録した後、抽出結果の品質確認（抽出QC）がJevに問い合わせて完了すると、以前の障害を示す警告が消えます。要約とループがともにoffで意味解析が止まっている間も、抽出QCによる回復を反映します。
+
+- **収集診断の対処案内を統一CLIに修正**
+  収集エラーの対処案内で、環境によっては存在しない素のpython3実行ではなく、導入方式に対応した`~/.local/bin/mcs`コマンドを案内します。
+
+- **LINE WORKS文章通知の設定不足を初期設定で検出**
+  LINE WORKSの文章だけの送信先を設定した場合も、接続設定・操作範囲の入力を求め、送信先トークルームの不一致を初期設定と設定確認で検出します。これまで設定を保存できても送信時に失敗する組み合わせがありました。
+
+- **Slack直接接続のチャンネル準備が完了扱いになる問題を修正**
+  MCS単独（standalone）でSlackカード用のチャンネルを新規作成または再開したとき、通知経路の公開ファイルがまだ無くても準備完了と判定される場合がありました。完了前に通知経路を公開し、その記録まで終わったときだけ完了として扱うように修正しました。チャンネル作成の条件、操作者の招待範囲、送信許可の範囲は変わりません。
+
+- **文書専用PRのmerge-gateが設計どおり進まない問題を修正**
+  文書だけのPRではCI scopeが `standalone-sdk`・`hermes-integration`・`pytest-macos` を省略しますが、merge-gateは一部の省略だけを合格として扱っていたため、文書専用PRが必須ゲートを通りませんでした。設計どおりの省略を認めるように修正しました。`full-ci` で完全なCIを要求したPRでは、以前の省略結果を合格の根拠にしません。
+
 
 ### 更新時の注意
 
@@ -286,6 +315,23 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - 追加操作は不要です。更新前から確認中のまま残っていた操作は、更新後に初めて照合できる時点を起点に1時間の猶予を置きます。通知の既定・対象・権限は変わりません。
 
 - 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要で、次の健康レポートから件数が戻ります。有効に戻るのは列追加（2026-11-21）より前に適用した追跡終了です。列追加後から今回の更新までに新しく適用した追跡終了があれば、その部品は監視件数に戻るので、追跡終了をやり直してください。
+
+- 既存のQwenモデルがある環境では自動的にそのモデルを再利用するため追加操作は不要です。新規導入ではメモリとチップに応じたモデルを取得します。128GB以上のMax/Ultraでは約76.5GB、512GB以上のUltraでは約244.1GBを取得します。自動判定を変える場合は導入前にMCS_LOCAL_MODELを指定してください。
+
+- 追加操作は不要です。通常の更新でサービス定義が同期されると定期処理に登録されます。v3自動更新の有効化には、従来どおり明示的な同意と中央側の配信条件が必要です。
+
+- 設定変更は不要です。10分ごとの定期処理は次回から反映され、常駐の抽出worker（standalone では抽出worker）は再起動で反映されます。待機中の意味解析ジョブは削除せずそのまま残し、summary_mode か loop_mode を off 以外に戻すと再び実行・再処理されます。
+
+- 設定変更は不要です。更新後の定期処理で、保存済みの記録にも同じ条件を適用します。
+
+- 追加操作は不要です。次回の収集診断から新しい案内が表示されます。
+
+- 既存環境でLINE WORKS送信先とnotify.lineworks.channel_idが一致しない場合は、同じトークルームIDへ修正してmcs setupを再実行してください。正常に設定済みの環境では追加操作は不要です。
+
+- 更新後に独立実行の常駐処理（mcs_standalone）の再起動が必要です。Slackチャンネル準備の記録があり、通知経路の完了記録だけがない環境では、更新後に `mcs setup slack-channels` を実行すると不足している通知経路の公開だけを補完します。新しいチャンネルは作成されません。通知先を手動で設定し、準備記録がない環境では追加操作は不要です。
+
+- 追加操作は不要です。
+
 
 ### 技術詳細
 
@@ -762,6 +808,75 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - ops.card_part_tracking_ack の証明は、通知部品・代表部品・配送試行の行を固定の列（証明 v1 の列）だけの辞書にしてからハッシュする。従来は SELECT * の全列を使っていたため、値が空の列が1つ増えただけで保存済みの証明と一致しなくなっていた。
 - 今後、通知部品や配送試行の表に列を足しても、保存済みの追跡終了は無効にならない。
 - 根拠: mcs/notify/notify_tracking_ack.py
+
+#### Macの性能に応じて導入するローカルAIモデルを自動選択
+
+- 選択候補はQwen3.5-9B、Qwen3.8-27B、Qwen3.6-35B-A3B、Qwen3.5-122B-A10B、Qwen3.5-397B-A17Bの固定revisionです。
+- 起動設定（LaunchAgent）が読み込んでいるモデルを最優先で維持します。常駐設定が無い場合だけ、導入済みの最も大きい完全なセットを再利用します。分割モデルの必要容量は未取得分だけ見積もり、取得開始前に全体の空き容量を確認します。
+- 122Bモデルは3分割、397Bモデルは6分割のGGUFで、各ファイルをsha256で照合し、llama-serverには先頭ファイルを指定します。
+- 初回設定には選択したlocal_llm.modelを保存します。
+- MCS_LOCAL_MODELにqwen3.5-9b、qwen3.8-27b、qwen3.6-35b-a3b、qwen3.5-122b-a10b、qwen3.5-397b-a17bのいずれかを指定すると自動判定を上書きできます。
+- 根拠: install.sh、deployment/install/runtime.sh、mcs/core/provider_settings.py、docs/guides/INSTALLATION.md
+
+
+#### v3自動更新のownerを定期観測する
+
+- 定期処理は開始時に0〜120秒のjitterを入れ、端末間の同時起動を避けます。
+- standaloneの定期ジョブ数は7から8へ増えます。owner tickは単一hostの既存schedulerへ1回だけ登録されます。
+- wire・contract digest・backup証拠などの依存が未接続の場合は、固定コードでholdし、成功扱いにしません。
+- `mcs_update.py auto-tick` で1回分の結果をJSON確認できます。
+- 依存未接続・owner hold・別tick実行中・owner状態異常は終了コード3で定期処理の成功時刻にカウントしません。
+- 根拠: mcs/ops/release_auto_driver.py、mcs/ops/update_cli.py、mcs/core/scheduled_jobs.py、deployment/scripts/mcs_release_auto.sh
+
+
+#### 使われない意味解析の判定を作らない
+
+- 「判定を読む機能があるか」は semantic_policy.primary_verdicts_consumed の1か所で決め、通常の取込時作成・明示の再実行・再処理・ヒント再構築・コホート変換・ジョブ実行・患者コンテキストの準備判定・滞留警告で共有する。確認済みholdの解除はこの判定で拒否せず、既存のスナップショット・hold epoch・lock等を再検証してから置換jobを保留状態で残す。
+- 読む機能がない間、通常の待機中意味解析ジョブは状態・試行回数・次回時刻を変えずに残し、実行結果に unread_semantic_pending として件数を記録する。明示のhold解除で置換されたjobも新たな評価は行わず、読者が再び有効になるまで待機する。
+- 進捗・観測画面では未読の待機件数を実行可能な件数と分け、未読ジョブを完了予測の対象にしない。
+- 読む機能がない間の再処理は取得状況の確認だけを行い、原文抽出とQCが最新なら完了として扱う。
+- 読む機能がない間は待機中の意味解析ジョブを semantic_backlog_stalled の警告対象にしない。
+- 抽出QC（extract_qc=annotate）と患者コンテキストの品質確認のJev利用は変更しない。
+- 根拠: mcs/semantic/semantic_policy.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_due_selection.py、mcs/semantic/semantic_reprocess.py、mcs/semantic/semantic_store.py、mcs/semantic/semantic_conversion.py、mcs/semantic/semantic_intake_hold.py、mcs/core/ledger/ledger_semantic_sources.py、mcs/patients/patient_context_refresh_readiness.py、mcs/patients/patient_context_progress.py、mcs/ingest/run_check.py、mcs/ingest/health_report.py、mcs/views/operational_progress.py、mcs/ops/semantic_observe.py
+
+
+#### 抽出QCでJevの回復を確認したときに古い障害警告を解除
+
+- 抽出QCが完了し、Jevへの問い合わせが1回以上記録された場合に回復と判定し、結果が後で編集により置き換えられても、その回復記録を保持する。問い合わせ回数が不明な過去の記録、問い合わせのない完了、途中保存、失敗や評価の省略では警告を解除しない。
+- 更新前の抽出QCが唯一の回復記録でも、投稿を編集して問い合わせなしで再確認したときは元の回復記録を残す。保持する回復記録は全体で最新の1件だけで、患者や投稿の識別子、本文、回答は含まない。
+- 回復と障害の順序は最初に記録した時点で判定する。その後に意味解析が新たなJevの障害を記録した場合は、新しい原因を表示する。
+- 根拠: mcs/ingest/health_report.py、mcs/semantic/semantic_qc.py、tests/ingest/test_jev_block_reason_read.py、tests/semantic/test_semantic_jev_drain.py
+
+
+#### 収集診断の対処案内を統一CLIに修正
+
+- 設定確認は`~/.local/bin/mcs setup check`、共有用診断は`~/.local/bin/mcs doctor --share`を案内する。
+- 表示文言だけの変更で、収集・診断の判定条件は変更しない。
+- 根拠: mcs/ingest/collection_diagnostics.py、docs/guides/COLLECTION_DIAGNOSTICS.md
+
+
+#### LINE WORKS文章通知の設定不足を初期設定で検出
+
+- LINE WORKSの文章通知はHermes・standaloneの両方で独立アダプターを使うため、interactive=offでも接続設定を必須として検証する。
+- 患者情報・運用通知のLINE WORKS送信先は、独立アダプターが実際に送信するnotify.lineworks.channel_idと一致する場合だけ受け付ける。
+- 根拠: mcs/core/mcs_config.py、mcs/ops/setup/setup_wizard.py
+
+
+#### Slack直接接続のチャンネル準備が完了扱いになる問題を修正
+
+- standaloneではHermesのカードworkerを起動しないため、Hermes用のworker確認ではなく通知経路 flags/notify.json の公開を完了条件にする。 flags_ready がない既存の準備記録は、Slack接続・操作者・チャンネルが同じまま無関係な設定だけ変わった場合でも再開できる。
+- 初回受入候補のSlack直接接続について、fresh-install workflowのstandalone経路をDiscord初期設定からSlack初期設定へ変更し、合成値での新規導入・認証情報の保存・常駐agentの登録をCIで確認する。
+- テキスト専用設定でも slack:new を明示した場合はチャンネルを自動作成する既存挙動に合わせて、付録Bの食い違う説明を修正する。
+- standaloneの対話設定でプロジェクト自動解決がオフのとき、空のプロジェクトIDが保存後の検証で失敗するのではなく、その場で再入力を求める。
+- 根拠: mcs/ops/setup/slack_channel_setup.py、mcs/ops/setup/setup_wizard.py、tests/ops/test_slack_channel_setup.py、tests/ops/test_setup_guided.py、.github/workflows/fresh-install.yml、docs/guides/INSTALLATION.md
+
+
+#### 文書専用PRのmerge-gateが設計どおり進まない問題を修正
+
+- merge-gateの判定では、文書だけの変更でscopeにより省略された `standalone-sdk`・`hermes-integration`・`pytest-macos` を合格として扱う。コード変更を含むPRでは従来どおりskipを不合格にする。
+- `full-ci` ラベルがあるPRでは、以前のdocs scope runに残ったskipを証拠にせず、full modeの結果を待つ。
+- 導入ガイドの既定runtime・設定コマンド・standaloneの接続設定例を実装に合わせて修正する。
+- 根拠: ci/agent_control.py、ci/auto_merge.py、tests/meta/test_agent_control.py、docs/development/AUTOMATION.md、docs/guides/INSTALLATION.md
 
 </details>
 
