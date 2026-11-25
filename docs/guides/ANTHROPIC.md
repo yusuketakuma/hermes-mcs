@@ -1,5 +1,7 @@
 # Jev・Anthropic・OpenAIの設定と利用状況
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+
 このMCSの `.env` にAPIキーを登録すると、設定で無効化していないサービスを自動で使用します。
 キーの登録前に、対象の投稿本文・患者情報を外部サービスへ送ることと、利用料金を確認してください。
 本文や患者名を自動で匿名化する機能はありません。
@@ -51,8 +53,8 @@ OpenAIの用途別設定は提供元専用の私有設定に保持します。`m
 次の例はAnthropic優先で、合計の日25ドル・月75ドルを、Anthropicの日20ドル・月60ドルとOpenAIの日5ドル・月15ドルに配分します。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm providers --provider auto --priority anthropic,openai --anthropic-daily-usd 20 --anthropic-monthly-usd 60 --openai-daily-usd 5 --openai-monthly-usd 15
-python3 mcs/ops/mcs_setup.py cloud-llm providers
+"$PY" mcs/ops/mcs_setup.py cloud-llm providers --provider auto --priority anthropic,openai --anthropic-daily-usd 20 --anthropic-monthly-usd 60 --openai-daily-usd 5 --openai-monthly-usd 15
+"$PY" mcs/ops/mcs_setup.py cloud-llm providers
 ```
 
 API別の上限と合計上限を同時に適用します。API別上限の合計が合計上限を超える設定は保存しません。
@@ -87,7 +89,7 @@ Jevは日本時間の1日10000要求が上限です。再試行、モデル一�
 modeを明示した既存設定で予算を省略した場合は、従来どおり `0` です。
 10000を超える設定でも実効上限は10000です。評価CLIが通常のmodeを迂回する場合も、この件数上限を迂回しません。
 背景の意味解析では、日上限の10%をリアルタイム処理のために残します。留保する件数は端数を切り上げます。日上限10000の場合、背景からのJev要求は9000件までで、残り1000件をリアルタイム処理に使います。Jevの枠を使い切っても、Anthropic・OpenAIによる処理は続けます。意味解析を有効にしている環境では、Jevが未設定、日次予算が0、または利用できない場合も、Jevの検証を省略して処理を続けます。
-`python3 mcs/ops/mcs_setup.py doctor --probe data --json` で、Jevの使用数と背景枠の状態を確認できます。
+`"$PY" mcs/ops/mcs_setup.py doctor --probe data --json` で、Jevの使用数と背景枠の状態を確認できます。
 
 Jevを省略しても、原文との対応、数量・薬剤などのコードによる検証、処理世代、公開範囲の確認は続けます。既に見つかった不一致を省略扱いで消しません。設定不正、利用期限切れ、送信結果・料金の確認待ち、人の承認待ちを、Jevの省略で解除することもありません。
 
@@ -101,9 +103,9 @@ AnthropicとOpenAIの合計に対して、1日の件数 `cloud_llm.daily_request
 送信する期間と、その期間全体の予算（ドル）を指定できます。期間予算は日をまたいでも合計で数え、日本時間の0時に戻りません。日・月・期間の費用上限を同時に適用します。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --until 2026-10-30            # 今から10月30日の終わりまで、合計80ドル
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 --until 2026-11-07
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --until 2026-10-30            # 今から10月30日の終わりまで、合計80ドル
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 --until 2026-11-07
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
 ```
 
 - `--until` はAnthropic・OpenAIの `cloud_llm.until` を設定します。Jevの `semantic.until` は変更しません。日付だけを指定すると、その日の23:59:59（日本時間）までです。
@@ -115,8 +117,8 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none    
 保存済み投稿の再抽出（過去の投稿を現行の抽出世代へ上書きする処理）は、既定ではローカルで処理します。費用上限と終了日時を指定した場合に限り、その終了日時までクラウドへ送れます。費用上限には、従来の期間予算か、全体と対象提供元の双方の日額・月額上限を使います。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20   # 11月20日の終わりまで再開
-python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none                         # 再開を終了
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20   # 11月20日の終わりまで再開
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none                         # 再開を終了
 ```
 
 - 設定項目は `cloud_llm.reextract_backlog_until` です。期間予算（`window_budget_usd`）なしで再開する場合は、全体の `daily_cost_limit_usd`・`monthly_cost_limit_usd` と、`provider_budgets` 内の対象提供元の日額・月額上限が必要です。提供元が `auto` の場合は、`provider_order` 内のすべての提供元に両方の上限が必要です。不完全な設定は保存せず、直接書いた場合も設定エラーとして送信を止めます。
@@ -135,9 +137,9 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none    
 費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、共通の費用設定は認証された設定変更経路で保存されます。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
-python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
-python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
+"$PY" mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
 ```
 
 設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
@@ -201,11 +203,11 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                  
 導入先で次のコマンドを実行できます。保存済み記録を読み取り、APIへは送信しません。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm plan
-python3 mcs/ops/mcs_setup.py cloud-llm estimate --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm log --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm compare --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm outstanding
+"$PY" mcs/ops/mcs_setup.py cloud-llm plan
+"$PY" mcs/ops/mcs_setup.py cloud-llm estimate --days 14
+"$PY" mcs/ops/mcs_setup.py cloud-llm log --days 14
+"$PY" mcs/ops/mcs_setup.py cloud-llm compare --days 14
+"$PY" mcs/ops/mcs_setup.py cloud-llm outstanding
 ```
 
 `outstanding` は保存されている会計履歴全体から、結果記録がない要求と、結果を精算できない要求の件数・最古の経過時間・10分以上の件数を集計します。本文や患者識別子は表示しません。読取り上限に達した場合は `unknown`、不正・重複・対応しない記録がある場合は `partial` とし、未確定の件数を0とは表示しません。この照会で予約額の解除や再送はしません。患者コンテキストの消去で記録を消し、件数だけを引き継いだ未精算の送信は、保存されている記録とは別に `carried_unresolved_requests` として表示します（再送はしません）。
@@ -246,7 +248,7 @@ AnthropicとOpenAIの利用記録は62日、Jevの利用記録は7日保持し�
 ## Jevのモデルを切り替える
 
 Jevのモデルは自動では切り替わりません。Jevを使っている環境（`semantic.mode` が off 以外で、キーがあり、日次予算が1以上で、施設の確認がJevを含む場合）では、
-`python3 mcs/ops/mcs_setup.py check` が1日1回までJevのモデル一覧を取得し、使用中より新しい固定版があれば次のように表示します。
+`"$PY" mcs/ops/mcs_setup.py check` が1日1回までJevのモデル一覧を取得し、使用中より新しい固定版があれば次のように表示します。
 一覧の取得は1要求として日次上限に数えます。利用枠を予約した後、送信の直前にもう一度この条件（施設の確認を含む）を確かめ、外れていれば送信しません。
 取得できなかった場合も翌日まで再取得しません（ほかの処理が保存中で待っても予約できなかった場合だけ、次の確認で再取得します）。
 Jevのモデル一覧が固定版のIDを返すことは提供元の仕様として確認できていません（一覧は別名の一覧として案内されています）。
@@ -256,11 +258,11 @@ Jevのモデル一覧が固定版のIDを返すことは提供元の仕様とし
   情報: Jev: 新しいモデル jev-X.Y.Z を利用できます（使用中: jev-1.14.0）。自動では切り替えません。…
 ```
 
-使用中のモデル・コードの既定・前回の一覧で見つかった新しい版は、`python3 mcs/ops/mcs_setup.py jev-model` で表示します（通信しません）。
+使用中のモデル・コードの既定・前回の一覧で見つかった新しい版は、`"$PY" mcs/ops/mcs_setup.py jev-model` で表示します（通信しません）。
 切り替えるときは、人が確認したうえで理由を付けて実行します。
 
 ```bash
-python3 mcs/ops/mcs_setup.py jev-model --to jev-X.Y.Z --confirm-human --reason '新しい版を確認した'
+"$PY" mcs/ops/mcs_setup.py jev-model --to jev-X.Y.Z --confirm-human --reason '新しい版を確認した'
 ```
 
 - 指定した版へ、完全合成のデータだけで検出の確認（`semantic_bench detect` と同じ9件）を送ります。送信は日次上限に数え、患者情報は送りません。
@@ -283,8 +285,8 @@ python3 mcs/ops/mcs_setup.py jev-model --to jev-X.Y.Z --confirm-human --reason '
 AnthropicとOpenAIの処理を停止するときは、理由を付けて次の操作を行います。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '外部処理を一時停止'
-python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定と利用状況を確認して再開'
+"$PY" mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '外部処理を一時停止'
+"$PY" mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定と利用状況を確認して再開'
 ```
 
 返された `command_id` を控え、同じ操作を再試行するときは `--command-id` で指定します。
@@ -300,14 +302,14 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定�
 
 ```bash
 # 1. 設定で extract.patient_context.enabled を false にし、送信を止め、作り直しの見積りを取る
-python3 mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '患者コンテキストの作り直し'
-python3 mcs/ops/mcs_setup.py cloud-llm estimate --days 14
+"$PY" mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '患者コンテキストの作り直し'
+"$PY" mcs/ops/mcs_setup.py cloud-llm estimate --days 14
 # 2. 消去の内容と前提を確認する（変更しない）
-python3 mcs/ops/mcs_setup.py cloud-llm context-reset-plan
+"$PY" mcs/ops/mcs_setup.py cloud-llm context-reset-plan
 # 3. 表示された preview_hash を渡して消去する（バックアップを取ってから消去）
-python3 mcs/ops/mcs_setup.py cloud-llm context-reset --preview-hash <preview_hash> --confirm-human --reason '患者コンテキストを作り直す'
+"$PY" mcs/ops/mcs_setup.py cloud-llm context-reset --preview-hash <preview_hash> --confirm-human --reason '患者コンテキストを作り直す'
 # 4. enabled を戻して再開する
-python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者コンテキストを作り直す'
+"$PY" mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者コンテキストを作り直す'
 ```
 
 `context-reset-plan` の `refusal` が `null` でない間は消去できません（`read_incomplete` は確認の読取りが上限に達したことを示します。`stop_reason` が `read_deadline` のときは、ほかの処理が少ない時間に再実行します。それ以外の理由は再実行しても通らないので、開発者に連絡してください）。

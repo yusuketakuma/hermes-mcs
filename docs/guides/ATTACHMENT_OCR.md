@@ -1,5 +1,7 @@
 # 添付資料の文字起こし（1.1.2向け）
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+
 macOSで画像・PDFの文章をローカルで取り出し、投稿本文とは別の原資料として保存します。
 診療情報提供書、訪問看護・薬剤管理・居宅療養管理・リハビリ等の報告書、
 処方資料、PCAポンプの表示を対象にしています。
@@ -25,14 +27,14 @@ MCSのPythonとは別に、`MCS_ROOT/ocr-venv`へPython 3.13とYomitoku 0.16.3�
 次は標準の導入先を使う例です。`$HOME`は実際のホームディレクトリに置き換えてください。
 
 ```sh
-python3 mcs/ops/mcs_setup.py init --set 'attachment_ocr={"enabled":true,"executable":"/Users/your-user/.mcs/ocr-venv/bin/yomitoku","timeout_seconds":120}'
+"$PY" mcs/ops/mcs_setup.py init --set 'attachment_ocr={"enabled":true,"executable":"/Users/your-user/.mcs/ocr-venv/bin/yomitoku","timeout_seconds":120}'
 ```
 
 保存済み添付のOCRとローカルLLM解析は、毎分の独立ジョブで進めます。収集の認証エラーなどで
 新規取得が失敗していても、保存済み資料は現行性・患者権限を確認して処理します。
 アーカイブ・閲覧禁止・権限失効・患者情報がない資料は解析しません。
 OCR実行中の設定OFF・実行設定変更も保存前に確認し、新しい結果を採用しません。
-手動では`python3 mcs/ops/mcs_ocr.py --run`を使えます。
+手動では`"$PY" mcs/ops/mcs_ocr.py --run`を使えます。
 1回のジョブは最大900秒で、ローカル解析を優先しながら原画像のOCRも進めます。
 1ページ・1添付を処理して必ず終了する制限はありません。重複起動は専用ロックで防ぎ、
 保留・無進捗・失敗の段階を同じ回の中で繰り返さず、もう一方の処理へ進みます。
@@ -50,7 +52,7 @@ OCR中は収集やLLMと共用の書込みロックを保持しません。演�
 失敗した資料を今すぐ再評価する場合は、次のコマンドを使います。
 
 ```sh
-python3 mcs/ops/mcs_ocr.py --run --retry-errors
+"$PY" mcs/ops/mcs_ocr.py --run --retry-errors
 ```
 
 開始時点より古いOCR失敗について、この実行内では各添付1回だけ待機時間を省いて再処理します。

@@ -33,16 +33,16 @@ PY=/absolute/path/to/mcs-python
 | 集約の再評価待ち | 集約の途中で元データが更新されたか有効期限を過ぎたため、その時点の集約結果を確定できませんでした | はい | 対処不要。次回の収集で自動的に再評価されます |
 | 通信 | MCSとの通信に失敗しました | はい | 次回の収集で再試行されます。続く場合はネットワーク接続を確認 |
 | MCS側の応答異常 | MCSが異常な応答（エラー番号付き）を返しました | はい | 次回の収集で再試行されます。続く場合はMCSの画面が開けるか確認 |
-| 応答形式 | MCSの応答が想定と違う形式でした（MCS側の仕様変更の可能性） | いいえ | 続く場合は開発元へ連絡（python3 mcs/ops/mcs_setup.py doctor --share の結果を添える） |
+| 応答形式 | MCSの応答が想定と違う形式でした（MCS側の仕様変更の可能性） | いいえ | 続く場合は開発元へ連絡（"$PY" mcs/ops/mcs_setup.py doctor --share の結果を添える） |
 | 保存 | 取得した内容をこのMacに保存できませんでした | いいえ | ディスクの空き容量と data フォルダの書込み権限を確認 |
 | 取得未完了 | 一部の投稿・返信を取り切れませんでした | はい | 再試行待ちは次回以降に続きを取得します。window_stalledで停止した初回履歴は、管理者がMCSの表示を確認し、既存の履歴取得操作で再開してください（docs/guides/USER_GUIDE.md「新しく認識した患者の履歴」） |
 | 添付の取得 | 添付ファイルを取得できませんでした | はい | 次回の収集で再試行されます。続く場合はMCSの画面で添付が開けるか確認 |
 | 補助情報の取得 | 職員一覧・自分の情報など補助的な情報を取得できませんでした | はい | 次回の収集で再試行されます。投稿の収集は続いています |
 | 操作の取込み | チャットからの操作・更新の指示の取込みや後片付けでエラーがありました | いいえ | 操作が反映されたかを画面や受付の記録で確認し、反映されていないと確認できた場合だけやり直す（確認できない場合はやり直さず data/mcs.log の cmd を確認） |
-| 設定 | 設定に誤りがあり、一部の機能を使えません | いいえ | python3 mcs/ops/mcs_setup.py check で設定を確認 |
+| 設定 | 設定に誤りがあり、一部の機能を使えません | いいえ | "$PY" mcs/ops/mcs_setup.py check で設定を確認 |
 | 収集後の処理 | 要約・薬剤照合・集約などの収集後の処理が失敗しました（収集は完了しています） | はい | 次回の収集で再実行されます。続く場合は data/mcs.log を確認 |
-| 実行基盤 | 収集の実行そのものに問題がありました（記録・ロック・異常終了など） | いいえ | python3 mcs/ops/mcs_setup.py check を実行。続く場合は data/mcs.log を確認 |
-| その他・原因未分類 | 分類できないエラーがありました | いいえ | 続く場合は data/mcs.log を確認し、python3 mcs/ops/mcs_setup.py doctor --share の結果を開発元へ |
+| 実行基盤 | 収集の実行そのものに問題がありました（記録・ロック・異常終了など） | いいえ | "$PY" mcs/ops/mcs_setup.py check を実行。続く場合は data/mcs.log を確認 |
+| その他・原因未分類 | 分類できないエラーがありました | いいえ | 続く場合は data/mcs.log を確認し、"$PY" mcs/ops/mcs_setup.py doctor --share の結果を開発元へ |
 
 いずれも患者名・投稿本文・例外の原文は表示しません。表にないコードは「その他・原因未分類」に入ります。
 
@@ -120,8 +120,8 @@ MCSLOGは患者情報を含めず、何が起きたか、影響、次の操作�
 |---|---|
 | `MCS-UPD-APPLIED` | プログラムの更新を適用。通知への対応は不要 |
 | `MCS-UPD-AVAILABLE` | 新しいバージョンを検出。まだ適用していないため、変更点と適用前の確認を読む |
-| `MCS-UPD-ABORTED` / `MCS-UPD-ROLLBACK-FAILED` | 更新の中止、または更新前のバージョンへ戻す処理の失敗。`python3 mcs/ops/mcs_update.py status`で更新記録を確認 |
-| `MCS-UPD-RECOVERY-COMPLETED` | 復旧処理の記録が完了。収集・通知の再開は`python3 mcs/ops/mcs_setup.py check`で別途確認 |
+| `MCS-UPD-ABORTED` / `MCS-UPD-ROLLBACK-FAILED` | 更新の中止、または更新前のバージョンへ戻す処理の失敗。`"$PY" mcs/ops/mcs_update.py status`で更新記録を確認 |
+| `MCS-UPD-RECOVERY-COMPLETED` | 復旧処理の記録が完了。収集・通知の再開は`"$PY" mcs/ops/mcs_setup.py check`で別途確認 |
 | `MCS-UPD-GATEWAY-RESTART-FAILED` / `MCS-UPD-LINEWORKS-RESTART-FAILED` / `MCS-UPD-STANDALONE-RESTART-FAILED` | 常駐処理の再起動要求を確認できない。更新を繰り返さず、通知の確認手順を実行 |
 | `MCS-UPD-DELIVERY-RECONCILE-HELD` | DB復元後に送信済みか確認できない通知が残る。[配送結果の個別確認](NOTIFICATION_RECOVERY.md)へ進み、不明なまま再送しない |
 | `MCS-UPD-UNKNOWN` / `MCS-UPD-RECOVERY-UNKNOWN` | 通知から結果を確認できない。成功・未送信と推測せず、更新記録を確認 |

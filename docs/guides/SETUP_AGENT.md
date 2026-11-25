@@ -419,8 +419,8 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ingest/run_check.py --json --download-files --mark-read
-$PY mcs/views/mcs_view.py status
+"$PY" mcs/ingest/run_check.py --json --download-files --mark-read
+"$PY" mcs/views/mcs_view.py status
 ```
 
 【検証】`run_check` が exit 0 で終了し、`status` に患者・メッセージ
@@ -446,8 +446,8 @@ installer内で初期設定を完了した場合は、次の`mcs setup`を繰り
 
 ```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py check
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py check
+"$PY" -m mcs_standalone status
 ```
 
 Chromeは[両モード共通の初回準備](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従います。専用profile準備・本人ログイン・CDP稼働・MCSセッション・初回収集は別々に確認し、同節のPath A用Pythonではなく上の`$PY`を使います。収集・通知・既読化は承認した範囲でだけ確認します。
@@ -458,8 +458,8 @@ Bot token等は端末の非表示入力に委ね、チャットやargvへ含め�
 `init --yes`も、§0-1で本人が準備した指定名の環境変数を認証情報登録の入力として使います。既存の保存値を優先し、必要な値が足りなければ新しい資格情報を保存せず停止します。実行時の`run`・`send`はroot配下の私有JSONを優先し、私有`.env`を互換経路として読むだけで、環境変数からトークンを推測しません。
 
 SlackはBot/App token、DiscordはBot tokenを専用0600ファイルへ保存します。
-LINE WORKSの認証・HTTPS Callbackは[専用手順](LINEWORKS.md)に従います。
-LINE WORKSは独立host内で起動するため、同じ資格情報で別アダプターを常駐させません。
+LINE WORKSの認証は[専用手順](LINEWORKS.md)に従い、HTTPS Callbackはカード・操作を使う場合だけ設定します。
+LINE WORKSのカード・操作では独立host内でアダプターが起動するため、同じ資格情報で別アダプターを常駐させません。文章だけの通知ではアダプターの常駐は不要です。
 
 旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
 手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
