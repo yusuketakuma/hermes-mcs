@@ -1,6 +1,6 @@
 # 通知partの配送結果を確認する
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 この手順は、ローカルの運用者が、配送結果が`unknown`になった本文・添付等のpartを個別に確認するためのものです。後述のSlackグループ共有では、準備不足により実行しなかった記録がある`not_sent`も扱います。チャットの操作ツールには公開していません。カード全体の復旧は従来の`control card_resolve`を使います。
 

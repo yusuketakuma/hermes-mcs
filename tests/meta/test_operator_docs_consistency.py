@@ -9,7 +9,7 @@ RAW_MCS_PYTHON = re.compile(r"(?<![\w/.-])python3(?=\s+mcs/(?:ops|views)/)")
 
 def test_operator_guides_do_not_use_macos_system_python_for_mcs_commands():
     offenders = []
-    for path in sorted(GUIDES.glob("*.md")):
+    for path in sorted(GUIDES.rglob("*.md")):
         for number, line in enumerate(path.read_text().splitlines(), 1):
             if RAW_MCS_PYTHON.search(line):
                 offenders.append(f"{path.name}:{number}")
@@ -31,7 +31,7 @@ def test_readme_manual_sections_do_not_use_macos_system_python_for_mcs_commands(
 def test_guides_using_py_define_and_quote_the_runtime_specific_interpreter():
     missing = []
     unquoted = []
-    for path in sorted(GUIDES.glob("*.md")):
+    for path in sorted(GUIDES.rglob("*.md")):
         text = path.read_text()
         if '"$PY"' not in text:
             continue
@@ -84,7 +84,7 @@ def _anchors(path):
 def test_operator_doc_local_links_and_anchors_resolve():
     import urllib.parse
     broken = []
-    for source in [ROOT / "README.md", *sorted(GUIDES.glob("*.md"))]:
+    for source in [ROOT / "README.md", *sorted(GUIDES.rglob("*.md"))]:
         for match in re.finditer(r"\[[^\]\n]+\]\(([^)\s]+)\)", source.read_text()):
             target = match.group(1)
             if target.startswith(("http://", "https://", "mailto:")):

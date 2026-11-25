@@ -442,7 +442,7 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   カードは、旧 worker では配送されず保留される（再起動後に配送）
 - **カードを操作できる人を増やす（Discord）** — 薬局スタッフ全員に
   ロールを付け、そのロール ID を `allowed_role_ids` に入れる:
-  `mcs setup --plugin-role-ids <role id>[,<role id>]`
+  `~/.local/bin/mcs setup --plugin-role-ids <role id>[,<role id>]`
   （または `hermes -p <profile> config set
   plugins.entries.mcs-discord-commands.settings.allowed_role_ids
   '["<role id>"]'`）。guild ID（@everyone ロール）は指定できない。
@@ -630,10 +630,9 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 ## 7. トラブルシューティング
 
 まず `./install.sh --preflight`（導入前・導入途中）または
-`~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check`
+`~/.local/bin/mcs setup check`
 （導入後）を実行し、出力されたメッセージを下の表で引く。どちらも
 直し方を `対処:` 行に出すので、基本はそれを上から順に実行して再実行する。
-表中の `$PY` は `~/.hermes/hermes-agent/venv/bin/python`。
 
 ### 7-1. `install.sh --preflight` / `install.sh` のメッセージ
 
@@ -660,7 +659,7 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | Hermes 導入に失敗しました | Hermesのcheckout内での `uv pip install` の失敗（通信・コンパイラ等） | 上に出たエラーを直して同じフラグで `install.sh` を再実行する（依存導入をやり直す）。Hermes経路では `pip` への自動切替えは行わない |
 | llama-server が見つかりません | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
 | プラグインの有効化に失敗しました | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
-| `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`"$PY" mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
+| `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`~/.local/bin/mcs setup check` の blocker を直して再実行 |
 | `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
 | `<パス> が PATH にありません` | shell から `hermes` が見えない | シェルの profile で `~/.local/bin` を PATH に追加（定期ジョブは独自の PATH を使うので影響しない） |
 | `AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました` | plist 更新時にサーバが応答中だった | 処理が空いた時に表示された `launchctl bootout ...; launchctl bootstrap ...` を実行 |
@@ -671,11 +670,11 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 
 | 表示内容の要旨（詳しい説明と対処は診断結果に表示されます） | 原因・対処 |
 |---|---|
-| 設定ツールに必要な Python の版を満たしていません | 素の `python3`（3.9 系）や旧 venv で実行した — `$PY`（Python 3.14 の venv）で実行する。1.0.17 以前の venv は更新ツールで移行する（[更新手順](UPGRADE_AGENT.md)） |
+| 設定ツールに必要な Python の版を満たしていません | 素の `python3`（3.9 系）や旧 venv で実行した — 導入方式に対応する Python 3.14 の venvで実行する。1.0.17 以前の venv は更新ツールで移行する（[更新手順](UPGRADE_AGENT.md)） |
 | 実行用または復旧用 Python の SQLite が安全条件を満たしていません | 定期ジョブ（または復旧 watchdog）を実際に動かす Python のリンクする SQLite が影響版。`services`・`update` は変更前に停止し、`doctor` は `checks.runtime` / `checks.recovery_runtime` を blocked にする（`runtimes.*` は事実の表示だけ） — 修正済み SQLite（§1 の要件）をリンクした Python で venv を作り直す。復旧側は `--recovery-python` / `init --recovery-python` で安全な独立 Python を指定する |
-| 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `"$PY" mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
+| 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `~/.local/bin/mcs setup services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
 | 定期実行から Hermes を呼び出せません | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
-| 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` を確認して直す。本人所有で内容を確認できる1 MiB以下の通常ファイルまたはシンボリックリンクは、対応環境で `"$PY" mcs/ops/mcs_setup.py init --yes` により `config.json.corrupt-<日時>` へ退避できる。通常ファイルに複数のハードリンクがある場合や、親フォルダーの権限が退避に適さない場合は停止する。退避を完了できない場合は停止し、表示に従って現在の設定と退避先を確認する |
+| 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` を確認して直す。本人所有で内容を確認できる1 MiB以下の通常ファイルまたはシンボリックリンクは、対応環境で `~/.local/bin/mcs setup init --yes` により `config.json.corrupt-<日時>` へ退避できる。通常ファイルに複数のハードリンクがある場合や、親フォルダーの権限が退避に適さない場合は停止する。退避を完了できない場合は停止し、表示に従って現在の設定と退避先を確認する |
 | 必須設定（mcs_login_id、notify_target）が不足しています | `init` で再登録（両方とも必須） |
 | Keychain に MCS のパスワードが登録されていません | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
 | Keychain の登録内容を読み取れません | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
@@ -688,10 +687,10 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | 配置済みの復旧ツールが配布版と異なります（注意） | 復旧ツールが古い — `./install.sh` を再実行（旧版は `.prev` に残る） |
 | 復旧監視が別の保存先を参照しています（注意） | checkout を移動した・別 checkout から実行している — 正しい checkout で `./install.sh`（§A-7） |
 | 復旧監視の設定はありますが、起動していません | 表示の `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/org.mcs.recovery.plist` |
-| 常駐処理の設定はありますが、起動していません | MCS の agent が止まっている — `"$PY" mcs/ops/mcs_setup.py services` |
-| 常駐処理の設定がありません（注意） | `services` 未実行 — `"$PY" mcs/ops/mcs_setup.py services` |
-| 配置済みのスクリプトが配布版と異なります | 更新後に services を再実行していない — `"$PY" mcs/ops/mcs_setup.py services` |
-| 定期実行スクリプトが未配置です（注意） | `services` 未実行 — `"$PY" mcs/ops/mcs_setup.py services` |
+| 常駐処理の設定はありますが、起動していません | MCS の agent が止まっている — `~/.local/bin/mcs setup services` |
+| 常駐処理の設定がありません（注意） | `services` 未実行 — `~/.local/bin/mcs setup services` |
+| 配置済みのスクリプトが配布版と異なります | 更新後に services を再実行していない — `~/.local/bin/mcs setup services` |
+| 定期実行スクリプトが未配置です（注意） | `services` 未実行 — `~/.local/bin/mcs setup services` |
 | このセッションから macOS の常駐処理を確認できません（注意） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
 | Hermes コマンドが見つかりません | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
 | Hermes の通知接続が常駐管理されていません | `services` を実行（`hermes gateway install`+`start` で常駐化） |

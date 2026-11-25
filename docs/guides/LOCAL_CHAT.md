@@ -1,6 +1,6 @@
 # ローカル患者ワークスペース
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 患者を選び、保存済みの投稿を古い順に閲覧しながら、MCS から取得した情報（投稿・添付・スタンプ・連携サマリー・MCS の登録データなど）を患者ごとに確認する「患者ワークスペース」の画面です。
 外部チャットのアカウント・SDK・CDN・クラウド推論は不要です。macOSのローカル操作者が明示的に起動する閲覧専用機能（薬局の患者台帳を指定したときだけ台帳を編集できます）で、既存のSlack・Discord・LINE WORKS連携は残します。

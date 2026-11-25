@@ -1,6 +1,6 @@
 # 利用者ガイド — hermes-mcs
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 利用者・責任者向けの詳細ガイド（画面イメージ・できること・仕組み・MCS データで何が追えるのか）。
 README.md の概要に続き、表示・操作の条件と記録の読み方を説明する。

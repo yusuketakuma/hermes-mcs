@@ -1,6 +1,6 @@
 # Jev・Anthropic・OpenAIの設定と利用状況
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 このMCSの `.env` にAPIキーを登録すると、設定で無効化していないサービスを自動で使用します。
 キーの登録前に、対象の投稿本文・患者情報を外部サービスへ送ることと、利用料金を確認してください。

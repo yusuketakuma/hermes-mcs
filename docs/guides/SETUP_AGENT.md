@@ -114,7 +114,7 @@ MCS ログインは依存導入を妨げないため、初回収集の直前に�
 3.9 系で、Path A では `install.sh` が `python@3.14` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
 実行しない（Path A は `~/.hermes/hermes-agent/venv/bin/python`、
-Path B は `~/.mcs/venv/bin/python3`）。
+Path B は `~/.mcs/venv/bin/python3`）。`HERMES_HOME`を変更した場合は、Path Aの例を`<Hermesホーム>/hermes-agent/venv/bin/python`に読み替える。
 
 | # | チェック | コマンド | 合格条件 |
 |---|---|---|---|

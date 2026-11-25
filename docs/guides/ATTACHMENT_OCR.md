@@ -1,6 +1,6 @@
 # 添付資料の文字起こし（1.1.2向け）
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 macOSで画像・PDFの文章をローカルで取り出し、投稿本文とは別の原資料として保存します。
 診療情報提供書、訪問看護・薬剤管理・居宅療養管理・リハビリ等の報告書、

@@ -190,7 +190,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 |---|---|---|---|
 | 1 | checkout | 次の順で最初に見つかったものを使う（以下 `$REPO`）: `sed -n 1p ~/.mcs-recovery/repo_path` → `grep -o "/[^']*/mcs/ops/mcs_cli.py" ~/.local/bin/mcs`（末尾の `/mcs/ops/mcs_cli.py` を除く） → `readlink ~/.hermes/plugins/mcs-discord-commands`（末尾の `/hermes_plugin` を除く） → `git -C ~/.mcs rev-parse --show-toplevel` → `git -C ~/.local/share/hermes-mcs rev-parse --show-toplevel`（`install_local.py` の置き場所） | 候補が `git -C "$REPO" rev-parse --show-toplevel` で同じパスを返す。どれも無ければユーザーに確認する |
 | 2 | 導入形態 | `python3 -c "import json;print(json.load(open('$HOME/.mcs/config.json')).get('runtime_mode','hermes'))"` | `hermes` か `standalone` |
-| 3 | Python | hermes: `PY=~/.hermes/hermes-agent/venv/bin/python` / standalone: `PY=~/.mcs/venv/bin/python3`。`"$PY" -V` | 3.10 以上（更新ツールの入口。1.0.18 への更新で 3.14 未満の venv は 3.14 へ移行される） |
+| 3 | Python | hermes: `PY=<Hermesホーム>/hermes-agent/venv/bin/python`（既定は`~/.hermes`） / standalone: `PY=~/.mcs/venv/bin/python3`。`"$PY" -V` | 3.10 以上（更新ツールの入口。1.0.18 への更新で 3.14 未満の venv は 3.14 へ移行される） |
 
 素の `python3`（macOS の 3.9 系）で更新処理を実行しない。
 

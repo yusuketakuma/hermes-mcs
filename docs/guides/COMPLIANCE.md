@@ -1,6 +1,6 @@
 # 医療情報システムとして使うための法令・ガイドライン対応
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 この文書は、薬局・訪問看護ステーション・診療所が hermes-mcs を業務で使うときに、
 施設側で整えるべきことと、ソフトウェアが用意している機能を対応づけたものです。

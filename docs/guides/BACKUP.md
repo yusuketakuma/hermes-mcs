@@ -1,6 +1,6 @@
 # バックアップ・端末喪失・鍵回復の運用手順
 
-> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="$HOME/.hermes/hermes-agent/venv/bin/python"` を設定してから使います。macOS標準の `python3` とは区別します。
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
 この手順の対象は、[mcs_backup.py](../../mcs/ops/mcs_backup.py) の
 `keygen` / `offsite` / `verify` / `drill` / `restore` / `status` と、
