@@ -633,6 +633,8 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 `~/.local/bin/mcs setup check`
 （導入後）を実行し、出力されたメッセージを下の表で引く。どちらも
 直し方を `対処:` 行に出すので、基本はそれを上から順に実行して再実行する。
+1.0.12以前の導入で`mcs`が無い場合は、導入方式に対応するvenvのPythonで
+`mcs/ops/mcs_setup.py check`を実行し、更新後は`~/.local/bin/mcs`へ移行する。
 
 ### 7-1. `install.sh --preflight` / `install.sh` のメッセージ
 
