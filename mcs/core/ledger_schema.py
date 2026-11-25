@@ -225,6 +225,9 @@ CREATE INDEX IF NOT EXISTS idx_ntokens_expires
 CREATE TABLE IF NOT EXISTS notification_meta(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   notify_dirty INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS notify_recovery_state(
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  last_run_at REAL);
 -- Post-restore holds: a DB rewind can erase attempt/render rows that
 -- the delivery journal proves had external effects. Each row pins one
 -- held scope until an operator (ops.card_resolve) or a factual receipt

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from contextlib import suppress
 
@@ -268,18 +269,32 @@ def publish_committed(ledger, db, specs, now) -> list:
     return publish_specs(db, notify_dirs(root), specs, now)
 
 
+RECOVER_INTERVAL_S = 60   # recovery is periodic repair, not command-latency work
+
+
 def recover(ledger, cfg, result) -> dict:
     """Startup/periodic recovery for the file-published plane: republish
     queued/held renders and delivered plans with pending parts whose
     spec file is missing, repair the flags file, and surface stale
     claims for the health layer. Never consumes
-    .claimed work — a claim is not proof the worker is dead."""
+    .claimed work — a claim is not proof the worker is dead.
+    Runs at most once per RECOVER_INTERVAL_S (persisted in the ledger, so a
+    restart does not reset the cadence): the commands pass fires every few
+    seconds and the scan cost must not hold the run lock each time."""
     db = getattr(ledger, "db", ledger)
     root = data_root(ledger)
     dirs = notify_dirs(root)
     ensure_dirs(root)
     now = time.time()
     fixed = {"republished": 0, "missing_claimed": 0}
+    try:
+        last = db.execute(
+            "SELECT last_run_at FROM notify_recovery_state WHERE singleton=1").fetchone()
+    except sqlite3.Error:
+        last = None
+    if last is not None and last[0] is not None and now - last[0] < RECOVER_INTERVAL_S:
+        fixed["deferred"] = "interval"
+        return fixed
     # Read and publish outside any write transaction (stat + fsync per
     # render must not hold the ledger lock), then one short transaction
     # that updates only rows still in the state that was read.
@@ -287,8 +302,8 @@ def recover(ledger, cfg, result) -> dict:
     for r in db.execute(
             "SELECT delivery_id,spec_json,transport,state FROM notification_renders r "
             "WHERE (state IN ('queued','held') OR (state='delivered' "
-            "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))) "
+            "AND r.delivery_id IN (SELECT delivery_id FROM notification_render_parts "
+            "WHERE state='pending'))) "
             "AND NOT EXISTS (SELECT 1 FROM notification_restore_holds h "
             "WHERE h.released_at IS NULL AND (h.delivery_id=r.delivery_id "
             "OR h.card_id=r.card_id))").fetchall():
@@ -305,6 +320,9 @@ def recover(ledger, cfg, result) -> dict:
             marks.append((r, True))
     with db:
         db.execute("BEGIN IMMEDIATE")
+        db.execute("INSERT INTO notify_recovery_state(singleton,last_run_at) VALUES(1,?) "
+                   "ON CONFLICT(singleton) DO UPDATE SET last_run_at=excluded.last_run_at",
+                   (now,))
         for r, republished in marks:
             if republished:
                 n = db.execute(
