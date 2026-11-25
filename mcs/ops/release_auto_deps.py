@@ -492,7 +492,15 @@ def _measure_state(*, git, repo, store, digests, local):
         owner = auto_state.load(store)
         if not isinstance(owner, dict):
             raise OwnerError('MEASURE_MISSING')
-        values = digests()
+        # measure対象はapply済みのactive targetそのもの。profileはowner正本から。
+        active = owner.get('active')
+        target = active.get('target') if isinstance(active, dict) else None
+        if not isinstance(target, dict):
+            target = owner.get('installed')
+        profile = owner.get('profile')
+        if not isinstance(target, dict) or not isinstance(profile, dict):
+            raise OwnerError('MEASURE_MISSING')
+        values = digests(target, profile)
         if not isinstance(values, dict):
             raise OwnerError('MEASURE_MISSING')
         profile = owner.get('profile')
