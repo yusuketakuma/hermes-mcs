@@ -107,7 +107,7 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
                        for r in db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
                                               'AND (message_id=1 OR parent_id=1) ORDER BY message_id')]
         owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
-                 'semantic_generation': generation, 'semantic_source': mcs_util.payload_hash(occurrences)}
+                 'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
         evidence = {'version': 1, 'project_id': 1, 'message_id': 1, 'fact_kind': fact_kind,
                     'facts_id': fact_id, 'assessment_id': assessment_id, 'original_summary_id': summary_id,
                     'audit_id': audit_id, 'repair_id': repair_id,
