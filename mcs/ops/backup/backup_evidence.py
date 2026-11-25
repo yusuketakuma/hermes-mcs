@@ -687,14 +687,21 @@ def inventory_matches(path: Path, expected: Inventory, *, max_steps: int | None 
 
 
 
+def _valid_static(path) -> bool:
+    """Validate a daily snapshot, decompressing compressed copies to a staging file."""
+    import local_backup  # late: core module, no cycle at import time
+    with local_backup.materialize_backup(str(path)) as real:
+        return valid_mcs_db(real)
+
+
 def latest_snapshot(directory: str) -> str:
     root = Path(directory)
     require_private_directory(root)
     for path in sorted(root.iterdir(), reverse=True):
-        if (re.fullmatch(r"ledger-[0-9]{8}\.db", path.name)
+        if (re.fullmatch(r"ledger-[0-9]{8}\.db(\.gz)?", path.name)
                 and not path.is_symlink()
                 and not has_sqlite_sidecars(path)
-                and valid_mcs_db(str(path))):
+                and _valid_static(path)):
             return str(path)
     raise BackupError("backup_no_valid_daily_snapshot")
 
