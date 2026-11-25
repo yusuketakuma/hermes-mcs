@@ -1070,7 +1070,9 @@ def _validate_bootstrap(config):
 def _bootstrap_common_valid(common):
     from mcs_config import CONFIG_RULES
 
-    allowed = {"runtime_mode", "recovery_python", "install_args"}
+    # The installer owns the first local-model choice as part of the fresh
+    # machine bootstrap; other known settings still mean the machine is not fresh.
+    allowed = {"runtime_mode", "recovery_python", "install_args", "local_llm"}
     known = set(CONFIG_RULES) | _INDEPENDENT_ROOTS
     return (isinstance(common, dict) and all(isinstance(key, str) for key in common)
             and not common.keys() & (known - allowed))
