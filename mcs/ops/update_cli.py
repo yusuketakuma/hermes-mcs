@@ -322,8 +322,12 @@ def cmd_auto_disable(_args) -> int:
 
 
 def _v3_consent_wire():
-    """v3 consent経路のwire。transport/credential/pinsの本番配線はW14待ち。"""
-    return None
+    """v3 consent経路のwire factory。実装はrelease_auto_wire_factory。
+
+    enrollment未完了・pin未配置・credential不整合ではNone(fail-closed)。
+    """
+    import release_auto_wire_factory
+    return release_auto_wire_factory.build_wire(HOME)
 
 
 _CONSENT_TERM_KEYS = ('scope', 'profile', 'allowed_class', 'timezone', 'windows',

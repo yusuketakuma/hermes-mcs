@@ -45,13 +45,14 @@ WIRED = {
     'release_auto_local', 'release_auto_locks', 'release_auto_offer',
     'release_auto_owner', 'release_auto_revoke', 'release_auto_services',
     'release_auto_stage', 'release_auto_state', 'release_auto_status',
-    'release_auto_transport', 'release_auto_wire', 'release_auto_witness',
+    'release_auto_transport', 'release_auto_trust', 'release_auto_wire',
+    'release_auto_wire_factory', 'release_auto_witness',
     'release_quarantine', 'release_runtime_proof', 'runtime_entry',
 }
 
 WAITING = {
     'release_auto_bridge', 'release_auto_migration', 'release_auto_recovery',
-    'release_auto_trust', 'release_publish_api',
+    'release_publish_api',
 }
 
 # Entry -> v3 modules it imports today; any edit of these references is
@@ -63,7 +64,8 @@ ENTRY_IMPORTS = {
     'mcs/ops/mcs_setup.py': {'release_auto_status', 'runtime_entry'},
     'mcs/ops/update_cli.py': {'release_auto_consent', 'release_auto_contract',
                               'release_auto_driver', 'release_auto_state',
-                              'release_auto_status', 'runtime_entry'},
+                              'release_auto_status', 'release_auto_wire_factory',
+                              'runtime_entry'},
     'mcs_standalone/__main__.py': {'runtime_entry'},
     'mcs_standalone/runtime.py': {'runtime_entry'},
 }
