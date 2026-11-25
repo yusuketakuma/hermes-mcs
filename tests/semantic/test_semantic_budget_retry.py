@@ -107,7 +107,7 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
                        for r in db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
                                               'AND (message_id=1 OR parent_id=1) ORDER BY message_id')]
         owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
-                 'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
+                 'semantic_generation': generation, 'semantic_source': mcs_util.payload_hash(occurrences)}
         evidence = {'version': 1, 'project_id': 1, 'message_id': 1, 'fact_kind': fact_kind,
                     'facts_id': fact_id, 'assessment_id': assessment_id, 'original_summary_id': summary_id,
                     'audit_id': audit_id, 'repair_id': repair_id,
@@ -491,6 +491,8 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
     db.save_patient(patient, notify={'source': 'unread'}, semantic=True)
     state = {'audits': 0, 'repairs': 0, 'requests': [], 'receipt': None}
     contract = {'backend': 'openai', 'model': 'synthetic-sol', 'prompt': 'synthetic-contract'}
+    cfg = _canonical_cfg()
+    generation = semantic_runtime.execution_generation(semantic_policy.runtime_config(cfg)[0])
 
     def llm(prompt, **_kwargs):
         value = _llm_v2(prompt)
@@ -499,13 +501,16 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
             if long_answer:
                 value += ' ' * bounded_http.MAX_RESPONSE_BYTES
             rid = 'a' * 32
-            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
-                                         meta={'reservation_id': rid})
             mids = db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
                                  'AND (message_id=1 OR parent_id=1) ORDER BY message_id').fetchall()
             occurrences = [(row[0], inference_dependency_loss.source_binding(db.db, 1, row[0])) for row in mids]
             owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
-                     'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
+                     'semantic_generation': generation, 'semantic_source': mcs_util.payload_hash(occurrences)}
+            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                         meta={'reservation_id': rid, 'route': 'semantic_backlog',
+                                               'owner': owner})
+            db.artifact_add('cloud_usage_result', '{}', project_id=1, message_id=1,
+                            meta={'reservation_id': rid})
             state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
                          receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
                                   'max_tokens': 32768})
@@ -540,7 +545,6 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
     monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: state['receipt'])
     monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: (
         contract if semantic_transport._inference_purpose.get() == 'quality_repair' else None))
-    cfg = _canonical_cfg()
     client = _PassJev()
     try:
         diagnostics = {'errors': []}

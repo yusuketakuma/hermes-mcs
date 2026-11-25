@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "保存前確認でsemantic本体が無効なら外部Jev追加解析も無効と表示",
+  "summary": "semantic.modeがoffの設定では、summary/loopの既定値がassistでも外部Jev追加解析が有効であるかのような保存前確認にならなくなりました。",
+  "upgrade": "追加操作は不要です。保存前確認の表示が実際の有効条件へ合わせられます。",
+  "details": [
+    "外部Jev追加解析の有効表示にsemantic.modeがoffでない条件を追加しました。"
+  ],
+  "refs": ["mcs/ops/setup/setup_wizard.py", "tests/semantic/test_semantic_budget_retry.py"]
+}
