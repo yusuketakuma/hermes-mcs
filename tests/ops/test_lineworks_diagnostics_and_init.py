@@ -172,11 +172,11 @@ def test_standalone_init_runs_the_lineworks_adapter_initializer(monkeypatch, yes
     assert mcs_setup._init_standalone_connectors(cfg, SimpleNamespace(yes=yes), True) is False
 
 
-def test_wizard_lineworks_scope_follows_transport_enabled():
+def test_wizard_lineworks_scope_follows_text_targets_in_both_runtimes():
     text_only = {"runtime_mode": "standalone", "notify_target": "lineworks:room-synthetic",
                  "notify": {"interactive": "slack"}}
     assert setup_wizard._lineworks_on(text_only) is True
-    assert setup_wizard._lineworks_on({**text_only, "runtime_mode": "hermes"}) is False
+    assert setup_wizard._lineworks_on({**text_only, "runtime_mode": "hermes"}) is True
     assert setup_wizard._lineworks_on(config()) is True
 
 
