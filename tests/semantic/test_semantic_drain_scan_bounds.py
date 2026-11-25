@@ -166,6 +166,9 @@ def test_invalidation_precheck_uses_the_kind_index(tmp_path):
     db = _seeded(tmp_path)
     seen = []
     try:
+        db.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                        meta={"fingerprint": "synthetic", "policy_fingerprint": "p",
+                              "invalidated": True, "invalidated_reason": "fact_source"})
         db.db.set_trace_callback(seen.append)
         semantic_publication.invalidate_projections(
             db.db, semantic_config(_canonical_cfg())[0])
