@@ -1530,9 +1530,11 @@ def _main() -> int:
                 refusal.update(writer_reason=diagnostic["writer_reason"],
                                writer_stage=diagnostic["writer_stage"])
             refusal.update(_not_started(args, lock_started))
+            writer_lock.record_run_lock_refusal(os.path.join(HOME, "data"))
             print(json.dumps(refusal))
             return 3
 
+    writer_lock.clear_run_lock_refusals(os.path.join(HOME, "data"))
     try:
         code_current = _entry_code_current()
         consent_only = False

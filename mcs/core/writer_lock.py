@@ -317,3 +317,64 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
             return fd
     record_writer_refusal("run_lock_not_acquired", "write_lock")
     return None
+
+
+RUN_LOCK_REFUSALS_NAME = "run_lock_refusals.json"
+# a gap longer than this breaks the starvation chain (the fleet either
+# recovered or stopped trying — either way it is a new episode)
+_REFUSAL_CHAIN_GAP_S = 1800
+
+
+def record_run_lock_refusal(data_dir: str, *, now: float | None = None) -> None:
+    """Persist one collection-path run-lock refusal so a starvation chain
+    is visible to health_watch — the 2026-11-25 wedge pinned the flock for
+    40+ minutes while every tick died before evidence arm, leaving nothing
+    but its exit code. Best effort: a filesystem error must never turn a
+    lock refusal into a crash."""
+    import json
+    now = time.time() if now is None else now
+    path = os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME)
+    first, consecutive = now, 1
+    try:
+        with open(path, encoding="utf-8") as f:
+            prior = json.load(f)
+        if (isinstance(prior, dict)
+                and isinstance(prior.get("last_at"), (int, float))
+                and isinstance(prior.get("first_at"), (int, float))
+                and type(prior.get("consecutive")) is int
+                and 0 <= now - prior["last_at"] <= _REFUSAL_CHAIN_GAP_S):
+            first = prior["first_at"]
+            consecutive = prior["consecutive"] + 1
+    except (OSError, ValueError, RecursionError):
+        pass
+    state = {"first_at": first, "last_at": now, "consecutive": consecutive}
+    try:
+        from safe_io import atomic_write
+        atomic_write(path, lambda f: f.write(json.dumps(state)), mode=0o600)
+    except OSError:
+        pass
+
+
+def clear_run_lock_refusals(data_dir: str) -> None:
+    """A successful acquisition ends the starvation chain. Best effort."""
+    from contextlib import suppress
+    with suppress(OSError):
+        os.unlink(os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME))
+
+
+def read_run_lock_refusals(data_dir: str) -> dict | None:
+    """The starvation chain state, or None when absent/corrupt — readers
+    treat unparseable evidence as no evidence rather than alerting on it."""
+    import json
+    try:
+        with open(os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME),
+                  encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (isinstance(state, dict)
+            and isinstance(state.get("first_at"), (int, float))
+            and isinstance(state.get("last_at"), (int, float))
+            and type(state.get("consecutive")) is int):
+        return state
+    return None

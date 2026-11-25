@@ -1,0 +1,17 @@
+{
+ "category": "improved",
+ "title": "収集がロック不足で止まっているとき健康レポートが原因を示すようになりました",
+ "summary": "2026-11-25 に、停滞した抽出ワーカーが実行ロックを40分以上握り続け、その間すべての収集が開始できずに失敗していました。収集は証拠を残す前に終了するため、健康レポートには原因不明の停滞だけが見えていました。今回から、収集がロックを取得できずに終了するたびに連鎖記録を残し、連続して長時間続いた場合は健康レポートと通知の理由に run_lock_starved として明示されます。収集がロックを取得できれば連鎖記録は消えます。収集の間隔やロックの待ち時間、通知の条件は変わりません。",
+ "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。",
+ "details": [
+  "writer_lock に run_lock_refusals.json の記録・消去・読取を追加。収集（run_check）がロック待ちに失敗すると1件記録し、取得成功で消去する。30分を超える間隔が空くと連鎖は新しい事象として数え直す。",
+  "health_watch は、連鎖が2件以上・15分以上の幅・直近15分以内の拒否を含む場合に report.run_lock_starved（回数・幅・最終拒否からの経過）を載せ、state_reasons に run_lock_starved を追加する。stale 判定時は従来どおり記録上の理由のみ残る。",
+  "単発の拒否や古い連鎖では表示しない。抽出ワーカーの単一writeロックは対象外で、収集経路の拒否だけを数える。"
+ ],
+ "refs": [
+  "mcs/core/writer_lock.py",
+  "mcs/ingest/run_check.py",
+  "mcs/ingest/health_watch.py",
+  "tests/ingest/test_run_lock_starvation.py"
+ ]
+}
