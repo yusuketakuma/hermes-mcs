@@ -67,3 +67,28 @@ def test_oversize_rejected(tmp_path):
 
 def test_pins_path_joins_control_root(tmp_path):
     assert trust.pins_path(tmp_path) == os.path.join(os.fspath(tmp_path), 'auto-v3-pins.json')
+
+
+def test_malformed_pin_fields_rejected(tmp_path):
+    for bad in [
+        {**PIN, 'purposes': None},
+        {**PIN, 'spki': ['a2V5']},
+        {**PIN, 'not_before': True},
+        {**PIN, 'expires_at': 0},
+    ]:
+        path = tmp_path / 'auto-v3-pins.json'
+        _write(path, {'schema_version': trust.SCHEMA_VERSION, 'pins': [bad]})
+        import pytest as _pytest
+        with _pytest.raises(trust.TrustError):
+            trust.load_v3_pins(path)
+
+
+def test_symlinked_parent_rejected(tmp_path):
+    real = tmp_path / 'real'
+    real.mkdir()
+    _write(real / 'auto-v3-pins.json', {'schema_version': trust.SCHEMA_VERSION, 'pins': [PIN]})
+    link = tmp_path / 'linkdir'
+    os.symlink(real, link)
+    import pytest as _pytest
+    with _pytest.raises(trust.TrustError):
+        trust.load_v3_pins(link / 'auto-v3-pins.json')

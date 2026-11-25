@@ -1,4 +1,4 @@
-"""v3 pinの配布file loader。pinはlocal fileで配布し、networkから取得・更新しない。
+"""v3 pin配布fileのfail-closed loader。
 
 spec ENC04のv3 pinは「HTTP応答からの自己登録」を禁止する信任境界の根拠。
 本moduleは管理者または署名済みrelease closureが配置した
@@ -46,15 +46,25 @@ def load_v3_pins(path):
       検証側(validate_auto_v3_pins)へ残す
     """
     path = os.fspath(path)
+    import stat as stat_mod
     try:
+        parent = os.lstat(os.path.dirname(path) or os.sep)
+        if stat_mod.S_ISLNK(parent.st_mode):
+            raise TrustError('TRUST_INVALID')
         stat = os.stat(path, follow_symlinks=False)
+    except TrustError:
+        raise
     except OSError as e:
         raise TrustError('TRUST_UNAVAILABLE') from e
-    import stat as stat_mod
     if not stat_mod.S_ISREG(stat.st_mode) or stat.st_size > MAX_BYTES:
         raise TrustError('TRUST_INVALID')
     try:
-        with open(path, 'rb') as fh:
+        # O_NOFOLLOWで開きfile自身のsymlink置換を拒否する。
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except (OSError, AttributeError) as e:
+        raise TrustError('TRUST_INVALID') from e
+    try:
+        with os.fdopen(fd, 'rb') as fh:
             raw = fh.read(MAX_BYTES + 1)
     except OSError as e:
         raise TrustError('TRUST_UNAVAILABLE') from e
@@ -76,6 +86,15 @@ def load_v3_pins(path):
                 or pin['kid'] in kids):
             raise TrustError('TRUST_INVALID')
         kids.add(pin['kid'])
+        uses = pin['purposes']
+        if (type(uses) is not list or not uses
+                or any(type(use) is not str or not use.startswith('mcs-') for use in uses)
+                or len(set(uses)) != len(uses)
+                or type(pin['spki']) is not str or not pin['spki']
+                or type(pin['not_before']) is not int or type(pin['not_before']) is bool
+                or type(pin['expires_at']) is not int or type(pin['expires_at']) is bool
+                or not 0 <= pin['not_before'] < pin['expires_at'] <= 2**53 - 1):
+            raise TrustError('TRUST_INVALID')
     # canonical再符号化で浮動小数点・非canonical表現の混入を排除する
     try:
         canonical(value['pins'], max_bytes=MAX_BYTES)
