@@ -3,6 +3,13 @@
   "title": "v3 consent wireをcredential storeとpin fileへ接続",
   "summary": "v3自動更新のconsent確認経路が、enrollment済みの端末credentialとpin配布fileから署名wireを組み立てられるようになりました。enrollment未完了・pin未配置では従来どおりfail-closedで利用できません。",
   "upgrade": "追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。",
-  "details": ["credentialは使用毎にconnector storeから解決し、pinはnetworkから取得しない。", "release_metadataのattestation trustは未配線のまま。"],
-  "refs": ["mcs/ops/update_cli.py", "mcs/ops/release_auto_trust.py"]
+  "details": [
+    "credentialは使用毎にconnector storeから解決し、pinはnetworkから取得しない。",
+    "release_metadataのattestation trustは未配線のまま。",
+    "confirm応答の保存はcompare-and-swapで行い、送信中のauto-disable撤回をconfirmで上書きしない。pin fileの不備はwire構築時にfail-closedする。"
+  ],
+  "refs": [
+    "mcs/ops/update_cli.py",
+    "mcs/ops/release_auto_trust.py"
+  ]
 }

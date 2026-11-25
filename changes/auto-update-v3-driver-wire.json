@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "v3 owner tick driverへwire接続を追加",
+  "summary": "v3自動更新の定期tickが、enrollment済みcredentialとpin配置のある端末で署名wire経由のcentral通信を使えるようになりました。未enrollment・pin未配置では従来どおりfail-closedで先へ進みません。",
+  "upgrade": "追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。",
+  "details": ["wire factoryをrelease_auto_wire_factoryへ集約し、consent CLIとowner tick driverが共有する。", "wire構築の失敗はtickを停止させずunavailable wireとしてfail-closedする。"],
+  "refs": ["mcs/ops/release_auto_wire_factory.py", "mcs/ops/release_auto_driver.py", "mcs/ops/update_cli.py"]
+}

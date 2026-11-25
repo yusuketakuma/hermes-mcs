@@ -28,9 +28,11 @@ def _pins(control):
 
 
 def _patch(monkeypatch, sdc_root, control):
+    import release_auto_wire_factory
     monkeypatch.setattr(update_cli.mcs_util, 'load_config',
                         lambda: {'sdc': {'state_root': str(sdc_root)}})
-    monkeypatch.setattr(update_cli, '_v3_state_root', lambda: str(control))
+    monkeypatch.setattr(release_auto_wire_factory, 'control_root_path',
+                        lambda home: str(control))
 
 
 def test_factory_builds_wire_when_enrolled_and_pinned(tmp_path, monkeypatch):
@@ -71,5 +73,18 @@ def test_factory_fail_closed_when_not_active(tmp_path, monkeypatch):
     with Store(sdc_root) as store:
         store.write('state.json', {'state': 'revoked', 'device_id': DEVICE, 'key_id': DEVICE})
     _pins(control)
+    _patch(monkeypatch, sdc_root, control)
+    assert update_cli._v3_consent_wire() is None
+
+
+def test_factory_fail_closed_with_malformed_pins(tmp_path, monkeypatch):
+    sdc_root, control = tmp_path / 'sdc', tmp_path / 'control'
+    _enrolled(sdc_root)
+    control.mkdir(parents=True)
+    bad = dict(PIN)
+    bad['purposes'] = None
+    (control / 'auto-v3-pins.json').write_text(
+        json.dumps({'schema_version': trust.SCHEMA_VERSION, 'pins': [bad]},
+                   separators=(',', ':'), sort_keys=True))
     _patch(monkeypatch, sdc_root, control)
     assert update_cli._v3_consent_wire() is None

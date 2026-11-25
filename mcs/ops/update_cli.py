@@ -322,50 +322,12 @@ def cmd_auto_disable(_args) -> int:
 
 
 def _v3_consent_wire():
-    """v3 consent経路のwire factory。
+    """v3 consent経路のwire factory。実装はrelease_auto_wire_factory。
 
-    署名credentialは既存SDC connector store(state_root)から使用毎に解決し、
-    v3 pinはrelease control rootのauto-v3-pins.jsonだけから読む。
-    networkからpinやcredentialを取得・更新しない。enrollment未完了・
-    pin未配置・credential不整合ではNone(fail-closed)を返す。
-    release_metadataのattestation trustは未配線のまま(consent経路では不使用)。
+    enrollment未完了・pin未配置・credential不整合ではNone(fail-closed)。
     """
-    try:
-        cfg = mcs_util.load_config()
-        sdc = cfg.get('sdc') if isinstance(cfg, dict) else None
-        state_root = sdc.get('state_root') if isinstance(sdc, dict) else None
-        control = _v3_state_root()
-        if type(state_root) is not str or not state_root or control is None \
-                or not os.path.isdir(state_root):
-            return None
-        import release_auto_trust
-        pins_file = release_auto_trust.pins_path(control)
-        if not os.path.isfile(pins_file):
-            return None
-        from adapters.sdc.connector import Connector
-        from adapters.sdc.release_auto_transport import ReleaseAutoTransport
-        from adapters.sdc.storage import Store
-        from release_auto_wire import Wire
-
-        def credential():
-            with Store(state_root) as store:
-                config = store.read('endpoint.json')
-                state = store.read('state.json')
-                cred = store.read('credential')
-                if type(state) is not dict or state.get('state') != 'active':
-                    raise ValueError('SDC_CREDENTIAL_REQUIRED')
-                key = Connector(store, None).secret(state, cred)
-                return config, state, key
-
-        def pins():
-            return release_auto_trust.load_v3_pins(pins_file)
-
-        config, _state, _key = credential()
-        transport = ReleaseAutoTransport(dict(config))
-        return Wire(transport=transport, credential=credential, pins=pins,
-                    now_ms=lambda: int(time.time() * 1000))
-    except Exception:
-        return None
+    import release_auto_wire_factory
+    return release_auto_wire_factory.build_wire(HOME)
 
 
 _CONSENT_TERM_KEYS = ('scope', 'profile', 'allowed_class', 'timezone', 'windows',
