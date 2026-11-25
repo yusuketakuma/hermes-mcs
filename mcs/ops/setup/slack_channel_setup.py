@@ -425,6 +425,16 @@ def _standalone_flags_pending(state):
             and surfaces_card(state) and state.get('flags_ready') is not True)
 
 
+def _flags_migration_pending(cfg, state):
+    return _standalone_flags_pending(state) and _applied_channels_match(cfg, state)
+
+
+def _config_publication_noop(previous, saved, state):
+    return (saved == previous
+            and (creation_unneeded(previous, state)
+                 or _flags_migration_pending(previous, state)))
+
+
 def creation_unneeded(cfg, state):
     """Identify a creation-only no-op without approving current routes or grants."""
     return _configured_channels(cfg) and (state is None or _post_complete(state))
@@ -488,7 +498,7 @@ def prepare(root, cfg, *, users=None):
     existing = read(root)
     if not required(cfg) or creation_unneeded(cfg, existing):
         return None
-    if _standalone_flags_pending(existing) and _applied_channels_match(cfg, existing):
+    if _flags_migration_pending(cfg, existing):
         return None
     desired = plan(cfg, users=users)
     if desired is None:
@@ -498,7 +508,7 @@ def prepare(root, cfg, *, users=None):
         state = read(root)
         if creation_unneeded(cfg, state):
             return None
-        if _standalone_flags_pending(state) and _applied_channels_match(cfg, state):
+        if _flags_migration_pending(cfg, state):
             return None
         key = _hash(desired)
         if state:
@@ -682,11 +692,11 @@ def stage_config(root, previous, saved):
     """Seal the exact verified config before its owner's config CAS."""
     if not required(previous):
         return
-    if creation_unneeded(previous, read(root)) and saved == previous:
+    if _config_publication_noop(previous, saved, read(root)):
         return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
-        if creation_unneeded(previous, state) and saved == previous:
+        if _config_publication_noop(previous, saved, state):
             return
         if state is None or candidate(root, previous) != saved:
             raise ValueError('slack_setup_saved_config_mismatch')
@@ -698,11 +708,11 @@ def stage_config(root, previous, saved):
 
 def applied(root, previous, saved):
     """Record successful CAS only when its result matches the verified receipt exactly."""
-    if creation_unneeded(previous, read(root)) and saved == previous:
+    if _config_publication_noop(previous, saved, read(root)):
         return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
-        if creation_unneeded(previous, state) and saved == previous:
+        if _config_publication_noop(previous, saved, state):
             return
         if state is None:
             return

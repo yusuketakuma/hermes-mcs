@@ -1016,6 +1016,8 @@ def test_card_standalone_flags_migration_allows_unrelated_config_drift(tmp_path,
     monkeypatch.setattr(standalone, 'setup_channels',
                         lambda *a: pytest.fail('a converged channel setup must not call Slack'))
     assert setup.run_setup(tmp_path, saved, args) is saved
+    setup.stage_config(tmp_path, saved, saved)
+    setup.applied(tmp_path, saved, saved)
 
     monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
     flags = []
