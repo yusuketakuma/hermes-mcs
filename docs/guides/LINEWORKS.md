@@ -43,10 +43,10 @@ Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-2で本�
 4. 配信先トークルームに Bot を招待し、メニューからチャンネル ID を
    確認します。許可するユーザー ID、ドメイン ID、対象 MCS
    プロジェクト ID を確認します。
-5. 正規 CA の証明書を持つ公開 HTTPS の Callback URL を設定し、
+5. カード・操作を使う場合は、正規 CA の証明書を持つ公開 HTTPS の Callback URL を設定し、
    message と postback イベントを有効にします。公開 URL は
    reverse proxy からローカルの `127.0.0.1:8788/lineworks/callback`
-   へ転送します。自己署名証明書は使えません。
+   へ転送します。自己署名証明書は使えません。文章だけの通知では Callback URL は不要です。
 
 Bot 登録は Console と管理者画面の二段階です。外部 LINE/LINE WORKS
 ユーザーを含むトークルームでは Bot を使用できず、500 名以上では
