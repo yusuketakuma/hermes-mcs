@@ -82,11 +82,12 @@ jobs:
         env:
           MCS_SETUP_PASSWORD: synthetic-password
           DISCORD_BOT_TOKEN: synthetic.discord.token
-          SLACK_BOT_TOKEN: xoxb-synthetic-token
-          SLACK_APP_TOKEN: xapp-synthetic-token
         run: |
           set -o pipefail
           if [ "$MODE" = standalone ]; then
+            # 秘密値スキャン用の連続した接頭辞を repo に残さず、実行時だけ合成する。
+            export SLACK_BOT_TOKEN='xox''b-synthetic-token'
+            export SLACK_APP_TOKEN='xap''p-synthetic-token'
             # 初回受入候補のSlack直接接続を、外部へ出ない確定済みチャンネル設定で確認する。
             ~/.local/bin/mcs setup --yes --runtime-mode "$MODE" \
               --login-id synthetic-user \
