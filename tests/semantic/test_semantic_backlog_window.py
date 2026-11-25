@@ -11,7 +11,8 @@ import semantic_drain
 import semantic_due_selection
 import semantic_runtime
 import semantic_transport
-from semantic_cloud_testkit import cloud as cloud, direct, rows
+from semantic_cloud_testkit import cloud as cloud, continuous_snapshot, direct, rows
+from semantic_testkit import _message
 
 
 def _open_window(cfg):
@@ -174,6 +175,21 @@ def test_summary_stage_keeps_recent_targets_out_of_cloud(cloud, monkeypatch):
     with ledger.db:
         ledger.db.execute("UPDATE messages SET first_seen=? WHERE message_id=?",
                           (time.time(), job["message_id"]))
+
+    with semantic_transport.inference_targets("synthetic-window-generation"):
+        with semantic_transport.backlog_inference(
+                ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
+                local_fallback=lambda prompt, **kwargs: '{"facts": []}') as chat:
+            assert chat is None
+    assert calls == [] and not rows(ledger, "cloud_usage_reserve")
+
+
+def test_summary_stage_keeps_thread_with_recent_reply_out_of_cloud(cloud, monkeypatch):
+    ledger, cfg, job, calls = cloud
+    _open_window(cfg)
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    ledger.save_messages([_message(mid=2, parent=job["message_id"], body="recent synthetic reply")])
+    continuous_snapshot(ledger)
 
     with semantic_transport.inference_targets("synthetic-window-generation"):
         with semantic_transport.backlog_inference(

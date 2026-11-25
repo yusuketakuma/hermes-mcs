@@ -93,6 +93,7 @@ from cloud_history_scope import (
     _history_document as _history_document,
     _history_scope as _history_scope,
     history_target_ready as history_target_ready,
+    history_thread_ready as history_thread_ready,
     history_thread_allowed as history_thread_allowed,
     _history_thread_allowed as _history_thread_allowed,
     history_thread_snapshot as history_thread_snapshot,
