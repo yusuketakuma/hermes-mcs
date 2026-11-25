@@ -436,6 +436,13 @@ def _initialize(db, *, schema_version: int) -> bool:
               AND (body_state IS NULL OR body_state NOT IN ('full','deleted'));
           CREATE INDEX IF NOT EXISTS idx_nrenders_state_updated
             ON notification_renders(state, updated_at);
+          CREATE INDEX IF NOT EXISTS idx_nrenders_spec_json_gc
+            ON notification_renders(updated_at, delivery_id)
+            WHERE spec_json IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_nrenders_spec_file_gc
+            ON notification_renders(updated_at, delivery_id)
+            WHERE state IN ('delivered','not_sent','cancelled')
+              AND spec_published=1 AND parts_state!='pending';
           CREATE INDEX IF NOT EXISTS idx_nparts_pending
             ON notification_render_parts(delivery_id) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_nparts_state_delivery
