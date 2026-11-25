@@ -99,6 +99,38 @@ def test_existing_qwen_model_is_kept_on_high_memory_mac(tmp_path):
     assert "Qwen3.5-9B-Q4_K_M.gguf" in plist.read_text()
 
 
+def test_active_plist_model_wins_over_larger_cached_model(tmp_path):
+    """A rerun must keep the model the launch agent actually loads: a larger
+    GGUF that merely sits in the models directory is not a switch."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in plist.read_text()
+    bigger = hermes_home / "models" / "Qwen3.8-27B-UD-Q4_K_M.gguf"
+    bigger.write_bytes(b"stub-model-bytes\n")
+    env = {**env, "STUB_MEMSIZE": str(128 * 1024**3), "STUB_CPU_BRAND": "Apple M4 Max"}
+    r2 = _run(env, hermes_home)
+    assert r2.returncode == 0, r2.stderr
+    text = plist.read_text()
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in text
+    assert "Qwen3.8-27B-UD-Q4_K_M.gguf" not in text
+
+
+def test_larger_cached_model_is_used_without_an_active_agent(tmp_path):
+    """Without a launch agent the largest complete cached set is still kept,
+    so a manually prepared model is not downloaded again."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    models = hermes_home / "models"
+    models.mkdir(parents=True)
+    for name in ("Qwen3.5-9B-Q4_K_M.gguf", "Qwen3.8-27B-UD-Q4_K_M.gguf"):
+        (models / name).write_bytes(b"stub-model-bytes\n")
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert "Qwen3.8-27B-UD-Q4_K_M.gguf" in plist.read_text()
+
+
 def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
     """F9/F13: a changed plist is applied when the agent is loaded but
     not serving; a serving one is kept with an exact reload hint."""

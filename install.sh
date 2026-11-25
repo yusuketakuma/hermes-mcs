@@ -172,7 +172,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="0ebe298e80ad341b82efca91c528e37a2c195412b59fd97eaff62bfdd2c4e54c"
+INSTALL_RUNTIME_SHA256="a555a3518b90576c8dfadf02e1174d96424eb05900498f8b5dd5a786c3ff0111"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -604,28 +604,58 @@ MODEL_DIR="$RUNTIME_HOME/models"
 # Hugging Face revision and LFS sha256: a floating main could swap the
 # bytes that read PHI bodies. MODEL_SPECS lines are
 # filename|pinned-url|sha256|bytes; split GGUFs keep one line per shard.
-select_model_profile() {
-    _smp_request="$(printf '%s' "${MCS_LOCAL_MODEL:-auto}" | tr '[:upper:]' '[:lower:]')"
-    if [ "$_smp_request" = auto ]; then
-        # An install already carrying a supported Qwen GGUF keeps it. The
-        # hardware ladder below only chooses the first model for a machine.
-        if [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf" ] \
+# Echo the profile key when every file of the set named by its first
+# file exists; nothing otherwise. Split models count only when all shards are present.
+complete_model_set_for() {
+    case "$1" in
+        Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf)
+            [ -f "$MODEL_DIR/$1" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00002-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00003-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00004-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00005-of-00006.gguf" ] \
-                && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00006-of-00006.gguf" ]; then
-            _smp_request=qwen3.5-397b-a17b
-        elif [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf" ] \
+                && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00006-of-00006.gguf" ] \
+                && printf '%s\n' qwen3.5-397b-a17b ;;
+        Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf)
+            [ -f "$MODEL_DIR/$1" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00002-of-00003.gguf" ] \
-                && [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf" ]; then
-            _smp_request=qwen3.5-122b-a10b
-        elif [ -f "$MODEL_DIR/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf" ]; then
-            _smp_request=qwen3.6-35b-a3b
-        elif [ -f "$MODEL_DIR/Qwen3.8-27B-UD-Q4_K_M.gguf" ]; then
-            _smp_request=qwen3.8-27b
-        elif [ -f "$MODEL_DIR/Qwen3.5-9B-Q4_K_M.gguf" ]; then
-            _smp_request=qwen3.5-9b
+                && [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf" ] \
+                && printf '%s\n' qwen3.5-122b-a10b ;;
+        Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
+            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.6-35b-a3b ;;
+        Qwen3.8-27B-UD-Q4_K_M.gguf)
+            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.8-27b ;;
+        Qwen3.5-9B-Q4_K_M.gguf)
+            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.5-9b ;;
+    esac
+    # Output is the answer, not the status: a missing set must not stop set -e.
+    return 0
+}
+select_model_profile() {
+    _smp_request="$(printf '%s' "${MCS_LOCAL_MODEL:-auto}" | tr '[:upper:]' '[:lower:]')"
+    if [ "$_smp_request" = auto ]; then
+        # An install already carrying a supported Qwen GGUF keeps it. The model
+        # the existing launch agent actually loads wins over a larger cached
+        # file set; without an active agent the largest complete set is kept.
+        # The hardware ladder below only chooses the first model for a machine.
+        _smp_pick=""
+        _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1)"
+        if [ -n "$_smp_active" ]; then
+            _smp_pick="$(complete_model_set_for "${_smp_active##*/}")"
+        fi
+        if [ -z "$_smp_pick" ]; then
+            for _smp_first in \
+                    Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf \
+                    Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf \
+                    Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+                    Qwen3.8-27B-UD-Q4_K_M.gguf \
+                    Qwen3.5-9B-Q4_K_M.gguf; do
+                _smp_pick="$(complete_model_set_for "$_smp_first")"
+                [ -n "$_smp_pick" ] && break
+            done
+        fi
+        if [ -n "$_smp_pick" ]; then
+            _smp_request="$_smp_pick"
         fi
     fi
     if [ "$_smp_request" = auto ]; then
@@ -655,25 +685,21 @@ select_model_profile() {
         qwen3.5-9b|9b)
             MODEL_NAME="Qwen3.5-9B"
             MODEL_SIZE_TEXT="約 5.7 GB"
-            MODEL_TOTAL_BYTES=5680522464
             MODEL_SPECS='Qwen3.5-9B-Q4_K_M.gguf|https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf|03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8|5680522464'
             ;;
         qwen3.8-27b|27b)
             MODEL_NAME="Qwen3.8-27B"
             MODEL_SIZE_TEXT="約 16.6 GB"
-            MODEL_TOTAL_BYTES=16564259744
             MODEL_SPECS='Qwen3.8-27B-UD-Q4_K_M.gguf|https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4af51b3542f775b0a8e4b310bfb3f17e01c306c9/Qwen3.8-27B-UD-Q4_K_M.gguf|1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529|16564259744'
             ;;
         qwen3.6-35b-a3b|35b-a3b)
             MODEL_NAME="Qwen3.6-35B-A3B"
             MODEL_SIZE_TEXT="約 22.1 GB"
-            MODEL_TOTAL_BYTES=22134528992
             MODEL_SPECS='Qwen3.6-35B-A3B-UD-Q4_K_M.gguf|https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf|ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61|22134528992'
             ;;
         qwen3.5-122b-a10b|122b-a10b)
             MODEL_NAME="Qwen3.5-122B-A10B"
             MODEL_SIZE_TEXT="約 76.5 GB"
-            MODEL_TOTAL_BYTES=76536964608
             MODEL_SPECS='Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf|https://huggingface.co/unsloth/Qwen3.5-122B-A10B-GGUF/resolve/51eab4d59d53f573fb9206cb3ce613f1d0aa392b/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf|467c9bd92ea518539cf75bf5a5fbfbd35e9a0b40d766ccaa67bf120e12041df3|10943552
 Qwen3.5-122B-A10B-Q4_K_M-00002-of-00003.gguf|https://huggingface.co/unsloth/Qwen3.5-122B-A10B-GGUF/resolve/51eab4d59d53f573fb9206cb3ce613f1d0aa392b/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00002-of-00003.gguf|90db14846413aebdac365b57206441437cac5f7e5037d94b325f0167f902e6e7|49968146912
 Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf|https://huggingface.co/unsloth/Qwen3.5-122B-A10B-GGUF/resolve/51eab4d59d53f573fb9206cb3ce613f1d0aa392b/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf|e3c24b8ebec070bb4f69ea0aca25a16531da7440cd515529953e046882901f97|26557874144'
@@ -681,7 +707,6 @@ Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf|https://huggingface.co/unsloth/Qwen
         qwen3.5-397b-a17b|397b-a17b)
             MODEL_NAME="Qwen3.5-397B-A17B"
             MODEL_SIZE_TEXT="約 244.1 GB"
-            MODEL_TOTAL_BYTES=244093630912
             MODEL_SPECS='Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf|https://huggingface.co/unsloth/Qwen3.5-397B-A17B-GGUF/resolve/da33c16fa4440f831149fcf53b98a22bc07785e5/Q4_K_M/Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf|63c290c9be83e1b4dd41833d81bd933afd535d65657579b9f92f5c3f76e0218d|10943552
 Qwen3.5-397B-A17B-Q4_K_M-00002-of-00006.gguf|https://huggingface.co/unsloth/Qwen3.5-397B-A17B-GGUF/resolve/da33c16fa4440f831149fcf53b98a22bc07785e5/Q4_K_M/Qwen3.5-397B-A17B-Q4_K_M-00002-of-00006.gguf|dc94995a3605f3130700e96df51ee56cf93bd9340fe891918403450556453ed7|49136153056
 Qwen3.5-397B-A17B-Q4_K_M-00003-of-00006.gguf|https://huggingface.co/unsloth/Qwen3.5-397B-A17B-GGUF/resolve/da33c16fa4440f831149fcf53b98a22bc07785e5/Q4_K_M/Qwen3.5-397B-A17B-Q4_K_M-00003-of-00006.gguf|2952dadb60137f413d5f70f6ca3c06007e24198e712c882a094432f58f76c230|49735103552
@@ -706,6 +731,29 @@ $MODEL_SPECS
 EOF_MODEL_SPECS
     [ "$_mfp_missing" -eq 0 ]
 }
+# Bytes still missing across every file of the selected set: present files cost
+# nothing, a .part only its remainder. Used by preflight and the runtime stage.
+model_missing_bytes() {
+    _mmb_total=0
+    while IFS='|' read -r _mmb_file _mmb_url _mmb_sha _mmb_size; do
+        [ -n "$_mmb_file" ] || continue
+        [ ! -f "$MODEL_DIR/$_mmb_file" ] || continue
+        _mmb_have=0
+        if [ -f "$MODEL_DIR/$_mmb_file.part" ] && [ ! -L "$MODEL_DIR/$_mmb_file.part" ]; then
+            _mmb_have="$(wc -c < "$MODEL_DIR/$_mmb_file.part" | tr -d ' ')"
+            case "$_mmb_have" in ''|*[!0-9]*) _mmb_have=0 ;; esac
+        fi
+        _mmb_rem=$((_mmb_size - _mmb_have))
+        [ "$_mmb_rem" -gt 0 ] || _mmb_rem=0
+        _mmb_total=$((_mmb_total + _mmb_rem))
+    done <<EOF_MODEL_SPECS
+$MODEL_SPECS
+EOF_MODEL_SPECS
+    printf '%s\n' "$_mmb_total"
+}
+AGENTS_DIR="$HOME/Library/LaunchAgents"
+LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
+HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
 select_model_profile
 # The pin is overridable only for tests and explicit verification runs.
 MODEL_SHA256_OVERRIDE=""
@@ -717,9 +765,6 @@ if [ -n "${MCS_MODEL_SHA256:-}" ]; then
     warn "MCS_MODEL_SHA256 は MCS_ALLOW_MODEL_SHA_OVERRIDE=1 がないため無視し、固定 sha256 で照合します"
   fi
 fi
-AGENTS_DIR="$HOME/Library/LaunchAgents"
-LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
-HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
 MCS_DATA="$MCS_ROOT/data"
 RECOVERY_DIR="$HOME/.mcs-recovery"
 WATCH_PLIST="$AGENTS_DIR/org.mcs.recovery.plist"
@@ -1077,13 +1122,17 @@ preflight() {
     elif [ "$_need_clone" -eq 1 ] || [ "$WITH_YOMITOKU" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
     fi
 
-    _model_gb=$(( (MODEL_TOTAL_BYTES + 999999999) / 1000000000 ))
-    _need_gb=$((6 + _model_gb))
-    if [ "$SKIP_LLM" -eq 1 ] || model_files_present; then _need_gb=6; fi
+    # Binary KiB end to end: present files cost nothing and a .part only its
+    # remainder, so a resumed or partial model is not charged twice.
+    _need_kb=$((6 * 1024 * 1024))
+    if [ "$SKIP_LLM" -eq 0 ]; then
+        _need_kb=$((_need_kb + ($(model_missing_bytes) + 1023) / 1024))
+    fi
+    _need_gb=$(((_need_kb + 1048575) / 1048576))
     _free_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')"
     case "$_free_kb" in
         ''|*[!0-9]*) pf_warn "ディスク: $HOME の空き容量を確認できません" "" ;;
-        *) if [ "$_free_kb" -ge $((_need_gb * 1024 * 1024)) ]; then
+        *) if [ "$_free_kb" -ge "$_need_kb" ]; then
                pf_ok "ディスク: 空き $((_free_kb / 1024 / 1024)) GB（必要容量は約 $_need_gb GB）"
            else
                pf_ng "ディスク: $HOME の空きは $((_free_kb / 1024 / 1024)) GB です（必要容量は約 $_need_gb GB、モデルは$MODEL_SIZE_TEXT）" "空き容量を増やして再実行してください"
@@ -1194,7 +1243,12 @@ dry_run_plan() {
                 && [ ! -f "$LLAMA_PLIST" ] && ! loaded ai.mcs.llamaserver; then
             plan_line "4/6 ローカルAI" "ポート8080の既存サーバーを保持（追加導入なし）"
         else
-            plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [$(state "$MODEL_FILE")] （$MODEL_NAME・新規の場合は$MODEL_SIZE_TEXTを取得）"
+            if model_files_present; then
+                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [$(state "$MODEL_FILE")] （$MODEL_NAME・全ファイル導入済み）"
+            else
+                _dr_missing_gb=$(( ($(model_missing_bytes) + 999999999) / 1000000000 ))
+                plan_line "4/6 ローカルAI" "AI モデル $MODEL_FILE [未取得] （$MODEL_NAME・残り約 ${_dr_missing_gb} GBを取得）"
+            fi
             plan_line "" "起動設定 $LLAMA_PLIST [$(state "$LLAMA_PLIST")]; launchctl bootstrap ai.mcs.llamaserver 未起動の場合に起動"
         fi
     fi

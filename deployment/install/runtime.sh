@@ -734,6 +734,20 @@ else
             mv -f "$_fm_path.part" "$_fm_path"
             ok "AI モデルを取得しました"
         }
+        # Budget the whole set before the first byte of a split model: failing
+        # the last shard after tens of GB is worse than failing before the first.
+        if [ -z "$MODEL_SHA256_OVERRIDE" ]; then
+            _missing_total="$(model_missing_bytes)"
+            if [ "$_missing_total" -gt 0 ]; then
+                _need_kb=$(( _missing_total / 1024 + 1048576 ))
+                _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+                case "$_free_kb" in ''|*[!0-9]*)
+                    die "$MODEL_DIR の空き容量を確認できません。モデルの取得は開始していません" ;;
+                esac
+                [ "$_free_kb" -ge "$_need_kb" ] \
+                    || die "$MODEL_DIR の空き容量が不足しています（空き約 $((_free_kb / 1048576)) GB、モデル全体で必要約 $(((_need_kb + 1048575) / 1048576)) GB）。空き容量を増やして install.sh を再実行してください。モデルの取得は開始していません"
+            fi
+        fi
         while IFS='|' read -r _model_file _model_url _model_sha _model_size; do
             [ -n "$_model_file" ] || continue
             fetch_model_file "$_model_file" "$_model_url" "$_model_sha" "$_model_size"
