@@ -68,10 +68,12 @@ def _verified_unchanged(dest: str) -> bool:
 
 
 def _valid(path: str, deadline: float | None) -> bool:
-    """valid_mcs_db, bounded by ``deadline`` only when one is given."""
-    if deadline is None:
-        return valid_mcs_db(path)
-    return valid_mcs_db(path, deadline=deadline)
+    """valid_mcs_db, bounded by ``deadline`` only when one is given.
+    Compressed copies validate through a staged decompression."""
+    with materialize_backup(path) as real:
+        if deadline is None:
+            return valid_mcs_db(real)
+        return valid_mcs_db(real, deadline=deadline)
 
 
 def homecare_migrations(db: sqlite3.Connection) -> dict[str, int] | None:
@@ -89,6 +91,11 @@ def _valid_homecare(path: str, deadline: float | None) -> bool:
     """A static home-care copy: quick_check ok and the core foundation migration recorded."""
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         return False
+    with materialize_backup(path) as real:
+        return _valid_homecare_real(real, deadline)
+
+
+def _valid_homecare_real(path: str, deadline: float | None) -> bool:
     try:
         with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro&immutable=1",
                                      uri=True)) as db:
@@ -270,19 +277,30 @@ def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
     os.chmod(BACKUP_DIR, 0o700)   # PHI store: never umask-loose
     stamp = time.strftime("%Y%m%d")
     dest = os.path.join(BACKUP_DIR, f"{prefix}-{stamp}.db")
+    # the stored copy is canonically compressed; a same-day uncompressed one
+    # is a copy compression has not finished (or predates compression)
+    stored = dest + ".gz" if os.path.isfile(dest + ".gz") else dest
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
     # missing marker falls back to validation (B24)
-    if _verified_unchanged(dest):
+    if _verified_unchanged(stored):
+        if stored == dest:
+            # compression is an optimization over a complete valid copy:
+            # a deadline stop only defers it to a later tick
+            with suppress(MaintenanceError):
+                _compress_published(dest, deadline)
         return None
     # checking today's file must leave room to replace it: a broken copy
     # whose check eats the whole budget would otherwise never be replaced
     check_by = None if deadline is None \
         else deadline - backup_time_needed_s(db_path) - BACKUP_CHECK_SLACK_S
-    if valid(dest, check_by):
+    if valid(stored, check_by):
         # re-arm the fast path, or every later tick today re-runs the
         # full quick_check (a same-day backup made before the marker)
-        _write_ok_marker(dest)
+        _write_ok_marker(stored)
+        if stored == dest:
+            with suppress(MaintenanceError):
+                _compress_published(dest, deadline)
         return None
     if deadline is not None and (
             deadline - monotonic() < backup_time_needed_s(db_path)):
@@ -295,6 +313,8 @@ def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
     os.close(fd)
     publish_backup(db_path, tmp, dest, deadline=deadline, valid=valid)
     _write_ok_marker(dest)
+    with suppress(MaintenanceError):
+        _compress_published(dest, deadline)
     files = _daily_backups("daily" if prefix == "ledger" else "homecare_daily", prefix)
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):
@@ -305,7 +325,7 @@ def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
 
 def _daily_backups(kind: str = "daily", prefix: str = "ledger") -> list[str]:
     """Only owned daily files contribute to rotation and freshness."""
-    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, f"{prefix}-*.db"))
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, f"{prefix}-*.db*"))
                   if backup_class(os.path.basename(path)) == kind)
 
 
@@ -438,7 +458,7 @@ def preupdate_homecare_backup(*, deadline: float | None = None) -> str | None:
 
 
 def _homecare_preupdate_backups() -> list[str]:
-    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "homecare-preupdate-*.db"))
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "homecare-preupdate-*.db*"))
                   if backup_class(os.path.basename(path)) == "homecare_preupdate")
 
 
@@ -515,7 +535,9 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
         # unreadable state => keep EVERYTHING (fail-safe, S17)
         return 0
     removed = 0
-    for path in glob.glob(os.path.join(BACKUP_DIR, "preupdate-*.db")):
+    for path in glob.glob(os.path.join(BACKUP_DIR, "preupdate-*.db*")):
+        if backup_class(os.path.basename(path)) != "preupdate":
+            continue
         if os.path.abspath(path) in referenced:
             continue
         with suppress(OSError):
@@ -526,6 +548,8 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
         with suppress(OSError):
             os.unlink(path)
             removed += 1
+        with suppress(OSError):
+            os.unlink(path + ".ok")
     return removed
 
 
@@ -534,7 +558,8 @@ def staging_patterns() -> list[str]:
     """Globs of the staging copies (and SQLite sidecars) a hard kill strands
     in the backup directory; prune_leftovers sweeps them once day-old."""
     return [os.path.join(BACKUP_DIR, "*.db.tmp" + suffix)
-            for suffix in ("", "-journal", "-wal", "-shm")]
+            for suffix in ("", "-journal", "-wal", "-shm")] + [
+            os.path.join(BACKUP_DIR, "*.gz.tmp")]
 
 
 _GENERATION_ORDER = ("daily", "preupdate", "patient_context_reset", "homecare_daily", "homecare_preupdate")
