@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "添付の依存captureが患者の全artifactsを走査して収集を停止させていた問題を修正",
+  "summary": "患者コンテキストのscan選択が kind+患者 で絞れる既存索引を使わず患者の全artifacts(実測5875件・scan対象は35件)を毎回走査していたため、backfill中の添付ページごとのcaptureが乗算で膨らみ収集runがwatchdogで打ち切られていました。索引を明示して走査範囲を約150分の1に狭窄し、返す行は完全に同一です。適用すると既存の添付解析の指紋が失効し再処理が走ります(対象: attachment_inference_checkpoint_v1 3935件・attachment_ocr_v1 569件・attachment_extract_v1 237件)。",
+  "upgrade": "配備後、添付解析の再処理が走ります。再処理はlocal LLMで行われ時間を要します。なおDBへのANALYZE実行でもplannerが正しい索引を選ぶようになるため、コード適用前の緩和として利用できます。",
+  "details": [
+    "selected_scan の走査に idx_artifacts_lookup を明示。結果の行・順序・検証は同一。",
+    "根本原因は idx_artifacts_project に sqlite_stat1 行がなく planner が誤選択していたこと。ANALYZE で統計を更新するとコード変更なしでも正しい plan になることを合成スケールモデルで検証済み。"
+  ],
+  "refs": ["mcs/core/patient_context_artifacts.py"]
+}

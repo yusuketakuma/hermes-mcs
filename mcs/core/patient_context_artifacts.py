@@ -107,7 +107,7 @@ def selected_scan(db, pid, source_key):
     before = _fence(db)
     _check_metadata(db, SCAN_KIND, pid)
     selected = None
-    with closing(db.execute("SELECT artifact_id,message_id,meta FROM artifacts WHERE kind=? AND project_id=? "
+    with closing(db.execute("SELECT artifact_id,message_id,meta FROM artifacts INDEXED BY idx_artifacts_lookup WHERE kind=? AND project_id=? "
             "AND CASE WHEN json_valid(meta) THEN COALESCE(json_extract(meta,'$.source_key'),message_id)=? END "
             'ORDER BY artifact_id DESC', (SCAN_KIND, pid, source_key))) as rows:
         for artifact_id, message_id, raw in rows:
