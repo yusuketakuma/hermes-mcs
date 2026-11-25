@@ -154,7 +154,7 @@ def _blank_active(operation_id, phase, target, attempt_key, rollout, **over):
               'start_receipt_id': None, 'candidate_generation': None,
               'startup_nonce': None, 'activation_receipt_id': None,
               'runtime_proof': None, 'reserved_owner_bytes': 1, 'error_code': None,
-              'rollout': rollout}
+              'rollout': rollout, 'contract_digests': None}
     active.update(over)
     return active
 
@@ -326,7 +326,7 @@ def stage_candidate(store, deps, offer):
         if target['code_seq'] > new['highest_seen']['code_seq']:
             new['highest_seen'] = copy.deepcopy(target)
         new['active'] = _blank_active(operation_id, 'STAGED', target, attempt_key,
-                                      selected['rollout'])
+                                      selected['rollout'], contract_digests=digests)
 
     saved = _mutate(store, apply)
     return saved['active']['operation_id'] if saved['active'] else None
@@ -445,7 +445,13 @@ def _build_prepared_public(store, owner, deps, active, prepare_nonce):
     PREPARED遷移が唯一のpending safety変更なので post-save値は一意に決まる。
     grantはこのrevisionへ束縛され、以後のsafety変更をconsume時に検出する。
     """
-    digests = deps.contract_digests(active['target'], owner['profile'])
+    # digestはSTAGED時にactiveへ耐久保存済み — runtime排他lock内でnetworkへ
+    # 出さず、resume tickでoffer不束縛でも再取得しない(spec 03 ENC03)。
+    digests = active.get('contract_digests')
+    if not (isinstance(digests, dict)
+            and type(digests.get('config_contract_sha256')) is str
+            and type(digests.get('data_contract_sha256')) is str):
+        raise OwnerError('CONTRACT_DIGESTS_UNAVAILABLE')
     public = {'schema_version': 'mcs.prepared-public.v3',
               'local_preflight_id': _det_uuid('preflight|' + active['operation_id']),
               'local_backup_evidence_id': deps.backup_evidence(),

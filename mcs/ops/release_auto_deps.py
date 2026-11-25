@@ -500,7 +500,13 @@ def _measure_state(*, git, repo, store, digests, local):
         profile = owner.get('profile')
         if not isinstance(target, dict) or not isinstance(profile, dict):
             raise OwnerError('MEASURE_MISSING')
-        values = digests(target, profile)
+        # stage時にactiveへ耐久保存されたdigestを優先し、apply後の観測で
+        # networkへ再取得しない。無ければ従来どおりdeps経由で解決する。
+        persisted = active.get('contract_digests') if isinstance(active, dict) else None
+        if isinstance(persisted, dict)                 and type(persisted.get('config_contract_sha256')) is str                 and type(persisted.get('data_contract_sha256')) is str:
+            values = persisted
+        else:
+            values = digests(target, profile)
         if not isinstance(values, dict):
             raise OwnerError('MEASURE_MISSING')
         profile = owner.get('profile')
