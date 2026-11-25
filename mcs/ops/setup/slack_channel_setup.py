@@ -400,14 +400,15 @@ def _applied_channels_match(cfg, state):
     scope = scope if isinstance(scope, dict) else {}
     patient = cfg.get('notify_target')
     surfaces = _surfaces(cfg)
-    patient_channel = (patient.partition(':')[2]
-                       if surfaces['text'] and isinstance(patient, str)
-                       else scope.get('channel_id'))
+    text_channel = (patient.partition(':')[2]
+                    if surfaces['text'] and isinstance(patient, str) else None)
+    card_channel = scope.get('channel_id') if surfaces['card'] else None
     system = cfg.get('notify_system_target')
     system_channel = system.partition(':')[2] if isinstance(system, str) else None
     patient_role = roles.get('patient') or {}
     system_role = roles.get('system') or {}
-    if (patient_role.get('id') != patient_channel
+    patient_channels = {channel for channel in (text_channel, card_channel) if channel}
+    if (patient_channels != {patient_role.get('id')}
             or system_role.get('id') != system_channel):
         return False
     desired = plan(cfg)
@@ -495,8 +496,10 @@ def plan(cfg, *, users=None):
 
 def prepare(root, cfg, *, users=None):
     """Only an explicit installer/setup/update call may create this durable intent."""
+    if not required(cfg):
+        return None
     existing = read(root)
-    if not required(cfg) or creation_unneeded(cfg, existing):
+    if creation_unneeded(cfg, existing):
         return None
     if _flags_migration_pending(cfg, existing):
         return None

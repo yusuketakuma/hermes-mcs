@@ -1019,11 +1019,12 @@ def test_card_standalone_flags_migration_allows_unrelated_config_drift(tmp_path,
     setup.stage_config(tmp_path, saved, saved)
     setup.applied(tmp_path, saved, saved)
 
-    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
-    flags = []
-    monkeypatch.setattr(notify_spool, 'publish_flags', lambda c, r: flags.append(c))
+    data = str(tmp_path / 'data')
+    notify_spool.ensure_dirs(data)
+    assert notify_spool.publish_flags(saved, data) is True
+    monkeypatch.setattr(notify_spool, 'publish_file',
+                        lambda *a: pytest.fail('unchanged route flags must not be rewritten'))
     setup.finish_runtime(tmp_path, saved, args)
-    assert flags == [saved]
     assert setup.read(tmp_path)['flags_ready'] is True
 
 
@@ -1043,6 +1044,32 @@ def test_card_standalone_flags_migration_rejects_slack_binding_drift(tmp_path, m
     saved['notify']['slack']['team_id'] = 'T000000003'
     with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
         setup.run_setup(tmp_path, saved, args)
+
+
+def test_card_standalone_flags_migration_rejects_card_channel_drift(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    monkeypatch.setattr(standalone, 'setup_channels',
+                        lambda root, binding: consume(root, client, cfg))
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    setup.applied(tmp_path, cfg, saved)
+    saved['job_budget_seconds'] = 20
+    saved['notify']['slack']['channel_id'] = 'C000000009'
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.run_setup(tmp_path, saved, args)
+
+
+def test_discord_only_setup_does_not_read_a_stale_slack_intent(tmp_path):
+    data = tmp_path / 'data'
+    data.mkdir()
+    (data / 'slack-channel-setup.json').write_text('{broken')
+    cfg = {'notify': {'interactive': 'discord'}}
+    assert setup.prepare(tmp_path, cfg) is None
 
 
 def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, monkeypatch):
