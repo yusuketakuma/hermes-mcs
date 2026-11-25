@@ -26,7 +26,10 @@ def clock(monkeypatch):
 @pytest.mark.parametrize("error", [TimeoutError("http worker deadline exceeded"),
                                    TimeoutError("http worker timeout"),
                                    OSError("http worker transport failed")])
-def test_unknown_outcome_after_dispatch_is_not_resent(clock, error):
+def test_unknown_outcome_after_dispatch_is_retried_to_the_cap(clock, error):
+    """Bounded-retry contract: an unknown-outcome dispatch (possibly billed, never
+    provably unsent) retries inside the job budget up to the shared ceiling —
+    every send is independently accounted instead of classified not_sent."""
     sent = []
 
     def post(body, timeout):
@@ -36,8 +39,22 @@ def test_unknown_outcome_after_dispatch_is_not_resent(clock, error):
     client = jev.JevClient("synthetic", post_fn=post)
     with pytest.raises(jev.JevError) as raised:
         client.evaluate({}, QUESTIONS, 100.0)
+    assert len(sent) == jev.CLOUD_MAX_ATTEMPTS and client.requests_made == jev.CLOUD_MAX_ATTEMPTS
+    assert raised.value.retryable is True and client.last_error is raised.value
+
+
+def test_non_retryable_failure_class_is_never_resent(clock):
+    """Safety side: auth/payment/contract failures of the same input stay single-send."""
+    sent = []
+
+    def post(body, timeout):
+        sent.append(1)
+        raise jev.JevError("auth_error", "synthetic", retryable=False)
+
+    client = jev.JevClient("synthetic", post_fn=post)
+    with pytest.raises(jev.JevError):
+        client.evaluate({}, QUESTIONS, 100.0)
     assert len(sent) == 1 and client.requests_made == 1
-    assert raised.value.retryable is False and client.last_error is raised.value
 
 
 @pytest.mark.parametrize("error", [bounded_http.NotSentTimeout("http worker deadline exceeded"),
