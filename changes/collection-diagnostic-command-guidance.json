@@ -1,10 +1,10 @@
 {
   "category": "fixed",
   "title": "収集診断の対処案内を統一CLIに修正",
-  "summary": "収集エラーの対処案内で、環境によっては存在しない素のpython3実行ではなく、導入方式に対応した`mcs`コマンドを案内します。",
+  "summary": "収集エラーの対処案内で、環境によっては存在しない素のpython3実行ではなく、導入方式に対応した`~/.local/bin/mcs`コマンドを案内します。",
   "upgrade": "追加操作は不要です。次回の収集診断から新しい案内が表示されます。",
   "details": [
-    "設定確認は`mcs setup check`、共有用診断は`mcs doctor --share`を案内する。",
+    "設定確認は`~/.local/bin/mcs setup check`、共有用診断は`~/.local/bin/mcs doctor --share`を案内する。",
     "表示文言だけの変更で、収集・診断の判定条件は変更しない。"
   ],
   "refs": ["mcs/ingest/collection_diagnostics.py", "docs/guides/COLLECTION_DIAGNOSTICS.md"]
