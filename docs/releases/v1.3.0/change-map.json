@@ -1,6 +1,21 @@
 {
   "version": "1.3.0",
   "records": {
+    "160-lab-quote-comparison-unverified": {
+      "title": "測定したことが明記された検査値を読み取る",
+      "path": "changes/archive/1.3.0/160-lab-quote-comparison-unverified.json",
+      "sha256": "ecb479b73bfd2f826a0d9c811905638fe979f410662a4b7609ff83f24662b571"
+    },
+    "attachment-local-deferral-engine-reason": {
+      "title": "添付ページのローカル解析の保留理由が「原因未特定」になる問題を修正",
+      "path": "changes/archive/1.3.0/attachment-local-deferral-engine-reason.json",
+      "sha256": "7264d5bf558211528235a4ce64efe91a37e75824f15da239e82833e8af3964f6"
+    },
+    "cloud-price-recheck-20261124": {
+      "title": "クラウド4モデルの料金を再確認し、確認期限を12月24日に更新",
+      "path": "changes/archive/1.3.0/cloud-price-recheck-20261124.json",
+      "sha256": "70a702b0fcf9d54a573b5f980ac345862f35f5b661a15928343f6ad24eaccbab"
+    },
     "cloud-provider-definitions": {
       "title": "外部AIの提供元ごとの判定を提供元の定義に集約",
       "path": "changes/archive/1.3.0/cloud-provider-definitions.json",
@@ -51,10 +66,20 @@
       "path": "changes/archive/1.3.0/drug-catalog.json",
       "sha256": "44b410ba7eff0250f2cadb703aba6a9fad1998fe7fc1dbb9768241abd816d949"
     },
+    "drug-map-deadline-deferred": {
+      "title": "薬剤辞書照合の期限打ち切りで健康レポートが低下扱いになる問題を修正",
+      "path": "changes/archive/1.3.0/drug-map-deadline-deferred.json",
+      "sha256": "08671f0f5f8eff67e45a6ed05e797f0abb1f50015b1ff81174f96941bacc8137"
+    },
     "drug-patients-cross-search": {
       "title": "薬剤名・マスター差分・添付文書改訂から、言及のある在宅患者を一覧にする",
       "path": "changes/archive/1.3.0/drug-patients-cross-search.json",
       "sha256": "89aa803154bd4193ae5d07532e8ef58a1e7d86ab7cfbb13bd3f7a4afed79ff56"
+    },
+    "export-archived-patients-20261124": {
+      "title": "閲覧権限を失った患者はexportから除外し、権限のあるarchiveはarchived行を付ける",
+      "path": "changes/archive/1.3.0/export-archived-patients-20261124.json",
+      "sha256": "e43ddc171045f8f011c549856066a1272b4f44fed925ccc349ecb85b2e7579c7"
     },
     "homecare-local-backup": {
       "title": "在宅記録の台帳をローカルバックアップの対象に追加",
@@ -121,6 +146,11 @@
       "path": "changes/archive/1.3.0/jev-optional.json",
       "sha256": "46facdbc177f5e1fa9b619cefc414fc54a397c4d23212ccb18ea05c5f2eef16f"
     },
+    "karte-scope-index": {
+      "title": "カルテ更新時の依存確認で読み込む記録を削減",
+      "path": "changes/archive/1.3.0/karte-scope-index.json",
+      "sha256": "d2d07013422c0bc0ec7188afd79bff7c7020ab4d63e5f0a195ae37eada934b3d"
+    },
     "lab-reading-redos-and-specimen-scope": {
       "title": "検査値の判定で、検体の節・続く検査値の単位・長い行での停止を修正",
       "path": "changes/archive/1.3.0/lab-reading-redos-and-specimen-scope.json",
@@ -141,6 +171,16 @@
       "path": "changes/archive/1.3.0/local-chat-patient-views.json",
       "sha256": "fd37ea015b97ec69e106b5574720ba7c150b604ee27509159e33a9cff25097fc"
     },
+    "local-rebuild-backlog-priority": {
+      "title": "承認済みのローカル作り直しが背景抽出に埋もれず進むように修正",
+      "path": "changes/archive/1.3.0/local-rebuild-backlog-priority.json",
+      "sha256": "e6f84fb326be9c3cfa2ac3f27b0394ac71d388b5dd04012e0f4adeb7d14de4b1"
+    },
+    "manual-extraction-upgrade-scope": {
+      "title": "手動の規則抽出と修復診断で過去の抽出を作り直す範囲を指定できる",
+      "path": "changes/archive/1.3.0/manual-extraction-upgrade-scope.json",
+      "sha256": "213b4def4e5d541fe50439aaafc4170abc299db04346d6aee914cb9cd2198bf5"
+    },
     "notify-remote-verify-actor": {
       "title": "通知部品の遠隔確認スクリプトが、実行したユーザー名を操作者として記録",
       "path": "changes/archive/1.3.0/notify-remote-verify-actor.json",
@@ -150,6 +190,31 @@
       "title": "通知の検索・日時・記録の状態の文言を実際の状態に合わせる",
       "path": "changes/archive/1.3.0/notify-search-wording.json",
       "sha256": "4809020f44873c3d8a646bb5733d3463fc903d862ca6ee6b47faa161e31dc1b4"
+    },
+    "ocr-ack-reboot-identity": {
+      "title": "再起動で添付OCRの受付と再抽出の承認が無効になる問題と、待ち合わせで添付OCRの健康状態が揺れる問題を修正",
+      "path": "changes/archive/1.3.0/ocr-ack-reboot-identity.json",
+      "sha256": "aa7db12370d3e4ab1d8d5591406be4baef2a38437e20cbd24f207bd0c5675f9a"
+    },
+    "own02-env-private-read": {
+      "title": "権限の弱い .env ファイルは読み込まなくなりました",
+      "path": "changes/archive/1.3.0/own02-env-private-read.json",
+      "sha256": "4e58c947f49f297c4dc2e49adb9f023c627976a048fa71436fc5b24a098ebfd5"
+    },
+    "patient-context-quality-concurrent-writes": {
+      "title": "別の患者の更新で患者コンテキストの品質確認が止まる問題を修正",
+      "path": "changes/archive/1.3.0/patient-context-quality-concurrent-writes.json",
+      "sha256": "425c69f1b0f1759b69b246d1c1d1fa035794da7ddeea34c20afd8a47c78f08d3"
+    },
+    "patient-context-quality-foreign-commit": {
+      "title": "ほかの患者の更新が重なっても品質確認済みの原文や概況を保存",
+      "path": "changes/archive/1.3.0/patient-context-quality-foreign-commit.json",
+      "sha256": "eac34363ff9afe9ce1deb86d42542fcecdf4dedd95ef70503cc57c54a5cac24f"
+    },
+    "patient-context-selection-concurrency": {
+      "title": "患者コンテキストの候補確認中に別の患者の処理を進める",
+      "path": "changes/archive/1.3.0/patient-context-selection-concurrency.json",
+      "sha256": "e292a25ccb6a80d2a82e7d84459987d51191154ac5cef2b9d2eb056b7fb59ddd"
     },
     "patient-workspace-layout": {
       "title": "患者画面のレイアウトを見直し（患者台帳は読む画面が先、訪問予定はカード表示、スマホは下のタブバー）",
@@ -185,6 +250,26 @@
       "title": "未読の意味解析jobを止め抽出QCだけをまとめて処理",
       "path": "changes/archive/1.3.0/semantic-drain-throughput.json",
       "sha256": "9c9cfa382d4c796f6b949d34ba88d26d934bb82682b49493519dcc18eb8fd6cc"
+    },
+    "semantic-hold-health-backoff": {
+      "title": "意味チェックの再修復待ちで監視が劣化しないようにし、決定的な保留で再処理が止まる問題を修正",
+      "path": "changes/archive/1.3.0/semantic-hold-health-backoff.json",
+      "sha256": "d29e372e12576b2bc52336248a468820199f04182e90ad50b3717902337d7e77"
+    },
+    "stamp-actor-partial-metadata": {
+      "title": "ほかの項目が不正でもスタンプを押した人の一覧を更新",
+      "path": "changes/archive/1.3.0/stamp-actor-partial-metadata.json",
+      "sha256": "c0fc88b98e1a0b421faa02ebe67db8efeb5563de8e2c4c18a89c308cca57bf8e"
+    },
+    "stamp-reconcile-expiry-20261124": {
+      "title": "送信から1時間後も自分のスタンプが操作どおりの状態にないと確認できた場合に操作を終了",
+      "path": "changes/archive/1.3.0/stamp-reconcile-expiry-20261124.json",
+      "sha256": "89bbeeef619144659f492cc7a906bda914729cb79faf420d51f0170aed490fa4"
+    },
+    "tracking-ack-proof-columns": {
+      "title": "適用済みの通知の追跡終了が監視件数に反映されない問題を修正",
+      "path": "changes/archive/1.3.0/tracking-ack-proof-columns.json",
+      "sha256": "ae3d04d9632b852ade279b2aab5557858e15083cda2361202690c786d2743e06"
     }
   }
 }
