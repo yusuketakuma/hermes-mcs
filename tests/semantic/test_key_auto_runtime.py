@@ -11,7 +11,7 @@ import semantic_jev as jev
 import semantic_policy
 import semantic_runtime as runtime
 import semantic_store
-from semantic_testkit import _FakeJev, _seeded
+from semantic_testkit import _FakeJev, _llm, _seeded
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "assist"])
@@ -23,7 +23,7 @@ def test_explicit_mode_without_budget_keeps_zero_requests(mode):
     assert resolved["daily_request_budget"] == 0
 
 
-def test_key_auto_runs_no_unread_assessment_and_promotes_no_notifications(tmp_path, monkeypatch):
+def test_key_auto_runs_assist_summary_and_loops_without_notification_promotion(tmp_path, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda root=None: "synthetic-unused-key")
     db = _seeded(tmp_path)
     client = _FakeJev()
@@ -32,12 +32,13 @@ def test_key_auto_runs_no_unread_assessment_and_promotes_no_notifications(tmp_pa
         assert run_check._semantic_enabled(db, {}, result)
         out = semantic_drain.run_due(
             db, {}, result, time.monotonic() + 300, jev_client=client,
-            llm_fn=lambda *_: pytest.fail("disabled summary must not call LLM"))
-        # key-auto leaves summary and loops off: nothing reads an assessment
-        assert out["mode"] == "assist" and out["done"] == 0
-        assert client.requests_made == 0 and not run_check._semantic_seeding({})
-        assert not db.artifacts("semantic_assess", message_id=1)
-        assert not db.artifacts("semantic_summary", message_id=1)
+            llm_fn=_llm)
+        # key-auto defaults summary and loops to assist: jobs run and their
+        # advisory output is produced, but nothing is promoted to notices
+        assert out["mode"] == "assist" and out["done"] >= 1
+        assert client.requests_made >= 1 and run_check._semantic_seeding({})
+        assert db.artifacts("semantic_assess", message_id=1)
+        assert db.artifacts("semantic_summary", message_id=1)
         assert not db.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
         assert run_check._semantic_skipped({}, "background_worker")["mode"] == "assist"
     finally:
