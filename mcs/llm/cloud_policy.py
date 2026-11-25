@@ -1010,6 +1010,39 @@ def _semantic_financial_identity(meta):
     return target, source, phase
 
 
+def _semantic_generation_identity(meta):
+    """Verify a semantic unit including the interpretation generation it answered."""
+    identity = _semantic_financial_identity(meta)
+    if identity is None:
+        return None
+    generation = meta['owner'].get('semantic_generation')
+    return (*identity[:2], generation, identity[2])
+
+
+# Member-bound semantic reservations carry generation/source/phase from the
+# first target-aware semantic rollout (commit a4d590c74, 2026-10-30 00:46:08 +09).
+# Rows before that boundary cannot prove which member or interpretation they
+# answered; their shape is nevertheless a complete, valid legacy receipt.
+SEMANTIC_MEMBER_BINDING_START_EPOCH = 1793288768.0
+
+
+def _prebinding_semantic_reservation(meta, row):
+    """Whether a valid receipt is the pre-member-binding semantic format."""
+    owner = meta.get('owner')
+    return (meta.get('route') == 'semantic_backlog'
+            and isinstance(meta.get('unit_key'), str)
+            and re.fullmatch(r'semantic:[0-9]+:[0-9a-f]+', meta['unit_key']) is not None
+            and type(row['created_at']) in (int, float)
+            and row['created_at'] < SEMANTIC_MEMBER_BINDING_START_EPOCH
+            and isinstance(owner, dict)
+            and all(key not in owner for key in (
+                'semantic_target_id', 'semantic_source', 'semantic_generation', 'semantic_phase'))
+            and meta.get('logical_target_id') is None
+            and meta.get('logical_unit_fp') is None
+            and meta.get('logical_request_fp') is None
+            and meta.get('input_binding') is None)
+
+
 def _legacy_request_effort(previous, current_body):
     """The effort an older record without one was proven to have sent, else None.
     The prompt is not persisted; each provider knows its own old request shape."""
@@ -1284,9 +1317,16 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 new_target = _semantic_financial_target(candidate)
                 if old_target is not None and new_target is not None and old_target != new_target:
                     continue
-                old_identity = _semantic_financial_identity(previous)
-                new_identity = _semantic_financial_identity(candidate)
+                old_identity = _semantic_generation_identity(previous)
+                new_identity = _semantic_generation_identity(candidate)
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
+                    continue
+                if new_identity is not None and _prebinding_semantic_reservation(previous, row):
+                    # The first target-aware rollout made interpretation generation part of
+                    # the semantic unit. Earlier receipts can neither be reused for a reprocess
+                    # nor prove that they answered this member's current generation; keeping them
+                    # as duplicate evidence wedged every later send in the project. They remain
+                    # fiscally valid, but a generation-bound candidate is allowed one fresh unit.
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
             if (local_fallback and candidate['route'] == 'patient_context'
