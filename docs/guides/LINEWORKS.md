@@ -21,7 +21,7 @@ Hermesアドオン形態（Path A）の場合:
 PY=~/.hermes/hermes-agent/venv/bin/python
 ```
 
-Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-4で本体・Pythonと
+Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-2で本体・Pythonと
 定期実行を設定し、`PY="$HOME/.mcs/venv/bin/python3"`を使います。LINE WORKSの接続手順は共通です。
 通知を送る実行には`--no-notify`を付けません。カード・操作を使う場合は
 独立アダプターも常駐させます。テキストだけなら常駐は不要です。
@@ -58,7 +58,7 @@ Bot 登録は Console と管理者画面の二段階です。外部 LINE/LINE WO
 ## 3. MCS の配送先と操作範囲を設定する
 
 ```bash
-$PY mcs/ops/mcs_setup.py init
+"$PY" mcs/ops/mcs_setup.py init
 ```
 
 ウィザードで `notify.interactive=lineworks` を選択し、通知先を
@@ -90,8 +90,8 @@ OpenSSL は JWT の RS256 署名に使用します。
 [公式Service Account認証](https://developers.worksmobile.com/jp/docs/auth-jwt)
 
 ```bash
-$PY -m lineworks_adapter init
-$PY -m lineworks_adapter check
+"$PY" -m lineworks_adapter init
+"$PY" -m lineworks_adapter check
 ```
 
 `init` は Client ID・Client Secret・Service Account・Bot Secret・
@@ -102,7 +102,7 @@ Private Key のパスを端末で受け取ります。秘密値は非表示入�
 上書きしません。診断に失敗した場合は、ファイルの配置・所有者・`0600`権限と
 秘密鍵のパスを端末で確認します。
 
-`$PY -m lineworks_adapter credentials` では、初回の認証情報登録を選べます。
+`"$PY" -m lineworks_adapter credentials` では、初回の認証情報登録を選べます。
 既存の認証情報の変更は、旧送信プロセスが情報を保持していないことを確認できないため、
 この対話では行いません。送信や接続を停止し、担当者に変更方法を相談してください。
 既存の認証ファイルは保持し、秘密値をチャットやログへ表示しません。
@@ -115,7 +115,7 @@ Private Key のパスを端末で受け取ります。秘密値は非表示入�
 ## 5. 起動し、接続を確認する
 
 ```bash
-$PY -m lineworks_adapter run
+"$PY" -m lineworks_adapter run
 ```
 
 プロセスを動かした状態で、公開 Callback URL の転送設定を確認します。
@@ -123,7 +123,7 @@ $PY -m lineworks_adapter run
 Hermes gateway の再起動では LINE WORKS adapter は起動しません。
 
 ```bash
-$PY mcs/ops/mcs_setup.py check
+"$PY" mcs/ops/mcs_setup.py check
 ```
 
 実際の送信・Callback 確認は、承認されたテナント・部屋に完全合成の内容を
@@ -134,7 +134,7 @@ $PY mcs/ops/mcs_setup.py check
 設定と `check` が完了した同じ checkout で、次を実行します。
 
 ```bash
-$PY -m lineworks_adapter service
+"$PY" -m lineworks_adapter service
 ```
 
 macOS は `~/.mcs/data/lineworks-service/ai.mcs.lineworks.plist`、Linux は

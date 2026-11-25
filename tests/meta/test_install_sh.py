@@ -494,6 +494,8 @@ def test_lineworks_guide_path_b_uses_standalone_venv_python():
     guide = (ROOT / "docs/guides/LINEWORKS.md").read_text()
     assert 'PY="$HOME/.mcs/venv/bin/python3"' in guide
     assert "`PY=python3.14`" not in guide
+    assert 'B-1〜B-2' in guide and 'B-1〜B-4' not in guide
+    assert '\n$PY ' not in guide
 
 
 def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
