@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKS文章通知の設定不足を初期設定で検出",
+  "summary": "LINE WORKSの文章だけの送信先を設定した場合も、接続設定・操作範囲の入力を求め、送信先トークルームの不一致を初期設定と設定確認で検出します。これまで設定を保存できても送信時に失敗する組み合わせがありました。",
+  "upgrade": "既存環境でLINE WORKS送信先とnotify.lineworks.channel_idが一致しない場合は、同じトークルームIDへ修正してmcs setupを再実行してください。正常に設定済みの環境では追加操作は不要です。",
+  "details": [
+    "LINE WORKSの文章通知はHermes・standaloneの両方で独立アダプターを使うため、interactive=offでも接続設定を必須として検証する。",
+    "患者情報・運用通知のLINE WORKS送信先は、独立アダプターが実際に送信するnotify.lineworks.channel_idと一致する場合だけ受け付ける。"
+  ],
+  "refs": ["mcs/core/mcs_config.py", "mcs/ops/setup/setup_wizard.py"]
+}
