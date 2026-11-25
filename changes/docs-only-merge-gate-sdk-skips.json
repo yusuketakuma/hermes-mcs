@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "文書専用PRのmerge-gateが設計どおり進まない問題を修正",
+  "summary": "文書だけのPRではCI scopeが `standalone-sdk`・`hermes-integration`・`pytest-macos` を省略しますが、merge-gateは一部の省略だけを合格として扱っていたため、文書専用PRが必須ゲートを通りませんでした。設計どおりの省略を認めるように修正しました。`full-ci` で完全なCIを要求したPRでは、以前の省略結果を合格の根拠にしません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "merge-gateの判定では、文書だけの変更でscopeにより省略された `standalone-sdk`・`hermes-integration`・`pytest-macos` を合格として扱う。コード変更を含むPRでは従来どおりskipを不合格にする。",
+    "`full-ci` ラベルがあるPRでは、以前のdocs scope runに残ったskipを証拠にせず、full modeの結果を待つ。",
+    "導入ガイドの既定runtime・設定コマンド・standaloneの接続設定例を実装に合わせて修正する。"
+  ],
+  "refs": [
+    "ci/agent_control.py",
+    "ci/auto_merge.py",
+    "tests/meta/test_agent_control.py",
+    "docs/development/AUTOMATION.md",
+    "docs/guides/INSTALLATION.md"
+  ]
+}

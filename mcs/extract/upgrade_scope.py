@@ -77,6 +77,16 @@ def live() -> Scope:
     return resolve(mcs_util.load_config_checked(mcs_util.CONF_PATH, missing_ok=True))
 
 
+def intersect(first: Scope, second: Scope) -> Scope:
+    """Admit earlier generations only within both the supplied and current scopes."""
+    if first.is_open:
+        return second
+    if second.is_open or first == second:
+        return first
+    shared = sorted(set(first.project_ids).intersection(second.project_ids))
+    return Scope("projects", tuple(shared)) if shared else Scope("none")
+
+
 def allows(scope: Scope, project_id) -> bool:
     """True when this patient's earlier-generation results may be rebuilt."""
     return scope.is_open or (scope.mode == "projects" and type(project_id) is int

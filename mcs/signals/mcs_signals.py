@@ -1698,7 +1698,7 @@ def dismiss_reason_counts(db, project_id=None, *, since=None, until=None,
     return out
 
 
-def current_open(db, project_id=None, limit=50):
+def current_open(db, project_id=None, limit=50, *, excluded_project_ids=()):
     """Read-side listing used by mcs_view — open signals with evidence
     ids. Runs on the snapshot connection; no state is touched. The
     latest row per meta.key is the signal's current state."""
@@ -1711,7 +1711,8 @@ def current_open(db, project_id=None, limit=50):
               "note": c.get("note")}
              for k, c in latest.items()
              if c is not None and c["state"] == "open"
-             and (project_id is None or c["project_id"] == project_id)]
+             and (project_id is None or c["project_id"] == project_id)
+             and c["project_id"] not in excluded_project_ids]
     items.sort(key=lambda i: -(i["detected_at"] or 0))
     # every detector evaluated since then; any finished run would hide deferral
     last_run = _complete_eval_at(_eval_state(db)[1])

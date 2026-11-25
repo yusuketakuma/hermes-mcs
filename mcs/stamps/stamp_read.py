@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from message_observations import METADATA_SHADOW_BACKOFF_S
+from message_observations import METADATA_SHADOW_BACKOFF_S, only_field_errors_sql
 
 REACTION_ACTORS_TTL_S = 24 * 3600
 
@@ -15,7 +15,7 @@ def reaction_actor_targets(db, limit=4, *, now=None):
     now = time.time() if now is None else now
     # w: roots and replies of threads active in the last 7 days in
     # active rooms (第2層 watch set) — stamps are pressed on both.
-    return db.execute("""
+    return db.execute(f"""
           SELECT m.message_id,m.project_id FROM messages m
           JOIN (SELECT m.message_id FROM messages m
             JOIN patients p ON p.project_id=m.project_id
@@ -28,7 +28,7 @@ def reaction_actor_targets(db, limit=4, *, now=None):
           ) w ON w.message_id=m.message_id
           JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
             SELECT source FROM message_metadata latest
-            WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
+            WHERE latest.message_id=m.message_id AND {only_field_errors_sql("latest.last_error")}
               AND json_valid(latest.content)
               AND json_type(latest.content,'$.reactions.value')='array'
             ORDER BY latest.checked_at DESC,latest.source='capture' DESC LIMIT 1)
@@ -114,7 +114,7 @@ def reaction_actor_summaries(db, message_ids, *, now=None) -> dict:
                     db, "SELECT message_id,json_extract(content,'$.reactions.observed_at') FROM ("
                     "SELECT message_id,content,ROW_NUMBER() OVER (PARTITION BY message_id "
                     "ORDER BY checked_at DESC,source='capture' DESC) AS newest FROM message_metadata "
-                    "WHERE message_id IN ({ids}) AND last_error IS NULL AND json_valid(content) "
+                    "WHERE message_id IN ({ids}) AND " + only_field_errors_sql("last_error") + " AND json_valid(content) "
                     "AND json_type(content,'$.reactions.value')='array') WHERE newest=1", complete):
                 changed[mid] = seen is not None and seen > fetches[mid][0]
         except sqlite3.OperationalError:

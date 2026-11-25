@@ -19,7 +19,7 @@ from mcs_util import payload_hash
 # Bump when acceptance changes outside the hashed code: the PASS rule in the
 # quality controller/receipts, a reinterpretation of an answer, or a Jev model
 # behaviour change under the same model name.
-QA_VERSION = 1
+QA_VERSION = 2
 
 # (module, name). Names are resolved through module globals on every call, so a
 # replaced function is seen. Helpers that only move bytes (mcs_util, the Jev

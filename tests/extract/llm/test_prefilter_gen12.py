@@ -147,9 +147,13 @@ def test_shared_allergy_cues_and_failed_hints_refuse_empty(monkeypatch):
 
 
 @pytest.mark.parametrize("body", ["こんにちは。", "ありがとうございます。", "承知しました。"])
-def test_real_thread_reply_is_not_an_empty_candidate(tmp_path, body):
+@pytest.mark.parametrize("root", ["full", "snippet", "partial", "missing"])
+def test_real_thread_reply_is_not_an_empty_candidate(tmp_path, body, root):
     with closing(_ledger(tmp_path)) as ledger:
-        _source(ledger, "完全合成の依頼です。明日の訪問をお願いします。", mid=10)
+        if root != "missing":
+            _source(ledger, "完全合成の依頼です。明日の訪問をお願いします。", mid=10)
+            with ledger.db:
+                ledger.db.execute("UPDATE messages SET body_state=? WHERE message_id=10", (root,))
         _source(ledger, body, parent_id=10)
         rows, _ = worker._select_pending(ledger, 1, {1}, None, False)
         assert [row["message_id"] for row in rows] == [1]

@@ -59,7 +59,7 @@ CATEGORIES = {
                "次回の収集で再試行されます。続く場合はMCSの画面が開けるか確認"),
     "schema": ("応答形式", "schema", False,
                "MCSの応答が想定と違う形式でした（MCS側の仕様変更の可能性）",
-               "続く場合は開発元へ連絡（python3 mcs/ops/mcs_setup.py doctor --share の結果を添える）"),
+               "続く場合は開発元へ連絡（~/.local/bin/mcs doctor --share の結果を添える）"),
     "storage": ("保存", "storage", False,
                 "取得した内容をこのMacに保存できませんでした",
                 "ディスクの空き容量と data フォルダの書込み権限を確認"),
@@ -80,16 +80,16 @@ CATEGORIES = {
                 "（確認できない場合はやり直さず data/mcs.log の cmd を確認）"),
     "config": ("設定", "other", False,
                "設定に誤りがあり、一部の機能を使えません",
-               "python3 mcs/ops/mcs_setup.py check で設定を確認"),
+               "~/.local/bin/mcs setup check で設定を確認"),
     "postprocess": ("収集後の処理", "other", True,
                     "要約・薬剤照合・集約などの収集後の処理が失敗しました（収集は完了しています）",
                     "次回の収集で再実行されます。続く場合は data/mcs.log を確認"),
     "runtime": ("実行基盤", "other", False,
                 "収集の実行そのものに問題がありました（記録・ロック・異常終了など）",
-                "python3 mcs/ops/mcs_setup.py check を実行。続く場合は data/mcs.log を確認"),
+                "~/.local/bin/mcs setup check を実行。続く場合は data/mcs.log を確認"),
     "other": ("その他・原因未分類", "other", False,
               "分類できないエラーがありました",
-              "続く場合は data/mcs.log を確認し、python3 mcs/ops/mcs_setup.py doctor --share の結果を開発元へ"),
+              "続く場合は data/mcs.log を確認し、~/.local/bin/mcs doctor --share の結果を開発元へ"),
 }
 # Every code the current producers emit after the prefix (see test_collection_diagnostics).
 _CODES = {
@@ -100,7 +100,8 @@ _CODES = {
     **dict.fromkeys(("rate_limited", "rate_limit"), "rate_limit"),
     **dict.fromkeys(("deadline_exceeded", "timeout", "worker_timeout", "budget_exhausted"),
                     "deadline"),
-    "deadline_deferred": "deferred",
+    # a designed queue wait that heals itself next pass, not a fault
+    **dict.fromkeys(("deadline_deferred", "semantic_repair_deferred"), "deferred"),
     "rollup_source_changed": "reevaluate",
     **dict.fromkeys(("http_error", "network_error", "connection_error", "worker_failed"),
                     "network"),

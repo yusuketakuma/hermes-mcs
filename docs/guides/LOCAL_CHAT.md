@@ -1,5 +1,7 @@
 # ローカル患者ワークスペース
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
+
 患者を選び、保存済みの投稿を古い順に閲覧しながら、MCS から取得した情報（投稿・添付・スタンプ・連携サマリー・MCS の登録データなど）を患者ごとに確認する「患者ワークスペース」の画面です。
 外部チャットのアカウント・SDK・CDN・クラウド推論は不要です。macOSのローカル操作者が明示的に起動する閲覧専用機能（薬局の患者台帳を指定したときだけ台帳を編集できます）で、既存のSlack・Discord・LINE WORKS連携は残します。
 
@@ -9,7 +11,7 @@
 原本の `ledger.db` は指定できません。スナップショットを外部へコピーしないでください。
 
 ```sh
-python3 mcs/ops/mcs_local_chat.py \
+"$PY" mcs/ops/mcs_local_chat.py \
   --snapshot /path/to/mcs/data/snapshots/ledger-snapshot.db \
   --project 101 --project 102
 ```
@@ -66,7 +68,7 @@ python3 mcs/ops/mcs_local_chat.py \
 在宅業務の記録（旧 zaitaku-calender の機能）をこのMacへ移すための土台で、職種に共通の機能（コア）の上に職種別のモジュールを載せる作りです。今は薬局モジュールだけがあり、`--homecare-module pharmacy`（既定）で有効になります。`--homecare-db` を付けなければ、これまでどおり閲覧専用です。
 
 ```sh
-python3 mcs/ops/mcs_local_chat.py \
+"$PY" mcs/ops/mcs_local_chat.py \
   --snapshot /path/to/mcs/data/snapshots/ledger-snapshot.db --all-patients \
   --homecare-db /path/to/mcs/data/homecare.db
 ```
@@ -139,7 +141,7 @@ python3 mcs/ops/mcs_local_chat.py \
 Mac の名前（`<名前>.<tailnet>.ts.net`）を確かめてから、固定のポートで起動します。例の `example-mac.example-tailnet.ts.net` は、この Mac の Tailscale の名前に置き換えてください。
 
 ```sh
-python3 mcs/ops/mcs_local_chat.py \
+"$PY" mcs/ops/mcs_local_chat.py \
   --snapshot /path/to/mcs/data/snapshots/ledger-snapshot.db --all-patients \
   --homecare-db /path/to/mcs/data/homecare.db \
   --port 8770 --tailnet-host example-mac.example-tailnet.ts.net \
@@ -172,7 +174,7 @@ tailscale serve --bg http://127.0.0.1:8770
 
 ```sh
 python3 scripts/development/local_chat_demo.py --output /path/to/new-synthetic-demo
-python3 mcs/ops/mcs_local_chat.py \
+"$PY" mcs/ops/mcs_local_chat.py \
   --snapshot /path/to/new-synthetic-demo/snapshots/ledger-snapshot.db \
   --all-patients
 ```

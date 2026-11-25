@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import sqlite3
 import patient_context_artifacts as context_artifacts
 from mcs_util import loads_dict, strict_json, valid_hash
 from inference_version import VERSION_KEY, current_meta_pred, read_version
@@ -57,6 +58,76 @@ def _profiled_summary_repair_exists(db, pid, input_key):
                 and meta.get('profile') is not None):
             return True
     return False
+
+
+def _quality_read(ledger, deadline, read):
+    """Seal the observed rows, keeping the original version fence for unrecordable reads."""
+    from patient_context_refresh_sources import _candidate_reader, _scan_writer_wait
+    from patient_readiness_witness import Recording
+
+    db = ledger.db
+    if db.in_transaction:
+        raise RuntimeError("patient_summary_transaction_active")
+    clock = patient_context_refresh_state.time.monotonic
+    changes = db.total_changes
+    witness = None
+    if db.execute("PRAGMA database_list").fetchone()[2]:
+        try:
+            with _candidate_reader(ledger, deadline) as reader:
+                with Recording(reader.db) as recording:
+                    value = read(reader)
+                    witness = recording.seal()
+        except sqlite3.DatabaseError as error:
+            if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_AUTH:
+                raise
+            # An SQL operation outside the recorder's allowlist uses the original read.
+    db.execute("BEGIN")
+    try:
+        version = db.execute("PRAGMA data_version").fetchone()[0]
+        if clock() >= deadline:
+            raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
+        if witness is None:
+            value = read(ledger)
+        elif not witness.matches(db, deadline, clock):
+            # The separately opened path must describe the writer's own database.
+            raise ValueError("patient_summary_quality_source_changed")
+    finally:
+        db.rollback()
+
+    def matches(own_writes=0):
+        nonlocal version
+        if clock() >= deadline or db.total_changes != changes + own_writes:
+            return False
+        if db.execute("PRAGMA data_version").fetchone()[0] == version:
+            return clock() < deadline
+        if witness is None:
+            return False
+        # Replay just the SQL observations. Outside a writer, try a fresh read first.
+        # Only a commit during that replay needs a reserved snapshot to make progress.
+        borrowed = db.in_transaction
+        for begin in ("BEGIN", "BEGIN IMMEDIATE"):
+            if not borrowed:
+                if begin == "BEGIN IMMEDIATE":
+                    until = min(deadline, clock() + _QUALITY_LOCK_WAIT_S + patient_context_refresh_state.COMMIT_MARGIN)
+                    with _scan_writer_wait(db, until):
+                        db.execute(begin)
+                else:
+                    db.execute(begin)
+            try:
+                seen = db.execute("PRAGMA data_version").fetchone()[0]
+                if not witness.matches(db, deadline, clock):
+                    return False
+            finally:
+                if not borrowed:
+                    db.rollback()
+            if clock() >= deadline or db.total_changes != changes + own_writes:
+                return False
+            if borrowed or db.execute("PRAGMA data_version").fetchone()[0] == seen:
+                version = seen
+                return clock() < deadline
+        return False
+
+    return value, matches
 
 
 _QUALITY_LOCK_WAIT_S = 60
@@ -257,30 +328,24 @@ def _quality_skip_receipt(db, pid, identity, selected, threshold):
     return content
 
 
-def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, threshold, reason):
+def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, threshold, reason, *, deadline=math.inf):
     """Persist a bounded skip only while the source, scope and owner remain current."""
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
-    version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-    changes = ledger.db.total_changes
-    ledger.db.execute("BEGIN")
-    try:
-        if not _quality_skip_evidence(ledger.db, pid, identity, selected, threshold):
+    def read(reader):
+        if not _quality_skip_evidence(reader.db, pid, identity, selected, threshold):
             raise ValueError("patient_summary_quality_unresolved_request")
-        prior = _quality_skip_receipt(ledger.db, pid, identity, selected, threshold)
-    finally:
-        ledger.db.rollback()
-    if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
-        raise ValueError("patient_summary_quality_source_changed")
-    fd = _acquire(current=current)
+        return _quality_skip_receipt(reader.db, pid, identity, selected, threshold)
+
+    prior, matches = _quality_read(ledger, deadline, read)
+    fd = _acquire(current=current, deadline=deadline)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
             if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
-                    or ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                    or ledger.db.total_changes != changes):
+                    or not matches()):
                 raise ValueError("patient_summary_quality_source_changed")
             writes = 0
             if prior is None:
@@ -443,7 +508,7 @@ def _quality_pass_present(db, pid, identity):
                       (patient_context_refresh_state._quality_kind(patient_context_refresh_state.QUALITY_PASS, identity), pid, identity["audit_key"])).fetchone() is not None
 
 
-def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold, *, descriptor=None):
+def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold, *, descriptor=None, deadline=math.inf):
     import semantic_runtime
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
@@ -452,28 +517,25 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
     # Validate the entire receipt set in a read snapshot, never under the
     # writer lock. The caller's current() fence is checked again in the
     # following writer transaction, including any intervening own writes.
-    version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-    changes = ledger.db.total_changes
-    ledger.db.execute("BEGIN")
-    try:
-        purpose = identity.get("purpose", "summary")
-        if semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, identity["fact_ids"], purpose=purpose):
+    purpose = identity.get("purpose", "summary")
+
+    def read(reader):
+        if semantic_runtime.patient_summary_request_problem(reader.db, pid, identity, identity["fact_ids"], purpose=purpose):
             raise ValueError("patient_summary_quality_unresolved_request")
         for start in range(0, len(identity["fact_ids"]), 12):
             ids = identity["fact_ids"][start:start + 12]
-            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
+            answers = _quality_answers(reader.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if set(answers) != set(ids) or any(
                     answers[fid]["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected_ids)
                     for fid in ids):
                 raise ValueError("patient_summary_quality_incomplete")
-        pass_content = _quality_pass_content(ledger.db, pid, identity, threshold=threshold, descriptor=descriptor)
+        pass_content = _quality_pass_content(reader.db, pid, identity, threshold=threshold, descriptor=descriptor)
         if pass_content is None:
             raise ValueError("patient_source_quality_receipt_missing")
-    finally:
-        ledger.db.rollback()
-    if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
-        raise ValueError("patient_summary_quality_source_changed")
-    fd = _acquire(current=current)
+        return pass_content
+
+    pass_content, matches = _quality_read(ledger, deadline, read)
+    fd = _acquire(current=current, deadline=deadline)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
@@ -481,8 +543,7 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
         try:
             if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
                     or _quality_failed(ledger.db, pid, identity)
-                    or ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                    or ledger.db.total_changes != changes):
+                    or not matches()):
                 raise ValueError("patient_summary_quality_source_changed")
             writes = 0
             if not _quality_passed(ledger.db, pid, identity, expected=pass_content):
@@ -602,8 +663,7 @@ def _quality_reserve_repair_tx(ledger, pid, identity, claim, current, receipt_fe
             or reservation.get("unit_key") != "summary_quality_repair"
             or reservation.get("owner") != owner):
         raise ValueError("patient_summary_quality_source_changed")
-    if (ledger.db.execute("PRAGMA data_version").fetchone()[0] != receipt_fence[0]
-            or ledger.db.total_changes != receipt_fence[1] + 1
+    if (not receipt_fence(1)
             or _quality_repair_spent(ledger.db, pid, identity["input_key"])
             or _other_summary_repair_spent(ledger.db, pid, identity)):
         raise ValueError("patient_summary_quality_source_changed")

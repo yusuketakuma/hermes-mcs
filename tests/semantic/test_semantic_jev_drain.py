@@ -493,9 +493,72 @@ def test_a_qc_larger_than_one_window_completes_over_several_days(tmp_path, monke
         assert sorted(asked) == sorted(questions) and len(questions) == 5
         assert json.loads(qc[0])["coverage"]["checked"] == 5
         assert jev_block_reason(db.db) is None
+        recovery, = db.artifacts(semantic_qc.KIND_JEV_HEALTH_RECOVERY)
+        assert recovery["artifact_id"] > db.artifacts("extract_qc")[0]["artifact_id"]
+        assert recovery["project_id"] is None and recovery["message_id"] is None
+        assert set(json.loads(recovery["meta"])) == {"jev_requests"}
+        assert json.loads(recovery["meta"])["jev_requests"] > 0
+        semantic_qc._drop_stale_qc(db, 1, "edited-source-hash")
+        db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
+                        meta={"hash": "edited-source-hash", "qc": "done", "jev_requests": 0})
+        assert jev_block_reason(db.db) is None
         assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (semantic_qc.QC_WAIT_KIND,)).fetchall()
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("later_error", [False, True])
+def test_replacing_the_only_legacy_qc_preserves_the_original_recovery_order(tmp_path, later_error):
+    from extract_testkit import _hash, _v2_artifact
+    from health_report import jev_block_reason
+
+    with contextlib.closing(_ledger(tmp_path)) as db:
+        db.save_messages([_message(1)])
+        db.artifact_add("semantic_assess", "{}", meta={"error_kind": "payment_required"})
+        recovery = db.artifact_add("extract_qc", '{"items":["synthetic"]}', 1, 1, "model",
+                                   {"hash": _hash(db), "qc": "done", "jev_requests": 1})
+        assert jev_block_reason(db.db) is None
+        if later_error:
+            db.artifact_add("semantic_assess", "{}", meta={"error_kind": "auth_error"})
+        db.save_messages([_message(1, body="synthetic edit")])
+        _v2_artifact(db, 1, _hash(db), content={"summary": "synthetic summary"})
+        client = _FakeJev()
+        cfg = _cfg("shadow", extract_qc="annotate", **JEV_ONLY)
+        semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
+                               jev_client=client, llm_fn=_no_local_model, lane="backlog")
+        assert client.requests_made == 0
+        assert [json.loads(row["meta"])["jev_requests"] for row in db.artifacts("extract_qc")] == [0]
+        assert jev_block_reason(db.db) == ("auth_error" if later_error else None)
+        marker, = db.artifacts(semantic_qc.KIND_JEV_HEALTH_RECOVERY)
+        assert (marker["artifact_id"], marker["project_id"], marker["message_id"],
+                marker["content"], marker["model"]) == (recovery, None, None, "{}", "")
+        assert json.loads(marker["meta"]) == {"jev_requests": 1}
+
+
+def test_qc_replacement_keeps_one_recovery_and_rolls_back_with_the_result(tmp_path):
+    with contextlib.closing(_ledger(tmp_path)) as db:
+        kind = semantic_qc.KIND_JEV_HEALTH_RECOVERY
+        for mid, meta in enumerate([{"jev_requests": 1}, {"jev_requests": 2}, {}, {"jev_requests": 0}], 1):
+            db.save_messages([_message(mid)])
+            db.artifact_add("extract_qc", "{}", 1, mid, meta={"hash": "old", "qc": "done", **meta})
+        for mid in (3, 4):
+            with db.db:
+                semantic_qc._drop_stale_qc(db, mid, "new")
+        assert not db.artifacts(kind)
+        with pytest.raises(RuntimeError, match="synthetic rollback"), db.db:
+            semantic_qc._drop_stale_qc(db, 2, "new")
+            raise RuntimeError("synthetic rollback")
+        assert not db.artifacts(kind)
+        assert [r["message_id"] for r in db.artifacts("extract_qc")] == [1, 2]
+        latest = db.artifacts("extract_qc", message_id=2)[0]["artifact_id"]
+        for mid in (2, 1):
+            with db.db:
+                semantic_qc._drop_stale_qc(db, mid, "new")
+        assert [r["artifact_id"] for r in db.artifacts(kind)] == [latest]
+        with pytest.raises(RuntimeError, match="synthetic rollback"), db.db:
+            semantic_qc._drop_stale_qc(db, 2, "new", new_requests=1)
+            raise RuntimeError("synthetic rollback")
+        assert [r["artifact_id"] for r in db.artifacts(kind)] == [latest]
 
 
 @pytest.mark.parametrize("sends", [False, True])

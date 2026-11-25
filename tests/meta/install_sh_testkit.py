@@ -208,6 +208,11 @@ exit 0
     "sw_vers": """#!/bin/sh
 echo 15.1
 """,
+    "sysctl": """#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "hw.memsize" ]; then echo "${STUB_MEMSIZE:-17179869184}"; exit 0; fi
+if [ "$1" = "-n" ] && [ "$2" = "machdep.cpu.brand_string" ]; then echo "${STUB_CPU_BRAND:-Apple M4}"; exit 0; fi
+exit 1
+""",
     "xcode-select": """#!/bin/sh
 echo /Library/Developer/CommandLineTools
 """,

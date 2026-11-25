@@ -45,8 +45,8 @@ installer内で初期設定を完了した場合は再度initを実行せず、�
 
 ```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py check
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py check
+"$PY" -m mcs_standalone status
 ```
 
 MCSの収集前にはChromeのログインとCDPポート`:9333`も準備します。[導入ガイドの動作確認](INSTALLATION.md#a-5-動作確認)の冒頭を確認し、同節のHermes用Pythonを使う例では上の`$PY`に読み替えます。収集・通知・既読化の確認は、許可した範囲で行います。
@@ -108,7 +108,7 @@ actor/project範囲を設定します。`allowed_role_ids`は任意で、@everyo
 `init`はその明示ファイルをJSONへ取り込み、既存ファイルは削除しません。
 JSONが存在して壊れている場合は `.env` へfallbackせず停止します。
 CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileから自動取得しません。
-`$PY -m mcs_standalone init --transport slack`または`discord`で認証情報を登録できます。
+`"$PY" -m mcs_standalone init --transport slack`または`discord`で認証情報を登録できます。
 既存の認証情報がある場合は、保持・変更希望・中止を選べます。変更希望は、古い接続や
 送信処理の停止を確認できる仕組みが整うまで保留し、認証情報は変更しません。
 `--yes`と端末を使わない実行では、既存の認証情報を保持します。
@@ -117,12 +117,11 @@ CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileか
 入力中の`.env`の変更を検出した場合も保存を中止します。
 入力を非表示にできない端末では、認証情報の入力を中止します。
 
-独立接続の認証情報を使えない場合は、`$PY -m mcs_standalone credential-status`で
+独立接続の認証情報を使えない場合は、`"$PY" -m mcs_standalone credential-status`で
 保留ファイルの状態を確認できます。この確認ではファイルを変更せず、旧版や手動で
 起動したプロセスの停止は確認できません。保留中や状態不明の場合は管理担当者に相談してください。
 
-LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設定します。
-独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。
+LINE WORKSは[専用手順](LINEWORKS.md)で接続を設定します。カード・操作を使う場合だけ公開HTTPS Callbackを設定し、独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。文章だけの通知ではアダプターの常駐は不要です。
 
 ### 患者情報と運用通知の送り先
 
@@ -159,13 +158,13 @@ LLMとrepo外の復旧watchdogは別のnative supervisorが所有します。
 個々の定期ジョブや抽出workerをcrontab・Hermes cron・LaunchAgentへ重複登録しません。
 
 ```bash
-$PY mcs/ops/mcs_setup.py services --dry-run
-$PY mcs/ops/mcs_setup.py services
-$PY mcs/ops/mcs_setup.py doctor
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py services --dry-run
+"$PY" mcs/ops/mcs_setup.py services
+"$PY" mcs/ops/mcs_setup.py doctor
+"$PY" -m mcs_standalone status
 ```
 
-サービスを使わず端末で動かすなら`$PY -m mcs_standalone run`を使います。
+サービスを使わず端末で動かすなら`"$PY" -m mcs_standalone run`を使います。
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
 ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
 
@@ -196,7 +195,7 @@ hostは同じdata rootに1つだけ起動できます。本文・秘密値を含
 - 状態ファイルは内容が変わったときと5秒ごとにだけ書き、ディスク満杯でも
   hostは落ちずにログへ1回記録します。
 
-Linuxでは`$PY -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
+Linuxでは`"$PY" -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
 `mcs_setup services`はユーザーsystemdへ配置します。Chrome・ローカルLLMなどの
 既存macOS向け導入は別途必要です。Linux候補の生成・隔離テストと実機検証は区別します。
 
@@ -214,9 +213,9 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。
 
-ローカルLLMのモデル（約5.7 GB）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
+ローカルLLMのモデル（容量は自動選択されたQwenで変わる）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
 独立: `~/.mcs/models`）。そのまま切り替えると`install.sh`が新しい保存先へ再ダウンロードし、
-元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に移動します。
+元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に導入済みのQwen GGUF（分割モデルは全ファイル）を移動します。Qwen3.5-9Bの例:
 
 ```bash
 mkdir -p ~/.mcs/models

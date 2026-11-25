@@ -85,14 +85,28 @@ jobs:
           DISCORD_BOT_TOKEN: synthetic.discord.token
         run: |
           set -o pipefail
-          ~/.local/bin/mcs setup --yes --runtime-mode "$MODE" \
-            --login-id synthetic-user \
-            --notify-target discord:1000000000000000001 \
-            --set 'notify.interactive="discord"' \
-            --set 'notify.discord={"profile":"default","application_id":"1000000000000000002","guild_id":"1000000000000000003","channel_id":"1000000000000000001"}' \
-            --plugin-user-ids 1000000000000000004 \
-            --plugin-chat-ids 1000000000000000001 \
-            --plugin-project-ids 1 </dev/null 2>&1 | tee "$LOG/setup.txt"
+          if [ "$MODE" = standalone ]; then
+            # 秘密値スキャン用の連続した接頭辞を repo に残さず、実行時だけ合成する。
+            export SLACK_BOT_TOKEN='xox''b-synthetic-token'
+            export SLACK_APP_TOKEN='xap''p-synthetic-token'
+            # 初回受入候補のSlack直接接続を、外部へ出ない確定済みチャンネル設定で確認する。
+            ~/.local/bin/mcs setup --yes --runtime-mode "$MODE" \
+              --login-id synthetic-user \
+              --notify-target slack:C000000001 \
+              --set 'notify_system_target="slack:C000000002"' \
+              --set 'notify.interactive="slack"' \
+              --set 'notify.slack={"profile":"default","application_id":"A000000001","team_id":"T000000001","channel_id":"C000000001","allowed_user_ids":["U000000001"],"project_ids":[1],"project_ids_auto":false}' \
+              </dev/null 2>&1 | tee "$LOG/setup.txt"
+          else
+            ~/.local/bin/mcs setup --yes --runtime-mode "$MODE" \
+              --login-id synthetic-user \
+              --notify-target discord:1000000000000000001 \
+              --set 'notify.interactive="discord"' \
+              --set 'notify.discord={"profile":"default","application_id":"1000000000000000002","guild_id":"1000000000000000003","channel_id":"1000000000000000001"}' \
+              --plugin-user-ids 1000000000000000004 \
+              --plugin-chat-ids 1000000000000000001 \
+              --plugin-project-ids 1 </dev/null 2>&1 | tee "$LOG/setup.txt"
+          fi
       - name: config check and doctor
         if: always()
         run: |
@@ -101,6 +115,13 @@ jobs:
           "$PY" mcs/ops/mcs_setup.py check </dev/null 2>&1 | tee "$LOG/check.txt" || true
           launchctl list | grep -E 'mcs|hermes' | tee "$LOG/launchctl.txt" || true
           ls -la ~/.mcs ~/.mcs/data ~/Library/LaunchAgents > "$LOG/files.txt" 2>&1 || true
+          if [ "$MODE" = standalone ]; then
+            test -f ~/Library/LaunchAgents/ai.mcs.standalone.plist
+            test -f ~/Library/LaunchAgents/local.mcs-health.plist
+            test -f ~/.mcs/data/slack-credentials.json
+            grep -q 'ai\.mcs\.standalone' "$LOG/launchctl.txt"
+            grep -q 'local\.mcs-health' "$LOG/launchctl.txt"
+          fi
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7

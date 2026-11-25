@@ -1,0 +1,190 @@
+{
+  "version": "1.3.0",
+  "records": {
+    "cloud-provider-definitions": {
+      "title": "外部AIの提供元ごとの判定を提供元の定義に集約",
+      "path": "changes/archive/1.3.0/cloud-provider-definitions.json",
+      "sha256": "a796d8105c27291b9b41e8a83f126d32e8616b4fbe8ff6b587093a2d03965d64"
+    },
+    "cloud-semantic-selection-lock-timing": {
+      "title": "クラウド意味解析のロック保持時間の記録を正す",
+      "path": "changes/archive/1.3.0/cloud-semantic-selection-lock-timing.json",
+      "sha256": "3a5eab3ef4ef90b80aba080fbc719be777e4f73d6133caea7e370f6813f9413e"
+    },
+    "cloud-tally-guarded-verification": {
+      "title": "クラウド費用チェックの照合を軽くして、クラウド抽出が進むようにする",
+      "path": "changes/archive/1.3.0/cloud-tally-guarded-verification.json",
+      "sha256": "ea1bf7241f853e3f7a1663638fca1f8deb1ff89fabe0c51affad68e5430a5787"
+    },
+    "cloud-tally-keep-unstamped": {
+      "title": "ほかの表への書込みで温めた費用集計を捨てないようにする",
+      "path": "changes/archive/1.3.0/cloud-tally-keep-unstamped.json",
+      "sha256": "891056e0c141f37f042f7dd839bb70bf07dbf986e9b3b39520987f053fdcfe81"
+    },
+    "cloud-unresolved-reselect-20261124": {
+      "title": "クラウド再抽出が同じ持ち越し投稿を繰り返し選定する問題を修正",
+      "path": "changes/archive/1.3.0/cloud-unresolved-reselect-20261124.json",
+      "sha256": "37d3b791dbf546f4ee8b29308522034ed01c77610125b7da389f80ad7bea3771"
+    },
+    "core-module-folders": {
+      "title": "mcs/core/ の補助モジュールを役割別のフォルダへ移動",
+      "path": "changes/archive/1.3.0/core-module-folders.json",
+      "sha256": "e8b5ab7ca1df501a2ee37aa87c08b84571afbeb92b76376357e45314a1146dab"
+    },
+    "derive-substage-timing": {
+      "title": "収集の派生処理の内訳時間を記録する",
+      "path": "changes/archive/1.3.0/derive-substage-timing.json",
+      "sha256": "6ed704cf57a9269923edaf7e29f390d5feac4886c66a7761cd56b08236ace42f"
+    },
+    "digest-rx-period-list": {
+      "title": "日次サマリーに処方期限の近い患者の一覧を追加",
+      "path": "changes/archive/1.3.0/digest-rx-period-list.json",
+      "sha256": "d69626fad2a44cc505c0901d1ccb5cb2f1544405ec34b2ec311a48dead4af8ff"
+    },
+    "drug-alias-over-limit-cache": {
+      "title": "別名数が上限を超える薬名辞書でヒント生成が毎回全走査する問題を修正",
+      "path": "changes/archive/1.3.0/drug-alias-over-limit-cache.json",
+      "sha256": "4bd28e660c886991cc1825cc872ae2790faf59d9157a7eca096690ff3f962136"
+    },
+    "drug-catalog": {
+      "title": "在宅記録などから使う医薬品の検索・照会の共通入口を追加",
+      "path": "changes/archive/1.3.0/drug-catalog.json",
+      "sha256": "44b410ba7eff0250f2cadb703aba6a9fad1998fe7fc1dbb9768241abd816d949"
+    },
+    "drug-patients-cross-search": {
+      "title": "薬剤名・マスター差分・添付文書改訂から、言及のある在宅患者を一覧にする",
+      "path": "changes/archive/1.3.0/drug-patients-cross-search.json",
+      "sha256": "89aa803154bd4193ae5d07532e8ef58a1e7d86ab7cfbb13bd3f7a4afed79ff56"
+    },
+    "homecare-local-backup": {
+      "title": "在宅記録の台帳をローカルバックアップの対象に追加",
+      "path": "changes/archive/1.3.0/homecare-local-backup.json",
+      "sha256": "fbc83cc89de36e0e89cc0f975996a6e4914f14d121521481580aa1fd6423f81d"
+    },
+    "homecare-register": {
+      "title": "ローカルの患者画面に在宅ケアの患者台帳・職員・ケアチームを追加",
+      "path": "changes/archive/1.3.0/homecare-register.json",
+      "sha256": "bc345c2eccac0b55de5c491519de98d048c1d38679c7ac13bc3a134603de0e96"
+    },
+    "homecare-resident-tailscale": {
+      "title": "在宅ケアの患者画面を事業所のスマホから使える常駐モードを追加",
+      "path": "changes/archive/1.3.0/homecare-resident-tailscale.json",
+      "sha256": "068f5d39048ecad52e165bcbb2ec08d5e4d05b340948478463a5b85eeffded04"
+    },
+    "homecare-visits-prescriptions-route": {
+      "title": "在宅ケアの台帳に訪問歴・処方歴・訪問時の情報・訪問ルートを追加",
+      "path": "changes/archive/1.3.0/homecare-visits-prescriptions-route.json",
+      "sha256": "aad5c7b953593206355ccdcef0b73bfee823a5249e710fc9776dc930948049ab"
+    },
+    "human-command-lock-wait": {
+      "title": "人が確認して実行する保存操作が、定期処理の合間に書込みロックを取れるようにする",
+      "path": "changes/archive/1.3.0/human-command-lock-wait.json",
+      "sha256": "c6230139be4a0afaa1f9556b3d3e53b73daafe164964f58c763deec9396ad5b8"
+    },
+    "install-fresh-resume": {
+      "title": "新規導入が設定の保存前に止まっても、同じコマンドの再実行で続きから導入できるように修正",
+      "path": "changes/archive/1.3.0/install-fresh-resume.json",
+      "sha256": "e0c389b49b1ff2d50eed36dd5f08056f7e17de0f077208af2db6717101f11f36"
+    },
+    "install-hermes-first-run": {
+      "title": "Hermes 経由の新規導入が、Hermes の初回起動に時間がかかって必ず止まる問題を修正",
+      "path": "changes/archive/1.3.0/install-hermes-first-run.json",
+      "sha256": "4126e6b95056a4ebcdb80d7e2f509920fc9d6a6d3564ecabb2b9bde179797633"
+    },
+    "issue-322": {
+      "title": "単発のカード通知が、ファイル公開の一時的な失敗で保留に止まる問題を修正",
+      "path": "changes/archive/1.3.0/issue-322.json",
+      "sha256": "7362baf646de34a84b80d6e136a225979c1a6edc4993850eb387745b05c7361f"
+    },
+    "jev-1-14": {
+      "title": "意味解析・抽出監査に使う Jev のモデルを jev-1.14.0 に更新",
+      "path": "changes/archive/1.3.0/jev-1-14.json",
+      "sha256": "820f4c40f0478b4c3c6ff3018c422babce2d3c49ded8164acbe870cf2ef74a38"
+    },
+    "jev-effect-observe": {
+      "title": "Jevへの要求と回答の内訳を処理状況の確認で表示",
+      "path": "changes/archive/1.3.0/jev-effect-observe.json",
+      "sha256": "79017e1b5e05eadb5c5044216a7376ab63ed29fa3847128a8629e44dffc37858"
+    },
+    "jev-manual-lock-wait": {
+      "title": "手動のJev操作が背景処理の実行中にすぐ失敗する問題を修正",
+      "path": "changes/archive/1.3.0/jev-manual-lock-wait.json",
+      "sha256": "c29094ff5076950cc08718939520f26b106dc8c8a7da24af404deb81108aeb15"
+    },
+    "jev-model-switch": {
+      "title": "Jevの新しいモデルを知らせ、確認に合格したときだけコマンドで切り替える",
+      "path": "changes/archive/1.3.0/jev-model-switch.json",
+      "sha256": "dc81ae9aea84588472a0ac0d4a439000d73616ab3776291b2dc0d66282984c98"
+    },
+    "jev-optional": {
+      "title": "Jev を導入していない環境と Jev の対象外の患者で、外部AIの患者コンテキストが公開待ちのまま止まる問題を修正",
+      "path": "changes/archive/1.3.0/jev-optional.json",
+      "sha256": "46facdbc177f5e1fa9b619cefc414fc54a397c4d23212ccb18ea05c5f2eef16f"
+    },
+    "lab-reading-redos-and-specimen-scope": {
+      "title": "検査値の判定で、検体の節・続く検査値の単位・長い行での停止を修正",
+      "path": "changes/archive/1.3.0/lab-reading-redos-and-specimen-scope.json",
+      "sha256": "e74effdde2350a1e7e991965628cf2159200136504d3fdf3e72b4b19683220ad"
+    },
+    "launchd-unknown-agent-state": {
+      "title": "launchctl の状態を確認できない常駐処理を未読込として起動する問題を修正",
+      "path": "changes/archive/1.3.0/launchd-unknown-agent-state.json",
+      "sha256": "ea3d6b4ba4585f6f1c55a90db5417b6830a3fcbfb8cdc7106304a4c48490e843"
+    },
+    "local-chat-mcs-coverage": {
+      "title": "ローカルの患者画面へMCSから取得した情報を漏れなく渡す",
+      "path": "changes/archive/1.3.0/local-chat-mcs-coverage.json",
+      "sha256": "d6b132018ac533a29bdfb76bea05f1ff397df114f8feb3ce41153abdb6b58e78"
+    },
+    "local-chat-patient-views": {
+      "title": "ローカルの患者画面で訪問前の確認ノートや経過などを表示",
+      "path": "changes/archive/1.3.0/local-chat-patient-views.json",
+      "sha256": "fd37ea015b97ec69e106b5574720ba7c150b604ee27509159e33a9cff25097fc"
+    },
+    "notify-remote-verify-actor": {
+      "title": "通知部品の遠隔確認スクリプトが、実行したユーザー名を操作者として記録",
+      "path": "changes/archive/1.3.0/notify-remote-verify-actor.json",
+      "sha256": "ac069c18cf1e9e4f2dd97ff42c09a4a77b8ca1bbff568bccb229b610ea13bb7a"
+    },
+    "notify-search-wording": {
+      "title": "通知の検索・日時・記録の状態の文言を実際の状態に合わせる",
+      "path": "changes/archive/1.3.0/notify-search-wording.json",
+      "sha256": "4809020f44873c3d8a646bb5733d3463fc903d862ca6ee6b47faa161e31dc1b4"
+    },
+    "patient-workspace-layout": {
+      "title": "患者画面のレイアウトを見直し（患者台帳は読む画面が先、訪問予定はカード表示、スマホは下のタブバー）",
+      "path": "changes/archive/1.3.0/patient-workspace-layout.json",
+      "sha256": "e556b7a929e9d06029dd701420ebdda077b89ef3bdea021926923c7375b76639"
+    },
+    "pharmacist-inquiry-signal": {
+      "title": "薬局から医師への照会・提案の返答待ちをアラートで知らせる",
+      "path": "changes/archive/1.3.0/pharmacist-inquiry-signal.json",
+      "sha256": "0574a8e681ae40a4deba05d69a93c33e993ec3a177a3aa2ac65d7addaf9cfff5"
+    },
+    "qc-cloud-second-attempt": {
+      "title": "抽出監査の指摘が残る投稿を、再抽出の再開期間中にクラウドで1回だけ再抽出",
+      "path": "changes/archive/1.3.0/qc-cloud-second-attempt.json",
+      "sha256": "6d1d5800a521052b683e56bac630d2871302689f6526a1d2bf74a1eadd3df4f3"
+    },
+    "queue-throughput-lock-wait": {
+      "title": "抽出・意味解析の待ちが溜まり続ける問題を軽減",
+      "path": "changes/archive/1.3.0/queue-throughput-lock-wait.json",
+      "sha256": "3dacaa99fd06195e0bd5270ca37066b5cab603f296f35fc6848e1f3b5e7716b5"
+    },
+    "semantic-assess-churn": {
+      "title": "同じ内容の投稿判定を Jev に繰り返し送る問題を修正",
+      "path": "changes/archive/1.3.0/semantic-assess-churn.json",
+      "sha256": "16477473fdbcd40a9c45200c2d52210249253b71d5a8d1a604b68141660dbe7b"
+    },
+    "semantic-drain-followup": {
+      "title": "Jevの日次上限で待機した抽出QCを、保存した回答の続きから再開",
+      "path": "changes/archive/1.3.0/semantic-drain-followup.json",
+      "sha256": "58514aa4a57e1e90c61a4635686b6596430e89ca3dc47c23eceedeae6e9b9c47"
+    },
+    "semantic-drain-throughput": {
+      "title": "未読の意味解析jobを止め抽出QCだけをまとめて処理",
+      "path": "changes/archive/1.3.0/semantic-drain-throughput.json",
+      "sha256": "9c9cfa382d4c796f6b949d34ba88d26d934bb82682b49493519dcc18eb8fd6cc"
+    }
+  }
+}

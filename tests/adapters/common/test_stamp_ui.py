@@ -116,6 +116,14 @@ def test_receipt_wording_never_claims_completion_before_readback(state, expect, 
         assert forbid not in out and "押しました" not in out
 
 
+def test_unknown_stamp_stays_pending_when_the_state_cannot_be_checked():
+    receipt = text.ja({"outcome": "applied", "stamp_state": "unknown"})
+    assert "1時間を過ぎても確認を続けます" in receipt
+    blocked = text.ja({"outcome": "rejected", "error": "stamp_result_unknown"})
+    assert "確認が終わるまで" in blocked and "次の操作はできません" in blocked
+    assert _payload({"post": "p4", "op": "add:viewed", "reason": "x"}) == blocked
+
+
 def test_only_a_queued_stamp_keeps_its_followup_waiting():
     assert text.followup_waiting({"outcome": "applied", "stamp_state": "queued"})
     for state in ("confirmed", "unknown", "rejected", None):

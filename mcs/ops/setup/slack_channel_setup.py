@@ -373,17 +373,67 @@ def _configured_channels(cfg):
 
 
 def _post_complete(state):
+    if state['state'] != 'applied':
+        return False
     if not surfaces_card(state):
-        return state['state'] == 'applied' and state.get('flags_ready') is True
-    return (state['state'] == 'applied'
-            and (state['plan']['runtime_mode'] != 'hermes'
-                 or state.get('worker_ready') is True
-                 or state.get('worker_ready') is not False
-                    and state['plan']['roles']['patient']['state'] != 'pending'))
+        return state.get('flags_ready') is True
+    if state['plan']['runtime_mode'] == 'standalone':
+        return state.get('flags_ready') is True
+    return (state.get('worker_ready') is True
+            or state.get('worker_ready') is not False
+            and state['plan']['roles']['patient']['state'] != 'pending')
 
 
 def surfaces_card(state):
     return _plan_surfaces(state['plan']).get('card') is True
+
+
+def _applied_channels_match(cfg, state):
+    """Whether the current concrete Slack routes are the channels this applied intent bound."""
+    if not isinstance(state, dict) or state.get('state') != 'applied' or not _configured_channels(cfg):
+        return False
+    roles = state.get('roles')
+    if not isinstance(roles, dict):
+        return False
+    notify = cfg.get('notify') or {}
+    scope = notify.get('slack') if isinstance(notify, dict) else None
+    scope = scope if isinstance(scope, dict) else {}
+    patient = cfg.get('notify_target')
+    surfaces = _surfaces(cfg)
+    text_channel = (patient.partition(':')[2]
+                    if surfaces['text'] and isinstance(patient, str) else None)
+    card_channel = scope.get('channel_id') if surfaces['card'] else None
+    system = cfg.get('notify_system_target')
+    system_channel = system.partition(':')[2] if isinstance(system, str) else None
+    patient_role = roles.get('patient') or {}
+    system_role = roles.get('system') or {}
+    patient_channels = {channel for channel in (text_channel, card_channel) if channel}
+    if (patient_channels != {patient_role.get('id')}
+            or system_role.get('id') != system_channel):
+        return False
+    desired = plan(cfg)
+    planned = state.get('plan') or {}
+    return (desired is not None
+            and _plan_surfaces(planned).get('card') is True
+            and desired['surfaces']['card'] is True
+            and all(planned.get(key) == desired.get(key)
+                    for key in ('binding', 'users', 'runtime_mode')))
+
+
+def _standalone_flags_pending(state):
+    return (isinstance(state, dict) and state.get('state') == 'applied'
+            and state.get('plan', {}).get('runtime_mode') == 'standalone'
+            and surfaces_card(state) and state.get('flags_ready') is not True)
+
+
+def _flags_migration_pending(cfg, state):
+    return _standalone_flags_pending(state) and _applied_channels_match(cfg, state)
+
+
+def _config_publication_noop(previous, saved, state):
+    return (saved == previous
+            and (creation_unneeded(previous, state)
+                 or _flags_migration_pending(previous, state)))
 
 
 def creation_unneeded(cfg, state):
@@ -446,7 +496,12 @@ def plan(cfg, *, users=None):
 
 def prepare(root, cfg, *, users=None):
     """Only an explicit installer/setup/update call may create this durable intent."""
-    if not required(cfg) or creation_unneeded(cfg, read(root)):
+    if not required(cfg):
+        return None
+    existing = read(root)
+    if creation_unneeded(cfg, existing):
+        return None
+    if _flags_migration_pending(cfg, existing):
         return None
     desired = plan(cfg, users=users)
     if desired is None:
@@ -455,6 +510,8 @@ def prepare(root, cfg, *, users=None):
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
         if creation_unneeded(cfg, state):
+            return None
+        if _flags_migration_pending(cfg, state):
             return None
         key = _hash(desired)
         if state:
@@ -638,11 +695,11 @@ def stage_config(root, previous, saved):
     """Seal the exact verified config before its owner's config CAS."""
     if not required(previous):
         return
-    if creation_unneeded(previous, read(root)) and saved == previous:
+    if _config_publication_noop(previous, saved, read(root)):
         return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
-        if creation_unneeded(previous, state) and saved == previous:
+        if _config_publication_noop(previous, saved, state):
             return
         if state is None or candidate(root, previous) != saved:
             raise ValueError('slack_setup_saved_config_mismatch')
@@ -654,11 +711,11 @@ def stage_config(root, previous, saved):
 
 def applied(root, previous, saved):
     """Record successful CAS only when its result matches the verified receipt exactly."""
-    if creation_unneeded(previous, read(root)) and saved == previous:
+    if _config_publication_noop(previous, saved, read(root)):
         return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
-        if creation_unneeded(previous, state) and saved == previous:
+        if _config_publication_noop(previous, saved, state):
             return
         if state is None:
             return
@@ -703,6 +760,19 @@ def reconnect_ready(root, cfg):
     raise ValueError('slack_setup_worker_pending')
 
 
+def _publish_flags_ready(root, cfg, state):
+    """Publish current route flags, then mark this exact applied intent converged."""
+    import notify_spool
+    notify_spool.ensure_dirs(str(Path(root) / 'data'))
+    notify_spool.publish_flags(cfg, str(Path(root) / 'data'))
+    with config_edit._edit_lock(str(path(root))):
+        current = read(root)
+        if current != state:
+            raise ValueError('slack_setup_existing_intent_conflict')
+        current['flags_ready'] = True
+        save(root, current)
+
+
 def finish_runtime(root, cfg, args):
     """Resume the post-CAS step without making another create request."""
     import notify_spool
@@ -719,19 +789,21 @@ def finish_runtime(root, cfg, args):
             return
         if state.get('applied_hash') != _hash(cfg):
             raise ValueError('slack_setup_not_ready_or_config_changed')
-        notify_spool.ensure_dirs(str(Path(root) / 'data'))
-        notify_spool.publish_flags(cfg, str(Path(root) / 'data'))
-        with config_edit._edit_lock(str(path(root))):
-            current = read(root)
-            if current != state:
-                raise ValueError('slack_setup_existing_intent_conflict')
-            current['flags_ready'] = True
-            save(root, current)
+        _publish_flags_ready(root, cfg, state)
         return
     if _post_complete(state):
         return
-    if state.get('applied_hash') != _hash(cfg):
+    standalone = state['plan']['runtime_mode'] == 'standalone'
+    if state.get('applied_hash') != _hash(cfg) and not (
+            standalone and _applied_channels_match(cfg, state)):
         raise ValueError('slack_setup_not_ready_or_config_changed')
+    if standalone:
+        # The standalone host owns its connector and restarts when the saved
+        # config changes; there is no Hermes card worker to rewire. The route
+        # flags are still the worker-visible publication and must be durable
+        # before this setup is treated as converged.
+        _publish_flags_ready(root, cfg, state)
+        return
     args.plugin_profile = state['plan']['binding']['profile']
     args.plugin_user_ids = ','.join(state['plan']['users'])
     if not setup_integration._apply_plugin_integration(cfg, args):

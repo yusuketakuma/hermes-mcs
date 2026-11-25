@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "手動の規則抽出と修復診断で過去の抽出を作り直す範囲を指定できる",
+  "summary": "手動の規則抽出も extract.upgrade_scope に従います。添付OCRは、処理開始後に対象を絞った場合も範囲外の過去世代を作り直しません。新着や訂正依頼は従来どおり処理します。",
+  "upgrade": "手動抽出は更新後の実行から、常駐する添付OCRは更新後の再起動から反映されます。修復診断では、従来どおり範囲を指定せずに既存の計画を検証できます。",
+  "details": ["mcs_repair.py plan に --scope-config で設定JSONを渡すと、作り直しの候補と範囲外の件数を分けて表示します。患者を指定した計画の record と finalize には、同じ患者の範囲を指定した設定JSONを渡してください。計画と監査記録には患者IDを出力しません。"],
+  "refs": ["mcs/extract/rules/extract.py", "mcs/extract/attachment_inference.py", "mcs/ops/mcs_repair.py", "#191"]
+}

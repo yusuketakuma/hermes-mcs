@@ -268,7 +268,7 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
     ntf = cfg.get("notify") or {}
     exe = mcs_util.hermes_exe(cfg) if cfg.get("runtime_mode") != "standalone" else ""
     lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
-    target = cfg.get("notify_target", "")
+    targets = (cfg.get("notify_target"), cfg.get("notify_system_target"))
     if mcs_runtime.standalone(cfg):
         # Slack/Discord run on MCS's own connector — Hermes is not used.
         r = run([mcs_runtime.python_executable(cfg),
@@ -281,7 +281,7 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
             warnings.append("MCSが独立して接続していますが、Hermesの接続サービスも稼働しています。"
                             "Slack/Discordの二重接続を避けるため、Hermes側の接続設定を外すか、"
                             "Hermesの接続サービスを停止してください（docs/guides/STANDALONE.md）")
-    elif lineworks or (isinstance(target, str) and target.startswith("lineworks:")):
+    elif lineworks or any(isinstance(target, str) and target.startswith("lineworks:") for target in targets):
         r = run([sys.executable, os.path.join(paths.checkout, "lineworks_adapter", "__main__.py"),
                   "check", "--root", paths.root], timeout=20)
         if r.returncode:

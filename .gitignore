@@ -41,6 +41,7 @@ ocr-venv/
 /scripts/mcs_llm_catchup.sh
 /scripts/mcs_ocr.sh
 /scripts/mcs_offsite.sh
+/scripts/mcs_release_auto.sh
 /scripts/mcs_update.sh
 
 # Generated release video artifacts

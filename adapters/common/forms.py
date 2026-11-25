@@ -33,6 +33,7 @@ MODAL_TITLES = {"request": "タスク作成", "dismiss": "候補を却下",
                 "drugsearch": "薬剤を検索", "digest": "サマリー（絞込み）",
                 "stamp": "MCSスタンプ"}
 STAMP_REASON_MAX = 200
+STAMP_RESULT_PENDING = "この投稿のスタンプは結果を確認中です。確認が終わるまで、カードから次の操作はできません。急ぐ場合はMCSの画面で状態を確認してください。"
 # card actions whose click opens a modal (forms.modal_fields) instead of
 # answering directly
 MODAL_ACTIONS = tuple(MODAL_TITLES)
@@ -164,7 +165,7 @@ def stamp_attrs(fields: dict, form: dict | None):
         return "対象の投稿を選択してください。"
     own = post.get("own") if isinstance(post.get("own"), dict) else {}
     if own.get("state") == "pending":
-        return "この投稿のMCSスタンプは確認中です。結果が出てからやり直してください。"
+        return STAMP_RESULT_PENDING
     if own.get("state") != "observed":
         return "この投稿の現在のMCSスタンプを確認できないため送信できません。"
     op = fields.get("op") or ""

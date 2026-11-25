@@ -1,5 +1,5 @@
 """Advance fair patient context work while preserving inference and publication evidence."""
-from contextlib import closing as closing, contextmanager as contextmanager
+from contextlib import ExitStack, closing as closing, contextmanager as contextmanager
 from datetime import datetime as datetime
 import copy as copy
 import hashlib as hashlib
@@ -407,7 +407,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     scan_reads, scan_interrupts = 0, 0
     unreadable = []
     best, selected = {}, None
-    rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+    rotation = None
     covered = False
 
     def count(key):
@@ -555,73 +555,88 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
             if not kept:
                 os.close(lock)
 
-    try:
-        with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
-            candidates, role_skips = 0, 0
-            if prefer is not None:
-                # Finishing the patient this worker is on comes before the fair turn, as one
-                # of the pass's candidates.
-                patient_context_refresh_sources._scan_check(reader.db)
-                candidates += 1
-                if consider(reader, prefer) == 'selected':
-                    selected = prefer
-            # A patient skipped for its role moves only this in-memory bookmark; the next write
-            # (the next candidate's, or the one at the end of the pass) carries it.
-            bookmark = rotation[0].get(scan_key)
+    def persist(value):
+        nonlocal rotation
+        rotation = _advance_patient_scan(ledger, rotation, value, deadline, admit,
+                                         observed_out=observed_out, key=scan_key)
+        if rotation is None:
+            raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
 
-            def persist(value):
-                nonlocal rotation
-                rotation = _advance_patient_scan(ledger, rotation, value, deadline, admit,
-                                                 observed_out=observed_out, key=scan_key)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
-
-            while selected is None and candidates < 8:
-                patient_context_refresh_sources._scan_check(reader.db)
-                original = bookmark
-                # Expensive activity ordering must not consume the fair turn's chance.
-                reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
+    def reserve(reader):
+        """Reserve the next candidate from the live bookmark before reading its evidence."""
+        nonlocal rotation, covered, role_skips, prefer
+        rotation = patient_context_refresh_state._latest(reader.db, patient_context_refresh_state.PROGRESS, 0)
+        if prefer is not None:
+            pid, prefer = prefer, None
+            return pid
+        bookmark = rotation[0].get(scan_key)
+        yield_after = patient_context_refresh_state.time.monotonic() + 1.0
+        while True:
+            patient_context_refresh_sources._scan_check(reader.db)
+            # Expensive activity ordering must not consume the fair turn's chance.
+            reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN,
+                                       patient_context_refresh_state.time.monotonic() + 1.0)
+            try:
+                plan = context_schedule.plan(reader.db, bookmark)
+            except Exception:
+                # A cancelled candidate query still uses its turn; retain the query error.
                 try:
-                    plan = context_schedule.plan(reader.db, original)
+                    persist(context_schedule.advance_turn(bookmark))
                 except Exception:
-                    # A cancelled candidate query still uses up its turn; the query's own error
-                    # is the one the pass reports.
-                    try:
-                        persist(context_schedule.advance_turn(original))
-                    except Exception:
-                        pass
-                    raise
-                finally:
-                    reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
-                bookmark = plan['next']
-                pid = plan['project_id']
-                if pid is not None and pid not in seen and passed(pid):
-                    seen.add(pid)
-                    role_skips += 1
-                    if role_skips >= _ROLE_SKIP_LIMIT or _scan_covered(reader.db, seen):
-                        covered = role_skips < _ROLE_SKIP_LIMIT
-                        break
-                    continue
+                    pass
+                raise
+            finally:
+                reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
+            bookmark, pid = plan['next'], plan['project_id']
+            if pid is None or pid in seen or not passed(pid):
                 persist(bookmark)
-                if pid is None or pid in seen:
-                    candidates += 1
-                    if _scan_covered(reader.db, seen):
-                        covered = True
-                        break
-                    continue
-                outcome = consider(reader, pid)
+                return pid
+            # Fold consecutive other-role patients into one bookmark write.
+            seen.add(pid)
+            role_skips += 1
+            if role_skips >= _ROLE_SKIP_LIMIT or _scan_covered(reader.db, seen):
+                covered = role_skips < _ROLE_SKIP_LIMIT
+                persist(bookmark)
+                return None
+            if patient_context_refresh_state.time.monotonic() >= yield_after:
+                persist(bookmark)
+                return None
+
+    try:
+        candidates, role_skips = 0, 0
+        while candidates < 8 and not covered and role_skips < _ROLE_SKIP_LIMIT:
+            fd, reason = _selection_lock(ledger.db)
+            if fd is None:
+                if not candidates and not role_skips:
+                    raise _SelectionUnavailable(reason)
+                if observed_out is not None:
+                    observed_out['selection_refusal'] = reason
+                scan_interrupts += 1
+                break
+            with ExitStack() as scan:
+                try:
+                    reader = scan.enter_context(patient_context_refresh_sources._candidate_reader(ledger, deadline))
+                    patient_context_refresh_sources._scan_check(reader.db)
+                    skipped_before = role_skips
+                    preferred = prefer is not None
+                    pid = reserve(reader)
+                finally:
+                    os.close(fd)
+                if pid is None and role_skips > skipped_before:
+                    continue   # a batch of other-role skips uses no candidate
                 candidates += 1
-                if outcome == 'skipped':
-                    continue
-                if outcome == 'selected':
-                    selected = pid
-                    break
-                if _scan_covered(reader.db, seen):
+                if pid is not None and pid not in seen:
+                    outcome = consider(reader, pid)
+                    if outcome == 'selected':
+                        selected = pid
+                        # Peers may have claimed a different patient's lane during this read.
+                        rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+                        break
+                    if preferred or outcome in ('skipped', 'other_role'):
+                        continue
+                if role_skips < _ROLE_SKIP_LIMIT and _scan_covered(reader.db, seen):
                     covered = True
-                    break
-            if bookmark != rotation[0].get(scan_key):
-                persist(bookmark)   # the skips after the last write: once per pass
-            _raise_if_systemic(unreadable, scanned)
+        _raise_if_systemic(unreadable, scanned)
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
@@ -834,8 +849,12 @@ def _guard_refusal_code(error):
         else type(error).__name__
 
 
+class _SelectionUnavailable(Exception):
+    """The next bookmark could not be reserved by this pass."""
+
+
 def _selection_lock(db):
-    """Non-blocking per-database mutex covering patient selection and claim.
+    """Non-blocking per-database mutex for reserving the next patient scan turn.
 
     Returns ``(fd, None)`` while held or ``(None, reason)`` carrying a fixed
     code: ``patient_context_selection_busy`` when another worker holds the
@@ -873,9 +892,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         # Nothing is left for a local lane while the cloud lane serves every patient: no scan.
         return {"status": "deferred", "done": 0, "reason": "patient_context_other_role"}
     scan_key = _scan_key(role)
-    selection_fd, selection_reason = _selection_lock(ledger.db)
-    if selection_fd is None:
-        return {"status": "deferred", "done": 0, "reason": selection_reason}
     try:
         started = patient_context_refresh_state.time.monotonic()
         scan_observed = {}
@@ -889,6 +905,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         for key in ('scan_refusal', 'skip_patient_code', 'generation_reason', 'unverified_records'):
             if scan_observed.get(key) is not None:
                 stats[key] = scan_observed[key]
+        if 'selection_refusal' in scan_observed:
+            return {"status": "deferred", "done": 0, "reason": scan_observed['selection_refusal'], **stats}
         if scan_rotation is None:
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         rotation = scan_rotation[0]
@@ -965,8 +983,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         except BaseException:
             ledger.db.rollback()
             raise
-    finally:
-        os.close(selection_fd)
+    except _SelectionUnavailable as conflict:
+        return {"status": "deferred", "done": 0, "reason": conflict.args[0]}
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
@@ -1743,44 +1761,35 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
         discard_if_changed()
         return {"status": "deferred", "done": 0}
-    # Rebuild the source signature outside the write lock. A data-version
-    # fence seals the read against any concurrent writer before publication.
-    quality_fence = None
-    source_pass_content = None
-    if source_quality_identity is not None:
-        before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        ledger.db.execute("BEGIN")
-        try:
-            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["route"], cfg, result):
-                return {"status": "source_changed", "done": 0}
-            source_pass_content = (patient_context_quality_receipts._quality_pass_content(ledger.db, pid, source_quality_identity)
-                                   if not source_quality_skipped else None)
-            if not source_quality_skipped and source_pass_content is None:
-                return {"status": "source_changed", "done": 0}
-        finally:
-            ledger.db.rollback()
-        quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        if quality_fence != before:
-            return {"status": "source_changed", "done": 0}
-    if quality_identity is not None:
-        before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        ledger.db.execute("BEGIN")
-        try:
-            refreshed_quality = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, result["summary"],
-                                                  quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
+    def quality_proofs(reader):
+        source_pass_content = refreshed_quality = None
+        if source_quality_identity is not None:
+            if not patient_context_refresh_sources._source_quality_verified(
+                    reader.db, pid, source, snapshot["route"], cfg, result):
+                return None
+            if not source_quality_skipped:
+                source_pass_content = patient_context_quality_receipts._quality_pass_content(
+                    reader.db, pid, source_quality_identity)
+                if source_pass_content is None:
+                    return None
+        if quality_identity is not None:
+            refreshed_quality = patient_context_refresh_sources._quality_capture(
+                reader.db, pid, cfg, workday_id, result["summary"], quality_identity["assessment"],
+                result["temporal_view"], source_keys=source_keys)
             if refreshed_quality["identity"] != quality_identity:
-                return {"status": "source_changed", "done": 0}
-        except (ValueError, KeyError, TypeError):
+                return None
+        return source_pass_content, refreshed_quality
+
+    quality_current = None
+    if quality_identity is not None or source_quality_identity is not None:
+        try:
+            proofs, quality_current = patient_context_quality_receipts._quality_read(ledger, deadline, quality_proofs)
+        except (ValueError, KeyError, TypeError, patient_context_refresh_state.Deferred):
             return {"status": "source_changed", "done": 0}
-        finally:
-            ledger.db.rollback()
-        quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
-        if quality_fence != before:
+        if proofs is None:
             return {"status": "source_changed", "done": 0}
+        source_pass_content, refreshed_quality = proofs
     version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-    changes = ledger.db.total_changes
-    if quality_fence is not None and quality_fence != (version, changes):
-        return {"status": "source_changed", "done": 0}
     _, write_proof[0], ready_snapshot = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg, deadline=deadline,
         complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys,
         write_scope={'source_key': context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None,
@@ -1835,7 +1844,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 except ValueError:
                     return {"status": "source_changed", "done": 0}
                 version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-                changes = ledger.db.total_changes
                 fresh = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
                 scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
                 waited = 0
@@ -1868,8 +1876,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": str(refused),
                             "guard_error": guard_error[0], "cloud_refusal": cloud_refusal[0]}
-            if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                                                 or ledger.db.total_changes != changes):
+            if quality_current is not None and not quality_current():
                 ledger.db.rollback()
                 return {"status": "source_changed", "done": 0}
             if quality_identity is not None:
@@ -2097,7 +2104,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, extract_llm.load_config(), [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and patient_context_refresh_state.time.monotonic() < deadline
-                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
                     and ledger.db.total_changes == adoption_before + adoption_writes[0])
                 if not valid_adoption:
                     ledger.db.rollback()

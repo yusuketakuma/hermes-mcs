@@ -27,6 +27,9 @@ QC_MAX_ITEMS = 16
 # Answers a QC job obtained before Jev stopped it, bound to the extraction
 # and question set they answer; never a QC result.
 QC_WAIT_KIND = "extract_qc_wait"
+KIND_JEV_HEALTH_RECOVERY = "semantic_jev_health_recovery"
+JEV_REQUESTS_POSITIVE_SQL = ("json_type(meta,'$.jev_requests')='integer' "
+                             "AND json_extract(meta,'$.jev_requests')>0")
 # Audited sections in round-robin order; allergies come last so earlier
 # extractions (which carry none) keep their exact question layout.
 _QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events", "allergies")
@@ -85,14 +88,27 @@ def qc_scope_sql(now: float, msg: str = "m") -> tuple[str, tuple]:
             (now - QC_REALTIME_MAX_AGE_S,))
 
 
-def _drop_stale_qc(ledger, mid: int, current_hash: str) -> None:
-    """Replace QC rows left over from a superseded message hash — the
-    replacement lands in the caller's tx so the row is never left
-    claimable without its result."""
-    ledger.db.execute(
-        "DELETE FROM artifacts WHERE kind=? AND message_id=?"
-        " AND json_valid(meta) AND json_extract(meta,'$.hash') != ?",
-        (QC_ARTIFACT, mid, current_hash))
+def _drop_stale_qc(ledger, mid: int, current_hash: str, *, new_requests=0) -> None:
+    """Keep the latest confirmed Jev recovery when replacing QC in the caller's transaction."""
+    stale = "kind=? AND message_id=? AND json_valid(meta) AND json_extract(meta,'$.hash') != ?"
+    params = (QC_ARTIFACT, mid, current_hash)
+    if type(new_requests) is int and new_requests > 0:
+        ledger.db.execute("DELETE FROM artifacts WHERE kind=?", (KIND_JEV_HEALTH_RECOVERY,))
+        ledger.artifact_add_tx(KIND_JEV_HEALTH_RECOVERY, "{}", meta={"jev_requests": new_requests})
+    else:
+        # A pre-marker QC may be the only proof. Retain its id so an edit cannot overtake a later error.
+        saved = ledger.db.execute(
+            "UPDATE artifacts SET kind=?,project_id=NULL,message_id=NULL,content='{}',model='',"
+            "meta=json_object('jev_requests',json_extract(meta,'$.jev_requests')) "
+            f"WHERE artifact_id=(SELECT artifact_id FROM artifacts WHERE {stale} AND "
+            f"json_extract(meta,'$.qc')='done' AND {JEV_REQUESTS_POSITIVE_SQL} "
+            "ORDER BY artifact_id DESC LIMIT 1)", (KIND_JEV_HEALTH_RECOVERY, *params))
+        if saved.rowcount:
+            ledger.db.execute(
+                "DELETE FROM artifacts WHERE kind=? AND artifact_id != ("
+                f"SELECT MAX(artifact_id) FROM artifacts WHERE kind=? AND json_valid(meta) AND {JEV_REQUESTS_POSITIVE_SQL})",
+                (KIND_JEV_HEALTH_RECOVERY, KIND_JEV_HEALTH_RECOVERY))
+    ledger.db.execute(f"DELETE FROM artifacts WHERE {stale}", params)
 
 
 def _reduce_answers(partial, questions) -> dict | None:
@@ -379,15 +395,15 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         # claimable after its result
         with ledger.db:
             guard('qc:write')
-            _drop_stale_qc(ledger, mid, art[1])
             drop_wait()
+            meta = {VERSION_KEY: CURRENT_VERSION, "hash": art[1],
+                    "extract_version": extract_llm.EXTRACT_VERSION,
+                    "source_artifact_id": art[2], "qc": qc, **(extra or {})}
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.model_in_use(scfg),
-                meta={VERSION_KEY: CURRENT_VERSION, "hash": art[1],
-                      "extract_version": extract_llm.EXTRACT_VERSION,
-                      "source_artifact_id": art[2],
-                      "qc": qc, **(extra or {})})
+                meta=meta)
+            _drop_stale_qc(ledger, mid, art[1], new_requests=meta.get("jev_requests") if qc == "done" else 0)
             if not runtime.transition_tx(ledger, token, "done"):
                 raise runtime.RuntimeStale("qc:write")
 

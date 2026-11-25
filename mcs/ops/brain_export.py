@@ -120,12 +120,13 @@ def _banner(view) -> str:
             f"> {HONESTY}\n\n")
 
 
-def _meta_md(view) -> str:
+def _meta_md(view, excluded: int = 0) -> str:
     gen_at = view.meta["generated_at"]
     return (_fm("MCS export meta") + "# MCS export meta\n\n" + _banner(view)
             + f"- snapshot generation: {view.meta['generation_id']}\n"
             + f"- snapshot generated_at: {_jst(gen_at, '%Y-%m-%dT%H:%M:%S%z')}\n"
-            + "- source: published snapshot (read-only; live ledger untouched)\n")
+            + "- source: published snapshot (read-only; live ledger untouched)\n"
+            + f"- excluded patients (権限喪失): {excluded}\n")
 
 
 def _count(db, sql, *params) -> int | None:
@@ -229,13 +230,16 @@ def _signals_md(view, res: dict) -> str:
     return "".join(lines)
 
 
-def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_config_unavailable=False) -> str:
+def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_config_unavailable=False,
+                archived: bool = False) -> str:
     title = f"MCS {name}"
     lines = [_fm(title), f"# {name}\n\n"]
     lines.append(f"- project_id: {pid}\n")
     lines.extend(f"- {k}: {info[k]}\n"
                  for k in ("project_type", "disease", "station_name")
                  if info.get(k))
+    if archived:
+        lines.append("- archived: true\n")
     if roll.get("rollup_freshness") == "unknown":
         lines.append("\n## 患者集約: 未確認\n\n記録の現行性を確認できません。\n")
         return "".join(lines)
@@ -364,8 +368,17 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             directory = out_dir / name
             _check_directory(directory)
         info = {r["project_id"]: dict(r) for r in view.db.execute(
-            "SELECT project_id,patient_name,project_type,disease,station_name"
-            " FROM patients")}
+            "SELECT project_id,patient_name,project_type,disease,station_name,"
+            "is_archived,fetch_state,fetch_reason FROM patients")}
+        # 権限喪失: the shared scope predicate — a refused fetch or an
+        # access-revoked reason. An archived room still within rights keeps
+        # its page; only the marker changes.
+        lost_pids = {pid for pid, row in info.items()
+                     if row.get("fetch_state") == "forbidden"
+                     or row.get("fetch_reason") in (
+                         "forbidden", "permission_denied", "access_revoked")}
+        archived_pids = {pid for pid, row in info.items()
+                         if row.get("is_archived")}
         rolls = {r["project_id"]: (r["content"], r["meta"]) for r in view.db.execute(
             "SELECT project_id,content,meta FROM artifacts "
             "WHERE kind='patient_rollup' ORDER BY artifact_id")}
@@ -380,13 +393,13 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         # Stop before writing any output rather than prune an existing page or
         # publish a mixture of generations. Patients without source messages
         # need no rollup unless an existing generated page would be removed.
-        missing = set(info) - set(rolls)
+        # A permission-lost patient is excluded, not a temporary rollup gap:
+        # it never blocks the export, and its existing page is pruned below.
+        missing = set(info) - set(rolls) - lost_pids
         if missing:
             if view.db.execute(
-                    "SELECT 1 FROM patients p WHERE EXISTS "
-                    "(SELECT 1 FROM messages m WHERE m.project_id=p.project_id) "
-                    "AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE "
-                    "a.kind='patient_rollup' AND a.project_id=p.project_id) LIMIT 1"
+                    "SELECT 1 FROM messages WHERE project_id IN (SELECT value FROM json_each(?)) LIMIT 1",
+                    (json.dumps(sorted(missing)),)
             ).fetchone():
                 raise ValueError("patient_rollup_missing")
             pdir = out_dir / "patients"
@@ -401,6 +414,8 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         # export. Corrupt input is not evidence that a patient disappeared.
         pages = {}
         for pid, (content, meta) in rolls.items():
+            if pid in lost_pids:
+                continue
             roll = loads_dict(content)
             if roll is None:
                 raise ValueError("patient_rollup_invalid")
@@ -422,16 +437,17 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             try:
                 pages[f"p{pid}.md"] = (
                     _patient_md(pid, name, info.get(pid) or {}, roll,
-                                measurement_config_unavailable=True)
+                                measurement_config_unavailable=True,
+                                archived=pid in archived_pids)
                     + "\n---\n\n" + banner)
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
         today = _jst(time.time(), "%Y-%m-%d")
-        sig_res = mcs_signals.current_open(view.db, limit=200)
+        sig_res = mcs_signals.current_open(view.db, limit=200, excluded_project_ids=lost_pids)
         if sig_res.get("errors"):
             raise ValueError("signal_state_invalid")
         model = read_model.read_model(view.db, scope="aggregate")
-        _write(out_dir, "meta.md", _meta_md(view))
+        _write(out_dir, "meta.md", _meta_md(view, excluded=len(lost_pids)))
         _write(out_dir, "health.md", _health_md(view))
         stats_results = {
             "operational": mcs_stats.run_stats(
@@ -462,6 +478,7 @@ def run(out_dir: Path, snapshot: Path) -> dict:
                         os.unlink(name, dir_fd=directory)
         expired = _sweep_exports(out_dir, time.time())
         return {"ok": True, "patients": len(seen),
+                "excluded": len(lost_pids),
                 "signals": sig_res["total"],
                 "snapshot_generation_id": view.meta["generation_id"],
                 "contract": read_model.CONTRACT,

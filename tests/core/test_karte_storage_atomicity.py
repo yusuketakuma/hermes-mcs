@@ -1,4 +1,5 @@
 """Patient memo-summary identity, history and transactional failure recovery."""
+import hashlib
 import json
 import sqlite3
 import time
@@ -477,6 +478,33 @@ def test_ledger_busy_timeout_override_reaches_pragma(tmp_path):
 
 
 # ---------- karte dependency capture: read-tx fence + in-tx fallback ----------
+
+def test_karte_scope_digest_preserves_order_and_bounds_unrelated_work_on_reopen(tmp_path):
+    import inference_dependency_loss as dependency_loss
+
+    with closing(_ledger(tmp_path)) as store:
+        db = store.db
+        _karte_due_patient(store)
+        with db:
+            db.execute("DROP INDEX idx_artifacts_project")
+            db.executemany("INSERT INTO artifacts(project_id,content) VALUES(?,?)",
+                           [(pid, f"synthetic-{n}") for n, pid in enumerate((1, None, 2, 1, None))])
+            db.executemany("INSERT INTO artifacts(project_id) VALUES(?)", ((2,) for _ in range(2000)))
+        expected = hashlib.sha256()
+        for query in ("SELECT * FROM artifacts WHERE project_id=? OR project_id IS NULL ORDER BY artifact_id",
+                      "SELECT * FROM patients WHERE project_id=?"):
+            for row in db.execute(query, (1,)):
+                for value in row:
+                    dependency_loss._fence_feed(expected, value)
+
+    with closing(_ledger(tmp_path)) as store:
+        # A full scan of the 2,000 unrelated rows would interrupt this digest.
+        store.db.set_progress_handler(lambda: 1, 2000)
+        try:
+            assert dependency_loss._karte_scope_digest(store.db, 1) == expected.hexdigest()
+        finally:
+            store.db.set_progress_handler(None, 0)
+
 
 def test_karte_write_reuses_read_capture_when_scope_is_unchanged(tmp_path, monkeypatch):
     """読取txの捕捉はfence一致でそのまま採用され、write tx内の再捕捉は走らない。"""

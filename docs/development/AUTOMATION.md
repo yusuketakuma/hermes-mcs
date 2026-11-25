@@ -71,8 +71,8 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 判定は `ci/agent_control.py` が行い、main 側の定義だけを使います。
 
 - `lint-test`・`hygiene`・`standalone-sdk`・`incident-gates`・`macos`・`hermes-integration` が、現在の head で、GitHub Actions によって実行され `success` であること。
-  `skipped`・`neutral`・欠落は不合格です（GitHub の必須チェックはこれらを合格として扱うため）。
-- `pytest-linux`・`pytest-macos` の結果（行列の job は `pytest-linux (1)` のように分割ごとに報告されます）があれば、それもすべて `success` であること。文書だけの変更での `pytest-macos` の省略だけは認めます。
+  `skipped`・`neutral`・欠落は不合格です（GitHub の必須チェックはこれらを合格として扱うため）。ただし文書だけの変更では、scope で省略される `standalone-sdk`・`hermes-integration` の skip を認めます。
+- `pytest-linux`・`pytest-macos` の結果（行列の job は `pytest-linux (1)` のように分割ごとに報告されます）があれば、それもすべて `success` であること。文書だけの変更では、scope で省略される `pytest-macos` の skip を認めます。`full-ci` ラベルでfull modeを要求したPRでは、以前のdocs scope runのskipを証拠に使わず、full modeの実行を待ちます。
 - 停止スイッチが切れている間は、AI ブランチの PR を不合格にします。
 - 下書きPRは使いません。AI も人も、PR は最初から通常のPRとして開きます。下書きのまま届いた PR（Copilot が GitHub の仕様で作るものを含む）は、所有者が Ready for review にするまで保留にします。
 

@@ -1,5 +1,7 @@
 # 通知partの配送結果を確認する
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
+
 この手順は、ローカルの運用者が、配送結果が`unknown`になった本文・添付等のpartを個別に確認するためのものです。後述のSlackグループ共有では、準備不足により実行しなかった記録がある`not_sent`も扱います。チャットの操作ツールには公開していません。カード全体の復旧は従来の`control card_resolve`を使います。
 
 管理者は、保存された`data/health.json`の`cards.unknown_parts`で対象の配送IDとpart IDを確認できます。
@@ -20,7 +22,7 @@ Discordのグループ構成員が共有アンカーへ誘導される場合は`
 一覧が20件を超える場合は、公開snapshotに対してページ単位で続きを読めます。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+"$PY" mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   recovery_parts --offset 20 --limit 20
 ```
 
@@ -31,7 +33,7 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
 `card_part_check`は、計画が作れるpartについて、稼働中のデータ領域の配送journalだけを読み、証拠の状態を返す読み取り専用コマンドです。snapshotは計画の同一性にだけ使い、journalは`--data-dir`で明示したliveのデータルートから読みます。journalルートをsnapshotや`--cmd-dir`の親から推測することはありません。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+"$PY" mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   card_part_check --delivery-id DELIVERY_UUID --part-id PART_ID \
   --data-dir /absolute/path/to/live-data
 ```
@@ -72,7 +74,7 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
 - `mcs_view recovery_parts`の`summary`：同じ内訳に加え、まとめて承認できる配送IDの一覧（`summary.active.batches`、最大20件）と集団の内訳（`summary.population`）を示します。`--offset`を変えても`summary`は同じです。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db recovery_parts
+"$PY" mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db recovery_parts
 ```
 
 集計対象は、監視が数える`active_by_state`の`unknown`・`not_sent`・`held`です。`total`はその合計と一致し、送信中の可能性がある`pending`は分類せず`pending_not_classified`に件数だけを示します。
@@ -113,7 +115,7 @@ healthでは、本体の観測が`recorded`で対象が1件以上のときだけ
 公開snapshotを指定し、対象の配送IDとpart IDを照合します。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+"$PY" mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   card_part_plan --delivery-id DELIVERY_UUID --part-id PART_ID
 ```
 
@@ -256,7 +258,7 @@ MCSは保存した計画とファイルIDを照合して配送結果を記録し
 承認用ファイルは運用者だけが読める場所へ0600で保存し、内容を確認した後に実行します。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+"$PY" mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   --cmd-dir /absolute/path/data/cmd \
   control card_part_resolve --confirm-human < /absolute/private/approved-part.json
 ```
@@ -303,10 +305,10 @@ LINE WORKSアダプターは起動中ずっと送信ロックを持つため、�
 
 ```sh
 (umask 077
- python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+ "$PY" mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
    plan --event-id EVENT_ID > /absolute/private/cancel-plan.json)
 # 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
-python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+"$PY" mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/cancel-plan.json --command-id COMMAND_UUID \
   --actor OPERATOR --reason '運用者の指示で今回の通知を送らず取消' --confirm-human
 ```
@@ -330,10 +332,10 @@ DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結�
 
 ```sh
 (umask 077
- python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+ "$PY" mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
    plan --event-id EVENT_ID --action retire_operational_alert > /absolute/private/retire-plan.json)
 # update/run の排他ロックと lifecycle marker が空いていることを確認してから実行する。
-python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+"$PY" mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/retire-plan.json --command-id COMMAND_UUID \
   --actor OPERATOR --reason '復元後に送信結果が不明なまま残る失敗通知を取り下げ' --confirm-human
 ```
@@ -358,9 +360,9 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 
 1. 非公開の診断結果から対象の失敗artifactを確認します。患者名・本文・
    元ファイル名を操作理由や共有する計画へ記載しないでください。
-2. `python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
+2. `"$PY" mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
    で計画を作成し、非公開ファイルに保存します。対象は1回最大20件です。
-3. 計画を確認後、`python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`
+3. 計画を確認後、`"$PY" mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`
    で適用します。必要な場合だけ `--wait-seconds 600` で実行ロックの空きを待てます。
 4. receiptの `ocr_outcome=failed` と `source_coverage=unrecovered` を確認します。
    `receipt_state=pending` はDB保存済み・receiptファイル出力待ちです。
@@ -378,13 +380,13 @@ Slackの過去の未配送部品は、同じ配送先で後続のカードが配
 ローカル管理者は、スナップショットから対象ごとの計画を作ります。
 
 ```bash
-python3 mcs/views/mcs_view.py card_part_tracking_plan --delivery-id DELIVERY_ID --part-id PART_ID
+"$PY" mcs/views/mcs_view.py card_part_tracking_plan --delivery-id DELIVERY_ID --part-id PART_ID
 ```
 
 返された `targets` に `actor` と `reason` を添えたJSONを、標準入力から次のコマンドへ渡します。`version` と `cmd` は計画を確認するための項目で、入力JSONからは除いてください。`command_id` は省略すると生成されます。1回につき最大20対象です。
 
 ```bash
-python3 mcs/views/mcs_view.py control card_part_tracking_ack --confirm-human < approved-targets.json
+"$PY" mcs/views/mcs_view.py control card_part_tracking_ack --confirm-human < approved-targets.json
 ```
 
 既存のコマンド処理が採用時に証拠を再照合し、receiptを残します。配送部品・試行・送信権限は変更せず、再送もしません。後続カードの配送は過去の内容の回収を証明しません。未配送総数は保持し、監視の対象件数と「運用終了・未回収」の件数を分けます。結果不明は別に全件集計し、追跡終了では隠しません。配送先や証拠が変われば、古いreceiptだけで監視対象から除外しません。

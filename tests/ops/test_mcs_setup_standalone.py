@@ -147,7 +147,7 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert plist["ProgramArguments"][7:] == [venv, "-m", "mcs_standalone", "run", "--root", str(tmp_path)]
     assert plist["StandardOutPath"] == plist["StandardErrorPath"] == os.devnull
     assert plist["AbandonProcessGroup"] is True  # Chrome outlives a tick
-    assert len(host.schedules) == 7
+    assert len(host.schedules) == 8
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
     assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [
@@ -230,7 +230,9 @@ def test_init_reuses_a_hermes_token_only_with_consent(monkeypatch, tmp_path):
     monkeypatch.setattr(setup_integration, "ENV_PATH", str(env))
     hermes = tmp_path / "home" / ".hermes"
     hermes.mkdir(parents=True)
-    (hermes / ".env").write_text("DISCORD_BOT_TOKEN=from-hermes\n")
+    hermes_env = hermes / ".env"
+    hermes_env.write_text("DISCORD_BOT_TOKEN=from-hermes\n")
+    hermes_env.chmod(0o600)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda *a: "")

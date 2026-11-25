@@ -129,6 +129,16 @@ def only_field_errors(errors) -> bool:
     return all(e in _FIELD_ONLY_ERRORS for e in errors)
 
 
+def only_field_errors_sql(column):
+    """Accept rows whose stored errors leave the reaction observation usable."""
+    allowed = ", ".join(repr(code) for code in sorted(_FIELD_ONLY_ERRORS))
+    # Quote the stored text before splitting it so a malformed code cannot break the query.
+    return f"""(CASE WHEN {column} IS NULL THEN 1
+        WHEN typeof({column})='text' AND instr({column},char(0))=0 THEN NOT EXISTS (
+            SELECT 1 FROM json_each(replace(json_array({column}), ',', '","'))
+            WHERE value NOT IN ({allowed})) ELSE 0 END)"""
+
+
 ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 

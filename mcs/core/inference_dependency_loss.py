@@ -544,8 +544,9 @@ def _karte_scope_digest(db, pid):
     the head query and scope occurrence join on. Reading raw bytes is cheap
     next to capture's per-row JSON decode and dependency analysis."""
     h = hashlib.sha256()
-    for row in db.execute('SELECT * FROM artifacts '
-                          'WHERE project_id=? OR project_id IS NULL ORDER BY artifact_id', (pid,)):
+    # Merge two disjoint index ranges in artifact order without sorting their payloads.
+    for row in db.execute('SELECT * FROM artifacts WHERE project_id=? UNION ALL '
+                          'SELECT * FROM artifacts WHERE project_id IS NULL ORDER BY artifact_id', (pid,)):
         for value in row:
             _fence_feed(h, value)
     for row in db.execute('SELECT * FROM patients WHERE project_id=?', (pid,)):
