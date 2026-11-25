@@ -447,9 +447,18 @@ def wizard(cfg: dict):
                                     and any(c != "0" for c in channel))):
                             default = channel
                             break
-            set_key(cfg, key,
-                     ask(key, kind, default, desc, get_key(cfg, key),
-                          has_key(cfg, key)))
+            while True:
+                answer = ask(key, kind, default, desc, get_key(cfg, key),
+                             has_key(cfg, key))
+                if key in ("notify.slack.project_ids", "notify.discord.project_ids") \
+                        and cfg.get("runtime_mode") == "standalone":
+                    transport = key.split(".")[1]
+                    automatic = get_key(cfg, f"notify.{transport}.project_ids_auto") is True
+                    if not automatic and (answer is UNSET or answer == []):
+                        print("    自動解決がオフのため、1件以上のプロジェクトIDを入力してください。")
+                        continue
+                break
+            set_key(cfg, key, answer)
     return step + 1
 
 
