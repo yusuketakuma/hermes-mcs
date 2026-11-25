@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "Homebrew導入済みでPATH未設定の場合の導入案内を改善",
+  "summary": "HomebrewがPATHに見つからない場合の導入エラーで、導入済みならインストーラのNext stepsにあるshellenvコマンドを確認する案内が表示されます。",
+  "upgrade": "追加操作は不要です。Homebrewの自動検出・自動変更は行いません。",
+  "details": [
+    "preflightと導入処理の案内文だけを変更し、Homebrewの場所を推測して黙って使う動作は追加していません。"
+  ],
+  "refs": ["install.sh", "deployment/install/runtime.sh"]
+}
