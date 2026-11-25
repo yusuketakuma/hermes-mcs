@@ -55,18 +55,22 @@ def list_backups(*, verify: bool = False) -> list[dict]:
 
 
 def _verify(path: Path) -> dict:
+    """sha256 is the PLAINTEXT hash — the same bytes a restore would place —
+    so operators can compare it against restore/adoption receipts."""
     try:
         if has_sqlite_sidecars(path):
             raise backup_evidence.BackupError("backup_static_snapshot_required")
-        before = file_sha256(path)
-        inventory = backup_evidence.inventory_snapshot(path)
-        if file_sha256(path) != before:
+        artifact = file_sha256(path)
+        with local_backup.materialize_backup(str(path)) as real:
+            sha256 = file_sha256(real)
+            inventory = backup_evidence.inventory_snapshot(real)
+        if file_sha256(path) != artifact:
             raise backup_evidence.BackupError("backup_source_changed")
     except backup_evidence.BackupError as exc:
         return {"check": backup_evidence.failure_code(exc)}
-    except (OSError, sqlite3.Error, ValueError):
+    except (OSError, EOFError, sqlite3.Error, ValueError):
         return {"check": "backup_unreadable"}
-    return {"check": "ok", "sha256": before, "schema": inventory["schema"],
+    return {"check": "ok", "sha256": sha256, "schema": inventory["schema"],
             "last_successful_run": inventory["last_successful_run"]}
 
 
@@ -74,15 +78,17 @@ def _verify_homecare(path: Path) -> dict:
     try:
         if has_sqlite_sidecars(path):
             raise backup_evidence.BackupError("backup_static_snapshot_required")
-        before = file_sha256(path)
-        migrations = _homecare_inventory(path)
-        if file_sha256(path) != before:
+        artifact = file_sha256(path)
+        with local_backup.materialize_backup(str(path)) as real:
+            sha256 = file_sha256(real)
+            migrations = _homecare_inventory(Path(real))
+        if file_sha256(path) != artifact:
             raise backup_evidence.BackupError("backup_source_changed")
     except backup_evidence.BackupError as exc:
         return {"check": backup_evidence.failure_code(exc)}
-    except (OSError, sqlite3.Error, ValueError):
+    except (OSError, EOFError, sqlite3.Error, ValueError):
         return {"check": "backup_unreadable"}
-    return {"check": "ok", "sha256": before, "migrations": migrations}
+    return {"check": "ok", "sha256": sha256, "migrations": migrations}
 
 
 def _homecare_inventory(path: Path) -> dict[str, int]:

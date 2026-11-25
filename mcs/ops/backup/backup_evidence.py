@@ -764,8 +764,10 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
             or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     before_hash, before = _inspection_hash(source, policy.max_snapshot_bytes)
-    inventory = inventory_snapshot(
-        source, max_steps=max_steps, deadline=time.monotonic() + max_seconds)
+    import local_backup  # late: core module, no cycle at import time
+    with local_backup.materialize_backup(str(source)) as real:
+        inventory = inventory_snapshot(
+            real, max_steps=max_steps, deadline=time.monotonic() + max_seconds)
     after_hash, after = _inspection_hash(source, policy.max_snapshot_bytes)
     if (before_hash != after_hash
             or _inspection_signature(before) != _inspection_signature(after)

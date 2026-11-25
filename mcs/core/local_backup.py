@@ -213,7 +213,10 @@ def materialize_backup(path: str):
         dir=os.path.dirname(path) or BACKUP_DIR)
     try:
         with os.fdopen(fd, "wb") as fout, gzip.open(path, "rb") as fin:
-            shutil.copyfileobj(fin, fout, COMPRESS_CHUNK)
+            try:
+                shutil.copyfileobj(fin, fout, COMPRESS_CHUNK)
+            except EOFError as e:  # truncated gzip: one failure kind for callers
+                raise OSError("backup_gzip_truncated") from e
         os.chmod(tmp, 0o600)
         yield tmp
     finally:
