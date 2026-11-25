@@ -264,6 +264,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                                           project_id=job["project_id"], message_ids=targets) \
         and not cloud_policy.scope_revoked(cfg, "semantic_backlog", job["project_id"])
     if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
+            or not cloud_policy.history_thread_ready(ledger.db, job["project_id"], job["message_id"]) \
             or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
         if owned:
             raise runtime.LLMNotSent('cloud_source_unverified')
