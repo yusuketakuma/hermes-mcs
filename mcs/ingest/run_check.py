@@ -1051,6 +1051,12 @@ def _housekeeping(result):
         maintenance.prune_leftovers()
     except Exception as e:
         result["errors"].append(f"prune_leftovers: {type(e).__name__}")
+    try:
+        # reference-based retention runs every tick, not only when a daily
+        # backup was published: deploy stops must not pile up preupdate copies
+        local_backup.prune_preupdate_backups()
+    except Exception as e:
+        result["errors"].append(f"prune_preupdate_backups: {type(e).__name__}")
 
 
 def _rotate_logs(result) -> None:
