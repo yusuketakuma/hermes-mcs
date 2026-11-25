@@ -102,6 +102,39 @@ def _change_local_model(db, monkeypatch):
     db.semantic_seed(1, [1, 2], {"source": "history_import"})
 
 
+def _prove_cloud_summaries(db):
+    """Attach settled synthetic cloud receipts to direct-cloud summary fixtures."""
+    import inference_dependency_loss
+    import mcs_util
+    scfg = semantic_policy.runtime_config(_canonical_cfg())[0]
+    generation = runtime.execution_generation(scfg)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    roots = [m["message_id"] for m in bundle["members"] if m.get("parent_id") is None]
+    assert len(roots) == 1
+    occurrences = []
+    for member in sorted(bundle["members"], key=lambda m: m["message_id"]):
+        binding = inference_dependency_loss.source_binding(db.db, 1, member["message_id"])
+        assert binding is not None
+        occurrences.append((member["message_id"], binding))
+    source = mcs_util.payload_hash(occurrences)
+    for row in (_kind_rows(db, semantic_policy.KIND_SUMMARY)
+                 + _kind_rows(db, semantic_policy.KIND_CANDIDATE)):
+        meta = json.loads(row["meta"])
+        reservation_id = f"synthetic-summary-receipt-{row['artifact_id']}"
+        owner = {"semantic_target_id": row["message_id"], "semantic_thread_root": roots[0],
+                 "semantic_source": source, "semantic_generation": generation,
+                 "semantic_phase": "summary"}
+        db.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=row["message_id"],
+                        meta={"reservation_id": reservation_id, "route": "semantic_backlog",
+                              "owner": owner})
+        db.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=row["message_id"],
+                        meta={"reservation_id": reservation_id})
+        meta["inference_requests"] = [reservation_id]
+        db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                      (json.dumps(meta, ensure_ascii=False), row["artifact_id"]))
+    db.db.commit()
+
+
 @pytest.fixture
 def cloud_over_local(tmp_path, monkeypatch):
     """Both members PASS with cloud summaries over facts of local model A."""
@@ -114,6 +147,7 @@ def cloud_over_local(tmp_path, monkeypatch):
     assert all(before.values()) and _state(db) == "done"
     for row in _kind_rows(db, semantic_policy.KIND_SUMMARY):
         assert json.loads(row["meta"])["provider_provenance"]["providers"] == ["anthropic"]
+    _prove_cloud_summaries(db)
     yield db, before
     db.close()
 

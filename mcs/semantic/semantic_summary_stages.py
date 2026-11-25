@@ -86,7 +86,7 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
     if (not isinstance(requests, list) or not all(isinstance(item, str) for item in requests)
             or not isinstance(members, list) or not members or not isinstance(generation, str)):
         return False
-    roots = [m.get("message_id") for m in members if isinstance(m, dict) and m.get("role") == "root"]
+    roots = [m.get("message_id") for m in members if isinstance(m, dict) and m.get("parent_id") is None]
     if len(roots) != 1:
         return False
     from inference_dependency_loss import source_binding
