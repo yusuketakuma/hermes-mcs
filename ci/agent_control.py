@@ -184,13 +184,15 @@ def _latest_runs(check_runs, head_sha):
     return latest
 
 
-def evidence(check_runs, head_sha, files):
+def evidence(check_runs, head_sha, files, *, full_ci=False):
     """(state, problems): state is success, pending or failure for the required jobs on head_sha."""
     runs = _latest_runs(check_runs, head_sha)
     problems, pending = [], []
     # A matrix job reports one check run per leg, named "pytest-linux (1)" and so on.
+    matrixed = {job for job in EVIDENCE_JOBS for name in runs
+                if name.startswith(job + " (")}
     legs = [(job, name) for job in EVIDENCE_JOBS for name in sorted(runs)
-            if name == job or name.startswith(job + " (")]
+            if (name == job and job not in matrixed) or name.startswith(job + " (")]
     for job, name in [(name, name) for name in REQUIRED_JOBS] + legs:
         run = runs.get(name)
         if run is None:
@@ -202,7 +204,9 @@ def evidence(check_runs, head_sha, files):
             pending.append(name)
         elif run.get("conclusion") == "success":
             continue
-        elif job == "pytest-macos" and run.get("conclusion") == "skipped" and docs_only(files):
+        elif (run.get("conclusion") == "skipped" and docs_only(files)
+              and not full_ci
+              and (job == "pytest-macos" or name in ("standalone-sdk", "hermes-integration"))):
             continue
         else:
             problems.append(f"{name}: {run.get('conclusion')}")
@@ -478,6 +482,10 @@ def labeler_allowed(sender, owner, dots_actor):
     return sender == owner or (bool(dots_actor) and sender == dots_actor)
 
 
+def full_ci_requested(pr):
+    return any(label.get("name") == "full-ci" for label in pr.get("labels") or [])
+
+
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
     """The plan for one PR head: commit status, auto-merge eligibility and attempt bookkeeping."""
     head = pr["head"]["sha"]
@@ -485,7 +493,7 @@ def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclus
     author = (pr.get("user") or {}).get("login", "")
     # Only branches pushed to this repository count as agent work; outsiders cannot push here.
     agent = is_agent_branch(branch) and same_repository(pr)
-    state, notes = evidence(check_runs, head, files)
+    state, notes = evidence(check_runs, head, files, full_ci=full_ci_requested(pr))
     if agent and not automation_enabled:
         state, notes = "failure", ["自動化の停止中（AUTOMATION_ENABLED が true ではない）"]
     if pr.get("draft") and state == "success":
