@@ -440,7 +440,7 @@ def test_standalone_documented_service_preserves_literal_paths(tmp_path):
     assert spec["StandardOutPath"] == spec["StandardErrorPath"] == os.devnull
     guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
     assert "./install.sh --mode standalone" in guide
-    assert "$PY mcs/ops/mcs_setup.py check" in guide
+    assert '"$PY" mcs/ops/mcs_setup.py check' in guide
 
 
 def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
@@ -488,6 +488,17 @@ def test_fresh_mac_without_python_explains_instead_of_silent_exit(tmp_path):
     r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
     assert "復旧用 Python は段階6で確認します" in r.stderr
     assert "【1/6】基本ソフトの準備（Homebrew）" in r.stdout
+
+
+def test_lineworks_guide_path_b_uses_standalone_venv_python():
+    import re
+    guide = (ROOT / "docs/guides/LINEWORKS.md").read_text()
+    assert 'PY="$HOME/.mcs/venv/bin/python3"' in guide
+    assert "`PY=python3.14`" not in guide
+    assert 'B-1〜B-2' in guide and 'B-1〜B-4' not in guide
+    uses = list(re.finditer(r"\$PY", guide))
+    assert uses
+    assert all(guide[match.start() - 1] == '"' and guide[match.end()] == '"' for match in uses)
 
 
 def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):

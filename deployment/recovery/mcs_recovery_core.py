@@ -40,7 +40,7 @@ KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 
 KNOWN_CRON_SCRIPTS = frozenset({
     "mcs_check.sh", "mcs_deep.sh", "mcs_ocr.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
-    "mcs_update.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
+    "mcs_update.sh", "mcs_release_auto.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
 
 
 STANDALONE_LABEL = "ai.mcs.standalone"

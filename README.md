@@ -272,6 +272,7 @@ git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
 sh scripts/mcs install --mode standalone --preflight   # 読取り専用の事前チェック
 sh scripts/mcs install --mode standalone               # 依存を導入し、初期設定へ進む
+PY="$HOME/.mcs/venv/bin/python3"                   # 以後のMCS用Python
 ```
 
 ![導入の4段階：ソフト準備→初期設定→browserと通知接続→checkと利用開始の流れを示す説明図](docs/releases/v1.1.2/setup-steps-v112.png)
@@ -279,10 +280,10 @@ sh scripts/mcs install --mode standalone               # 依存を導入し、�
 説明図は実画面ではありません。各段階の詳細と止まったときの再開は[導入ガイド](docs/guides/INSTALLATION.md)と[更新・復旧](docs/guides/UPGRADE_AGENT.md)に従います。
 
 事前チェックの「要対処」に表示される`対処:`を確認し、`導入を妨げる問題 0件`になってから導入します。
-共通入口の`sh scripts/mcs install`は既存の`install.sh`を実行します。方式を省略した初回はHermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、新規導入の推奨とEnterの既定はstandalone（MCS単独）です。既存の接続方法は維持します。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
+共通入口の`sh scripts/mcs install`は既存の`install.sh`を実行します。方式を省略した初回はHermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、新規導入の推奨とEnterの既定はstandalone（MCS単独）です。既存の接続方法は維持します。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。 Hermes連携では、以後の`PY`を`"<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は`$HOME/.hermes`）に読み替えます。
 導入後は、そのまま初期設定へ進むか、後で行うかを選べます。後で行う場合は、完了画面に表示される設定コマンドを使います。
 初期設定の推奨コースは必要な項目を順番に案内し、詳細コースでは全項目を確認できます。分からない必須情報は中止して確認できます。HermesモードのSlack/DiscordではHermesとの同期も行います。[初めての導入・更新・復旧](docs/guides/EASY_SETUP.md)に操作の流れをまとめています。
-本体の初回設定後は、`mcs setup browser`の案内に沿って専用ChromeでMCSへ本人がログインし、診断に残った項目を解消します。新規導入で外部AI（Anthropic・OpenAI・Jev）を使う場合は、施設の責任者が契約と患者への周知を確認し、`python3 mcs/ops/mcs_compliance.py acknowledge --by 氏名 --reason 根拠 --services サービス --confirm-human`で確認を記録すると、記録に含めたサービスにだけ送信が始まります。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
+本体の初回設定後は、`mcs setup browser`の案内に沿って専用ChromeでMCSへ本人がログインし、診断に残った項目を解消します。新規導入で外部AI（Anthropic・OpenAI・Jev）を使う場合は、初回収集の後に、施設の責任者が契約と患者への周知を確認し、`"$PY" mcs/ops/mcs_compliance.py acknowledge --by 氏名 --reason 根拠 --services サービス --confirm-human`で確認を記録すると、記録に含めたサービスにだけ送信が始まります。LINE WORKSは[接続ガイド](docs/guides/LINEWORKS.md)で接続を確認し、カード・操作を使う場合はCallback・常駐設定と再診断も続けます。
 既存環境を更新する場合は[更新エージェント手順](docs/guides/UPGRADE_AGENT.md)を使います。移行先版の更新コードで計画・バックアップ・適用を行い、再導入は必要な場合に明示指定します。
 
 **AIに導入を任せる場合**は、リポジトリを開いたエージェントに次のように依頼できます。デスクトップ版のClaude・Codexが一時フォルダへ取得した場合は、`python3 scripts/install_local.py` で恒久的な置き場所へ導入します（[手順](docs/guides/LOCAL_AGENT_INSTALL.md)）。
@@ -299,7 +300,7 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 | 次に進む先 | 内容 |
 |---|---|
 | [standaloneのSlackを設定する](docs/guides/STANDALONE.md#slackとdiscordの接続準備) | Slack app・接続・許可範囲。Hermes連携は[導入ガイド](docs/guides/INSTALLATION.md)へ |
-| [LINE WORKSを設定する](docs/guides/LINEWORKS.md) | 独自接続アダプター・秘密値入力・Callback・許可範囲の設定 |
+| [LINE WORKSを設定する](docs/guides/LINEWORKS.md) | 独自接続アダプター・秘密値入力・許可範囲・必要な場合のCallback設定 |
 | [Hermesなしで使う](docs/guides/STANDALONE.md) | `install.sh --mode standalone`・Slack/Discordの直接接続・切り替え |
 | [導入ガイド](docs/guides/INSTALLATION.md) | 最短手順・成功の目安・通知先の設定・トラブル対応 |
 | [AIエージェント向け導入手順](docs/guides/SETUP_AGENT.md) | エージェントに導入を任せるときの確認・実行手順 |

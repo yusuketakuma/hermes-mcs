@@ -31,7 +31,11 @@ def _slack_connect_on(cfg):
 
 
 def _lineworks_on(cfg):
-    return transport_enabled(cfg, "lineworks")
+    # LINE WORKS text delivery uses the independent adapter in both runtimes,
+    # so a text-only target needs the same connection scope as cards.
+    return transport_enabled(cfg, "lineworks") or any(
+        isinstance(cfg.get(key), str) and cfg[key].strip().startswith("lineworks:")
+        for key in ("notify_target", "notify_system_target"))
 
 
 def _cards_on(cfg):
@@ -182,7 +186,7 @@ WIZARD = [
          "AIの接続先URL（通常は空欄。既定は http://127.0.0.1:8080/v1/chat/completions。指定する場合は /v1/chat/completions まで入力してください。外部URLは指定できません）",
          None),
         ("local_llm.model", "opt", None,
-         "AIモデル名（通常は空欄でQwen3.5-9B。別のモデルを導入した場合のみ指定）", None),
+         "AIモデル名（通常は空欄。導入時はMacの性能に合わせたQwenが選ばれます。別のモデルを導入した場合のみ指定）", None),
     ]),
     ("確認が必要な内容の通知", [
         ("signals.notify", "bool", False,
@@ -447,9 +451,18 @@ def wizard(cfg: dict):
                                     and any(c != "0" for c in channel))):
                             default = channel
                             break
-            set_key(cfg, key,
-                     ask(key, kind, default, desc, get_key(cfg, key),
-                          has_key(cfg, key)))
+            while True:
+                answer = ask(key, kind, default, desc, get_key(cfg, key),
+                             has_key(cfg, key))
+                if key in ("notify.slack.project_ids", "notify.discord.project_ids") \
+                        and cfg.get("runtime_mode") == "standalone":
+                    transport = key.split(".")[1]
+                    automatic = get_key(cfg, f"notify.{transport}.project_ids_auto") is True
+                    if not automatic and (answer is UNSET or answer == []):
+                        print("    自動解決がオフのため、1件以上のプロジェクトIDを入力してください。")
+                        continue
+                break
+            set_key(cfg, key, answer)
     return step + 1
 
 

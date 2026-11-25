@@ -957,6 +957,121 @@ def test_text_only_flags_publish_gates_completion_and_resume_converges(tmp_path,
     assert flags == [saved, saved]
 
 
+def test_card_standalone_bootstrap_publishes_route_flags_without_hermes_worker(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import notify_spool
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    def channels(root, binding):
+        consume(root, client, cfg)
+    monkeypatch.setattr(standalone, 'setup_channels', channels)
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    assert client.created == ['mcs', 'mcslog']
+    assert saved['notify_target'] == 'slack:C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000002'
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied'
+    assert setup.creation_unneeded(saved, state) is False
+
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration',
+                        lambda *a: pytest.fail('standalone postphase must not wire Hermes'))
+    monkeypatch.setattr(setup, 'reconnect_ready',
+                        lambda *a: pytest.fail('standalone owns no Hermes card worker'))
+    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
+    flags = []
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda c, r: flags.append(c))
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+    state = setup.read(tmp_path)
+    assert state['flags_ready'] is True
+    assert 'worker_ready' not in state
+    assert setup.creation_unneeded(saved, state) is True
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+
+
+def test_card_standalone_flags_migration_allows_unrelated_config_drift(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import notify_spool
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    monkeypatch.setattr(standalone, 'setup_channels',
+                        lambda root, binding: consume(root, client, cfg))
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert 'flags_ready' not in state
+
+    saved['job_budget_seconds'] = 20
+    assert setup.creation_unneeded(saved, setup.read(tmp_path)) is False
+    monkeypatch.setattr(standalone, 'setup_channels',
+                        lambda *a: pytest.fail('a converged channel setup must not call Slack'))
+    assert setup.run_setup(tmp_path, saved, args) is saved
+    setup.stage_config(tmp_path, saved, saved)
+    setup.applied(tmp_path, saved, saved)
+
+    data = str(tmp_path / 'data')
+    notify_spool.ensure_dirs(data)
+    assert notify_spool.publish_flags(saved, data) is True
+    monkeypatch.setattr(notify_spool, 'publish_file',
+                        lambda *a: pytest.fail('unchanged route flags must not be rewritten'))
+    setup.finish_runtime(tmp_path, saved, args)
+    assert setup.read(tmp_path)['flags_ready'] is True
+
+
+def test_card_standalone_flags_migration_rejects_slack_binding_drift(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    monkeypatch.setattr(standalone, 'setup_channels',
+                        lambda root, binding: consume(root, client, cfg))
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    setup.applied(tmp_path, cfg, saved)
+    saved['job_budget_seconds'] = 20
+    saved['notify']['slack']['team_id'] = 'T000000003'
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.run_setup(tmp_path, saved, args)
+
+
+def test_card_standalone_flags_migration_rejects_card_channel_drift(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    monkeypatch.setattr(standalone, 'setup_channels',
+                        lambda root, binding: consume(root, client, cfg))
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    setup.applied(tmp_path, cfg, saved)
+    saved['job_budget_seconds'] = 20
+    saved['notify']['slack']['channel_id'] = 'C000000009'
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.run_setup(tmp_path, saved, args)
+
+
+def test_discord_only_setup_does_not_read_a_stale_slack_intent(tmp_path):
+    data = tmp_path / 'data'
+    data.mkdir()
+    (data / 'slack-channel-setup.json').write_text('{broken')
+    cfg = {'notify': {'interactive': 'discord'}}
+    assert setup.prepare(tmp_path, cfg) is None
+
+
 def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, monkeypatch):
     cfg, client = text_config(), Client()
     cfg['runtime_mode'] = 'standalone'
