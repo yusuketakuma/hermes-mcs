@@ -490,6 +490,17 @@ def test_fresh_mac_without_python_explains_instead_of_silent_exit(tmp_path):
     assert "【1/6】基本ソフトの準備（Homebrew）" in r.stdout
 
 
+def test_lineworks_guide_path_b_uses_standalone_venv_python():
+    import re
+    guide = (ROOT / "docs/guides/LINEWORKS.md").read_text()
+    assert 'PY="$HOME/.mcs/venv/bin/python3"' in guide
+    assert "`PY=python3.14`" not in guide
+    assert 'B-1〜B-2' in guide and 'B-1〜B-4' not in guide
+    uses = list(re.finditer(r"\$PY", guide))
+    assert uses
+    assert all(guide[match.start() - 1] == '"' and guide[match.end()] == '"' for match in uses)
+
+
 def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     """LINE WORKS uses its own adapter: --no-plugin must not claim every
     interactive transport needs the plugin, and the final guidance names
