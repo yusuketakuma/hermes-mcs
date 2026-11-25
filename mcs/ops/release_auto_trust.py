@@ -61,7 +61,12 @@ def load_v3_pins(path):
     try:
         # O_NOFOLLOWで開きfile自身のsymlink置換を拒否する。
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except (OSError, AttributeError) as e:
+    except OSError as e:
+        import errno
+        if e.errno == errno.ELOOP:
+            raise TrustError('TRUST_INVALID') from e
+        raise TrustError('TRUST_UNAVAILABLE') from e
+    except AttributeError as e:
         raise TrustError('TRUST_INVALID') from e
     try:
         with os.fdopen(fd, 'rb') as fh:

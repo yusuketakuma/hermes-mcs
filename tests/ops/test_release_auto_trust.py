@@ -92,3 +92,40 @@ def test_symlinked_parent_rejected(tmp_path):
     import pytest as _pytest
     with _pytest.raises(trust.TrustError):
         trust.load_v3_pins(link / 'auto-v3-pins.json')
+
+
+def test_open_errno_distinguishes_symlink_from_permission(tmp_path, monkeypatch):
+    import pytest as _pytest
+    target = tmp_path / 'target.json'
+    _write(target, {'schema_version': trust.SCHEMA_VERSION, 'pins': [PIN]})
+    link = tmp_path / 'auto-v3-pins.json'
+    os.symlink(target, link)
+    # stat段階をすり抜けた場合でも、openのELOOPはINVALID(形状不備)を返す
+    real_stat = os.stat
+    real_lstat = os.lstat
+    resolved = os.path.realpath(link)
+    def fake_stat(pth, **kw):
+        kw.pop('follow_symlinks', None)
+        return real_stat(resolved if os.fspath(pth) == os.fspath(link) else pth, **kw)
+    def fake_lstat(pth, **kw):
+        if os.fspath(pth) == os.fspath(link):
+            return real_stat(resolved)
+        return real_lstat(pth, **kw)
+    monkeypatch.setattr(trust.os, 'stat', fake_stat)
+    monkeypatch.setattr(trust.os, 'lstat', fake_lstat)
+    with _pytest.raises(trust.TrustError) as e:
+        trust.load_v3_pins(link)
+    assert e.value.code == 'TRUST_INVALID'
+
+
+def test_permission_denied_is_unavailable(tmp_path):
+    import pytest as _pytest
+    path = tmp_path / 'auto-v3-pins.json'
+    _write(path, {'schema_version': trust.SCHEMA_VERSION, 'pins': [PIN]})
+    os.chmod(path, 0o000)
+    try:
+        with _pytest.raises(trust.TrustError) as e:
+            trust.load_v3_pins(path)
+        assert e.value.code == 'TRUST_UNAVAILABLE'
+    finally:
+        os.chmod(path, 0o600)
