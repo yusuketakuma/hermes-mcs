@@ -2,7 +2,6 @@
 import json
 import sqlite3
 
-import patient_context_artifacts as artifacts_mod
 
 
 def _make_db(tmp_path):
