@@ -4,7 +4,7 @@
 
 本書はパッケージ内の正本章とfield一覧を結合したもの。JSON Schema、interfaces.pyi、合成fixture、98項目の受入JSONもZIPに含む。製品実装・配備は未実施。
 
-なお直前の「製品実装・配備は未実施」はこの統合読取り版を作成した 2026-11-10 時点の状態を指す。実装配線の現状（2026-11-25 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール32個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は27個、残り5個（`release_auto_bridge`/`migration`/`recovery`/`trust` と `release_publish_api`）は接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` のwire factory接続は別PR、contract digest規則・trusted recovery driverは未接続であり、製品ファイルが `recover_tick` を呼ばないことは同テストが別途固定している。配備は引き続き未実施である。
+なお直前の「製品実装・配備は未実施」はこの統合読取り版を作成した 2026-11-10 時点の状態を指す。実装配線の現状（2026-11-25 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール32個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は27個、残り5個（`release_auto_bridge`/`migration`/`recovery`/`trust` と `release_publish_api`）は接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` とowner tick driverはpin配布fileとenrollment credentialの揃った端末でだけwireを返すが、contract digest規則・trusted recovery driverは未接続であり、製品ファイルが `recover_tick` を呼ばないことは同テストが別途固定している。配備は引き続き未実施である。
 
 ---
 
