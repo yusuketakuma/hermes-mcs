@@ -44,6 +44,7 @@ if [ "$SKIP_BREW" -eq 1 ]; then
 elif ! command -v brew >/dev/null 2>&1; then
     die "Homebrew が見つかりません。先に次のコマンドで導入してください:
   $BREW_INSTALL
+導入済みならPATHに反映されていません。インストーラの Next steps に表示された shellenv コマンドを実行してください。
 その後 install.sh を再実行してください（基本ソフトを別途管理する場合は --no-brew）"
 else
     _new=""

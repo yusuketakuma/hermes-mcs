@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "導入用mcsコマンドからtelemetry設定を開けない問題を修正",
+  "summary": "リポジトリ内の `sh scripts/mcs telemetry ...` が操作名エラーで拒否されず、導入後の `mcs telemetry` と同じ固定テレメトリ設定入口へ進めます。",
+  "upgrade": "追加操作は不要です。既存のテレメトリ許可・停止状態は変わりません。",
+  "details": [
+    "`scripts/mcs` の操作名一覧とヘルプに `telemetry` を追加しただけで、テレメトリ送信の既定や対象項目は変更しません。"
+  ],
+  "refs": ["scripts/mcs", "tests/ops/test_mcs_cli.py"]
+}
