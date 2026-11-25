@@ -202,7 +202,8 @@ def evidence(check_runs, head_sha, files):
             pending.append(name)
         elif run.get("conclusion") == "success":
             continue
-        elif job == "pytest-macos" and run.get("conclusion") == "skipped" and docs_only(files):
+        elif (run.get("conclusion") == "skipped" and docs_only(files)
+              and (job == "pytest-macos" or name in ("standalone-sdk", "hermes-integration"))):
             continue
         else:
             problems.append(f"{name}: {run.get('conclusion')}")

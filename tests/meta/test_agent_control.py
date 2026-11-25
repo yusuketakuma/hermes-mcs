@@ -86,6 +86,13 @@ def test_skipped_test_evidence_fails_unless_macos_on_a_docs_only_change():
     assert ac.decide_gate(_pr(), skipped_mac, CODE, 0, True)["state"] == "failure"
 
 
+@pytest.mark.parametrize("name", ["standalone-sdk", "hermes-integration"])
+def test_scope_skipped_sdk_lanes_count_only_for_docs_only_changes(name):
+    skipped = _green() + [_run("pytest-linux"), _run(name, "skipped")]
+    assert ac.decide_gate(_pr(), skipped, DOC, 0, True)["state"] == "success"
+    assert ac.decide_gate(_pr(), skipped, CODE, 0, True)["state"] == "failure"
+
+
 def test_matrix_legs_of_the_test_jobs_count_as_evidence():
     legs = _green() + [_run("pytest-linux (1)"), _run("pytest-linux (2)"), _run("pytest-macos (1)")]
     assert ac.decide_gate(_pr(), legs, CODE, 0, True)["state"] == "success"
