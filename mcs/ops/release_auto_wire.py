@@ -217,6 +217,17 @@ class Wire:
     def signed_send(self, path, raw_bytes):
         if path not in _SENDABLE or type(raw_bytes) is not bytes or not raw_bytes:
             raise WireError('WIRE_PATH')
+        # 応答を検証できるpinが無いpathは送らない — 中央だけ同意/開始が進み
+        # 端末が応答を拒否する状態分裂を防ぐ。metadataは二形式なので対象外。
+        if path != METADATA_PATH:
+            purpose = _PATH_PURPOSE.get(path)
+            if purpose is not None:
+                now = self._now_ms()
+                usable = [pin for pin in self._pins()
+                          if purpose in pin.get('purposes', ())
+                          and pin.get('not_before', 0) <= now < pin.get('expires_at', 0)]
+                if not usable:
+                    raise WireError('WIRE_PATH')
         try:
             request = json.loads(raw_bytes.decode('utf-8'))
         except (ValueError, UnicodeDecodeError):
