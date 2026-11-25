@@ -190,7 +190,7 @@ cd hermes-mcs
 |---|---|
 | `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `正常`/`注意`/`要対処` を表示。要対処には `対処:` 行で直し方が付く。要対処が1つでもあれば exit 1。何も書き込まない |
 | `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[新規]`/`[既存]`）を表示。何も書き込まない。要対処があれば exit 1 |
-| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=hermes）。非対話は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
+| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=standalone）。設定のない初回の非対話実行も standalone。既存データだけがある場合は安全側に hermes を保持。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
 | `--recovery-python PATH` | 復旧 watchdog（stage 6）を実行する既存の独立 Python の絶対パス。何かを書き込む前に Python ≥3.14 と SQLite の WAL-reset 修正を検証し、更新されるチェックアウト内の実行ファイルは拒否する。私有 `config.json` の `recovery_python` に保存される（後から `mcs_setup.py init --yes --recovery-python <絶対パス>` でも変更可）。未指定時は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの。代替 Python の自動選択・導入はしない |
 | `--force-repo` | 別の checkout から導入済みの環境（plugin symlink・`~/.mcs-recovery/repo_path`・services）を、この checkout に切り替えることを許可する（§A-7） |
 | `--no-brew` / `--no-llm` / `--no-plugin` / `--no-services` / `--no-recovery` | ステージ 1 / 4 / 3 / 5 / 6 をスキップ（下記） |
@@ -281,12 +281,13 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 ### A-3. `mcs_setup.py init` — 設定ウィザード
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init
+~/.local/bin/mcs setup init
 ```
 
-（`mcs_setup` の実行は Python ≥3.14 が必要。install.sh が用意した venv
-インタプリタを使うのが確実 — macOS 標準の `/usr/bin/python3` は
-3.9 系で古い）
+（`mcs setup` は導入済みの実行方式に合わせて正しいvenvを選ぶ。直接実行する場合の
+インタプリタは standalone が `~/.mcs/venv/bin/python3`、Hermes連携が
+`~/.hermes/hermes-agent/venv/bin/python`。`mcs_setup` の実行は Python ≥3.14 が必要で、
+macOS 標準の `/usr/bin/python3` は3.9系で古い）
 
 対話ウィザードで推奨コースと詳細コースを選びます。推奨コースは必須情報・通知先・権限範囲を確認します。通知スレッドと通知のまとめ方も、必要な場合に質問します。質問しない設定は既存値を保持し、未設定ならその版の既定値を使います。詳細コースは全設定を順に案内します。各項目は説明と選択肢を表示し、Enterで表示された値を使います。関連機能がオフの項目は自動スキップします。`init` が行うこと:
 
@@ -294,33 +295,34 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 - Keychain `mcs-adapter` へ MCS パスワードを登録
 - `~/.mcs/.env` に `MCS_PASSWORD`（Keychain ロック中のフォールバック）
   と `TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY`（環境変数で渡した場合）を保存
-- `notify.interactive=slack`/`discord` を選んだ場合、hermes 側へも
-  書き込む（Slack は `slack_*` settings キーにマップされる）:
-  - プラグイン settings を serving profile の config.yaml へ
+- `notify.interactive=slack`/`discord` を選んだ場合、実行方式に合わせて接続設定を保存する:
+  - Hermes連携では、プラグイン settings を serving profile の config.yaml へ
     （`hermes -p <profile> config set` 経由 — snapshot/inbox/
-    allowlists/scope 一式）
-  - `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN`（Discord は
-    `DISCORD_BOT_TOKEN`）を同 profile の `.env` へ（stdin 経由、
-    argv には載せない。既設定済みのトークンは残る）
+    allowlists/scope 一式。Slack は `slack_*` settings キーにマップされる）と、
+    `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN`（Discord は `DISCORD_BOT_TOKEN`）を同 profile の `.env` へ書き込む
+    （stdin 経由、argv には載せない。既設定済みのトークンは残る）
+  - standaloneでは、同じトークンを `~/.mcs/data/slack-credentials.json` または
+    `~/.mcs/data/discord-credentials.json` の私有JSONへ保存し、許可ユーザー・プロジェクトなどの範囲は
+    `config.json` の `notify.slack` / `notify.discord` に保持する
 
-非対話でも実行できる（CI・再現用）:
+非対話でも実行できる（CI・再現用）。standaloneのSlackの例:
 
 ```bash
 # secrets は対話入力か安全な端末で環境変数に準備し、履歴に平文を残さない
-~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
+~/.local/bin/mcs setup init --yes \
     --login-id <ID> --notify-target slack:<チャンネルID> \
     --set 'notify.interactive="slack"' \
-    --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
-    --plugin-profile <serving profile> \
-    --plugin-user-ids <uid> \
-    --plugin-project-ids <pid>
+    --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C","allowed_user_ids":["U"],"project_ids":[1],"project_ids_auto":false}'
 ```
 
-`--set` の値は JSON（文字列は内側の引用符が必要）。Discord の場合は
-`notify.interactive="discord"` +
+`--set` の値は JSON（文字列は内側の引用符が必要）。Hermes連携では、上記の接続設定に加えて
+`--plugin-profile <serving profile>`・`--plugin-user-ids <uid>`・`--plugin-project-ids <pid>`
+を指定する。Discord の場合は `notify.interactive="discord"` +
 `notify.discord={"profile","application_id","guild_id","channel_id"}`・
-`--notify-target discord:<チャンネルID>`・`--plugin-chat-ids`、
-トークンは `DISCORD_BOT_TOKEN`。例は `init --help` の末尾にも表示される。
+`--notify-target discord:<チャンネルID>`、トークンは `DISCORD_BOT_TOKEN`。
+Hermes連携のDiscordでは `--plugin-chat-ids` も指定する。standaloneでは許可範囲を
+`notify.discord` の `allowed_user_ids`・`project_ids`（必要なら `allowed_chat_ids`）へ入れる。
+例は `init --help` の末尾にも表示される。
 
 1.0.23ではSlack・Discordとも、指定profileの所有者を確認できる接続だけが配送workerを起動します。Discordは設定したapplication_idと実bot IDも照合します。更新後は使用中の全profileのgatewayを再起動し、指定profileの`worker_started`を確認してください。所有者不明・不一致・起動失敗はdoctorで区別し、gatewayのPIDが生存していることだけを配送成功の根拠にしません。
 
