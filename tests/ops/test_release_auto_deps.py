@@ -162,11 +162,20 @@ def test_default_drain_labels_hermes_and_lineworks(env):
 
 
 def test_measure_state(env):
-    deps = _build(env, contract_digests=lambda target=None, profile=None: {
-        'config_contract_sha256': '4' * 64,
-        'data_contract_sha256': '5' * 64})
+    seen = {}
+
+    def digests(target=None, profile=None):
+        seen['target'] = target
+        seen['profile'] = profile
+        return {'config_contract_sha256': '4' * 64,
+                'data_contract_sha256': '5' * 64}
+
+    deps = _build(env, contract_digests=digests)
     seed_owner(env['store'])
     measured = deps.measure_state()
+    # active無しではinstalled releaseがmeasure対象になり、profileはowner正本
+    assert isinstance(seen['target'], dict) and seen['target']
+    assert isinstance(seen['profile'], dict) and 'profile_sha256' in seen['profile']
     assert measured['head'] == 'a' * 40
     assert measured['config_contract_sha256'] == '4' * 64
     assert measured['installed_schema'] == 7
