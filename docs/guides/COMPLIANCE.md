@@ -1,5 +1,7 @@
 # 医療情報システムとして使うための法令・ガイドライン対応
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
+
 この文書は、薬局・訪問看護ステーション・診療所が hermes-mcs を業務で使うときに、
 施設側で整えるべきことと、ソフトウェアが用意している機能を対応づけたものです。
 **法的助言ではありません。** 実際の導入判断は、施設の顧問弁護士・個人情報保護の担当者、
@@ -75,9 +77,9 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 記録せず、その旨を表示します（確認待ちの間は外部AIへ自動送信しないので、初回収集を先に済ませても送信は始まりません）。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
+"$PY" mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
   --reason "2026-11-20 契約・同意書式・運用管理規程v1を確認" --services anthropic,jev --confirm-human
-python3 mcs/ops/mcs_compliance.py status
+"$PY" mcs/ops/mcs_compliance.py status
 ```
 
 確認は人承認操作 `ops.external_transfer_acknowledge` として、ほかの承認操作と同じ受付記録（`command_receipts`）を
@@ -166,9 +168,9 @@ MCSを動かすユーザーが所有する権限0600の通常ファイルに戻�
   点検記録（端末の外）に書き、次回 `--checkpoint 件数:head` で照合します。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回のhead>  # 改ざん検査
-python3 mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
-python3 mcs/ops/mcs_compliance.py access-log show --project 123
+"$PY" mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回のhead>  # 改ざん検査
+"$PY" mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
+"$PY" mcs/ops/mcs_compliance.py access-log show --project 123
 ```
 
 `review` の患者数は、記録に残った患者IDの重複を除いた人数です。1行に載らなかった分（`patients_more`）は

@@ -440,7 +440,7 @@ def test_standalone_documented_service_preserves_literal_paths(tmp_path):
     assert spec["StandardOutPath"] == spec["StandardErrorPath"] == os.devnull
     guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
     assert "./install.sh --mode standalone" in guide
-    assert "$PY mcs/ops/mcs_setup.py check" in guide
+    assert '"$PY" mcs/ops/mcs_setup.py check' in guide
 
 
 def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):

@@ -18,8 +18,10 @@ Hermesアドオン形態（Path A）の場合:
 ```bash
 ./install.sh --preflight
 ./install.sh
-PY=~/.hermes/hermes-agent/venv/bin/python
+PY="$HOME/.hermes/hermes-agent/venv/bin/python"
 ```
+
+`HERMES_HOME`を変更した場合は、`<Hermesホーム>/hermes-agent/venv/bin/python`を使います。
 
 Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-2で本体・Pythonと
 定期実行を設定し、`PY="$HOME/.mcs/venv/bin/python3"`を使います。LINE WORKSの接続手順は共通です。
