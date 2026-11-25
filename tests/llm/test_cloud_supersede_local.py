@@ -334,6 +334,11 @@ def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected)
                               ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
     elif status is not None:
         _settle(ledger, reservation, status, error, usage)
+        if status == "timeout":
+            # Bounded retry permits replacement sends while fewer than the ceiling of
+            # uncertain failed sends exist; this row set is at that ceiling.
+            for _ in range(policy.FAILED_SEND_BILLED_LIMIT - 1):
+                _settle(ledger, _reserve(ledger), status, error, usage)
     before = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
     send = _refusal(lambda: _reserve(ledger))
     check = _refusal(lambda: policy.request_send_block_reason(ledger, CFG, _body("synthetic prompt"),

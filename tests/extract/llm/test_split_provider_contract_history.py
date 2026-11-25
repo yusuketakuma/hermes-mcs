@@ -178,7 +178,7 @@ def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, 
         with pytest.raises(anthropic_client.AnthropicError) as denied:
             _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='new',
                      selection=selected, max_tokens=selected['max_tokens'])
-        assert denied.value.detail == ('cloud_unit_unresolved' if outcome == 'unknown' else 'scope')
+        assert denied.value.detail == 'scope'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
         assert [tuple(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
             "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == before

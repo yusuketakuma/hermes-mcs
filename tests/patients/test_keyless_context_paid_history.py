@@ -13,6 +13,7 @@ import extract_llm
 import extract_llm_provider
 import patient_context_refresh_state as state
 import patient_context_refresh as refresh
+from llm_retry import CLOUD_MAX_ATTEMPTS
 from test_context_cloud_update_identity import real_cloud, runtime, cloud, finish
 from test_patient_context_refresh import seed, step
 from common_testkit import follow_cloud_mode
@@ -63,8 +64,8 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
     if status == 429:
-        # The rate-limit circuit opens only after three consecutive cloud
-        # failures; a second source gives the cloud lane enough units to reach it.
+        # The rate-limit circuit opens after consecutive cloud failures;
+        # a second source gives the cloud lane enough units to observe its cooldown.
         seed(ledger, mid=2, body='合成の通院記録があります。')
     waited = []
     for _ in range(40):
@@ -72,9 +73,12 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         if result['status'] == 'complete':
             break
         assert result['status'] in ('progressed', 'deferred'), result
+        if result['status'] == 'deferred' and result.get('reason') == 'patient_context_waiting':
+            clock.wall += 301
+            clock.mono += 301
         if result.get('reason', '').startswith('patient_context_cloud_deferred:'):
-            # Three rate limits open the circuit: the next unit waits for its cooldown
-            # instead of going local (owner decision 2026-11-16), then meets its own refusal.
+            # Rate limits and persistent 5xx open the circuit after the bounded failure
+            # ceiling: the next unit waits for its cooldown instead of going local.
             waited.append(result['reason'])
             clock.wall += 301
             clock.mono += 301
@@ -83,7 +87,7 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         pytest.fail(f'API fallback did not publish: {result!r}; coverage='
                     f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert sent and local_calls
-    assert bool(waited) == (status == 429), waited
+    assert bool(waited) == (status == 429 or 500 <= status <= 599), waited
     assert json.loads(ledger.artifacts(state.KIND)[-1]["meta"])["local_fallback"] is True
     results = ledger.artifacts('cloud_usage_result')
     assert results
@@ -129,7 +133,7 @@ def test_unverified_or_answered_request_cannot_be_substituted_locally(runtime, r
 
 
 def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, monkeypatch):
-    ledger, _, local_calls = runtime
+    ledger, clock, local_calls = runtime
     cfg, _ = real_cloud
     sent = []
     def unknown(_client, method, body, *args, **kwargs):
@@ -138,31 +142,37 @@ def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, mon
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', unknown)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
-    # The result of a sent request is unknown: local work takes the unit at once (owner
-    # decision 2026-11-15) and the request is recorded as replaced, never sent again.
+    # The result of every bounded send is unknown: local work takes the unit once the
+    # retry ceiling is exhausted and the requests are recorded as replaced, never sent again.
     first = step(runtime, cfg=cfg)
-    assert first['status'] == 'progressed' and len(sent) == 1 and len(local_calls) == 1
+    assert first['status'] == 'progressed' and len(sent) == CLOUD_MAX_ATTEMPTS and len(local_calls) == 1
     paid = [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
-    assert len(paid) == 2
+    assert len(paid) == CLOUD_MAX_ATTEMPTS * 2
     replaced = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
-    assert [(row['reservation_id'], row['disposition']) for row in replaced] == [
-        (json.loads(paid[0][6])['reservation_id'], 'superseded_local')]
+    assert len(replaced) == CLOUD_MAX_ATTEMPTS
+    assert {row['disposition'] for row in replaced} == {'superseded_local'}
     for _ in range(40):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
             break
         assert result['status'] in ('progressed', 'deferred'), result
+        if result.get('reason') == 'patient_context_waiting':
+            clock.wall += 301
+            clock.mono += 301
     else:
         pytest.fail(f'local replacement did not publish: {result!r}')
     assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
-    # Each unit (the source, then its overview) met the failure once; no body was sent twice.
+    # Each unit (the source, then its overview) met the failure up to the bounded ceiling;
+    # no body was sent again after that unit's local replacement.
     bodies = [json.dumps(payload, sort_keys=True) for payload in sent]
-    assert len(bodies) == len(set(bodies)) == 2 and sum('source' in payload for payload in sent) == 1
+    assert len(bodies) == CLOUD_MAX_ATTEMPTS * 2 and len(set(bodies)) == 2
+    assert sum('source' in payload for payload in sent) == CLOUD_MAX_ATTEMPTS
     dispositions = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
-    assert len(dispositions) == 2 and {row['disposition'] for row in dispositions} == {'superseded_local'}
+    assert len(dispositions) == CLOUD_MAX_ATTEMPTS * 2
+    assert {row['disposition'] for row in dispositions} == {'superseded_local'}
     assert [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")][:2] == paid
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")][:len(paid)] == paid
 
 
 def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime, real_cloud, monkeypatch):

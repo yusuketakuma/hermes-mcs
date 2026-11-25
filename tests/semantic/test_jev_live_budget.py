@@ -10,6 +10,7 @@ from ledger import Ledger
 import mcs_util
 import semantic_jev as jev
 import semantic_runtime as runtime
+from llm_retry import CLOUD_MAX_ATTEMPTS
 from semantic_store import jev_usage_today
 
 
@@ -98,8 +99,8 @@ def test_retries_reserve_each_http_and_preserve_unknown_attempt(home):
     assert len(sent) == 2 and _used(home) == 2
 
 
-def test_lost_response_is_not_resent_and_keeps_its_reservation(home):
-    (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": 2}}))
+def test_lost_response_retry_stops_at_the_bounded_ceiling(home):
+    (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": CLOUD_MAX_ATTEMPTS}}))
     sent = []
 
     def lost(*args):
@@ -109,8 +110,8 @@ def test_lost_response_is_not_resent_and_keeps_its_reservation(home):
     with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=lost) as client:
         with pytest.raises(jev.JevError, match="transport") as raised:
             _evaluate(client)
-    assert raised.value.retryable is False
-    assert len(sent) == 1 and _used(home) == 1
+    assert raised.value.retryable is True
+    assert len(sent) == CLOUD_MAX_ATTEMPTS and _used(home) == CLOUD_MAX_ATTEMPTS
 
 
 def test_models_get_consumes_same_shared_reservation(home, monkeypatch):

@@ -124,7 +124,7 @@ def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
                             meta={VERSION_KEY: CURRENT_VERSION, "error": True,
                                   "extract_version": extract_llm.EXTRACT_VERSION,
                                   "attempts": 5, "hash": source_hash,
-                                  "auto_retry": 3 if i < extract_llm.REVIVE_MAX * 4 else 0})
+                                  "auto_retry": extract_llm.REVIVE_PER_INPUT if i < extract_llm.REVIVE_MAX * 4 else 0})
         old = db.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=1,
                               meta={VERSION_KEY: LEGACY_VERSION, "error": True,
                                     "extract_version": extract_llm.EXTRACT_VERSION,
