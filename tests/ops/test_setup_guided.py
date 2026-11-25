@@ -54,6 +54,29 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     assert mcs_setup.validate_config(cfg)[0] == []
 
 
+def test_standalone_slack_wizard_reprompts_project_ids_when_auto_off(monkeypatch, capsys):
+    cfg = {'runtime_mode': 'standalone', 'mcs_login_id': 'synthetic-login',
+           'notify_target': 'slack:C1234567890',
+           'notify': {'interactive': 'slack', 'slack': {'channel_id': 'C1234567890'}}}
+    project_answers = []
+
+    def answer(key, kind, default, desc, cur, present=False):
+        if key == 'setup_detail':
+            return 'recommended'
+        if key == 'notify.slack.project_ids_auto':
+            return False
+        if key == 'notify.slack.project_ids':
+            project_answers.append(True)
+            return [] if len(project_answers) == 1 else [101]
+        return cur if present else default if default is not None else setup_wizard.UNSET
+
+    monkeypatch.setattr(setup_wizard, 'ask', answer)
+    setup_wizard.wizard(cfg)
+    assert len(project_answers) == 2
+    assert cfg['notify']['slack']['project_ids'] == [101]
+    assert '1件以上のプロジェクトIDを入力してください' in capsys.readouterr().out
+
+
 def test_recommended_path_preserves_explicit_semantic_off(monkeypatch):
     cfg = {'mcs_login_id': 'synthetic-login', 'notify_target': 'local',
            'semantic': {'mode': 'off', 'daily_request_budget': 17}}
