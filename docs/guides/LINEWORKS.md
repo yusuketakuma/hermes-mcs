@@ -62,7 +62,9 @@ Bot 登録は Console と管理者画面の二段階です。外部 LINE/LINE WO
 ```
 
 ウィザードで `notify.interactive=lineworks` を選択し、通知先を
-`lineworks:<トークルームID>` にします。接続項目は次の通りです。
+`lineworks:<トークルームID>` にします。文章だけの通知（`off`）でも同じ接続設定が必要です。
+`notify_target` と、LINE WORKSを使う `notify_system_target` には、下の
+`notify.lineworks.channel_id` と同じトークルームIDを指定します。接続項目は次の通りです。
 
 | MCS 設定 | 入れる値 |
 |---|---|
