@@ -648,7 +648,7 @@ select_model_profile() {
         # them. Without an active agent the largest complete set is kept.
         # The hardware ladder below only chooses the first model for a machine.
         _smp_pick=""
-        _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1 | sed -e 's|&quot;|"|g' -e 's|&apos;|'"'"'|g' -e 's|&lt;|<|g' -e 's|&gt;|>|g' -e 's|&amp;|\&|g')"
+        _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | awk 'NR == 1' | sed -e 's|&quot;|"|g' -e 's|&apos;|'"'"'|g' -e 's|&lt;|<|g' -e 's|&gt;|>|g' -e 's|&amp;|\&|g')"
         # Only a model inside this mode's MODEL_DIR counts: after a mode switch
         # the old agent still names the previous home, whose bytes are elsewhere.
         if [ -n "$_smp_active" ] && [ "${_smp_active%/*}" = "$MODEL_DIR" ]; then
@@ -729,8 +729,10 @@ Qwen3.5-397B-A17B-Q4_K_M-00006-of-00006.gguf|https://huggingface.co/unsloth/Qwen
             die "MCS_LOCAL_MODEL の指定が不正です: ${MCS_LOCAL_MODEL}（auto・qwen3.5-9b・qwen3.8-27b・qwen3.6-35b-a3b・qwen3.5-122b-a10b・qwen3.5-397b-a17b）"
             ;;
     esac
-    MODEL_FILE="$MODEL_DIR/$(printf '%s\n' "$MODEL_SPECS" | sed -n '1s/|.*//p')"
-    MODEL_URL="$(printf '%s\n' "$MODEL_SPECS" | sed -n '1p' | cut -d'|' -f2)"
+    _first_spec="$(printf '%s\n' "$MODEL_SPECS" | sed -n '1p')"
+    MODEL_FILE="$MODEL_DIR/${_first_spec%%|*}"
+    _spec_rest="${_first_spec#*|}"
+    MODEL_URL="${_spec_rest%%|*}"
 }
 model_files_present() {
     _mfp_missing=0
