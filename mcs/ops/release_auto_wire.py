@@ -286,8 +286,9 @@ class Wire:
         attestation/compatibility両endpointの検証済み値と相互照合する(SEM14)。
 
         戻り値: {'publication_id','manifest_digest','compatibility_sha256',
-                 'rollout_epoch'}。offer未検証・selected不一致・期限切れ・
-        provider未設定は全てfail-closed。
+                 'rollout_epoch','config_contract_sha256',
+                 'data_contract_sha256'}。offer未検証・selected不一致・
+        期限切れ・provider未設定は全てfail-closed。
         """
         if self._release_trust is None or self._release_scope is None:
             raise WireError('WIRE_UNAVAILABLE')
@@ -351,7 +352,16 @@ class Wire:
                 or offer.get('rollout_epoch') != rollout['authorization_epoch']
                 or type(selected.get('publication_id')) is not str):
             raise WireError('WIRE_METADATA')
+        # attempt_keyのdigestは検証済みCompatibility payloadの値だけを使う
+        # (spec 03 ENC03)。端末は契約文書から計算しない・配備値も使わない。
+        config_sha = payload.get('config_contract_sha256')
+        data_sha = payload.get('data_contract_sha256')
+        if not (type(config_sha) is str and len(config_sha) == 64
+                and type(data_sha) is str and len(data_sha) == 64):
+            raise WireError('WIRE_METADATA')
         return {'publication_id': selected['publication_id'],
                 'manifest_digest': manifest_digest,
                 'compatibility_sha256': compat_sha,
-                'rollout_epoch': offer['rollout_epoch']}
+                'rollout_epoch': offer['rollout_epoch'],
+                'config_contract_sha256': config_sha,
+                'data_contract_sha256': data_sha}

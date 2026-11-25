@@ -122,7 +122,7 @@ def test_unavailable_stubs_fail_closed(env):
     with pytest.raises(WireError):
         deps.signed_send('/v3/x', b'{}')
     with pytest.raises(OwnerError):
-        deps.contract_digests()
+        deps.contract_digests(None, None)
     with pytest.raises(BackupEvidenceError):
         deps.backup_evidence()
     # backup_detail未注入でもwitness providerはfail-closed
@@ -162,7 +162,7 @@ def test_default_drain_labels_hermes_and_lineworks(env):
 
 
 def test_measure_state(env):
-    deps = _build(env, contract_digests=lambda: {
+    deps = _build(env, contract_digests=lambda target=None, profile=None: {
         'config_contract_sha256': '4' * 64,
         'data_contract_sha256': '5' * 64})
     seed_owner(env['store'])
@@ -229,3 +229,26 @@ def test_runtime_advance_with_quarantine(env):
     assert callable(deps.runtime_advance)
     assert callable(deps.service_desires)
     assert calls == []
+
+
+def test_wire_backed_digests_pass_through_and_fail_closed(env):
+    class FakeWire:
+        signed_send = verify = fetch_artifact = None
+
+        def release_metadata(self, target, profile):
+            return {'config_contract_sha256': '4' * 64,
+                    'data_contract_sha256': '5' * 64}
+
+    deps = _build(env, wire=FakeWire())
+    assert deps.contract_digests({'release_id': '1' * 64}, {'profile_sha256': '2' * 64}) == {
+        'config_contract_sha256': '4' * 64, 'data_contract_sha256': '5' * 64}
+
+    class BrokenWire:
+        signed_send = verify = fetch_artifact = None
+
+        def release_metadata(self, target, profile):
+            raise RuntimeError('WIRE_UNAVAILABLE')
+
+    deps = _build(env, wire=BrokenWire())
+    with pytest.raises(OwnerError):
+        deps.contract_digests({'release_id': '1' * 64}, {'profile_sha256': '2' * 64})
