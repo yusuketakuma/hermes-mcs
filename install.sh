@@ -172,7 +172,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="a555a3518b90576c8dfadf02e1174d96424eb05900498f8b5dd5a786c3ff0111"
+INSTALL_RUNTIME_SHA256="b82cf9c569f841055309d01d784e26e7e34aa5b6069b297f87603d9cce96b4ca"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -604,44 +604,53 @@ MODEL_DIR="$RUNTIME_HOME/models"
 # Hugging Face revision and LFS sha256: a floating main could swap the
 # bytes that read PHI bodies. MODEL_SPECS lines are
 # filename|pinned-url|sha256|bytes; split GGUFs keep one line per shard.
+# Echo the profile key for a first-file basename, without checking any file.
+profile_key_for_first_file() {
+    case "$1" in
+        Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf) printf '%s\n' qwen3.5-397b-a17b ;;
+        Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf) printf '%s\n' qwen3.5-122b-a10b ;;
+        Qwen3.6-35B-A3B-UD-Q4_K_M.gguf) printf '%s\n' qwen3.6-35b-a3b ;;
+        Qwen3.8-27B-UD-Q4_K_M.gguf) printf '%s\n' qwen3.8-27b ;;
+        Qwen3.5-9B-Q4_K_M.gguf) printf '%s\n' qwen3.5-9b ;;
+    esac
+    return 0
+}
 # Echo the profile key when every file of the set named by its first
 # file exists; nothing otherwise. Split models count only when all shards are present.
 complete_model_set_for() {
-    case "$1" in
-        Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf)
+    _cmsf_key="$(profile_key_for_first_file "$1")"
+    [ -n "$_cmsf_key" ] || return 0
+    case "$_cmsf_key" in
+        qwen3.5-397b-a17b)
             [ -f "$MODEL_DIR/$1" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00002-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00003-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00004-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00005-of-00006.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-397B-A17B-Q4_K_M-00006-of-00006.gguf" ] \
-                && printf '%s\n' qwen3.5-397b-a17b ;;
-        Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf)
+                || return 0 ;;
+        qwen3.5-122b-a10b)
             [ -f "$MODEL_DIR/$1" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00002-of-00003.gguf" ] \
                 && [ -f "$MODEL_DIR/Qwen3.5-122B-A10B-Q4_K_M-00003-of-00003.gguf" ] \
-                && printf '%s\n' qwen3.5-122b-a10b ;;
-        Qwen3.6-35B-A3B-UD-Q4_K_M.gguf)
-            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.6-35b-a3b ;;
-        Qwen3.8-27B-UD-Q4_K_M.gguf)
-            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.8-27b ;;
-        Qwen3.5-9B-Q4_K_M.gguf)
-            [ -f "$MODEL_DIR/$1" ] && printf '%s\n' qwen3.5-9b ;;
+                || return 0 ;;
+        *)
+            [ -f "$MODEL_DIR/$1" ] || return 0 ;;
     esac
-    # Output is the answer, not the status: a missing set must not stop set -e.
-    return 0
+    printf '%s\n' "$_cmsf_key"
 }
 select_model_profile() {
     _smp_request="$(printf '%s' "${MCS_LOCAL_MODEL:-auto}" | tr '[:upper:]' '[:lower:]')"
     if [ "$_smp_request" = auto ]; then
         # An install already carrying a supported Qwen GGUF keeps it. The model
-        # the existing launch agent actually loads wins over a larger cached
-        # file set; without an active agent the largest complete set is kept.
+        # the existing launch agent names wins over a larger cached file set,
+        # even while its shards are still incomplete: the download logic resumes
+        # them. Without an active agent the largest complete set is kept.
         # The hardware ladder below only chooses the first model for a machine.
         _smp_pick=""
         _smp_active="$(sed -n 's|.*<string>-m</string><string>\([^<]*\)</string>.*|\1|p' "$LLAMA_PLIST" 2>/dev/null | head -1)"
         if [ -n "$_smp_active" ]; then
-            _smp_pick="$(complete_model_set_for "${_smp_active##*/}")"
+            _smp_pick="$(profile_key_for_first_file "${_smp_active##*/}")"
         fi
         if [ -z "$_smp_pick" ]; then
             for _smp_first in \

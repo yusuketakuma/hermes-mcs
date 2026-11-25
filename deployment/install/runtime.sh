@@ -736,7 +736,10 @@ else
         }
         # Budget the whole set before the first byte of a split model: failing
         # the last shard after tens of GB is worse than failing before the first.
+        # The directory is created first: on a clean Mac df cannot report a path
+        # that does not exist yet.
         if [ -z "$MODEL_SHA256_OVERRIDE" ]; then
+            mkdir -p "$MODEL_DIR"
             _missing_total="$(model_missing_bytes)"
             if [ "$_missing_total" -gt 0 ]; then
                 _need_kb=$(( _missing_total / 1024 + 1048576 ))
