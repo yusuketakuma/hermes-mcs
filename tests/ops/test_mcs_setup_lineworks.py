@@ -138,12 +138,16 @@ def test_lineworks_never_installs_hermes_gateway():
     assert service_management.sync_gateway(config(), 'nonexistent', lambda _: pytest.fail('gateway mutation'), False) == 0
 
 
-def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(monkeypatch, tmp_path):
+@pytest.mark.parametrize("system_only", [False, True])
+def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(monkeypatch, tmp_path, system_only):
     import json
     from adapters.lineworks import __main__ as adapter_cli
 
     cfg = config()
     cfg["notify"]["interactive"] = "off"
+    if system_only:
+        cfg["notify_system_target"] = cfg["notify_target"]
+        cfg["notify_target"] = "local"
     (tmp_path / "config.json").write_text(json.dumps(cfg))
     chrome = tmp_path / "synthetic-chrome"
     chrome.write_text("synthetic")
