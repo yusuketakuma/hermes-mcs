@@ -186,7 +186,7 @@ WIZARD = [
          "AIの接続先URL（通常は空欄。既定は http://127.0.0.1:8080/v1/chat/completions。指定する場合は /v1/chat/completions まで入力してください。外部URLは指定できません）",
          None),
         ("local_llm.model", "opt", None,
-         "AIモデル名（通常は空欄でQwen3.5-9B。別のモデルを導入した場合のみ指定）", None),
+         "AIモデル名（通常は空欄。導入時はMacの性能に合わせたQwenが選ばれます。別のモデルを導入した場合のみ指定）", None),
     ]),
     ("確認が必要な内容の通知", [
         ("signals.notify", "bool", False,

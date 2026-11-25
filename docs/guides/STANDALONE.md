@@ -212,9 +212,9 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。
 
-ローカルLLMのモデル（約5.7 GB）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
+ローカルLLMのモデル（容量は自動選択されたQwenで変わる）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
 独立: `~/.mcs/models`）。そのまま切り替えると`install.sh`が新しい保存先へ再ダウンロードし、
-元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に移動します。
+元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に導入済みのQwen GGUF（分割モデルは全ファイル）を移動します。Qwen3.5-9Bの例:
 
 ```bash
 mkdir -p ~/.mcs/models
