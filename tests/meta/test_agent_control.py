@@ -95,6 +95,13 @@ def test_scope_skipped_sdk_lanes_count_only_for_docs_only_changes(name):
     assert ac.decide_gate(_pr(labels=("full-ci",)), skipped, DOC, 0, True)["state"] == "failure"
 
 
+def test_full_ci_matrix_legs_replace_a_stale_bare_macos_skip():
+    runs = _green() + [
+        _run("pytest-linux (1)"), _run("pytest-macos", "skipped"),
+        _run("pytest-macos (1)"), _run("pytest-macos (2)")]
+    assert ac.decide_gate(_pr(labels=("full-ci",)), runs, DOC, 0, True)["state"] == "success"
+
+
 def test_matrix_legs_of_the_test_jobs_count_as_evidence():
     legs = _green() + [_run("pytest-linux (1)"), _run("pytest-linux (2)"), _run("pytest-macos (1)")]
     assert ac.decide_gate(_pr(), legs, CODE, 0, True)["state"] == "success"

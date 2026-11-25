@@ -189,8 +189,10 @@ def evidence(check_runs, head_sha, files, *, full_ci=False):
     runs = _latest_runs(check_runs, head_sha)
     problems, pending = [], []
     # A matrix job reports one check run per leg, named "pytest-linux (1)" and so on.
+    matrixed = {job for job in EVIDENCE_JOBS for name in runs
+                if name.startswith(job + " (")}
     legs = [(job, name) for job in EVIDENCE_JOBS for name in sorted(runs)
-            if name == job or name.startswith(job + " (")]
+            if (name == job and job not in matrixed) or name.startswith(job + " (")]
     for job, name in [(name, name) for name in REQUIRED_JOBS] + legs:
         run = runs.get(name)
         if run is None:
