@@ -1,10 +1,14 @@
 """Patient context contracts, artifact identity and shared execution dependencies."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import time as time
+from error_codes import KNOWN_ERROR_CODES
 from writer_lock import acquire_run_lock as acquire_run_lock
 import local_llm
 import cloud_inference
@@ -106,6 +110,71 @@ def _quality_expected(identity, fid, selected):
 
 class Deferred(Exception):
     """Admission or remaining time is unavailable; no attempt is charged to the unit."""
+
+
+# The gate at which a quality step (or the save-time quality check) ended without
+# passing. Observation only: a recorded code never decides an outcome.
+QUALITY_DETAIL_CODES = frozenset({
+    # live refusals of the step's current() check
+    "deadline", "admission", "writer_changed", "jev_key_changed", "cloud_key_changed",
+    "semantic_config_invalid", "semantic_off", "jev_withheld", "jev_scope_excluded",
+    "skip_condition_changed", "skip_condition_unread", "patient_paused", "cloud_stopped",
+    "assessment_changed", "config_changed", "claim_lost",
+    # changed inputs
+    "summary_changed", "identity_changed", "chunks_changed", "scope_excluded",
+    # the read fence
+    "own_write_mismatch", "version_unwitnessed", "witness_mismatch", "replay_commit",
+    # steps that end without raising
+    "origin_unverified", "jev_unavailable", "jev_window_closed", "jev_usage_unread", "jev_circuit_unclassified",
+    "claim_unavailable", "failure_recorded", "jev_client_hooks", "request_problem", "retry_wait",
+    "jev_not_evaluated", "prior_failure_blocks_skip", "skip_unrecorded", "candidate_failed",
+    # repairs
+    "cloud_off", "repair_profile", "repair_budget", "repair_deadline", "repair_prompt_capacity",
+    "repair_dispatch", "repair_evidence_held", "repair_slot_unknown", "repair_deferred",
+    # the save-time check
+    "save_proof_unread", "save_proof_changed", "save_policy_changed", "save_receipt_invalid",
+    "save_repair_unverified",
+    # Deferred codes a quality step raises (ValueError codes are in KNOWN_ERROR_CODES)
+    "patient_summary_quality_lock", "patient_summary_quality_budget_changed",
+    "patient_summary_quality_source_changed", "patient_context_source_repair_changed",
+    "patient_context_source_repair_lock", "patient_context_capacity_or_deadline",
+    "patient_context_admission_deferred", "patient_context_turn_busy",
+    "patient_context_endpoint_unsent", "patient_context_endpoint_unavailable",
+})
+
+
+_QUALITY_DETAIL_TYPE = re.compile(r"[A-Z][A-Za-z0-9]{0,69}(?:Error|Exception|Stale|Fallback)")
+
+
+_quality_detail = ContextVar("patient_context_quality_detail", default=None)
+
+
+@contextmanager
+def capture_quality_detail():
+    """Collect the first gate code that the quality checks in this scope record."""
+    detail = {"code": None}
+    token = _quality_detail.set(detail)
+    try:
+        yield detail
+    finally:
+        _quality_detail.reset(token)
+
+
+def record_quality_detail(code):
+    """Note the gate that stops a quality check; the first code in a scope stands.
+
+    Nothing reads the note back to decide an outcome, and outside a capture it is dropped."""
+    detail = _quality_detail.get()
+    if detail is not None and detail["code"] is None:
+        detail["code"] = code
+
+
+def bounded_quality_detail(value):
+    """A fixed gate code, a registered error code or an exception type name; else ``unclassified``."""
+    if type(value) is str and (value in QUALITY_DETAIL_CODES or value in KNOWN_ERROR_CODES
+                               or _QUALITY_DETAIL_TYPE.fullmatch(value)):
+        return value
+    return "unclassified"
 
 
 def _digest(value):

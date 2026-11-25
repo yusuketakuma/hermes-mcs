@@ -67,7 +67,7 @@ def _stored(model):
     return None if model == jev.JEV_MODEL else model
 
 
-def _publish(before, after) -> None:
+def _publish(before, after, command_id) -> None:
     """Save ``after`` only over a config still naming ``before``; an already saved ``after`` is done."""
     import config_edit
     cfg = config_edit.read_strict()
@@ -76,16 +76,17 @@ def _publish(before, after) -> None:
         return
     if current != before:
         raise ValueError("jev_model_changed")
-    _, errors = config_edit.apply({"semantic.model": _stored(after)}, expected=cfg)
+    _, errors = config_edit.apply({"semantic.model": _stored(after)}, expected=cfg,
+                                  origin="jev_model", command_id=command_id)
     if errors:
         raise ValueError("jev_model_config_invalid")
 
 
 @contextmanager
-def _published_after_commit(before, after):
+def _published_after_commit(before, after, command_id):
     """Publish only once the receipt has committed; a failure leaves a receipt a rerun finishes."""
     yield
-    _publish(before, after)
+    _publish(before, after, command_id)
 
 
 def _newest(db):
@@ -119,7 +120,8 @@ def apply_tx(db, req, filesystem_changes) -> tuple[str | None, dict]:
     trial["semantic"] = block
     if validate_config(trial)[0]:
         return "jev_model_config_invalid", {}
-    filesystem_changes.enter_context(_published_after_commit(req["expected_model"], req["model"]))
+    filesystem_changes.enter_context(_published_after_commit(req["expected_model"], req["model"],
+                                                                 req["command_id"]))
     return None, {"cmd": CMD, "reason": req["reason"],
                   "jev_model": {"before": req["expected_model"], "after": req["model"],
                                 "probe": req.get("probe")}}
@@ -134,7 +136,8 @@ def replay_tx(db, receipt, filesystem_changes) -> None:
     if newest is None or newest.get("command_id") != receipt.get("command_id"):
         return
     change = receipt["jev_model"]
-    filesystem_changes.enter_context(_published_after_commit(change["before"], change["after"]))
+    filesystem_changes.enter_context(_published_after_commit(change["before"], change["after"],
+                                                                 receipt["command_id"]))
 
 
 def receipt_state(receipt) -> str:

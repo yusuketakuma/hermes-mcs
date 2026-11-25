@@ -7,7 +7,7 @@ import sqlite3
 import local_llm
 import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION
-from mcs_util import loads_dict
+from mcs_util import loads_dict, safe_error_code
 from inference_version import VERSION_KEY, current_meta_pred
 import patient_context_plan as context_plan
 import patient_context_selection as context_selection
@@ -16,6 +16,13 @@ import patient_context_quality_receipts
 import patient_context_refresh_sources
 import patient_context_refresh_state
 import writer_lock
+
+
+_note = patient_context_refresh_state.record_quality_detail
+
+
+# The coarse stop of a repair that ended without a candidate and named no finer gate.
+_REPAIR_STOPS = {"held": "repair_evidence_held", "unknown": "repair_slot_unknown", "deferred": "repair_deferred"}
 
 
 def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim, current,
@@ -53,6 +60,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         ids = identity["fact_ids"]
         for offset in range(0, len(ids), 12):
             if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+                _note("deadline")
                 return "deferred", None
             answers = patient_context_quality_receipts._quality_answers(reader.db, pid, identity["audit_key"], ids[offset:offset + 12])
             if set(answers) != set(ids[offset:offset + 12]):
@@ -146,9 +154,18 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
             return "held", None
         return "candidate", {"fact_ids": ids, "identity": next_identity}
     if cloud_mode != "on":
+        _note("cloud_off")
         return "cloud_off", None
-    if (len(prompt) > context_plan.MAX_PROMPT_CHARS or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline
-            or not admit() or not current()):
+    if len(prompt) > context_plan.MAX_PROMPT_CHARS:
+        _note("repair_prompt_capacity")
+        return "deferred", None
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline:
+        _note("repair_deadline")
+        return "deferred", None
+    if not admit():
+        _note("admission")
+        return "deferred", None
+    if not current():
         return "deferred", None
     # Check an unspent repair's exact bound before consuming its one-use
     # allowance. Spent attempts must still reach shared response recovery.
@@ -162,6 +179,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
             cfg, route="patient_context", purpose="quality_repair",
             root=extract_llm.HOME)
         if errors or selection is None:
+            _note("repair_profile")
             return "deferred", None
     distinct = (selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
@@ -169,6 +187,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     if not spent and cloud_policy.budget_block_reason(
             ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
+        _note("repair_budget")
         return "deferred", None
     owner = {"workday_id": workday_id, "source_sig": identity["input_key"]}
     def on_reserved(reserving, reservation, artifact_id):
@@ -191,7 +210,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         current=lambda: current() and patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim),
         dispatch=lambda fn, **_kwargs: fn(), owner=owner,
         reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
-        max_attempts=1, purpose="quality_repair", selection=selection,
+        purpose="quality_repair", selection=selection,
         input_binding=patient_context_refresh_state._digest([identity, patient_context_refresh_state._cloud_input_binding(ledger.db, pid, patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys))]))
     try:
         response = []
@@ -202,6 +221,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, patient_context_refresh_state.Deferred, ValueError):
         # Capacity/budget/lock refusal before the reservation consumes neither
         # allowance. A committed reservation, including an unknown send, stays spent.
+        _note("repair_dispatch")
         return ("held" if patient_context_quality_receipts._quality_repair_spent(ledger.db, pid, identity["input_key"]) else "deferred"), None
     new_ids = [row["fact_ids"][0] for row in repaired]
     if set(new_ids) == selected or not missing <= set(new_ids) or rejected & set(new_ids):
@@ -302,6 +322,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
             cfg, route='patient_context', purpose='quality_repair',
             root=extract_llm.HOME)
         if errors or selection is None:
+            _note('repair_profile')
             return 'deferred', None
     def other_spent(db):
         return context_artifacts.other_repair_spent(
@@ -374,9 +395,13 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
                            or reserved_units[0]['chunk_span'] != span):
         return 'unknown', None
     if cloud_mode != 'on':
+        _note('cloud_off')
         return 'cloud_off', None
-    if (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline
-            or not admit()):
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline:
+        _note('repair_deadline')
+        return 'deferred', None
+    if not admit():
+        _note('admission')
         return 'deferred', None
     slot = [reserved_units[0]['artifact_id'] if reserved_units else None]
     def on_reserved(owner, reservation, artifact_id):
@@ -430,7 +455,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         message_id=source['message_id'] or None, unit_key=unit_key, deadline=deadline,
         current=lambda: current() and patient_context_quality_receipts._quality_owns(ledger.db, pid, identity['input_key'], claim),
         dispatch=lambda fn, **_kwargs:fn(), reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
-        owner={'repair_input_key':repair_key,'unit_key':unit_key}, max_attempts=1,
+        owner={'repair_input_key':repair_key,'unit_key':unit_key},
         purpose='quality_repair', selection=selection, input_binding=patient_context_refresh_state._digest(origin))
     try:
         response = []
@@ -441,12 +466,15 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
                                                for fact in captured['facts']}})
         provider.commit_guard()
     except patient_context_refresh_state.Deferred:
+        _note('repair_dispatch')
         return ('unknown' if slot[0] is not None else 'deferred'), None
     except (cloud_inference.CloudFallback, cloud_client.CloudNotSent):
+        _note('repair_dispatch')
         return ('unknown' if slot[0] is not None else 'deferred'), None
     except ValueError as exc:
         # Input-deterministic refusals cannot succeed on retry; each retry is
         # a paid dispatch, so hold until the bound source/config/policy changes.
+        _note('repair_dispatch')
         if str(exc) in _SOURCE_REPAIR_HELD_CODES:
             return 'held', None
         return ('unknown' if slot[0] is not None else 'deferred'), None
@@ -607,6 +635,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if cloud_policy.stopped(ledger):
+        _note("cloud_stopped")
         return "deferred", None   # `cloud-llm stop` also stops sends to Jev without sticking after resume
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
@@ -622,6 +651,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         local_quality = bool(not actual.get('provider')
                              and (actual.get('route_provider') or not route['provider']))
     if errors:
+        _note("semantic_config_invalid")
         return "deferred", None
     # Jev cannot be asked: semantic off, the patient outside Jev's scope, or the
     # facility review withholds Jev.
@@ -638,12 +668,15 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     cloud_policy.guard_context_origins(ledger, pid,
                         [(None, 'summary', base_meta['provider']['model'], base_meta)])
                 else:
+                    _note("origin_unverified")
                     return "unknown", None
             optional_quality = True
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError):
+            _note("origin_unverified")
             return "unknown", None
     if not cloud_key and not optional_quality or jev_off and not optional_quality:
+        _note("jev_unavailable")
         return "deferred", None
     from semantic_store import jev_usage_today
     # Jev is never asked here (semantic off, or the patient outside Jev's scope):
@@ -656,8 +689,13 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
         try:
             semantic_runtime._jev_window_check()
+        except (semantic_jev.JevError, ValueError, sqlite3.Error):
+            _note("jev_window_closed")
+            return "deferred", None
+        try:
             used = jev_usage_today(ledger)
         except (semantic_jev.JevError, ValueError, sqlite3.Error):
+            _note("jev_usage_unread")
             return "deferred", None
         skip_reason = (semantic_jev.REVIEW_HELD if scfg["jev_held"] else
                        "not_configured" if not key else
@@ -666,6 +704,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     if no_send is None and semantic_runtime.circuit_open(ledger):
         state = semantic_runtime._circuit_state(ledger)
         if state["failure_class"] not in semantic_runtime._CIRCUIT_FAILURE_CLASSES:
+            _note("jev_circuit_unclassified")
             return "deferred", None
         skip_reason = skip_reason or "circuit_open"
     assessment = patient_context_refresh_state._quality_assessment(scfg)
@@ -679,6 +718,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                    if source is not None else
                    patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, summary, assessment, display_projection, source_keys=source_keys))
         if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, cfg, initial["sources"]):
+            _note("scope_excluded")
             return "deferred", None
     finally:
         ledger.db.rollback()
@@ -686,6 +726,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
     denied = False
     fence = None
     observed_config = None
+
+    def refused(code):
+        _note(code)
+        return False
 
     def authorized(reader, live):
         live_key = semantic_jev.api_key()
@@ -696,7 +740,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                              if no_send == patient_context_quality_receipts.OUT_OF_SCOPE else
                              optional_quality and live_semantic['mode'] == 'off')
             if not still_skipped:
-                return False
+                return refused("skip_condition_changed")
         elif skip_reason is not None:
             try:
                 semantic_runtime._jev_window_check()
@@ -713,20 +757,38 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                                      and semantic_runtime._circuit_state(reader)["failure_class"]
                                      in semantic_runtime._CIRCUIT_FAILURE_CLASSES))
                 if not still_skipped:
-                    return False
+                    return refused("skip_condition_changed")
             except (semantic_jev.JevError, ValueError, sqlite3.Error):
-                return False
-        if (patient_context_refresh_state.time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
-                or live_key != key or problems or live_semantic["mode"] == "off" and not optional_quality
-                # a run that asks Jev stops once the live config no longer lets Jev be asked
-                or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"]
-                                            or semantic_policy.jev_scope_excludes(
-                                                semantic_policy.jev_scope_policy(live)[0], pid))
-                or paused(reader.db, pid)
-                or cloud_policy.stopped(reader)
-                or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
-                or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
-            return False
+                return refused("skip_condition_unread")
+        # Checked in this order, each only after every earlier one held.
+        if patient_context_refresh_state.time.monotonic() >= deadline:
+            return refused("deadline")
+        if not admit():
+            return refused("admission")
+        if not extract_llm._writer_current(full=True):
+            return refused("writer_changed")
+        if live_key != key:
+            return refused("jev_key_changed")
+        if problems:
+            return refused("semantic_config_invalid")
+        if live_semantic["mode"] == "off" and not optional_quality:
+            return refused("semantic_off")
+        # a run that asks Jev stops once the live config no longer lets Jev be asked
+        if skip_reason is None:
+            if live_semantic["mode"] == "off":
+                return refused("semantic_off")
+            if live_semantic["jev_held"]:
+                return refused("jev_withheld")
+            if semantic_policy.jev_scope_excludes(semantic_policy.jev_scope_policy(live)[0], pid):
+                return refused("jev_scope_excluded")
+        if paused(reader.db, pid):
+            return refused("patient_paused")
+        if cloud_policy.stopped(reader):
+            return refused("cloud_stopped")
+        if cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key:
+            return refused("cloud_key_changed")
+        if patient_context_refresh_state._quality_assessment(live_semantic) != assessment:
+            return refused("assessment_changed")
         return True
 
     def inputs_current(reader, live):
@@ -736,17 +798,21 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             latest, latest_meta = patient_context_refresh_state._latest(reader.db, patient_context_refresh_state.KIND, pid)
             if (latest != base_doc if base_doc is not None else
                     latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
-                return False
+                return refused("summary_changed")
             if base_meta is not None and latest_meta != base_meta:
-                return False
+                return refused("summary_changed")
         patient_context_quality_receipts._quality_integrity(reader.db, pid)
         refreshed = (patient_context_refresh_sources._source_quality_capture(reader.db, pid, live, context_plan.source_key(source), assessment,
                         candidate_ref=source_candidate_ref)
                      if source is not None else
                      patient_context_refresh_sources._quality_capture(reader.db, pid, live, workday_id, summary, assessment, display_projection, source_keys=source_keys))
-        return (refreshed["identity"] == identity
-                and (source is None or refreshed["chunks_sig"] == initial["chunks_sig"])
-                and patient_context_quality_receipts._quality_scope_allowed(reader.db, pid, live, refreshed["sources"]))
+        if refreshed["identity"] != identity:
+            return refused("identity_changed")
+        if source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]:
+            return refused("chunks_changed")
+        if not patient_context_quality_receipts._quality_scope_allowed(reader.db, pid, live, refreshed["sources"]):
+            return refused("scope_excluded")
+        return True
 
     def current(own_writes=0):
         nonlocal denied, fence, observed_config
@@ -759,29 +825,39 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     ledger, deadline, lambda reader: inputs_current(reader, live))
                 observed_config = copy.deepcopy(live)
             else:
-                allowed = (fence is not None and extract_llm._same_but_operating_limits(live, observed_config)
-                           and authorized(ledger, live))
+                same = fence is not None and extract_llm._same_but_operating_limits(live, observed_config)
+                if fence is not None and not same:
+                    _note("config_changed")
+                allowed = same and authorized(ledger, live)
             denied = not (allowed and fence(own_writes))
-        except (ValueError, KeyError, TypeError, OSError, sqlite3.Error):
+        except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as exc:
+            _note(safe_error_code(exc))
             denied = True
         return not denied
 
     claim = None
     def guard(stage):
-        if (not current(1 if stage == "jev_reserved" else 0) or claim is None
-                or not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim)):
+        if not current(1 if stage == "jev_reserved" else 0):
+            raise semantic_runtime.RuntimeStale(stage)
+        if claim is None:
+            _note("claim_lost")
+            raise semantic_runtime.RuntimeStale(stage)
+        if not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim):
             raise semantic_runtime.RuntimeStale(stage)
 
     claim = patient_context_quality_receipts._quality_claim(ledger, pid, identity["input_key"], deadline, current)
     if claim is None:
+        _note("claim_unavailable")
         return "deferred", None
     try:
         if not patient_context_quality_receipts._quality_failure_allows_remainder(ledger.db, pid, identity):
+            _note("failure_recorded")
             return ("held" if source_candidate_ref is not None else "failed"), identity
         purpose = identity.get("purpose", "summary")
         selected = set() if source is not None else {row["fact_ids"][0] for row in summary}
 
         def skip_blocked_status():
+            _note("prior_failure_blocks_skip")
             problem = semantic_runtime.patient_summary_request_problem(
                 ledger.db, pid, identity, identity["fact_ids"], purpose=purpose)
             return "held" if problem == "patient_summary_invalid_exhausted" else "unknown" if problem else "deferred"
@@ -791,6 +867,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 problem = semantic_runtime.patient_summary_request_problem(
                     ledger.db, pid, identity, identity["fact_ids"], purpose=purpose)
                 if problem:
+                    _note("request_problem")
                     return ("held" if problem == "patient_summary_invalid_exhausted" else "unknown"), identity
             patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"], deadline=deadline,
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
@@ -825,10 +902,17 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             finally:
                 os.close(fd)
 
+        # In-band retries stay pinned to one send here: this path's usage
+        # reserver cannot distinguish a retried send from an unresolved
+        # unknown-outcome send, so retrying inside one operation would weaken
+        # the duplicate-billing contract. Cross-tick retries remain bounded by
+        # the quality failure backoff; unifying this path needs logical-request
+        # accounting in semantic_usage first.
         client = semantic_jev.JevClient(api_key=key, model=scfg["model"],
             attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
             max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
+            _note("jev_client_hooks")
             return "deferred", None
         def seal_not_sent(unsent, reason):
             # committed, but its POST never started: settle it so the page can be asked again
@@ -858,6 +942,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             if len(prior) == len(ids):
                 continue
             problem = semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, ids, purpose=purpose)
+            if problem:
+                _note("request_problem")
             if problem == "patient_summary_invalid_exhausted":
                 patient_context_quality_receipts._quality_record_failure(ledger, pid, identity, claim, page_key, "failed", current)
                 return "held", identity
@@ -865,6 +951,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 return "unknown", identity
             retry = patient_context_quality_receipts._quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose)
             if retry["held"] or retry["next_try"] > patient_context_refresh_state.time.time():
+                _note("retry_wait")
                 return "deferred", identity
             candidates = [by_id[fid] for fid in ids] if page is None else None
             sources = ({ (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
@@ -891,11 +978,13 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                         patient_context_quality_receipts._quality_mark_skipped(ledger, pid, identity, claim, selected, current,
                                               scfg["match_threshold"], reason, deadline=deadline)
                     except (ValueError, patient_context_refresh_state.Deferred):
+                        _note("skip_unrecorded")
                         return "unknown", identity
                     return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": reason,
                         **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                            if purpose == "source" else {})}
                 failure_class = outcome.get("failure_class", "failed")
+                _note("jev_not_evaluated")
                 if failure_class in ("retry", "failed"):
                     patient_context_quality_receipts._quality_record_failure(ledger, pid, identity, claim, page_key, failure_class, current)
                 return "deferred", identity
@@ -903,9 +992,13 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         if patient_context_quality_receipts._quality_failed(ledger.db, pid, identity):
             if purpose == "source":
                 if source_candidate_ref is not None:
+                    _note("candidate_failed")
                     return "held", identity
-                return _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
+                repair_status, ref = _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
                     claim, current, deadline, admit, scfg["match_threshold"], cloud_mode=cloud_mode)
+                if repair_status in _REPAIR_STOPS:
+                    _note(_REPAIR_STOPS[repair_status])
+                return repair_status, ref
             if not current():
                 return "deferred", None
             repair_status, candidate = _quality_repair_candidate(
@@ -914,6 +1007,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 cloud_mode=cloud_mode, source_keys=source_keys)
             if repair_status == "candidate":
                 return "candidate", {**candidate, "facts": initial["facts"], "state": initial["state"]}
+            if repair_status in _REPAIR_STOPS:
+                _note(_REPAIR_STOPS[repair_status])
             return repair_status, identity
         patient_context_quality_receipts._quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"], deadline=deadline,
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)

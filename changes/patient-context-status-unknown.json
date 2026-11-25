@@ -1,0 +1,24 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストの状態が件数のある環境でも「不明」になる問題を修正",
+  "summary": "健康状態の記録（health.json）の患者コンテキストは、1時間ごとの再集計が2秒の上限に収まらなかった場合や読み取りに失敗した場合でも、直前に集計できた件数を失わず、元の集計時刻と経過秒数を付けた前回値（stale_measurement）として残します。前回値は元の集計から3時間までで、その後や台帳・抽出世代が変わった場合は従来どおり unknown です。doctor --probe data の作業待ちの件数は、1秒の上限で全員を確認できなかった場合に「患者N人のうちM人まで確認」と確認した範囲の件数を示し、合計としては扱いません。",
+  "upgrade": "追加の設定は不要です。Hermes gateway または独立実行の mcs_standalone を再起動してください（通常の更新ツールは自動で再起動します）。health.json は更新後の次の定期実行から、doctor は次の実行から反映されます。患者コンテキストの処理コードの識別値が変わるため、fact_source が shadow の場合は新しい条件で品質を再確認します。canonical の場合は更新後の候補で比較・承認をやり直してください。",
+  "details": [
+    "health.json の patient_context は、同じ台帳・抽出世代の recorded を1時間再利用する動作を変えていません。その後の再集計が上限超過（observation_limit）か読み取り失敗（observation_unavailable）で終わると、直前の件数を status=stale_measurement として、元の observed_at・age_s・失敗の reason を付けて出します。",
+    "前回値を再び引き継ぐ場合も observed_at は元の集計時刻のままで、毎回の定期実行で再集計を試みます。元の集計から3時間（health_policy.PATIENT_CONTEXT_CARRY_S）を過ぎた値、台帳・抽出世代が異なる値、件数が欠けた値は引き継がず unknown とします。publication は前回値ではなく現在の設定から読みます。",
+    "status_snapshot の patient_context_status に stale_measurement が出ることがあります。通知カード・未完了部品の前回値の扱い（30分・上限超過のときだけ）は変えていません。",
+    "doctor --probe data の患者コンテキスト作業待ちの走査は1秒の期限で患者の間に止まり、途中までの件数を JSON の patient_context.partial（checked・total・counts）に入れます。全員を確認できた場合だけ counts に入れ、途中の場合の状態は「確認できません」のままです。確認した範囲に失敗・読めない記録があれば注意にします。期限を過ぎた時点で読み途中だった患者は数えません。",
+    "doctor の JSON の patient_context に partial キーを追加しました（未確認・失敗・設定不正のときは null）。"
+  ],
+  "refs": [
+    "mcs/ingest/health_report.py",
+    "mcs/core/runtime/health_policy.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "docs/specs/patient-context.md",
+    "tests/ops/test_patient_context_observation.py",
+    "tests/ops/test_patient_context_refresh_setup.py",
+    "tests/patients/test_context_malformed_rows.py",
+    "tests/ingest/test_notification_measurement_carry.py"
+  ]
+}

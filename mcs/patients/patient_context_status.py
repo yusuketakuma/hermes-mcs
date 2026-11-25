@@ -85,15 +85,25 @@ def _allowed_code(value):
     return value in (_QUALITY_HELD, "other") or reason_code(value) == value
 
 
-def latest_current_pred(a="a", b="b"):
-    """Current-version row with no newer current row of the same kind, patient and source key."""
-    def key(alias):
-        return f"CASE WHEN json_valid({alias}.meta) THEN json_extract({alias}.meta,'$.source_key') END"
+def latest_current_pred(a="a", b="b", kinds=None):
+    """Current-version row that is the newest current row of its kind, patient and source key.
+
+    Membership in each (kind, patient, source key) group's maximum, computed
+    once over the active patients' current rows. A per-candidate NOT EXISTS
+    walked every newer artifact of the patient regardless of kind (and, under
+    a same-kind index hint, every same-kind row), which put the bounded health
+    read over its budget on large ledgers."""
+    if kinds is None:
+        import patient_context_refresh_state as state
+        kinds = (state.SCAN,)
+    key = f"CASE WHEN json_valid({b}.meta) THEN json_extract({b}.meta,'$.source_key') END"
     return (current_meta_pred(f"{a}.meta", target=CURRENT_VERSION)
-            + f" AND NOT EXISTS (SELECT 1 FROM artifacts {b} WHERE {b}.kind={a}.kind "
-            f"AND {b}.project_id={a}.project_id AND {b}.artifact_id>{a}.artifact_id AND "
+            + f" AND ({a}.kind, {a}.artifact_id) IN (SELECT {b}.kind, MAX({b}.artifact_id) "
+            f"FROM patients bp CROSS JOIN artifacts {b} ON {b}.project_id=bp.project_id "
+            "WHERE COALESCE(bp.is_archived,0)=0 "
+            f"AND {b}.kind IN ({','.join('?' for _ in kinds)}) AND "
             + current_meta_pred(f"{b}.meta", target=CURRENT_VERSION)
-            + f" AND {key(b)} IS {key(a)})")
+            + f" GROUP BY {b}.kind, {b}.project_id, {key})")
 
 
 def _object(column):
@@ -194,8 +204,9 @@ def _state_counts(db):
         "WHERE a.kind IN (?,?,?,?) AND COALESCE(p.is_archived,0)=0 "
         "AND (a.kind=? OR a.message_id IS NULL) "
         "AND (a.kind!=? OR COALESCE(" + _field("a.meta", "invalidated") + ",0)=0) AND "
-        + latest_current_pred(), (state.PROGRESS, state.SCAN, state.KIND, state.LEGACY_KIND,
-                                  state.SCAN, state.SCAN))
+        + latest_current_pred(kinds=(state.PROGRESS, state.SCAN, state.KIND, state.LEGACY_KIND)),
+        (state.PROGRESS, state.SCAN, state.KIND, state.LEGACY_KIND, state.SCAN, state.SCAN,
+         state.PROGRESS, state.SCAN, state.KIND, state.LEGACY_KIND))
     for (pid, kind, mid, artifact_id, ok, key, key_type, binding, is_published, failure, failure_type,
          held_type, quality, quality_type, complete_type, audited_type, scope_type, scope,
          progress_scope_type, progress_scope) in rows:

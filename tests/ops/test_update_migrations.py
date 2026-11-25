@@ -108,6 +108,12 @@ def test_provider_initial_migration_keeps_raw_values_and_split_noop(tmp_path, mo
     before = [(p.read_bytes(), p.stat().st_ino) for p in paths]
     assert update_migrations.migrate_provider_settings(tmp_path) is False
     assert [(p.read_bytes(), p.stat().st_ino) for p in paths] == before
+    # The migration moves values without changing them; its record says so.
+    record, = provider_settings.change_records(tmp_path, 5)['records']
+    assert (record['origin'], record['changed']) == ('update_migration', [])
+    assert record['limits']['before'] == record['limits']['after']
+    assert record['limits']['after']['cloud_llm.provider_budgets.openai.monthly_cost_limit_usd'] == 10
+    assert record['limits']['after']['semantic.daily_request_budget'] == 2
     assert not (tmp_path / '.env').exists()
 
 

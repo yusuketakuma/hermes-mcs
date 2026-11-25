@@ -61,7 +61,7 @@ def migrate_provider_settings(root, *, before_publication=None):
         if before_publication is not None:
             before_publication()
         saved = provider_settings.commit(root, before["snapshot"], common, providers,
-            selected_provider=settings["provider"], **options)
+            selected_provider=settings["provider"], origin="update_migration", **options)
         checked = provider_settings.read(root, **options)
         if (saved != checked or checked["mode"] != "split" or checked["common"] != common
                 or checked["providers"] != providers):

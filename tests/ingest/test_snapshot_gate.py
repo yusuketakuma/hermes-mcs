@@ -1,6 +1,7 @@
-"""Snapshot verification gate: the run lock is released only while the
-fenced child validates, then reacquired and identity-checked before
-publication proceeds. Any verification failure forbids terminal writes."""
+"""Snapshot verification gate: the run lock is released while the online
+backup copy and fenced child validation run, then reacquired and
+identity-checked before publication proceeds. Any verification failure
+forbids terminal writes."""
 import fcntl
 import json
 import os
@@ -40,12 +41,13 @@ def _env(tmp_path, monkeypatch):
     return db, updater, lock_fd, run_check._db_identity(db)
 
 
-def _publish(db, tmp_path, lock_fd, state, baseline=None, context="default"):
+def _publish(db, tmp_path, lock_fd, state, baseline=None, context="default", deadline=None):
     snapshots._reset_status()
     with snapshots._publication_lock(maintenance.SNAPSHOT_DIR) as fence:
         assert fence is not None
         return snapshots._publish_snapshot_locked(
             str(tmp_path / "ledger.db"), maintenance.SNAPSHOT_DIR, fence,
+            deadline=deadline,
             verification_context=(
                 run_check._verification_context_factory(
                     db, lock_fd, state, baseline if baseline is not None
@@ -61,7 +63,7 @@ def _dest():
     return os.path.join(maintenance.SNAPSHOT_DIR, "ledger-snapshot.db")
 
 
-def test_gate_releases_run_lock_only_during_child_validation(tmp_path, monkeypatch):
+def test_gate_releases_run_lock_during_copy_and_child_validation(tmp_path, monkeypatch):
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     state = {"allowed": False, "attempted": False}
     probe = _probe(tmp_path)
@@ -78,8 +80,24 @@ def test_gate_releases_run_lock_only_during_child_validation(tmp_path, monkeypat
             fcntl.flock(probe, fcntl.LOCK_UN)
         return original(*args, **kwargs)
 
+    copy_held = {}
+    original_prepare = snapshots._prepare_in_child
+
+    def copying(*args, **kwargs):
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            copy_held["during"] = True
+        else:
+            copy_held["during"] = False
+            fcntl.flock(probe, fcntl.LOCK_UN)
+        return original_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "_prepare_in_child", copying)
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
-    assert _publish(db, tmp_path, lock_fd, state, baseline) is not None
+    assert _publish(db, tmp_path, lock_fd, state, baseline,
+                    deadline=time.monotonic() + 300) is not None
+    assert copy_held["during"] is False                  # run.lock was free during the copy
     assert held["during"] is False                       # run.lock was free in the window
     assert {key: state[key] for key in ("allowed", "attempted")} == {"allowed": True, "attempted": True}
     assert "reason" not in state and state["verify_window_s"] >= 0 and state["reacquire_s"] >= 0

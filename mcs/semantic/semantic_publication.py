@@ -994,6 +994,12 @@ def invalidate_projections(db, scfg: dict) -> int:
     # Paging pins the rowid range with a unary ``+`` (see below); the one-row
     # pre-check has no such range, so it keeps the plain kind for the kind index.
     candidate = candidate_from("+a.kind")
+    # These projection kinds are absent in installations that have not used
+    # them yet. Do not walk every artifact rowid in that common case.
+    if db.execute(
+            "SELECT 1 FROM artifacts WHERE kind IN ('canonical_projection','semantic_facts_v4') LIMIT 1"
+    ).fetchone() is None:
+        return 0
     current_ids = set()
     if enabled and db.execute(
             "SELECT 1" + candidate_from("a.kind")

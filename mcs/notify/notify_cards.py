@@ -1364,7 +1364,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             yield from (row for row in rows if row["delivery_id"] not in retained)
 
         for r in candidates(
-                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,r.updated_at,c.kind FROM notification_renders r
+                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,r.updated_at,c.kind FROM notification_renders r INDEXED BY idx_nrenders_spec_json_gc
                    LEFT JOIN notification_cards c ON c.card_id=r.card_id
                    WHERE r.spec_json IS NOT NULL
                      AND CASE WHEN json_valid(r.spec_json) THEN NOT (
@@ -1426,7 +1426,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         # parts the journal could still finish.
         removed = 0
         for r in candidates(
-                "SELECT delivery_id,transport,updated_at FROM notification_renders r "
+                "SELECT delivery_id,transport,updated_at FROM notification_renders r INDEXED BY idx_nrenders_spec_file_gc "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "AND spec_published=1 AND parts_state!='pending' "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "

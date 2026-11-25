@@ -190,7 +190,11 @@ def tailnet(monkeypatch):
     monkeypatch.setattr(remote, "workspace_answers", lambda port, host: state.answering)
     monkeypatch.setattr(remote, "POLL_S", 0)
     monkeypatch.setattr(mcs_util, "load_config_checked", lambda *a, **k: state.cfg)
-    monkeypatch.setattr(config_edit, "apply", lambda changes: (state.saved.append(changes), ({}, []))[1])
+    def apply(changes, *, origin):
+        assert origin == "remote_access"
+        state.saved.append(changes)
+        return {}, []
+    monkeypatch.setattr(config_edit, "apply", apply)
 
     def services(args):
         state.services += 1

@@ -196,16 +196,20 @@ def _edit_lock(path=None):
 
 
 def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None = None,
-          admission=None, on_saved=None) -> tuple[dict | None, list[str]]:
+          admission=None, on_saved=None, origin="unattributed", command_id=None) -> tuple[dict | None, list[str]]:
     """Validate the whole edited config and atomically save against its locked base.
 
     ``defaults`` are set only where the locked config has no value yet.
     Every known schema error blocks publication, including errors outside
-    the edited section.
+    the edited section. ``origin`` (one of provider_settings.SETTINGS_ORIGINS)
+    and ``command_id`` name the entry point in a split installation's change
+    record; a legacy config.json keeps no record.
     """
+    import provider_settings
     from mcs_config import validate_config
     if admission is not None and not callable(admission) or on_saved is not None and not callable(on_saved):
         raise ValueError("config_callback_invalid")
+    provider_settings.require_origin(origin, command_id)
     with _edit_lock() as lock_fd:
         split = mcs_util._provider_config_active(mcs_util.CONF_PATH)
         if split:
@@ -239,7 +243,6 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
                 touched.add(dotted)
         if split:
             import cloud_policy
-            import provider_settings
             import semantic_jev
 
             common, providers = _split_changes(state, cfg, touched, selected, owners)
@@ -268,7 +271,7 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
             try:
                 result = provider_settings.commit_locked(root, state["snapshot"], common, providers,
                     selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL,
-                    lock_fd=lock_fd)
+                    lock_fd=lock_fd, origin=origin, command_id=command_id)
             except ValueError as error:
                 if str(error) == "provider_snapshot_changed":
                     raise ConfigConflict("config_changed") from None
@@ -347,7 +350,7 @@ def settings_command(args) -> int:
         return 1
     try:
         if changes:
-            _, errors = apply(changes)
+            _, errors = apply(changes, origin="settings")
             if errors:
                 print("設定に誤りがあるため保存していません。mcs_setup.py check で確認してください")
                 return 1

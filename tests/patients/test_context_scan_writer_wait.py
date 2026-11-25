@@ -40,3 +40,38 @@ def test_contended_scan_writer_respects_remaining_time_and_restores_timeout(runt
     finally:
         other.rollback()
         other.close()
+
+
+@pytest.mark.parametrize('stage', ['bookmark', 'claim'])
+def test_contended_begin_immediate_is_interrupted_not_read_failure(runtime, monkeypatch, stage):
+    """A BEGIN IMMEDIATE that outlives its bounded wait is lock contention, an
+    interrupted scan — never a read_sqlite fault. Covers both writer waits:
+    the bookmark persist and the selected-unit claim."""
+    ledger, _, calls = runtime
+    seed(ledger, mid=1, pid=1)
+    ledger.db.execute('PRAGMA busy_timeout=2000')
+    path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+    other = sqlite3.connect(path, timeout=0)
+    select = refresh._select_patient
+
+    def select_then_lock(*args, **kwargs):
+        result = select(*args, **kwargs)
+        assert result[1] == 1
+        other.execute('BEGIN IMMEDIATE')
+        return result
+
+    try:
+        if stage == 'bookmark':
+            other.execute('BEGIN IMMEDIATE')
+        else:
+            monkeypatch.setattr(refresh, '_select_patient', select_then_lock)
+        result = step(runtime, seconds=refresh.COMMIT_MARGIN + 0.12)
+        assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+        assert result['scan_refusal'] == 'scan_interrupted'
+        assert other.in_transaction and not ledger.db.in_transaction
+        assert calls == []
+        if stage == 'bookmark':
+            assert result['scanned'] == 0 and result['scan_interrupts'] == 1
+    finally:
+        other.rollback()
+        other.close()

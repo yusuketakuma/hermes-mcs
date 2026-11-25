@@ -60,6 +60,44 @@ def _profiled_summary_repair_exists(db, pid, input_key):
     return False
 
 
+# The confirmed reads below hydrate, bind and prove whole message rows for the
+# audit; each returns every column including ``updated_seen``, the maintenance
+# stamp a re-observation rewrites on every fetch. Only these reads may drop it
+# at this boundary: any other SQL — an explicit ``SELECT updated_seen``, or a
+# column merely named updated_seen — keeps raw-value matching.
+_SEEN_FULL_READS = frozenset({
+    "SELECT m.*,length(m.body_text) AS body_length FROM messages m WHERE project_id=? ORDER BY message_id",
+    "SELECT m.*,length(m.body_text) AS body_length FROM messages m "
+    "WHERE project_id=? AND message_id=? ORDER BY message_id",
+    "SELECT a.content,a.meta,a.model,m.* FROM artifacts a JOIN messages m "
+    "ON a.message_id=m.message_id AND (a.project_id IS NULL OR a.project_id=m.project_id) "
+    "WHERE a.artifact_id=? AND a.kind='extract_llm'",
+    "SELECT * FROM messages WHERE message_id IN (SELECT value FROM json_each(?))",
+})
+
+
+def _seen_narrowed_sql(sql, columns):
+    """The confirmed read returning the same rows without ``updated_seen``."""
+    if "m.*" in sql:
+        return sql.replace("m.*", ",".join("m." + column for column in columns), 1)
+    return sql.replace("SELECT *", "SELECT " + ",".join(columns), 1)
+
+
+class _SeenNarrowingDb:
+    """Forward everything to the reader connection except the confirmed reads."""
+    __slots__ = ("_db", "_narrowed")
+
+    def __init__(self, db, narrowed):
+        self._db = db
+        self._narrowed = narrowed
+
+    def execute(self, sql, parameters=()):
+        return self._db.execute(self._narrowed.get(sql, sql), parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 def _quality_read(ledger, deadline, read):
     """Seal the observed rows, keeping the original version fence for unrecordable reads."""
     from patient_context_refresh_sources import _candidate_reader, _scan_writer_wait
@@ -75,32 +113,56 @@ def _quality_read(ledger, deadline, read):
         try:
             with _candidate_reader(ledger, deadline) as reader:
                 with Recording(reader.db) as recording:
+                    columns = [row[1] for row in reader.db.execute("PRAGMA table_info(messages)")
+                               if row[1] != "updated_seen"]
+                    narrowed = {sql: _seen_narrowed_sql(sql, columns) for sql in _SEEN_FULL_READS}
+                    reader.db = _SeenNarrowingDb(reader.db, narrowed)
                     value = read(reader)
                     witness = recording.seal()
         except sqlite3.DatabaseError as error:
             if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_AUTH:
                 raise
             # An SQL operation outside the recorder's allowlist uses the original read.
+    note = patient_context_refresh_state.record_quality_detail
     db.execute("BEGIN")
     try:
         version = db.execute("PRAGMA data_version").fetchone()[0]
         if clock() >= deadline:
+            note("deadline")
             raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
         if witness is None:
             value = read(ledger)
         elif not witness.matches(db, deadline, clock):
             # The separately opened path must describe the writer's own database.
+            note("witness_mismatch")
             raise ValueError("patient_summary_quality_source_changed")
     finally:
         db.rollback()
 
+    def stale(own_writes):
+        if clock() >= deadline:
+            note("deadline")
+            return True
+        if db.total_changes != changes + own_writes:
+            note("own_write_mismatch")
+            return True
+        return False
+
+    def in_time():
+        if clock() < deadline:
+            return True
+        note("deadline")
+        return False
+
     def matches(own_writes=0):
         nonlocal version
-        if clock() >= deadline or db.total_changes != changes + own_writes:
+        if stale(own_writes):
             return False
         if db.execute("PRAGMA data_version").fetchone()[0] == version:
-            return clock() < deadline
+            return in_time()
         if witness is None:
+            # A read the recorder could not seal has nothing to replay.
+            note("version_unwitnessed")
             return False
         # Replay just the SQL observations. Outside a writer, try a fresh read first.
         # Only a commit during that replay needs a reserved snapshot to make progress.
@@ -116,15 +178,18 @@ def _quality_read(ledger, deadline, read):
             try:
                 seen = db.execute("PRAGMA data_version").fetchone()[0]
                 if not witness.matches(db, deadline, clock):
+                    note("witness_mismatch")
                     return False
             finally:
                 if not borrowed:
                     db.rollback()
-            if clock() >= deadline or db.total_changes != changes + own_writes:
+            if stale(own_writes):
                 return False
             if borrowed or db.execute("PRAGMA data_version").fetchone()[0] == seen:
                 version = seen
-                return clock() < deadline
+                return in_time()
+        # Another commit landed during the replay under the reserved snapshot too.
+        note("replay_commit")
         return False
 
     return value, matches
@@ -193,6 +258,14 @@ def _quality_claim(ledger, pid, input_key, deadline, current):
 
 
 def _quality_owns(db, pid, input_key, claim):
+    """Whether the claim still owns this patient's quality work; a lost claim is noted as the stop."""
+    owned = _quality_claim_held(db, pid, input_key, claim)
+    if not owned:
+        patient_context_refresh_state.record_quality_detail("claim_lost")
+    return owned
+
+
+def _quality_claim_held(db, pid, input_key, claim):
     token, lease = claim
     row = db.execute("SELECT payload FROM fetch_jobs WHERE kind=? AND project_id=? "
                      "AND message_id=0 AND next_try=? AND next_try>?",
@@ -238,7 +311,7 @@ def _quality_release(ledger, pid, input_key, claim):
     try:
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
-            if _quality_owns(ledger.db, pid, input_key, claim):
+            if _quality_claim_held(ledger.db, pid, input_key, claim):
                 ledger.db.execute("DELETE FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=0",
                                   (patient_context_refresh_state.QUALITY_CLAIM, pid))
             ledger.db.commit()

@@ -153,6 +153,24 @@ def inference_receipt():
     return dict(provider.completed_reservations[-1])
 
 
+def record_cloud_validation_failure(error):
+    """Annotate the active paid cloud answer as rejected by local validation."""
+    provider = _job_model.get()
+    receipt = inference_receipt()
+    ledger = getattr(provider, 'ledger', None)
+    if provider is None or receipt is None or ledger is None:
+        return
+    import cloud_policy
+    def write():
+        cloud_policy.record_validation_failure_tx(ledger, receipt, failure_reason=error)
+    if ledger.db.in_transaction:
+        write()
+    else:
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            write()
+
+
 def repair_answer_record(prompt, value, previous_requests):
     """Return the replay record of one new cloud answer, or None.
 
@@ -474,6 +492,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)
         if error:
+            record_cloud_validation_failure(error)
             return _failed(error)
         _record_inference(provider.selection['provider'])
         return response["text"]

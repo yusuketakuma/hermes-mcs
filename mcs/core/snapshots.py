@@ -389,9 +389,9 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
     """Copy and validate while the caller retains the publication fence.
 
     An optional ``verification_context(*, deadline)`` factory gates the
-    child-validation window: the caller's run lock may be released while
-    the fenced child validates, then reacquired and re-identified before
-    publication proceeds."""
+    copy and child-validation window: the caller's run lock may be released
+    while the online backup and fenced validation run, then reacquired and
+    re-identified before publication proceeds."""
     if not _verified_publication_lock(dest_dir, fd):
         return None
     started = monotonic() if started is None else started
@@ -409,63 +409,76 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
         except OSError as error:
             _fail("snapshot_setup_oserror", errno=error.errno)
             return None
+        gate_context = None
         if verification_context is not None:
             # Writer-identity baseline check before the private copy is
             # even attempted — a swapped source path is caught while the
             # lock is still held.
-            verification_context(deadline=deadline).precheck()
-        if not _prepare_in_child(db_path, tmp, deadline, fd, state):
-            _status.failure.setdefault("copy_s", round(monotonic() - started, 3))
-            return None
-        copied = monotonic()
-        verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
-            SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
-        if deadline is not None:
-            # The gate path keeps room for the reacquire wait plus the
-            # publish tail; the plain path holds the lock throughout, so
-            # it only needs the fixed tail. A verify window that ran to
-            # the deadline left the reacquire bounded wait nothing
-            # (run_lock_timeout), which forbade every terminal write
-            # incl. the health write.
-            reserve = (SNAPSHOT_GATE_RESERVE_S if verification_context is not None
-                       else SNAPSHOT_WORK_TAIL_S)
-            verify_by = min(verify_by, deadline - reserve)
-        if verification_context is None:
-            if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
-                _status.failure.setdefault("reason", "validator_false")
-                _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None
-                      and verify_by == deadline - reserve)
+            gate_context = verification_context(deadline=deadline)
+            gate_context.precheck()
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            gate = None
+            if gate_context is not None and deadline is not None:
+                # The online backup is consistent without excluding writers.
+                # A write during the copy only leaves the freshness marker
+                # conservative, so the long copy must not hold the run lock.
+                gate = stack.enter_context(gate_context)
+            if not _prepare_in_child(db_path, tmp, deadline, fd, state):
+                _status.failure.setdefault("copy_s", round(monotonic() - started, 3))
                 return None
-            verified = monotonic()
-        else:
-            # Fail fast while the lock is still held: an empty verify
-            # window would release the lock only to fail at start, then
-            # pay a pointless reacquire race against queued writers.
-            if monotonic() >= verify_by:
-                _fail("verify_deadline_at_start",
-                      copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None
-                      and verify_by == deadline - reserve)
-                return None
-            # The gate's reacquire bound is the publish deadline: the
-            # reserve stays usable after verification. Without a publish
-            # deadline the old bound (verify_by) keeps the gate engaged —
-            # deadline=None would disengage it entirely.
-            with verification_context(
-                    deadline=deadline if deadline is not None else verify_by) as gate:
-                inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
-                                                   fence_fd=fd, state=state)
-                # Sampled inside the unlock scope: the reacquire cost is
-                # never charged to verify_s.
+            copied = monotonic()
+            verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
+                SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
+            if deadline is not None:
+                # The gate path keeps room for the reacquire wait plus the
+                # publish tail; the plain path holds the lock throughout, so
+                # it only needs the fixed tail. A verify window that ran to
+                # the deadline left the reacquire bounded wait nothing
+                # (run_lock_timeout), which forbade every terminal write
+                # incl. the health write.
+                reserve = (SNAPSHOT_GATE_RESERVE_S if verification_context is not None
+                           else SNAPSHOT_WORK_TAIL_S)
+                verify_by = min(verify_by, deadline - reserve)
+            if verification_context is None:
+                if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
+                    _status.failure.setdefault("reason", "validator_false")
+                    _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
+                          capped_by_deadline=deadline is not None
+                          and verify_by == deadline - reserve)
+                    return None
                 verified = monotonic()
+            else:
+                # Fail fast on an empty verify window instead of paying a
+                # pointless reacquire race against queued writers.
+                if monotonic() >= verify_by:
+                    _fail("verify_deadline_at_start",
+                          copy_s=round(copied - started, 3),
+                          capped_by_deadline=deadline is not None
+                          and verify_by == deadline - reserve)
+                    return None
+                if gate is None:
+                    # Without a publish deadline the copy stays locked as before;
+                    # the old bound (verify_by) keeps the validation gate engaged —
+                    # deadline=None would disengage it entirely.
+                    with verification_context(deadline=verify_by) as gate:
+                        inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
+                                                           fence_fd=fd, state=state)
+                        # Sampled inside the unlock scope: the reacquire cost is
+                        # never charged to verify_s.
+                        verified = monotonic()
+                else:
+                    inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
+                                                       fence_fd=fd, state=state)
+                    verified = monotonic()
+        if gate is not None:
             gate.confirm_fence(fd, dest_dir)
-            if not inside:
-                _status.failure.setdefault("reason", "validator_false")
-                _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None
-                      and verify_by == deadline - reserve)
-                return None
+        if verification_context is not None and not inside:
+            _status.failure.setdefault("reason", "validator_false")
+            _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
+                  capped_by_deadline=deadline is not None
+                  and verify_by == deadline - reserve)
+            return None
         if verified >= verify_by:
             _fail("verify_deadline", copy_s=round(copied - started, 3),
                   verify_s=round(verified - copied, 3))

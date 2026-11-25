@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "cloud意味解析backlogがrun lockを取得できず送信されない問題を修正",
+  "summary": "cloud意味解析backlogがrun lockを取得できるよう、lock待機を連続ウィンドウに延長します。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。",
+  "details": [
+    "cloud semantic phaseはこれまで10秒×3回の短いpollで諦めてextractターンに譲っていたため、収集tickがrun lockを長時間保持する時間帯には一度も取得できず、semantic_backlogのcloud送信が24時間で0件になっていました。",
+    "患者コンテキストscanが勝てているのと同じ方式(最大60秒級の連続した待機ウィンドウ)に合わせ、1回のpollウィンドウを30秒へ延長します。3連続トライで最大90秒の連続待機となり、tickの合間の短い解放隙間を取得できる確率が上がります。",
+    "lock取得後の動作・課金・再試行の契約に変更はありません。extractのcloud処理にも影響しません。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_backlog.py",
+    "tests/llm/test_cloud_backlog.py"
+  ]
+}

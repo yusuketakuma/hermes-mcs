@@ -74,7 +74,7 @@ def test_an_attempt_waits_for_its_profile_cap_but_never_past_the_deadline(provid
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))
-def test_a_timeout_after_sending_is_recorded_once_and_never_sent_again(provider):
+def test_a_timeout_after_sending_is_recorded_on_each_bounded_retry(provider):
     module = PROVIDERS[provider]
     model, effort = next(key for key in sorted(module.PROFILE_DEFINITIONS.values()))
     calls, results = [], []
@@ -83,12 +83,13 @@ def test_a_timeout_after_sending_is_recorded_once_and_never_sent_again(provider)
         calls.append(timeout)
         raise TimeoutError("synthetic")
 
-    client = CLIENTS[provider]("synthetic", model=model, effort=effort, post_fn=post)
+    client = CLIENTS[provider]("synthetic", model=model, effort=effort, post_fn=post,
+                               wait_fn=lambda delay: None)
     with pytest.raises(cloud_client.CloudError, match="^timeout$"):
-        _complete(client, results)
-    assert len(calls) == len(results) == 1
-    assert results[0]["http_class"] == "transport" and results[0]["error_kind"] == "timeout"
-    assert results[0]["usage"] is None
+        _complete(client, results, deadline=time.monotonic() + 60)
+    assert len(calls) == len(results) == 6
+    assert all(result["http_class"] == "transport" and result["error_kind"] == "timeout" for result in results)
+    assert all(result["usage"] is None for result in results)
 
 
 def _long_reply(size):

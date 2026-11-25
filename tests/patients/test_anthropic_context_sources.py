@@ -22,6 +22,7 @@ from contextlib import closing
 from pathlib import Path
 import pytest
 import extract_llm as worker
+import cloud_backlog
 import cloud_inference
 import patient_context_refresh as context_refresh
 import semantic_usage_receipts
@@ -103,6 +104,9 @@ def test_source_quality_commits_only_with_current_inputs_and_owner(runtime, clou
                               "json_extract(meta,'$.operation')='patient_source_quality'").fetchone()
     if mutation == 'own_write':
         assert result.get('reason') == 'source_quality_unavailable:patient_summary_quality_source_changed'
+        # the gate that stopped it is named, on the result and on the pass event
+        assert result.get('quality_detail') == 'own_write_mismatch'
+        assert cloud_backlog._context_pass_observation(result)['quality_detail'] == 'own_write_mismatch'
 
 
 def test_source_pass_rechecks_sealed_answers_at_the_writer(runtime, cloud, monkeypatch):
@@ -136,11 +140,45 @@ def test_source_pass_rechecks_sealed_answers_at_the_writer(runtime, cloud, monke
         if changed:
             break
     assert result.get('reason') == 'source_quality_unavailable:patient_summary_quality_source_changed'
+    assert result.get('quality_detail') == 'witness_mismatch'
+    assert cloud_backlog._context_pass_observation(result)['quality_detail'] == 'witness_mismatch'
     assert not led.artifacts('patient_context_source_quality_pass_v1', project_id=1)
     clock.wall += 61
     clock.mono += 61
     assert step(runtime).get('reason') == 'source_quality_unknown'
     assert len(led.synthetic_jev_requests) == before_send_count[0]
+
+
+def test_source_save_names_the_policy_gate_when_the_jev_key_changes_after_the_audit(runtime, cloud, monkeypatch):
+    import semantic_jev
+    led, _, _ = runtime
+    seed(led, body='完全合成の居住記録。')
+    quality = patient_context_quality_controller._quality_step
+    capture = patient_context_refresh_readiness._capture_readiness
+    passed = []
+
+    def audit(*args, **kwargs):
+        status, value = quality(*args, **kwargs)
+        if status == 'passed' and kwargs.get('source') is not None:
+            passed.append(True)
+        return status, value
+
+    def rotate_key_before_save(*args, **kwargs):
+        if passed:
+            monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-rotated-jev-key')
+        return capture(*args, **kwargs)
+
+    monkeypatch.setattr(patient_context_quality_controller, '_quality_step', audit)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_capture_readiness', rotate_key_before_save)
+    for _ in range(12):
+        result = step(runtime)
+        if passed:
+            break
+    assert passed and result == {'status': 'source_changed', 'done': 0, 'quality_detail': 'save_policy_changed'}
+    assert cloud_backlog._context_pass_observation(result) == {
+        'status': 'source_changed', 'done': 0, 'quality_detail': 'save_policy_changed'}
+    # the audit was not taken up: the source's published context still waits
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 def test_unrelated_commit_during_source_repair_does_not_repeat_a_send(runtime, source_repair, monkeypatch):
