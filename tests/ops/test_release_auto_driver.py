@@ -217,3 +217,25 @@ def test_cmd_auto_tick_applies_bounded_jitter(control_root, monkeypatch, capsys)
     assert update_cli.cmd_auto_tick(args) == 0
     assert sleeps == [120]
     json.loads(capsys.readouterr().out)
+
+
+def test_cmd_auto_tick_hold_exits_3(control_root, monkeypatch, capsys):
+    control_root.mkdir(mode=0o700)
+    monkeypatch.setattr(release_auto_driver, 'run_tick', lambda root, **kw: {
+        'schema_version': release_auto_driver.RESULT_SCHEMA,
+        'action': 'hold', 'stage': 'owner_tick', 'code': 'WIRE_UNAVAILABLE',
+        'owner': {'action': 'hold', 'code': 'WIRE_UNAVAILABLE'},
+        'health': {'action': 'hold', 'code': 'WIRE_UNAVAILABLE'}})
+    assert update_cli.cmd_auto_tick(object()) == 3
+    json.loads(capsys.readouterr().out)
+
+
+def test_cmd_auto_tick_unreadable_status_exits_3(control_root, monkeypatch, capsys):
+    control_root.mkdir(mode=0o700)
+    monkeypatch.setattr(release_auto_driver, 'run_tick', lambda root, **kw: {
+        'schema_version': release_auto_driver.RESULT_SCHEMA,
+        'action': 'status_only',
+        'owner': {'action': 'status_only', 'code': 'STORE_UNREADABLE'},
+        'health': {'action': 'no_binding'}})
+    assert update_cli.cmd_auto_tick(object()) == 3
+    json.loads(capsys.readouterr().out)

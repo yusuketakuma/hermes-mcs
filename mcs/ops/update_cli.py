@@ -524,6 +524,11 @@ def cmd_auto_tick(_args) -> int:
                      ensure_ascii=False, separators=(',', ':')))
     if result.get('stage') == 'open_store':
         return 2
+    owner = result.get('owner') if isinstance(result.get('owner'), dict) else {}
+    abnormal_status = (owner.get('action') == 'status_only'
+                       and owner.get('code') != 'UNKNOWN_BASELINE')
+    if result.get('action') in ('hold', 'busy') or abnormal_status:
+        return 3
     return 0
 
 
