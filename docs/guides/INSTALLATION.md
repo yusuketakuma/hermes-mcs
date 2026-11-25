@@ -71,14 +71,11 @@ LLM・復旧設定のファイル配置や一時ファイルの削除に失敗�
 `--no-recovery` と併用した事前チェックでも指定を検証する。
 
 `install.sh` の最後に「ソフトの準備が完了しました」と、次に実行するコマンドが
-**フルパスで**表示される。ターミナルでの実行時は初期設定へ続けて進む選択肢も表示する。それをそのままコピーして実行する（下はその形。
-`python` は install.sh が作った venv のインタプリタで、macOS 標準の
-`python3` では動かない）:
+**フルパスで**表示される。ターミナルでの実行時は初期設定へ続けて進む選択肢も表示する。それをそのままコピーして実行する。`mcs` コマンドでも同じ設定へ進める（`mcs setup` は導入済みの実行方式に合わせて正しいvenvを選び、macOS標準の`python3`は使わない）:
 
 ```bash
-PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ops/mcs_setup.py init       # 4. 本体設定・最終チェック。Slack/Discordではplugin・gatewayも同期
-$PY mcs/ops/mcs_setup.py doctor     #    （困ったとき）範囲別の件数だけの読取り診断（check の代わりではない）
+~/.local/bin/mcs setup init       # 4. 本体設定・最終チェック。Slack/Discordでは接続設定も同期
+~/.local/bin/mcs setup doctor     #    （困ったとき）範囲別の件数だけの読取り診断（check の代わりではない）
 ```
 
 `init` が `設定確認: 正常` で終われば初回設定は完了です。`--no-services` で
@@ -317,11 +314,16 @@ macOS 標準の `/usr/bin/python3` は3.9系で古い）
 
 `--set` の値は JSON（文字列は内側の引用符が必要）。Hermes連携では、上記の接続設定に加えて
 `--plugin-profile <serving profile>`・`--plugin-user-ids <uid>`・`--plugin-project-ids <pid>`
-を指定する。Discord の場合は `notify.interactive="discord"` +
-`notify.discord={"profile","application_id","guild_id","channel_id"}`・
-`--notify-target discord:<チャンネルID>`、トークンは `DISCORD_BOT_TOKEN`。
-Hermes連携のDiscordでは `--plugin-chat-ids` も指定する。standaloneでは許可範囲を
-`notify.discord` の `allowed_user_ids`・`project_ids`（必要なら `allowed_chat_ids`）へ入れる。
+を指定する。standaloneのDiscordでは、例えば次のように接続と許可範囲を1つのJSONへ入れる:
+
+```bash
+--set 'notify.interactive="discord"' \
+--set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C","allowed_user_ids":["U"],"project_ids":[1],"project_ids_auto":false}' \
+--notify-target discord:<チャンネルID>
+```
+
+トークンは `DISCORD_BOT_TOKEN`。Hermes連携のDiscordでは `--plugin-chat-ids` も指定する。
+standaloneでは必要に応じて `allowed_chat_ids` も `notify.discord` へ入れる（省略時はカード投稿先）。
 例は `init --help` の末尾にも表示される。
 
 1.0.23ではSlack・Discordとも、指定profileの所有者を確認できる接続だけが配送workerを起動します。Discordは設定したapplication_idと実bot IDも照合します。更新後は使用中の全profileのgatewayを再起動し、指定profileの`worker_started`を確認してください。所有者不明・不一致・起動失敗はdoctorで区別し、gatewayのPIDが生存していることだけを配送成功の根拠にしません。
@@ -336,8 +338,9 @@ Hermes連携のDiscordでは `--plugin-chat-ids` も指定する。standaloneで
   コピーや保存に失敗した場合は表示された案内に従って状態を確認する。親フォルダーのmodeで本人以外に書き込みが許可される場合も
   停止し、シンボリックリンクではmodeで本人以外のアクセスが許可される場合も停止する。
   これらは所有者とmodeの検査であり、ACLによるアクセスは別途確認する
-- `init` は通知プラグイン設定の後、対話通知を使うときは gateway を同期し、
-  `check` を自動実行する。設定書込み・同期・チェックの失敗は成功扱いにしない
+- `init` は通知接続の設定後、Hermes連携で対話通知を使うときは gateway を同期し、
+  standaloneでは独立connectorを初期化する。どちらでも `check` を自動実行する。
+  設定書込み・同期・チェックの失敗は成功扱いにしない
 
 設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`auto`/`off`/`shadow`/`assist`/`enforce`）で指定できる。
 
