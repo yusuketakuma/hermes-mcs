@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import secrets
 import time
 import uuid
 from contextlib import suppress
@@ -491,6 +492,41 @@ def cmd_consent_preview(args) -> int:
     return 0
 
 
+def cmd_auto_tick(_args) -> int:
+    """Run one v3 owner tick from the existing scheduler boundary.
+
+    The command never enables consent or falls back to the legacy auto path.
+    An unmigrated control root is the normal pre-v3 state and exits 0 as
+    status_only; an existing but unreadable control root exits 2 so the fixed
+    failure is visible instead of being treated as a healthy update.
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({'action': 'status_only', 'code': 'UNKNOWN_BASELINE'},
+                         ensure_ascii=False))
+        return 0
+    jitter = getattr(_args, 'jitter', 0)
+    if type(jitter) is not int or not 0 <= jitter <= 600:
+        print(json.dumps({'action': 'hold', 'code': 'JITTER_INVALID'}, ensure_ascii=False))
+        return 2
+    if jitter:
+        time.sleep(secrets.randbelow(jitter + 1))
+    try:
+        import release_auto_driver
+        mutex_path = os.path.join(HOME, 'data', release_auto_driver.DRIVER_LOCK_NAME)
+        result = release_auto_driver.run_tick(root, mutex_path=mutex_path)
+    except Exception as e:
+        print(json.dumps({'action': 'hold', 'stage': 'driver',
+                          'code': getattr(e, 'code', 'DRIVER_FAILED')},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps(release_auto_driver.public_result(result),
+                     ensure_ascii=False, separators=(',', ':')))
+    if result.get('stage') == 'open_store':
+        return 2
+    return 0
+
+
 def cmd_apply(args) -> int:
     return apply(args.tag, args.sha, args.command_id,
                  base_sha=args.base_sha, reinstall=args.reinstall,
@@ -575,6 +611,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
     sub.add_parser("auto-disable", help="v3自動更新の同意を撤回する（local_consent_epochを増分）").set_defaults(
         fn=lambda args: cmd_auto_disable(args))
+    at_p = sub.add_parser("auto-tick", help="v3自動更新ownerを1回だけ観測・前進させる")
+    at_p.add_argument("--jitter", type=int, default=0,
+                      help="実行前の遅延上限秒（定期処理では120）")
+    at_p.set_defaults(fn=lambda args: cmd_auto_tick(args))
     cp_p = sub.add_parser("consent-preview",
                           help="v3 ConsentPreviewを中央から取得してファイル保存する")
     cp_p.add_argument("--proposal-id", required=True,

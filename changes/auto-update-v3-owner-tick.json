@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "v3自動更新のownerを定期観測する",
+  "summary": "v3自動更新に移行済みの端末では、10分ごとの定期処理がownerを1回だけ観測し、届いている作業の再開・証拠送付・health報告を行います。未移行の端末では何もせず終了し、従来の自動更新経路へ fallback しません。",
+  "upgrade": "追加操作は不要です。通常の更新でサービス定義が同期されると定期処理に登録されます。v3自動更新の有効化には、従来どおり明示的な同意と中央側の配信条件が必要です。",
+  "details": [
+    "定期処理は開始時に0〜120秒のjitterを入れ、端末間の同時起動を避けます。",
+    "wire・contract digest・backup証拠などの依存が未接線の場合は、固定コードでholdし、成功扱いにしません。",
+    "`mcs_update.py auto-tick` で1回分の結果をJSON確認できます。"
+  ],
+  "refs": ["mcs/ops/release_auto_driver.py", "mcs/ops/update_cli.py", "mcs/core/scheduled_jobs.py", "deployment/scripts/mcs_release_auto.sh"]
+}
