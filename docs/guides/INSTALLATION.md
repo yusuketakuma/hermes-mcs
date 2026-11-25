@@ -75,7 +75,7 @@ LLM・復旧設定のファイル配置や一時ファイルの削除に失敗�
 
 ```bash
 ~/.local/bin/mcs setup init       # 4. 本体設定・最終チェック。Slack/Discordでは接続設定も同期
-~/.local/bin/mcs setup doctor     #    （困ったとき）範囲別の件数だけの読取り診断（check の代わりではない）
+~/.local/bin/mcs doctor             #    （困ったとき）範囲別の件数だけの読取り診断（check の代わりではない）
 ```
 
 `init` が `設定確認: 正常` で終われば初回設定は完了です。`--no-services` で
@@ -317,9 +317,10 @@ macOS 標準の `/usr/bin/python3` は3.9系で古い）
 を指定する。standaloneのDiscordでは、例えば次のように接続と許可範囲を1つのJSONへ入れる:
 
 ```bash
---set 'notify.interactive="discord"' \
---set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C","allowed_user_ids":["U"],"project_ids":[1],"project_ids_auto":false}' \
---notify-target discord:<チャンネルID>
+~/.local/bin/mcs setup init --yes \
+    --login-id <ID> --notify-target discord:<チャンネルID> \
+    --set 'notify.interactive="discord"' \
+    --set 'notify.discord={"profile":"P","application_id":"A","guild_id":"G","channel_id":"C","allowed_user_ids":["U"],"project_ids":[1],"project_ids_auto":false}'
 ```
 
 トークンは `DISCORD_BOT_TOKEN`。Hermes連携のDiscordでは `--plugin-chat-ids` も指定する。
