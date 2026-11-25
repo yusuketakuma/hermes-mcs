@@ -28,9 +28,10 @@ def _green(sha=HEAD):
 REPO = "yusuketakuma/hermes-mcs"
 
 
-def _pr(branch="agent/claude-issue-5", draft=False, body="Fixes #5", author="claude[bot]", head_repo=REPO):
+def _pr(branch="agent/claude-issue-5", draft=False, body="Fixes #5", author="claude[bot]", head_repo=REPO, labels=()):
     return {"head": {"sha": HEAD, "ref": branch, "repo": {"full_name": head_repo}},
-            "base": {"repo": {"full_name": REPO}}, "draft": draft, "body": body, "user": {"login": author}}
+            "base": {"repo": {"full_name": REPO}}, "draft": draft, "body": body, "user": {"login": author},
+            "labels": [{"name": label} for label in labels]}
 
 
 def _file(name, status="modified", patch="@@\n+text"):
@@ -91,6 +92,7 @@ def test_scope_skipped_sdk_lanes_count_only_for_docs_only_changes(name):
     skipped = _green() + [_run("pytest-linux"), _run(name, "skipped")]
     assert ac.decide_gate(_pr(), skipped, DOC, 0, True)["state"] == "success"
     assert ac.decide_gate(_pr(), skipped, CODE, 0, True)["state"] == "failure"
+    assert ac.decide_gate(_pr(labels=("full-ci",)), skipped, DOC, 0, True)["state"] == "failure"
 
 
 def test_matrix_legs_of_the_test_jobs_count_as_evidence():
