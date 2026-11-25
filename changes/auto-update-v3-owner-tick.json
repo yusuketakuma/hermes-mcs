@@ -5,7 +5,8 @@
   "upgrade": "追加操作は不要です。通常の更新でサービス定義が同期されると定期処理に登録されます。v3自動更新の有効化には、従来どおり明示的な同意と中央側の配信条件が必要です。",
   "details": [
     "定期処理は開始時に0〜120秒のjitterを入れ、端末間の同時起動を避けます。",
-    "wire・contract digest・backup証拠などの依存が未接線の場合は、固定コードでholdし、成功扱いにしません。",
+    "standaloneの定期ジョブ数は7から8へ増えます。owner tickは単一hostの既存schedulerへ1回だけ登録されます。",
+    "wire・contract digest・backup証拠などの依存が未接続の場合は、固定コードでholdし、成功扱いにしません。",
     "`mcs_update.py auto-tick` で1回分の結果をJSON確認できます。",
     "依存未接続・owner hold・別tick実行中・owner状態異常は終了コード3で定期処理の成功時刻にカウントしません。"
   ],

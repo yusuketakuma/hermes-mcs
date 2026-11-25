@@ -36,25 +36,26 @@ def test_jobs_quiesce_and_restart_after_the_updater_finishes(tmp_path, monkeypat
     monkeypatch.setattr(runtime.subprocess, "Popen", Child)
     host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
     now = datetime(2026, 10, 2, 5, 10, tzinfo=timezone.utc).timestamp()
-    assert len(host.schedules) == 7
+    assert len(host.schedules) == 8
     host.tick(now)
-    assert set(host.children) == {"extract-0", "extract-2", "extract-night", "mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "update"}
+    assert set(host.children) == {"extract-0", "extract-2", "extract-night", "mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "mcs_release_auto", "update"}
     assert all(kw["env"]["MCS_ROOT"] == str(tmp_path) for _, kw, _ in launched)
     assert host.argv["extract-0"][-3:] == ["--lane", "2", "--semantic"]
     assert host.argv["extract-2"][-3:] == ["--lane", "3", "--semantic"]
     assert host.argv["extract-night"][-3:] == ["--lane", "1", "--semantic"]
     host.tick(now + 0.5)
-    assert len(launched) == 8  # one instance per job and scheduled minute
+    assert len(launched) == 9  # one instance per job and scheduled minute
 
     marker = data / UPDATE_MARKER_NAME
     marker.write_text("synthetic")
     host.tick(now + 1)
     assert all(not host.children[job]["process"].terminated
-               for job in ("mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "update"))
+               for job in ("mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "mcs_release_auto", "update"))
     host.children["mcs_check"]["process"].code = 0
     host.children["mcs_deep"]["process"].code = 0
     host.children["mcs_health"]["process"].code = 0
     host.children["mcs_ocr"]["process"].code = 0
+    host.children["mcs_release_auto"]["process"].code = 0
     host.tick(now + 2)
     snapshot = json.loads((data / service.STATUS_FILE).read_text())
     assert snapshot["update_in_progress"] is True and set(snapshot["children"]) == {"update"}
