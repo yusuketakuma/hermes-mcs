@@ -120,6 +120,8 @@ def test_open_errno_distinguishes_symlink_from_permission(tmp_path, monkeypatch)
 
 def test_permission_denied_is_unavailable(tmp_path):
     import pytest as _pytest
+    if os.geteuid() == 0:
+        _pytest.skip('rootはpermissionを無視するため権限拒否を再現できない')
     path = tmp_path / 'auto-v3-pins.json'
     _write(path, {'schema_version': trust.SCHEMA_VERSION, 'pins': [PIN]})
     os.chmod(path, 0o000)
