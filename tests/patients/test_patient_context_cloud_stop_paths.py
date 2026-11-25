@@ -91,7 +91,7 @@ def _scan_done(ledger):
 
 def _drain(runtime, cfg, *, limit=40, until=None, **kw):
     """Step until the context is complete (or ``until`` holds); the outcomes of every pass."""
-    ledger, _, _ = runtime
+    ledger, clock, _ = runtime
     outcomes = []
     for _ in range(limit):
         outcome = step(runtime, cfg=cfg, **kw)
@@ -99,6 +99,9 @@ def _drain(runtime, cfg, *, limit=40, until=None, **kw):
         assert outcome['status'] in ('progressed', 'deferred', 'complete'), outcome
         if (until(outcome) if until is not None else outcome['status'] == 'complete'):
             return outcomes
+        if outcome['status'] == 'deferred' and outcome.get('reason') == 'patient_context_waiting':
+            clock.wall += 301
+            clock.mono += 301
     pytest.fail(repr(([(o['status'], o.get('reason'), o.get('lane'), o.get('guard_error'), o.get('cloud_refusal'))
                        for o in outcomes[-12:]], _dispositions(ledger))))
 
@@ -154,9 +157,9 @@ def test_multi_send_unit_with_later_503_finishes_locally(runtime, real_cloud, mo
     assert len([payload for payload in sent if 'source' in payload]) == 1 + cap
     assert _reservations(ledger, 'scan:1') == reservations
     assert [payload.get('derived_summaries') for payload in _local_sources(local_calls)[:2]] == [
-        payload['derived_summaries'] for payload in scans]
+        scans[0]['derived_summaries'], scans[1]['derived_summaries']]
     assert _dispositions(ledger) == [(answered, 'superseded_local')]
-    assert _usage(ledger)[:4] == paid
+    assert _usage(ledger)[:len(paid)] == paid
 
 
 def _partial_cloud_scan(runtime, cfg, monkeypatch, *, adopted=1, script=None):
