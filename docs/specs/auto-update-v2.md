@@ -740,6 +740,8 @@ Publicationの同一tag予約はrequest_idより強いunique制約を持つ。�
 |mcs-release-acceptance-v2|ReleaseAcceptance|正式な検証受入|
 
 rootは既存2-of-3とchain更新を維持。日常release署名keyとdevice grant keyは用途・アクセス権を分離する。公開鍵は初回bridgeで独立確認し、HTTP応答から新keyを自己登録しない。
+
+端末側pin集合の配布形式は`mcs.auto-v3-pins.v1`とする。release control rootの`auto-v3-pins.json`に、閉じたtop-level key集合`{schema_version,pins}`だけを持つcanonical JSONで置く。各pinは`{kid,purposes,spki,not_before,expires_at}`の5keyだけを持ち、kidはsha256hex一意、16件まで。管理者または署名済みrelease closureが配置し、端末のいかなるnetwork経路もこのfileを取得・更新しない。symlink・非regular file・16KiB超・schema違反・未知keyは全てfail-closedで拒否する。用途と期限の評価は`validate_auto_v3_pins`の責務とし、loaderは形状の検査だけを行う。
 BuildRequestのupstream_run_id/attemptは両方存在または両方null。nullは認証済みmanual/composed受入だけで許可し、workflow_runの対象SHA確認を省くためには使わない。
 
 署名payloadが8KiBを超える場合は拒否する。上限拡大で済ませず、対応profile/asset数を減らすか、詳細証拠をcontent-addressed referenceへ分離する。大きいcompatibility catalogueはprofile別envelopeを最大4件まとめる保管物で、端末には該当envelope一件だけを返す。
