@@ -13,9 +13,9 @@ from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 if __package__:
-    from .agent_control import REQUIRED_JOBS, evidence
+    from .agent_control import REQUIRED_JOBS, evidence, full_ci_requested
 else:
-    from agent_control import REQUIRED_JOBS, evidence
+    from agent_control import REQUIRED_JOBS, evidence, full_ci_requested
 
 
 API_VERSION = "2022-11-28"
@@ -350,7 +350,7 @@ def merge_evidence(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
     try:
         check_runs = _api_list(api, _repo_path(repo, f"commits/{head_sha}/check-runs"), "check_runs")
         files = _api_list(api, _repo_path(repo, f"pulls/{number}/files"))
-        state, notes = evidence(check_runs, head_sha, files)
+        state, notes = evidence(check_runs, head_sha, files, full_ci=full_ci_requested(pr))
         if state != "success":
             return False, "; ".join(notes)
         if not _latest_gate_status(api, repo, head_sha):
