@@ -1,5 +1,7 @@
 # バックアップ・端末喪失・鍵回復の運用手順
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
+
 この手順の対象は、[mcs_backup.py](../../mcs/ops/mcs_backup.py) の
 `keygen` / `offsite` / `verify` / `drill` / `restore` / `status` と、
 [mcs_local_backup.py](../../mcs/ops/mcs_local_backup.py) の `list` / `restore`。
@@ -437,16 +439,16 @@ DBの置換・改変・承認との不一致・公開中断は保留を維持す
 実データでの実行は別途確定した人の同意が必要で、サービスは開始しない。
 
 ```bash
-python3 mcs/ops/mcs_restore.py plan \
+"$PY" mcs/ops/mcs_restore.py plan \
   --destination "$DEST" --source-sha256 "$BUNDLE_SHA"
 
-python3 mcs/ops/mcs_restore.py approve \
+"$PY" mcs/ops/mcs_restore.py approve \
   --destination "$DEST" --source-sha256 "$BUNDLE_SHA" \
   --plan-sha256 "$PLAN_SHA" --confirm-human \
   --actor "$ACTOR" --reason "$REASON" \
   --custody-ref "$CUSTODY_REF" --delivery-policy hold_all
 
-python3 mcs/ops/mcs_restore.py resume \
+"$PY" mcs/ops/mcs_restore.py resume \
   --destination "$DEST" --receipt-sha256 "$RECEIPT_SHA" \
   --confirm-human --actor "$ACTOR" --reason "$REASON"
 ```
@@ -533,7 +535,7 @@ receiptと一致させる。別の配置先や古い承認の値を流用しな�
 成功日時や復号結果を作りません。鍵も不要です。
 
 ```bash
-python3 mcs/ops/mcs_backup.py review-drill \
+"$PY" mcs/ops/mcs_backup.py review-drill \
   --policy "$POLICY" --state-dir "$STATE_DIR" \
   --attempt-id "$OBSERVED_ATTEMPT_ID" \
   --confirm-human --reason "原因と保持物を確認して整理した"
