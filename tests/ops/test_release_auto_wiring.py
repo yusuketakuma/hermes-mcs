@@ -52,7 +52,7 @@ WIRED = {
 
 WAITING = {
     'release_auto_bridge', 'release_auto_migration', 'release_auto_recovery',
-    'release_publish_api',
+    'release_auto_trust', 'release_publish_api',
 }
 
 # Entry -> v3 modules it imports today; any edit of these references is
