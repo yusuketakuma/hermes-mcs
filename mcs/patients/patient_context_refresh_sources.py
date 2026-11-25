@@ -855,6 +855,17 @@ def _scan_check(db):
         raise _ScanInterrupted('patient_context_scan_incomplete')
 
 
+def _deadline_interrupt(db, exc):
+    """Raise the progress handler's own interrupt as a scan stop once the scan's deadline passed.
+
+    Any other SQLite error, and an interrupt before that deadline, stays as it is."""
+    until = getattr(db, 'scan_until', None)
+    if (isinstance(exc, sqlite3.OperationalError)
+            and getattr(exc, 'sqlite_errorcode', None) == sqlite3.SQLITE_INTERRUPT
+            and until is not None and patient_context_refresh_state.time.monotonic() >= until):
+        raise _ScanInterrupted('patient_context_scan_incomplete') from exc
+
+
 class _ScanCursor(sqlite3.Cursor):
     @property
     def description(self):
@@ -893,9 +904,10 @@ class _ScanCursor(sqlite3.Cursor):
                 observed.fail()
         try:
             result = super().execute(sql, parameters)
-        except BaseException:
+        except BaseException as exc:
             if observed is not None:
                 observed.fail()
+            _deadline_interrupt(self.connection, exc)
             raise
         if observed is not None:
             self._read_handle = observed.start(sql, parameters, self.description)
@@ -917,9 +929,10 @@ class _ScanCursor(sqlite3.Cursor):
             _scan_check(self.connection)
             row = super().fetchone()
             _scan_check(self.connection)
-        except BaseException:
+        except BaseException as exc:
             if active is not None:
                 active.fail()
+            _deadline_interrupt(self.connection, exc)
             raise
         observed = getattr(self, '_read_handle', None)
         if observed is not None:
@@ -950,9 +963,10 @@ class _ScanCursor(sqlite3.Cursor):
             rows = super().fetchmany(*args, **kwargs)
             size = args[0] if args else kwargs.get('size', self.arraysize)
             _scan_check(self.connection)
-        except BaseException:
+        except BaseException as exc:
             if active is not None:
                 active.fail()
+            _deadline_interrupt(self.connection, exc)
             raise
         observed = getattr(self, '_read_handle', None)
         if observed is not None:

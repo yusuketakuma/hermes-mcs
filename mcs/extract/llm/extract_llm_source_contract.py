@@ -32,6 +32,7 @@ import cloud_client
 import anthropic_client
 import openai_client
 import cloud_policy
+from llm_retry import CLOUD_MAX_RETRIES
 import cloud_usage_accounting
 import cloud_history_scope
 import cloud_backlog
@@ -334,7 +335,7 @@ _DEFERRED = object()
 REVIVE_MAX = 30
 
 
-REVIVE_PER_INPUT = 3
+REVIVE_PER_INPUT = CLOUD_MAX_RETRIES
 
 
 REVIVE_COOLDOWN_S = 6 * 3600

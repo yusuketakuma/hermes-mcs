@@ -118,7 +118,7 @@ def _workspace_listening(port, host):
 
 def _save(config_edit, changes):
     try:
-        _, errors = config_edit.apply(changes)
+        _, errors = config_edit.apply(changes, origin="remote_access")
     except (config_edit.ConfigConflict, OSError, ValueError):
         return False
     return not errors
@@ -137,7 +137,7 @@ def command(args, *, services) -> int:
         changes = {f"remote_access.{key}": None for key in current}
         if changes:
             try:
-                _, errors = config_edit.apply(changes)
+                _, errors = config_edit.apply(changes, origin="remote_access")
             except (config_edit.ConfigConflict, OSError, ValueError):
                 errors = ["config"]
             if errors:

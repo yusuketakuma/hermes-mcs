@@ -91,7 +91,7 @@ def _check_metadata(db, kind, pid, *, repair=False):
     repair_check = (" OR json_type(meta,'$.repair_input_key') IS NOT 'text' "
                     "OR length(json_extract(meta,'$.repair_input_key'))!=64 "
                     "OR json_extract(meta,'$.repair_input_key') GLOB '*[^0-9a-f]*'") if repair else ''
-    if db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND CASE "
+    if db.execute("SELECT 1 FROM artifacts INDEXED BY idx_artifacts_lookup WHERE kind=? AND project_id=? AND CASE "
                   "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
                   "WHEN json_type(meta)!='object' THEN 1 "
                   "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
@@ -107,7 +107,7 @@ def selected_scan(db, pid, source_key):
     before = _fence(db)
     _check_metadata(db, SCAN_KIND, pid)
     selected = None
-    with closing(db.execute("SELECT artifact_id,message_id,meta FROM artifacts WHERE kind=? AND project_id=? "
+    with closing(db.execute("SELECT artifact_id,message_id,meta FROM artifacts INDEXED BY idx_artifacts_lookup WHERE kind=? AND project_id=? "
             "AND CASE WHEN json_valid(meta) THEN COALESCE(json_extract(meta,'$.source_key'),message_id)=? END "
             'ORDER BY artifact_id DESC', (SCAN_KIND, pid, source_key))) as rows:
         for artifact_id, message_id, raw in rows:
@@ -145,7 +145,7 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
     if type(body_size) is not int or body_size <= 0:
         raise _invalid()
     _check_metadata(db, REPAIR_KIND, pid, repair=True)
-    headers = _rows(db, "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND json_extract(meta,'$.repair_input_key')=? "
+    headers = _rows(db, "SELECT * FROM artifacts INDEXED BY idx_artifacts_lookup WHERE kind=? AND project_id=? AND json_extract(meta,'$.repair_input_key')=? "
                     'ORDER BY artifact_id LIMIT 2', (REPAIR_KIND, pid, candidate_ref['repair_input_key']))
     if len(headers) != 1 or headers[0]['artifact_id'] != candidate_ref['repair_artifact_id']:
         raise _invalid()
@@ -369,7 +369,7 @@ def original_rows(db, pid, source_key, scan_meta, scan_content, *, artifact_ids=
         condition = "project_id=? AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key')=? END AND " + current_meta_pred("meta", target=CURRENT_VERSION)
         params = (pid, source_key)
     ids = []
-    with closing(db.execute('SELECT artifact_id,project_id,message_id,meta FROM artifacts WHERE kind=? AND '
+    with closing(db.execute('SELECT artifact_id,project_id,message_id,meta FROM artifacts INDEXED BY idx_artifacts_lookup WHERE kind=? AND '
                             + condition + ' ORDER BY artifact_id', (ORIGINAL_KIND, *params))) as cursor:
         for artifact_id, project_id, message_id, raw in cursor:
             meta = loads_dict(raw)

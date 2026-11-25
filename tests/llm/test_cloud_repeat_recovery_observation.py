@@ -106,6 +106,11 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                                   "'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        if change == 'binding':
+            assert _ask(provider)['reused_response'] is True
+            assert len(calls) == len(locks) == 1
+            assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+            return
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(provider)
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
@@ -156,7 +161,7 @@ def test_guard_reports_the_comparison_it_used_without_inferred_recovery(tmp_path
     with closing(_db(tmp_path)) as ledger:
         with legacy_cloud_routes():
             reservation = _reserve(ledger, 'synthetic prompt', provider, route='reextract')
-        cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
+        cloud_policy.record_result(ledger, reservation, _result(reservation, 'http_402', 'payment_required'))
         if kind != 'logical_equal':
             with ledger.db:
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
@@ -177,7 +182,7 @@ def test_other_routes_and_unbound_messages_have_no_new_fields(tmp_path, monkeypa
     with closing(_db(tmp_path)) as ledger:
         with legacy_cloud_routes():
             reservation = _reserve(ledger, 'synthetic prompt', route=route, message_id=mid)
-        cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
+        cloud_policy.record_result(ledger, reservation, _result(reservation, 'http_402', 'payment_required'))
         with pytest.raises(cloud_client.CloudError) as caught:
             cloud_policy._guard_repeated_request(ledger, reservation)
         assert not hasattr(caught.value, 'history_observation')
@@ -245,6 +250,11 @@ def test_changed_history_can_make_exact_keys_same_without_proving_a_race(paid, m
         with legacy_cloud_routes():
             _ask(unit(ledger))
         provider = unit(ledger, binding='synthetic-changed')
+        # This race test exercises a legacy envelope with no logical prompt proof;
+        # a logical-fingerprinted paid answer is now deliberately reused instead.
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
+                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         recover = cloud_policy.recover_response
         def changed(*args, **kwargs):
             result = recover(*args, **kwargs)
@@ -299,6 +309,11 @@ def test_observation_build_failure_preserves_original_refusal(paid, monkeypatch,
     with closing(Ledger(dbpath)) as ledger:
         with legacy_cloud_routes():
             _ask(unit(ledger, purpose='quality_repair'))
+        # Keep this observation-error test on the legacy no-logical-fingerprint path;
+        # logical-fingerprinted paid answers are now reused before the repeat guard.
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
+                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         monkeypatch.setattr(cloud_policy, '_repeat_observation', failed)
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(unit(ledger, binding='synthetic-changed'))

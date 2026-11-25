@@ -7,6 +7,7 @@ from __future__ import annotations
 from mcs_util import payload_hash, until_epoch
 import provider_settings
 import semantic_jev as jev
+from llm_retry import CLOUD_MAX_ATTEMPTS
 
 SCHEMA_VERSION = "2026-09-20"
 POLICY_VERSION = "2026-10-16.1"
@@ -105,7 +106,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
            "daily_request_budget": jev.DAILY_REQUEST_LIMIT,
            "attempt_timeout_seconds": 20.0,
            "job_budget_seconds": 45.0,
-           "max_attempts_per_try": 3,
+           "max_attempts_per_try": CLOUD_MAX_ATTEMPTS,
            "max_questions_per_request": 12,
            "match_threshold": jev.MATCH_THRESHOLD,
            "nomatch_threshold": jev.NOMATCH_THRESHOLD,
@@ -186,7 +187,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
         out["model"] = jev.resolve_model(block["model"]) or jev.JEV_MODEL
     for key, lo, hi in (("daily_request_budget", 0, jev.DAILY_REQUEST_BUDGET_MAX),
                         ("max_questions_per_request", 1, 48),
-                        ("max_attempts_per_try", 1, 3),
+                        ("max_attempts_per_try", 1, CLOUD_MAX_ATTEMPTS),
                         ("delayed_notice_seconds", 60, 86400)):
         if key in block:
             v = block[key]

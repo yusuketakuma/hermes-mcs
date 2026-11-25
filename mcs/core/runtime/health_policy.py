@@ -16,6 +16,11 @@ COVERAGE_STALL_S = 24 * 3600
 # notification measurement older than this cannot vouch for renders queued
 # since, so a carried measurement expires at the same age.
 CARD_STALL_S = 1800
+# Full extraction-coverage and patient-context COUNTs run at most this often.
+COVERAGE_COUNT_S = 3600
+# A recorded patient-context count is carried, marked stale, while refreshes
+# keep failing for at most three refresh periods; older is unknown.
+PATIENT_CONTEXT_CARRY_S = 3 * COVERAGE_COUNT_S
 # Why an unfinished run stopped, as runs.error of a 'crashed' row. Only a
 # reason its evidence proves is written; anything else reads as 'unknown'.
 INTERRUPT_REASONS = ("watchdog_exit", "update_preempted", "host_restart", "unknown")

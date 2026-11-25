@@ -8,7 +8,7 @@ import re
 import time
 
 import bounded_http
-from llm_retry import http_error, retry_after
+from llm_retry import CLOUD_MAX_ATTEMPTS, http_error, retry_after
 from mcs_util import payload_hash, strict_json
 
 MAX_TOKENS = 128000
@@ -71,11 +71,11 @@ def not_sent_reason(error):
 
 class CloudClient:
     """Own the guarded provider-neutral attempt lifecycle."""
-    def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=3, post_fn=None,
+    def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=CLOUD_MAX_ATTEMPTS, post_fn=None,
                  wait_fn=None):
         if (type(attempt_timeout) not in (int, float)
                 or not math.isfinite(attempt_timeout) or not 0 < attempt_timeout <= ATTEMPT_TIMEOUT_CEILING
-                or type(max_attempts) is not int or not 1 <= max_attempts <= 3):
+                or type(max_attempts) is not int or not 1 <= max_attempts <= CLOUD_MAX_ATTEMPTS):
             raise ValueError("attempt_policy_invalid")
         if wait_fn is not None and not callable(wait_fn):
             raise ValueError("wait_fn_invalid")
@@ -87,10 +87,9 @@ class CloudClient:
 
     def response_error(self, status, raw, headers=None):
         kind, retryable = http_error(status)
-        # A paid provider's 5xx/529 may already be billed, and the reservation guard refuses a
-        # second send of the same request, so waiting only held the slot: the unit goes to the
-        # local contract at once (owner decision 2026-11-15). Jev keeps the shared classes.
-        return kind, retryable and status < 500, {}
+        # A provider HTTP failure is a definite cloud failure. The shared policy
+        # permits bounded retries; every retry is separately reserved and accounted.
+        return kind, retryable, {}
 
     def wire(self, body, cache_prefix):
         """The body as posted. Accounting and resend identity keep using ``body``
@@ -191,11 +190,11 @@ class CloudClient:
                 failure = CloudError if attempt else CloudNotSent
                 last = failure("budget_exceeded", "deadline", retryable=False)
             except OSError as error:
-                # No transport exception proves the request never left (bounded_http maps a
-                # refusal while reading the response to the same type), and a sent request
-                # may already be billed: it is never sent again (owner decision 2026-10-28).
+                # A transport failure may reach the provider before the response is lost.
+                # The shared cloud policy still permits bounded retries; accounting treats
+                # every send as possibly billed and caps the same logical request separately.
                 last = CloudError("timeout" if isinstance(error, TimeoutError) else "transport",
-                                      type(error).__name__, retryable=False)
+                                      type(error).__name__, retryable=True)
             except CloudError as error:
                 last = error
             except Exception as error:   # never leave a reserved attempt without its result row

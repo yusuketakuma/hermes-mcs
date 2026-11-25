@@ -1069,7 +1069,8 @@ def test_provider_dialog_keeps_unset_provider_budgets_under_current_shared_cap(t
     answers = iter(["2", "", "", "", "", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     saved = []
-    monkeypatch.setattr(cli, "providers_command", lambda args: saved.append(vars(args)) or 0)
+    monkeypatch.setattr(cli, "providers_command",
+                        lambda args, *, origin: saved.append(vars(args)) or (0 if origin == "provider_dialog" else 1))
 
     assert cli.provider_dialog(tmp_path) == 0
     assert saved == [{"provider": "openai", "priority": "anthropic,openai"}]
@@ -1087,7 +1088,8 @@ def test_provider_dialog_preserves_existing_caps_unless_changed(tmp_path, monkey
     answers = iter(["2", "", "", "5", "", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     saved = []
-    monkeypatch.setattr(cli, "providers_command", lambda args: saved.append(vars(args)) or 0)
+    monkeypatch.setattr(cli, "providers_command",
+                        lambda args, *, origin: saved.append(vars(args)) or (0 if origin == "provider_dialog" else 1))
 
     assert cli.provider_dialog(tmp_path) == 0
     assert saved == [{"provider": "openai", "priority": "anthropic,openai", "openai_daily_usd": "5"}]
@@ -1129,7 +1131,8 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     cfg = {"cloud_llm": {"mode": "off"}, "semantic": {"until": "2026-11-30T23:59:59+09:00"}}
     monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
     saved = []
-    def apply(changes, defaults):
+    def apply(changes, defaults, *, origin):
+        assert origin == "cloud_llm_budget"
         saved.append(changes)
         return cfg, []
     monkeypatch.setattr(config_edit, "apply", apply)
@@ -1162,7 +1165,8 @@ def test_cloud_budget_saves_times_in_a_form_python39_helpers_can_read(monkeypatc
     cfg = {"cloud_llm": {"mode": "off"}}
     monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
     saved = []
-    def apply(changes, defaults):
+    def apply(changes, defaults, *, origin):
+        assert origin == "cloud_llm_budget"
         saved.append(changes)
         return cfg, []
     monkeypatch.setattr(config_edit, "apply", apply)

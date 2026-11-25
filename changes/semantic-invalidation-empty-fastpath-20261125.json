@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "semantic projection候補が無い環境で収集runが長くなる問題を修正",
+  "summary": "semantic projectionの無効化確認は、対象kindが1件も無いとき全artifactsを走査していました。対象kindの有無を既存索引で先に確認し、無い場合は走査を省きます。対象がある場合の判定と更新は変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "候補kindの有無だけを先に確認し、候補が無い場合はrowid pagingへ進まず終了する。",
+    "候補がある場合は従来どおりscan開始時点の上限でpageし、判定結果を1回のcommitで反映する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_publication.py"
+  ]
+}

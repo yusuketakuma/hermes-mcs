@@ -1,6 +1,9 @@
 """Synthetic coverage and bounded-work checks for patient context observation."""
 import json
+import sqlite3
 import time
+
+import pytest
 
 import extract_llm
 import patient_context_refresh as context
@@ -150,6 +153,87 @@ def test_health_patient_context_records_invalid_rows_and_recomputes_old_cache(tm
     ledger.close()
 
 
+def test_latest_scan_lookup_skips_other_kind_rows(tmp_path):
+    """A latest-row check reads only the patient's same-kind artifacts.
+
+    A correlated NOT EXISTS walked every newer artifact of the patient
+    regardless of kind, so the bounded health read of a busy patient timed out
+    (observation_limit) while identical counts were still correct.
+    """
+    import patient_context_status
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'deferred'}),
+                        project_id=1, meta={**meta, 'source_key': 's1'})
+    # Newer artifacts of other kinds must not be visited by the latest check.
+    for _ in range(1500):
+        ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
+    explain = ("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+               + patient_context_status.latest_current_pred())
+    plan = db.execute(explain, (context.SCAN,) * explain.count('?')).fetchall()
+    # The old per-candidate NOT EXISTS is a correlated subquery on any plan;
+    # the grouped maximum is one uncorrelated list pass.
+    assert any('LIST SUBQUERY' in row[3] for row in plan)
+    assert not any('CORRELATED' in row[3] for row in plan)
+    result, steps = _steps(db, context.lane_metrics)
+    assert result['lanes']['C'] == {'length_stop': 0, 'unsupported': 0, 'other_failure': 0,
+                                    'split': 0, 'repair': 0}
+    assert result['quality']['deferred'] == 1
+    assert steps < 800, steps   # one grouped pass; the rescan plan visited every newer artifact
+    ledger.close()
+
+
+def test_latest_scan_lookup_stays_linear_with_same_kind_history(tmp_path):
+    """The latest-row check is one grouped pass, not a per-candidate rescan.
+
+    Hinting the correlated NOT EXISTS at the same-kind index walks every
+    same-kind row per candidate instead (~25x more VM steps when 600 rows
+    cycle five source keys). The grouped maximum reads the active patients'
+    same-kind rows once, keeping the bounded health read inside its budget in
+    both regimes. Counts are identical either way.
+    """
+    import patient_context_status
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    db.executemany(
+        "INSERT INTO messages(message_id,project_id,body_text,body_state,content_hash) "
+        "VALUES (?,1,'合成','full','h')", [(mid,) for mid in range(1, 602)])
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    # Same-kind history cycling five source keys: only the newest of each counts.
+    for i in range(600):
+        state = 'deferred' if i % 5 == 4 else 'held'
+        ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': state}),
+                            project_id=1, message_id=i + 1,
+                            meta={**meta, 'source_key': 'k%d' % (i % 5)})
+    # A different message can still share a source key and supersede its group.
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'failed'}),
+                        project_id=1, message_id=601, meta={**meta, 'source_key': 'k0'})
+    # Rows without a source key form one group; its newest row wins.
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'unavailable'}),
+                        project_id=1, meta=dict(meta))
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'pending'}),
+                        project_id=1, meta=dict(meta))
+    # Newer artifacts of other kinds must not be visited at all.
+    for _ in range(1500):
+        ledger.artifact_add('synthetic_unrelated', '{}', project_id=1)
+    explain = ("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM artifacts a WHERE a.kind=? AND "
+               + patient_context_status.latest_current_pred())
+    plan = db.execute(explain, (context.SCAN,) * explain.count('?')).fetchall()
+    assert any('LIST SUBQUERY' in row[3] for row in plan)
+    assert not any('CORRELATED' in row[3] for row in plan)
+    result, steps = _steps(db, context.lane_metrics)
+    assert result['quality'] == {'none': 0, 'pending': 1, 'deferred': 1, 'held': 3,
+                                 'failed': 1, 'unavailable': 0, 'unknown': 0,
+                                 'budget': 0, 'disabled': 0, 'other': 0}
+    # ~97k for one grouped pass; the correlated rescan was 205k on this corpus
+    # and ~3.49M under the same-kind index hint codex1 measured.
+    assert steps < 150000, steps
+    ledger.close()
+
+
 def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
     """health.json's invalid_rows and doctor's states.invalid_rows see the same latest rows."""
     import patient_context_status
@@ -164,3 +248,75 @@ def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
     states = patient_context_status.sanitize(patient_context_status.state_counts(db))
     assert states['invalid_rows'] == 3 and patient_context_status.has_problem(states)
     ledger.close()
+
+
+_CARRIED_COUNTS = {'published': 2, 'active_patients': 3, 'extraction_complete': 1,
+                   'focus_eligible': 1, 'focus_targets': 1, 'invalid_rows': 0}
+
+
+def _context_health(monkeypatch, previous, now, *, fail=None, cfg=None):
+    """Run patient_context_health against ``previous`` with a refresh that fails as ``fail``."""
+    import health_report
+    reads = []
+
+    def read(db, fn, seconds=None, **kwargs):
+        reads.append(seconds)
+        if fail is not None:
+            raise fail
+        return {'lanes': {}, 'quality': {}, **_CARRIED_COUNTS, 'published': 9}
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {'patient_context': previous})
+    monkeypatch.setattr(health_report, 'bounded_health_read', read)
+    return health_report.patient_context_health(None, cfg, now, 'synthetic', seconds=30), reads
+
+
+def _recorded(observed_at, **extra):
+    return {**_CARRIED_COUNTS, 'lanes': {}, 'quality': {}, 'publication': True, 'status': 'recorded',
+            'observed_at': observed_at, 'source': 'synthetic',
+            'extract_version': extract_llm.EXTRACT_VERSION, **extra}
+
+
+@pytest.mark.parametrize('fail,reason', [(RuntimeError('observation_limit'), 'observation_limit'),
+                                         (sqlite3.DatabaseError('synthetic'), 'observation_unavailable')])
+def test_failed_refresh_carries_the_last_recorded_counts_as_stale(monkeypatch, fail, reason):
+    import health_report
+    now = 100_000.0
+    observed = now - health_report.COVERAGE_COUNT_S - 5
+    cfg = {'extract': {'patient_context': {'publication': False}}}
+    result, reads = _context_health(monkeypatch, _recorded(observed), now, fail=fail, cfg=cfg)
+    assert reads == [health_report.PATIENT_CONTEXT_S]       # the refresh was attempted within its bound
+    assert result['status'] == 'stale_measurement' and result['reason'] == reason
+    assert result['observed_at'] == observed and result['age_s'] == round(now - observed, 1)
+    assert {k: result[k] for k in _CARRIED_COUNTS} == _CARRIED_COUNTS
+    assert result['publication'] is False                   # current config, not the old block
+
+
+def test_carried_counts_carry_again_with_the_original_time_and_still_retry(monkeypatch):
+    import health_report
+    now = 100_000.0
+    observed = now - 2 * health_report.COVERAGE_COUNT_S
+    carried = _recorded(observed, status='stale_measurement', reason='observation_limit', age_s=1.0)
+    result, reads = _context_health(monkeypatch, carried, now, fail=RuntimeError('observation_limit'))
+    assert len(reads) == 1 and result['status'] == 'stale_measurement'
+    assert result['observed_at'] == observed and result['age_s'] == round(now - observed, 1)
+    assert result['publication'] is None                    # unchecked config is unknown publication
+    # a recent carried value is never reused as fresh: the refresh runs and replaces it
+    recent = _recorded(now - 10, status='stale_measurement', reason='observation_limit', age_s=10.0)
+    result, reads = _context_health(monkeypatch, recent, now)
+    assert len(reads) == 1 and result['status'] == 'recorded' and result['observed_at'] == now
+    assert result['published'] == 9
+
+
+@pytest.mark.parametrize('previous', [
+    'too_old', 'other_ledger', 'other_generation', 'unknown', 'missing_count'])
+def test_unusable_previous_counts_stay_unknown(monkeypatch, previous):
+    import health_report
+    now = 100_000.0
+    block = {'too_old': _recorded(now - health_report.PATIENT_CONTEXT_CARRY_S - 1),
+             'other_ledger': _recorded(now - 4000, source='other'),
+             'other_generation': _recorded(now - 4000, extract_version=extract_llm.EXTRACT_VERSION - 1),
+             'unknown': {'status': 'unknown', 'observed_at': now - 600, 'reason': 'observation_limit',
+                         'publication': True},
+             'missing_count': {k: v for k, v in _recorded(now - 4000).items() if k != 'invalid_rows'}}[previous]
+    result, _ = _context_health(monkeypatch, block, now, fail=RuntimeError('observation_limit'))
+    assert result == {'status': 'unknown', 'observed_at': now, 'reason': 'observation_limit',
+                      'publication': None}

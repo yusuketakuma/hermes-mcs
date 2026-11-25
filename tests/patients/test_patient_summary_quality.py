@@ -488,15 +488,48 @@ def test_cloud_stop_defers_quality_step_and_resume_reevaluates(quality_owner, mo
     import cloud_policy
     led, clock, cfg, doc, sends, _ = quality_owner
     monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: True)
-    status, _ = patient_context_quality_controller._quality_step(
-        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
-        cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
-    assert status == 'deferred' and not sends
+    with patient_context_refresh_state.capture_quality_detail() as detail:
+        status, _ = patient_context_quality_controller._quality_step(
+            led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+            cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'deferred' and not sends and detail['code'] == 'cloud_stopped'
     monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: False)
     status, identity = patient_context_quality_controller._quality_step(
         led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
         cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert status == 'pending' and len(sends) == 1
+
+
+def test_every_recorded_quality_gate_is_a_fixed_reportable_code():
+    import ast
+    notes = {"_note", "note", "refused", "record_quality_detail", "_quality_source_changed"}
+    codes = set(patient_context_quality_controller._REPAIR_STOPS.values())
+    # A quality step's own Deferred codes are reported too; the unit's other deferrals are not details.
+    for module, names in ((patient_context_quality_controller, notes | {"Deferred"}),
+                          (patient_context_quality_receipts, notes | {"Deferred"}), (refresh, notes)):
+        for node in ast.walk(ast.parse(open(module.__file__, encoding="utf-8").read())):
+            if (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                    and (node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)) in names):
+                codes.add(node.args[0].value)
+            elif isinstance(node, ast.FunctionDef) and node.name == "_quality_save_refusal":
+                codes.update(child.value.value for child in ast.walk(node) if isinstance(child, ast.Return)
+                             and isinstance(child.value, ast.Constant) and isinstance(child.value.value, str))
+    assert {"cloud_stopped", "witness_mismatch", "save_policy_changed", "patient_summary_quality_lock"} <= codes
+    assert all(patient_context_refresh_state.bounded_quality_detail(code) == code for code in codes)
+    # the gate codes are notes only: none is raised as an error code
+    gates = {code for code in patient_context_refresh_state.QUALITY_DETAIL_CODES if not code.startswith("patient_")}
+    raised = {code for module in (patient_context_quality_controller, patient_context_quality_receipts, refresh)
+              for code in _raised_value_errors(module)}
+    assert not gates & raised
+
+
+def _raised_value_errors(module):
+    import ast
+    for node in ast.walk(ast.parse(open(module.__file__, encoding="utf-8").read())):
+        if (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name)
+                and node.exc.func.id == "ValueError" and node.exc.args and isinstance(node.exc.args[0], ast.Constant)):
+            yield node.exc.args[0].value
 
 
 def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
@@ -986,3 +1019,17 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
         assert status == 'unknown'
     assert len(sends) == count
     assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS)
+
+
+@pytest.mark.parametrize("code,reason,failure,child_wait,expected", [
+    ("deadline", "source_quality_unavailable:deadline", None, False, {"quality_detail": "deadline"}),
+    ("deadline", "summary_quality_deferred", None, False, {"quality_detail": "deadline"}),
+    ("deadline", "patient_context_capacity_or_deadline", None, False, {}),
+    ("deadline", "source_quality_deferred", "patient_context_length_stop", False, {}),
+    ("deadline", "source_quality_deferred", None, True, {}),
+    (None, "source_quality_deferred", None, False, {}),
+    ("free text 本文", "source_quality_deferred", None, False, {"quality_detail": "unclassified"}),
+])
+def test_quality_detail_field_only_reports_a_quality_deferral(code, reason, failure, child_wait, expected):
+    # the early deadline return and the final return share this rule
+    assert refresh._quality_detail_field(code, reason, failure=failure, child_wait=child_wait) == expected
