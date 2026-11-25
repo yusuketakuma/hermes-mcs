@@ -12,6 +12,7 @@ import semantic_reprocess
 import os
 import json
 import sqlite3
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -482,6 +483,8 @@ def carry_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "Ledger", lambda *a: fake_ledger)
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: state.memory)
     monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
+    # The pool gate (key, profile, budget) admits unless a test closes it.
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: True)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
     monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
@@ -1170,7 +1173,8 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
     import extract_llm
     import mcs_util
     state, _ = carry_worker
-    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4},
+           "extract": {"patient_context": {"enabled": False}}}
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
     item = object()
@@ -1200,6 +1204,75 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
     assert records[-1]['reason'] == 'capacity_reduced'
 
 
+@pytest.mark.parametrize("index,context_on,retires", [
+    (3, True, True), (2, True, True),   # the context share takes two of four places back
+    (1, True, False),
+    (3, False, False),                  # with patient context off the whole target stays
+])
+def test_worker_gives_back_the_places_of_the_context_share(carry_worker, monkeypatch, capsys,
+                                                           index, context_on, retires):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4},
+           "extract": {"patient_context": {"enabled": context_on}}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+
+    def extract(ledger, **kwargs):
+        state.events.append("extract")
+        state.alive = False
+        return {"done": 0}
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    with legacy_cloud_routes():
+        backlog.worker(991, index=index)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    if retires:
+        assert state.events == []
+        assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "capacity_reduced"}
+    else:
+        assert state.events == ["extract"]
+        assert "cloud_worker_retired" not in [record["event"] for record in records]
+
+
+def test_worker_settles_paid_carry_before_a_closed_pool_gate_retires_it(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    clock = iter(range(0, 10 ** 6, 61))     # every gate check is due
+    monkeypatch.setattr(backlog, "time", SimpleNamespace(
+        monotonic=lambda: float(next(clock)), sleep=lambda _: None, time=time.time))
+    gate = [True]
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: gate[-1])
+    item = object()
+
+    def extract(ledger, **kwargs):
+        state.events.append("extract")
+        gate.append(False)                   # a spend hold starts during this unit
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kwargs):
+        state.events.append("settle")
+        carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    with legacy_cloud_routes():
+        backlog.worker(991, index=0)
+    assert state.events == ["extract", "settle"] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_blocked"}
+
+
 @pytest.mark.parametrize("capacity,index", [(0, 0), (1, 2)])
 def test_low_memory_target_retires_idle_worker_without_work(carry_worker, monkeypatch, capacity, index):
     import extract_llm
@@ -1214,7 +1287,11 @@ def test_low_memory_target_retires_idle_worker_without_work(carry_worker, monkey
 
 def test_memory_target_tolerates_one_resident_worker(carry_worker, monkeypatch):
     import extract_llm
+    import mcs_util
     state, _ = carry_worker
+    # Patient context off: the memory sample alone sets this worker's place.
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {
+        "cloud_llm": {"mode": "on", "project_ids": [1]}, "extract": {"patient_context": {"enabled": False}}})
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: 1)
 
     def extract(*a, **kw):
@@ -1588,7 +1665,8 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     import extract_llm
     (tmp_path / "data").mkdir()
     monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
-    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    # Room for both pools: the context children and the stored-message workers share it.
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(4, limit))
     spawned = []
 
     class Child:
@@ -1629,6 +1707,227 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     finally:
         owner.close()
     assert all(child.stopped for child in spawned)
+
+
+class _PoolChild:
+    """A synthetic child that stays alive until stopped."""
+    spawned = None
+
+    def __init__(self, command, **kw):
+        self.context_only = "--context-only" in command
+        self.stopped = False
+        type(self).spawned.append(self)
+
+    def poll(self):
+        return 0 if self.stopped else None
+
+    def terminate(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _reopened_cfg(limit):
+    return {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic", "max_concurrency": limit,
+                          "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+                          "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+
+
+def _decide_again(owner):
+    owner.last_sync -= 11
+    if owner.backlog is not None:
+        owner.backlog.last_sync -= 11
+
+
+@pytest.fixture
+def pool_children(tmp_path, monkeypatch):
+    import extract_llm
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(backlog, "helper_path", lambda *a, **kw: "/synthetic/helper")
+    spawned = []
+    monkeypatch.setattr(_PoolChild, "spawned", spawned)
+    monkeypatch.setattr(backlog.subprocess, "Popen", _PoolChild)
+    return spawned
+
+
+def test_context_pool_keeps_at_most_two_children(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 8}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(4):
+            owner.sync(cfg)
+            _decide_again(owner)
+        assert len(owner.children) == backlog.CONTEXT_WORKERS_MAX == 2
+        assert all(child.context_only for child in pool_children)
+    finally:
+        owner.close()
+
+
+def test_context_pool_refills_its_second_child_with_room_for_two(tmp_path, monkeypatch, pool_children):
+    # One child of two with room for exactly two is not a borderline sample to hold.
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    monkeypatch.setattr(backlog, "_QUICK_EXIT_S", 0)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 8}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        owner.sync(cfg)
+        assert len(owner.children) == 2
+        owner.children[0].stopped = True
+        _decide_again(owner)
+        owner.sync(cfg)
+        assert len(owner.children) == 2 and len(pool_children) == 3
+    finally:
+        owner.close()
+
+
+def test_both_pools_share_one_start_budget_per_decision(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        started = []
+        for _ in range(4):
+            before = len(pool_children)
+            owner.sync(_reopened_cfg(8))
+            started.append(len(pool_children) - before)
+            _decide_again(owner)
+        assert started == [2, 2, 2, 2]   # never two per pool in one decision
+        assert len(owner.children) == 2 and len(owner.backlog.children) == 6
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("limit,context,stored", [(1, 1, 0), (2, 1, 1), (3, 2, 1), (4, 2, 2)])
+def test_an_open_window_keeps_one_place_when_the_limit_is_small(tmp_path, monkeypatch, pool_children,
+                                                               limit, context, stored):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(4):
+            owner.sync(_reopened_cfg(limit))
+            _decide_again(owner)
+        assert (len(owner.children), len(owner.backlog.children)) == (context, stored)
+    finally:
+        owner.close()
+
+
+def test_a_failing_window_check_leaves_the_context_children_starting(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+
+    def broken(*args):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(backlog, "backlog_admits", broken)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        with pytest.raises(RuntimeError):
+            owner.sync(_reopened_cfg(4))     # the stored-message pool reports its own error
+        assert len(owner.children) == 2 and not owner.failed and owner.backlog.failed
+    finally:
+        owner.close()
+
+
+def test_pool_starts_at_most_two_children_per_decision(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: limit)
+    pool = backlog.CloudBacklogPool(tmp_path)
+    try:
+        counts = []
+        with legacy_cloud_routes():
+            for _ in range(4):
+                pool.sync(_reopened_cfg(6))
+                counts.append(len(pool.children))
+                _decide_again(pool)
+        assert backlog.SPAWN_PER_DECISION == 2
+        assert counts == [2, 4, 6, 6]   # max_concurrency still bounds the pool
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("memory", [1, 2, 3, 5, 8])
+def test_both_pools_of_one_owner_share_one_memory_target(tmp_path, monkeypatch, pool_children, memory):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(memory, limit))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(6):
+            owner.sync(_reopened_cfg(8))
+            assert len(owner.children) + len(owner.backlog.children) <= memory
+            _decide_again(owner)
+        # The owner decides first, so its context children keep their share.
+        assert len(owner.children) == min(memory, 2)
+        assert len(owner.backlog.children) == memory - min(memory, 2)
+        # A context child that exits keeps its share while it restarts:
+        # the stored-message workers never take it.
+        owner.children[0].stopped = True
+        for _ in range(3):
+            _decide_again(owner)
+            owner.sync(_reopened_cfg(8))
+            assert len(owner.children) + len(owner.backlog.children) <= memory
+            assert len(owner.backlog.children) == memory - min(memory, 2)
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("memory,limit", [(2, 2), (3, 4)])
+def test_stored_message_workers_take_each_place_a_stopping_context_child_frees(
+        tmp_path, monkeypatch, pool_children, memory, limit):
+    # A share the context pool frees is exact, not a noisy sample to hold one worker short of.
+    monkeypatch.setattr(backlog, "memory_workers", lambda cap: min(memory, cap))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(_reopened_cfg(limit))
+            _decide_again(owner)
+        context = len(owner.children)
+        assert len(owner.backlog.children) == memory - context
+        off = {**_reopened_cfg(limit), "extract": {"patient_context": {"enabled": False}}}
+        for stopped, child in enumerate(list(owner.children), start=1):
+            child.stopped = True     # each context child exits after its current unit
+            owner.sync(off)
+            _decide_again(owner)
+            assert _live_backlog(owner) == memory - context + stopped
+    finally:
+        owner.close()
+
+
+def _live_backlog(owner):
+    return backlog._live_children(owner.backlog)
+
+
+def test_context_children_leave_the_places_of_lingering_stored_message_workers(
+        tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda cap: min(2, cap))
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(_reopened_cfg(2))
+            _decide_again(owner)
+        assert (len(owner.children), len(owner.backlog.children)) == (1, 1)
+        # The window closes (here a spend hold): its worker settles before it retires.
+        monkeypatch.setattr(backlog, "backlog_admits", lambda *a: False)
+        for _ in range(3):
+            owner.sync(_reopened_cfg(2))
+            _decide_again(owner)
+            assert len(owner.children) + _live_backlog(owner) <= 2
+        assert len(owner.children) == 1
+        owner.backlog.children[0].stopped = True
+        owner.sync(_reopened_cfg(2))
+        assert len(owner.children) == 2
+    finally:
+        owner.close()
+
+
+def test_stored_message_workers_use_the_whole_target_while_context_is_off(tmp_path, monkeypatch, pool_children):
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(4, limit))
+    cfg = {**_reopened_cfg(8), "extract": {"patient_context": {"enabled": False}}}
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for _ in range(3):
+            owner.sync(cfg)
+            _decide_again(owner)
+        assert not owner.children and len(owner.backlog.children) == 4
+    finally:
+        owner.close()
 
 
 def test_pool_resolves_the_log_helper_only_when_it_starts_children(tmp_path, monkeypatch):
@@ -1808,12 +2107,12 @@ def test_pool_sync_reports_recovery_only_after_the_nested_pool_recovers(tmp_path
     owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
     outcomes = iter([RuntimeError("synthetic"), None])
 
-    def decide(cfg, ledger, now):
+    def decide(cfg, ledger, now, reserve, starts):
         item = next(outcomes)
         if item:
             raise item
     monkeypatch.setattr(owner.backlog, "_decide", decide)
-    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now: None)
+    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now, reserve, starts: None)
     with pytest.raises(RuntimeError):
         owner.sync({})
     owner.last_sync -= 11
@@ -1852,6 +2151,27 @@ def test_indexed_worker_retires_when_the_window_is_open_but_the_route_is_not(car
     assert state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_route_closed"}
+
+
+def test_indexed_worker_gives_its_place_back_while_its_pool_would_not_start_it(carry_worker, monkeypatch, capsys):
+    # A spend hold inside an open window: the worker settles nothing more and leaves the
+    # shared target to the context children; its pool starts it again once it admits.
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    window = {"cloud_llm": {**_CONTEXT_ONLY_WINDOW["cloud_llm"], "routes": ["patient_context", "reextract"]}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: window)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    gate = []
+    monkeypatch.setattr(backlog, "backlog_admits", lambda *a: gate.append(a[1] is window) or False)
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **kw: pytest.fail("a closed pool gate admitted extract"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    backlog.worker(991, index=0)
+    assert gate == [True] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_blocked"}
 
 
 def test_no_backlog_worker_spawns_while_the_window_is_open_but_the_route_is_not(tmp_path, monkeypatch):

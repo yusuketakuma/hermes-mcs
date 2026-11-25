@@ -182,6 +182,38 @@ def _quality_unavailable_detail(exc):
     return type(exc).__name__
 
 
+def _quality_detail_field(code, deferred_reason, *, failure, child_wait):
+    """The ``quality_detail`` a pass result carries: only for a quality deferral, never for a failure or a child wait."""
+    if (code is None or failure or child_wait or not deferred_reason
+            or not deferred_reason.startswith(("summary_quality_", "source_quality_"))):
+        return {}
+    return {"quality_detail": patient_context_refresh_state.bounded_quality_detail(code)}
+
+
+def _quality_save_refusal(db, pid, live_cfg, live_policy, problems, sources, identity, keys, skipped, selected,
+                          *, expected=None):
+    """The save-time gate that refuses one audited identity, or None while its policy and receipts hold."""
+    import cloud_policy
+    import extract_llm
+    import semantic_jev
+    if (problems or not patient_context_quality_receipts._quality_scope_allowed(db, pid, live_cfg, sources)
+            or keys != patient_context_refresh_state._credential_tag(
+                semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
+            or identity["assessment"] != patient_context_refresh_state._quality_assessment(live_policy)):
+        return "save_policy_changed"
+    if ((not patient_context_quality_receipts._quality_skip_receipt(db, pid, identity, selected, live_policy["match_threshold"])
+         if skipped else not patient_context_quality_receipts._quality_passed(db, pid, identity, expected=expected))
+            or patient_context_quality_receipts._quality_failed(db, pid, identity)):
+        return "save_receipt_invalid"
+    return None
+
+
+def _quality_source_changed(code):
+    """The save-time quality refusal, naming the gate it stopped at."""
+    return {"status": "source_changed", "done": 0,
+            "quality_detail": patient_context_refresh_state.bounded_quality_detail(code)}
+
+
 # Which patients a worker serves. ``cloud``: the context children, patients the cloud scope
 # serves. ``local``: a local lane while a child serves the cloud lane, every other patient.
 # ``local_takeover``: a local lane once no child has served for the grace period, every patient,
@@ -289,6 +321,15 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
         except BaseException:
             ledger.db.rollback()
             raise
+
+
+_SQLITE_ERROR_NAME = re.compile(r'SQLITE_[A-Z_]{1,40}')
+
+
+def _sqlite_error_name(exc):
+    """The standard SQLite error name of a failed scan read, or ``unclassified``; never its text."""
+    name = getattr(exc, 'sqlite_errorname', None)
+    return name if type(name) is str and _SQLITE_ERROR_NAME.fullmatch(name) else 'unclassified'
 
 
 def _scan_covered(db, seen):
@@ -658,11 +699,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     except sqlite3.Error as exc:
         scan_interrupts += 1
         if observed_out is not None:
-            # Lock waits and deadline aborts are interrupted scans, not read faults.
-            observed_out['scan_refusal'] = ('read_sqlite'
-                                            if not _locked_sqlite(exc)
-                                            and getattr(exc, 'sqlite_errorcode', 0) & 0xFF != sqlite3.SQLITE_INTERRUPT
-                                            else 'scan_interrupted')
+            observed_out['scan_refusal'] = 'scan_interrupted' if _locked_sqlite(exc) else 'read_sqlite'
+            observed_out['scan_sqlite_error'] = _sqlite_error_name(exc)
         best, selected, covered = {}, None, False
     except OSError:
         scan_interrupts += 1
@@ -917,7 +955,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
         stats.update({key: scan_observed[key] for key in _SCAN_COUNTER_KEYS if key in scan_observed})
-        for key in ('scan_refusal', 'skip_patient_code', 'generation_reason', 'unverified_records'):
+        for key in ('scan_refusal', 'scan_sqlite_error', 'skip_patient_code', 'generation_reason',
+                    'unverified_records'):
             if scan_observed.get(key) is not None:
                 stats[key] = scan_observed[key]
         if 'selection_refusal' in scan_observed:
@@ -1090,12 +1129,23 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     # Set when a quality repair, which only the cloud makes, waits for a context child.
     repair_waits = [False]
+    # The gate at which the last quality step stopped (observation only; never persisted).
+    quality_detail = [None]
 
     def quality_step(*args, **kwargs):
         """Audit under this unit's cloud mode: a local lane, the takeover included, never sends a
         repair, which is deferred as with the cloud off. Only where the takeover turned the cloud
         off (a child would make the repair) does the pass report a wait for a child."""
-        status, value = patient_context_quality_controller._quality_step(*args, cloud_mode=mode, **kwargs)
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            try:
+                status, value = patient_context_quality_controller._quality_step(*args, cloud_mode=mode, **kwargs)
+            except Exception as exc:
+                patient_context_refresh_state.record_quality_detail(
+                    "deadline" if patient_context_refresh_state.time.monotonic()
+                    + patient_context_refresh_state.COMMIT_MARGIN >= deadline else _quality_unavailable_detail(exc))
+                quality_detail[0] = detail["code"]
+                raise
+        quality_detail[0] = None if status in ("passed", "skipped") else detail["code"]
         if status == "cloud_off":
             repair_waits[0] = takeover
             status = "deferred"
@@ -1788,7 +1838,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return {"status": "deferred", "done": 0}
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
         discard_if_changed()
-        return {"status": "deferred", "done": 0}
+        # the gate of a quality deferral this pass ran into still reports (observation only)
+        return {"status": "deferred", "done": 0, **_quality_detail_field(
+            quality_detail[0], deferred_reason, failure=failure, child_wait=repair_waits[0])}
     def quality_proofs(reader):
         source_pass_content = refreshed_quality = None
         if source_quality_identity is not None:
@@ -1810,12 +1862,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     quality_current = None
     if quality_identity is not None or source_quality_identity is not None:
-        try:
-            proofs, quality_current = patient_context_quality_receipts._quality_read(ledger, deadline, quality_proofs)
-        except (ValueError, KeyError, TypeError, patient_context_refresh_state.Deferred):
-            return {"status": "source_changed", "done": 0}
+        with patient_context_refresh_state.capture_quality_detail() as detail:
+            try:
+                proofs, quality_current = patient_context_quality_receipts._quality_read(ledger, deadline, quality_proofs)
+            except (ValueError, KeyError, TypeError, patient_context_refresh_state.Deferred):
+                return _quality_source_changed(detail["code"] or "save_proof_unread")
         if proofs is None:
-            return {"status": "source_changed", "done": 0}
+            return _quality_source_changed("save_proof_changed")
         source_pass_content, refreshed_quality = proofs
     version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     _, write_proof[0], ready_snapshot = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg, deadline=deadline,
@@ -1904,43 +1957,38 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": str(refused),
                             "guard_error": guard_error[0], "cloud_refusal": cloud_refusal[0]}
-            if quality_current is not None and not quality_current():
-                ledger.db.rollback()
-                return {"status": "source_changed", "done": 0}
+            if quality_current is not None:
+                with patient_context_refresh_state.capture_quality_detail() as detail:
+                    fenced = quality_current()
+                if not fenced:
+                    ledger.db.rollback()
+                    return _quality_source_changed(detail["code"])
             if quality_identity is not None:
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
-                import semantic_jev
                 try:
                     repair_verified = patient_context_refresh_readiness._summary_repair_publication(
                         ledger.db, pid, cfg, result, meta, refreshed_quality,
                         quality_identity['assessment'], snapshot['route'])
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
-                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_cfg, fresh["sources"])
-                        or quality_keys != patient_context_refresh_state._credential_tag(
-                            semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
-                        or quality_identity["assessment"] != patient_context_refresh_state._quality_assessment(live_policy)
-                        or (not patient_context_quality_receipts._quality_skip_receipt(ledger.db, pid, quality_identity,
-                                {row["fact_ids"][0] for row in result["summary"]}, live_policy["match_threshold"])
-                            if quality_skipped else not patient_context_quality_receipts._quality_passed(ledger.db, pid, quality_identity))
-                        or patient_context_quality_receipts._quality_failed(ledger.db, pid, quality_identity) or not repair_verified):
+                refusal = (_quality_save_refusal(ledger.db, pid, live_cfg, live_policy, problems, fresh["sources"],
+                                                 quality_identity, quality_keys, quality_skipped,
+                                                 {row["fact_ids"][0] for row in result["summary"]})
+                           or (None if repair_verified else "save_repair_unverified"))
+                if refusal is not None:
                     ledger.db.rollback()
-                    return {"status": "source_changed", "done": 0}
+                    return _quality_source_changed(refusal)
             if source_quality_identity is not None:
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
-                import semantic_jev
-                if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_cfg, fresh["sources"])
-                        or source_quality_keys != patient_context_refresh_state._credential_tag(
-                            semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
-                        or source_quality_identity["assessment"] != patient_context_refresh_state._quality_assessment(live_policy)
-                        or (not patient_context_quality_receipts._quality_skip_receipt(ledger.db, pid, source_quality_identity,
-                                set(), live_policy["match_threshold"]) if source_quality_skipped else
-                            not patient_context_quality_receipts._quality_passed(ledger.db, pid, source_quality_identity, expected=source_pass_content))
-                        or patient_context_quality_receipts._quality_failed(ledger.db, pid, source_quality_identity)):
+                import semantic_jev   # the adoption check below reads the key again
+                refusal = _quality_save_refusal(ledger.db, pid, live_cfg, live_policy, problems, fresh["sources"],
+                                                source_quality_identity, source_quality_keys, source_quality_skipped,
+                                                set(), expected=source_pass_content)
+                if refusal is not None:
                     ledger.db.rollback()
-                    return {"status": "source_changed", "done": 0}
+                    return _quality_source_changed(refusal)
             if provider is not None:
                 if completed_receipts is not None:
                     import notify_spool
@@ -2214,6 +2262,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             # A repair waiting for a child keeps its quality state above; the pass reports the wait.
             **({"reason": failure or (CHILD_WAIT_REASON if repair_waits[0] else deferred_reason)}
                if failure or deferred_reason else {}),
+            # The gate that stopped a quality deferral this pass reports (observation only).
+            **_quality_detail_field(quality_detail[0], deferred_reason, failure=failure,
+                                    child_wait=repair_waits[0]),
             **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
             **({"cloud_refusal": cloud_refusal[0]} if cloud_refusal[0] is not None else {}),
             "lock_wait_s": waited, **stats}

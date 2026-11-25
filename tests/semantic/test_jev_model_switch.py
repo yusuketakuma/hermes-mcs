@@ -346,3 +346,24 @@ def test_a_stored_assessment_labeled_with_the_wrong_model_is_reevaluated(tmp_pat
     assert row["meta"]["technical_status"] == "complete"
     assert semantic_store._valid_primary_assessment(
         row["content"], row["meta"], row["model"], 1, fp, policy, scfg)
+
+
+def test_a_split_switch_record_names_its_receipt_command(home, monkeypatch):
+    import update_migrations
+
+    assert update_migrations.migrate_provider_settings(home) is True
+    _probe(monkeypatch, "pass")
+    publish = jev_model_setup._publish
+    monkeypatch.setattr(jev_model_setup, "_publish", lambda *a: (_ for _ in ()).throw(OSError("synthetic crash")))
+    command_id = "00000000-0000-4000-8000-0000000000bb"
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 1
+    monkeypatch.setattr(jev_model_setup, "_publish", publish)
+    assert jev_model_setup.command(_args(to=NEXT, command_id=command_id)) == 0   # the rerun publishes
+    assert jev_model_setup.command(_args(to="default")) == 0
+    receipts = _receipts(home)
+    records = provider_settings.change_records(home, 5)["records"]
+    assert [(record["origin"], record["command_id"]) for record in records] == [
+        ("jev_model", receipts[-1]["command_id"]), ("jev_model", command_id), ("update_migration", None)]
+    # The model is not an operating limit; the migration only moves values.
+    assert all(record["changed"] == [] for record in records)
+    assert records[-1]["limits"]["after"]["semantic.daily_request_budget"] == 10

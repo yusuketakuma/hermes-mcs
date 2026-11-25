@@ -241,3 +241,19 @@ def test_card_counts_without_latency_match_the_full_card_read(stored):
     latency = full['completion'].pop('latency')
     assert notify_scope.health_cards(stored, SLACK) == full
     assert latency == notify_scope._delivery_latency(stored, notify_scope.retired_transports(SLACK), NOW)
+
+
+@pytest.mark.parametrize('age,reason,carried', [
+    (health_report.CARD_STALL_S, 'observation_limit', True),
+    (health_report.CARD_STALL_S + 1, 'observation_limit', False),
+    (60, 'observation_unavailable', False)])
+def test_card_carry_keeps_its_own_age_and_reason_despite_the_longer_context_carry(age, reason, carried):
+    """The patient-context carry bound and reasons are opt-in; the card defaults are unchanged."""
+    assert health_report.PATIENT_CONTEXT_CARRY_S > health_report.CARD_STALL_S + 1
+    current = {'status': 'unknown', 'observed_at': NOW, 'reason': reason}
+    result = health_report.carried_measurement(current, _parts(observed_at=NOW - age), NOW)
+    assert (result['status'] == 'stale_measurement') is carried
+    if carried:
+        assert result['observed_at'] == NOW - age and result['age_s'] == age
+    else:
+        assert result is current

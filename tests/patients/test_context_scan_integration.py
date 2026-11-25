@@ -1,5 +1,7 @@
 """Exercise durable scan progress through the real context scheduler entry."""
 
+from contextlib import closing
+
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
@@ -352,6 +354,87 @@ def test_select_scan_refusal_classifies_read_failures(runtime, monkeypatch):
     assert result['scan_interrupts'] == 1
 
 
+def _slow_plan(monkeypatch, clock):
+    """A candidate query that runs past its time limit: the clock moves while SQLite steps."""
+    original = schedule.plan
+    real_time = patient_context_refresh_state.time
+
+    def ticking():
+        clock.mono += 0.01
+        return clock.mono
+
+    def plan(db, state):
+        monkeypatch.setattr(patient_context_refresh_state, 'time',
+                            type(real_time)(time=real_time.time, monotonic=ticking))
+        try:
+            db.execute('WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT 100000000) '
+                       'SELECT count(*) FROM c').fetchone()
+        finally:
+            monkeypatch.setattr(patient_context_refresh_state, 'time', real_time)
+        return original(db, state)
+
+    monkeypatch.setattr(schedule, 'plan', plan)
+
+
+def test_a_candidate_query_stopped_at_its_time_limit_is_an_incomplete_scan(runtime, monkeypatch):
+    led, clock, _ = runtime
+    seed(led, mid=1, pid=1)
+    _slow_plan(monkeypatch, clock)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+    assert result['scan_refusal'] == 'scan_interrupted' and 'scan_sqlite_error' not in result
+    assert result['scan_interrupts'] == 1
+    # The cancelled query still used its turn.
+    assert global_state(led)['patient_scan']['turn'] == 1
+
+
+def test_an_interrupt_before_the_time_limit_stays_a_read_failure(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+    original = schedule.plan
+
+    def plan(db, state):
+        db.set_progress_handler(lambda: 1, 1)
+        return original(db, state)
+
+    monkeypatch.setattr(schedule, 'plan', plan)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['scan_interrupts'] == 1
+    assert result['scan_refusal'] == 'read_sqlite' and result['scan_sqlite_error'] == 'SQLITE_INTERRUPT'
+
+
+def test_a_busy_read_reports_its_sqlite_error_name(runtime, monkeypatch, tmp_path):
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+    path = tmp_path / 'synthetic-busy.db'
+    with closing(sqlite3.connect(path, isolation_level=None)) as holder, \
+            closing(sqlite3.connect(path, timeout=0, isolation_level=None)) as other:
+        holder.execute('BEGIN IMMEDIATE')
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            other.execute('BEGIN IMMEDIATE')
+        holder.rollback()
+    busy = caught.value
+
+    def pending(db, pid, cfg, **kwargs):
+        raise busy
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    result = step(runtime)
+    assert result['scan_refusal'] == 'scan_interrupted' and result['scan_sqlite_error'] == 'SQLITE_BUSY'
+
+
+def test_a_read_failure_without_an_sqlite_name_is_unclassified(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+
+    def pending(db, pid, cfg, **kwargs):
+        raise sqlite3.OperationalError('synthetic read failure')
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    result = step(runtime)
+    assert result['scan_refusal'] == 'read_sqlite' and result['scan_sqlite_error'] == 'unclassified'
+
+
 def test_select_scan_refusal_classifies_bookmark_value_errors(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
@@ -366,14 +449,13 @@ def test_select_scan_refusal_classifies_bookmark_value_errors(runtime, monkeypat
 
 
 @pytest.mark.parametrize('errorcode,refusal', [
-    (sqlite3.SQLITE_INTERRUPT, 'scan_interrupted'),
+    (sqlite3.SQLITE_INTERRUPT, 'read_sqlite'),
     (sqlite3.SQLITE_BUSY, 'scan_interrupted'),
     (sqlite3.SQLITE_LOCKED, 'scan_interrupted'),
     (sqlite3.SQLITE_CORRUPT, 'read_sqlite'),
 ])
 def test_select_scan_refusal_separates_lock_waits_from_read_faults(runtime, monkeypatch, errorcode, refusal):
-    """Deadline aborts and lock waits are interrupted scans, not read faults;
-    only uncoded or other sqlite errors stay read_sqlite."""
+    """Lock waits are interrupted scans; other SQLite failures keep the read-fault reason."""
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
 

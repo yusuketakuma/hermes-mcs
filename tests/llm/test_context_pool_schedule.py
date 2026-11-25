@@ -138,6 +138,35 @@ def test_context_pass_reports_only_fixed_bounded_diagnostics():
         "status": "complete", "done": 0}
 
 
+@pytest.mark.parametrize("detail", [
+    "witness_mismatch", "save_policy_changed", "patient_summary_quality_lock",
+    "patient_summary_quality_source_changed", "RuntimeStale", "OperationalError",
+])
+def test_context_pass_reports_a_fixed_quality_detail(detail):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "done": 0, "reason": "summary_quality_unavailable:RuntimeStale", "quality_detail": detail})
+    assert record == {"status": "deferred", "done": 0, "reason": "summary_quality_unavailable", "quality_detail": detail}
+
+
+@pytest.mark.parametrize("detail", [
+    "synthetic_unregistered_gate", "合成の未知の理由", "A" * 76 + "Error", 1, True, ["deadline"], {"code": "deadline"},
+    "synthetic-private patient", "deadline ",
+])
+def test_context_pass_rejects_any_other_quality_detail(detail):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "done": 0, "quality_detail": detail})
+    assert record == {"status": "source_changed", "done": 0, "quality_detail": "unclassified"}
+
+
+def test_context_pass_omits_an_absent_quality_detail():
+    for result in ({"status": "deferred", "reason": "source_quality_pending"},
+                   {"status": "deferred", "reason": "source_quality_pending", "quality_detail": None}):
+        assert "quality_detail" not in cloud_backlog._context_pass_observation(result)
+    record = cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "done": 0, "quality_detail": "save_receipt_invalid"})
+    assert record == {"status": "source_changed", "done": 0, "quality_detail": "save_receipt_invalid"}
+
+
 @pytest.mark.parametrize("reason", [
     "source_quality_unavailable:RuntimeStale",
     "source_quality_unavailable:patient_context_audit_mismatch",
@@ -247,6 +276,25 @@ def test_context_pass_omits_absent_scan_refusal():
     assert "scan_refusal" not in record
 
 
+@pytest.mark.parametrize("name", ["SQLITE_BUSY", "SQLITE_INTERRUPT", "SQLITE_IOERR_SHORT_READ", "unclassified"])
+def test_context_pass_reports_a_standard_scan_sqlite_error_name(name):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "scan_refusal": "read_sqlite", "scan_sqlite_error": name})
+    assert record["scan_refusal"] == "read_sqlite" and record["scan_sqlite_error"] == name
+
+
+@pytest.mark.parametrize("value", ["database is locked", "sqlite_busy", "SQLITE_", "SQLITE_BUSY ",
+                                   "SQLITE_" + "X" * 41, "合成の未知理由", 5, True, ["SQLITE_BUSY"]])
+def test_context_pass_rejects_any_other_scan_sqlite_error(value):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_sqlite_error": value})
+    assert record["scan_sqlite_error"] == "unclassified"
+
+
+def test_context_pass_omits_an_absent_scan_sqlite_error():
+    assert "scan_sqlite_error" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "scan_refusal": "read_sqlite"})
+
+
 @pytest.mark.parametrize("key,value", [
     ("waiting", 17), ("waiting", -1), ("waiting", True), ("waiting", 1.5), ("waiting", "3"),
     ("scan_reads", 17), ("scan_reads", -1), ("scan_interrupts", 2), ("scan_interrupts", True),
@@ -292,11 +340,11 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
     assert "synthetic-private" not in json.dumps(events)
 
 
-@pytest.mark.parametrize("index,passes", [(5, 3), (6, 3), (7, 1), (9, 1)])
-def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path, index, passes):
-    """Ten workers spawned at capacity 10; a drop to 6 retires index 7 and up
-    (one worker of hysteresis, as the backlog workers) at the next 60 s check,
-    after the pass in hand has returned."""
+@pytest.mark.parametrize("index,dropped_to,passes", [(0, 1, 3), (1, 1, 3), (1, 0, 1), (0, 0, 1)])
+def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path, index, dropped_to, passes):
+    """Two workers spawned at capacity 10; a drop retires the indices past it (one worker of
+    hysteresis, as the backlog workers) at the next 60 s check, after the pass in hand has
+    returned."""
     events, clock = [], SimpleNamespace(now=0.0)
     capacity = {"value": 10}
     initial = (False, "synthetic-current")
@@ -314,7 +362,7 @@ def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path,
     monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=sleep, monotonic=lambda: clock.now))
 
     def refresh(*args, **kwargs):
-        capacity["value"] = 6   # memory drops while the first pass runs
+        capacity["value"] = dropped_to   # memory drops while the first pass runs
         return {"status": "complete", "done": 1}
     monkeypatch.setattr(resident, "_background_context_refresh", refresh)
     cloud_backlog._context_worker(object(), initial, index)
@@ -485,3 +533,101 @@ def test_deferral_delay_is_shared_by_the_child_pause_and_the_lane_a_retry_time()
         assert cloud_backlog.deferral_delay(reason) == 60
         if reason and reason.startswith("patient_context_cloud_deferred:"):
             assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 60
+
+
+@pytest.mark.parametrize("limit,index,window_open,retires", [
+    (2, 1, True, True),     # a window opened after the child started takes its place back
+    (2, 1, False, False),
+    (2, 0, True, False),    # one context child always stays
+    (3, 1, True, False),    # with room for three, both context children keep their places
+])
+def test_context_child_leaves_one_place_to_an_opened_window(monkeypatch, tmp_path, limit, index, window_open,
+                                                            retires):
+    events, clock = [], SimpleNamespace(now=0.0)
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": limit})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+    monkeypatch.setattr(cloud_backlog, "backlog_admits", lambda *a: window_open)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 3)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: setattr(clock, "now", clock.now + 60), monotonic=lambda: clock.now))
+    monkeypatch.setattr(resident, "_background_context_refresh", lambda *a, **kw: {"status": "complete", "done": 1})
+    cloud_backlog._context_worker(object(), initial, index)
+    names = [name for name, _ in events]
+    if retires:
+        assert names == ["cloud_worker_retired"] and events[0][1] == {"reason": "capacity_reduced"}
+    else:
+        assert names == ["patient_context_pass"] * 3
+
+
+def test_context_child_leaves_its_place_after_a_window_opens_during_its_pass(monkeypatch, tmp_path):
+    events, clock, window = [], SimpleNamespace(now=0.0), [False]
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 2})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+    monkeypatch.setattr(cloud_backlog, "backlog_admits", lambda *a: window[-1])
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 4)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: setattr(clock, "now", clock.now + 60), monotonic=lambda: clock.now))
+
+    def refresh(*args, **kwargs):
+        window.append(True)      # the stored-message window opens while this pass runs
+        return {"status": "complete", "done": 1}
+    monkeypatch.setattr(resident, "_background_context_refresh", refresh)
+    cloud_backlog._context_worker(object(), initial, 1)
+    assert [name for name, _ in events] == ["patient_context_pass", "cloud_worker_retired"]
+    assert events[-1][1] == {"reason": "capacity_reduced"}
+
+
+def test_context_child_exits_when_patient_context_is_switched_off(monkeypatch, tmp_path):
+    events, cfg = [], {}
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 2})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 5)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda seconds: None, monotonic=lambda: 0.0))
+
+    def refresh(*args, **kwargs):
+        # Switched off while the pass in hand runs: that pass finishes, the next one never starts.
+        cfg["extract"] = {"patient_context": {"enabled": False}}
+        return {"status": "complete", "done": 1}
+    monkeypatch.setattr(resident, "_background_context_refresh", refresh)
+    cloud_backlog._context_worker(object(), initial, 0)
+    assert [name for name, _ in events] == ["patient_context_pass"]
+
+
+def test_a_failing_window_check_never_retires_a_context_child(monkeypatch, tmp_path):
+    events, clock = [], SimpleNamespace(now=0.0)
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 2})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+
+    def broken(*args):
+        raise sqlite3.OperationalError("synthetic")
+    monkeypatch.setattr(cloud_backlog, "backlog_admits", broken)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 3)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: setattr(clock, "now", clock.now + 60), monotonic=lambda: clock.now))
+    monkeypatch.setattr(resident, "_background_context_refresh", lambda *a, **kw: {"status": "complete", "done": 1})
+    cloud_backlog._context_worker(object(), initial, 1)
+    assert [name for name, _ in events] == ["patient_context_pass"] * 3

@@ -309,6 +309,9 @@ def test_bootstrap_runtime_edit_preserves_unknown_values_and_state(tmp_path):
     assert authority["configuration_state"] == "bootstrap"
     assert "configuration_state" not in second["common"]
     assert not (tmp_path / "data" / ".provider-settings-pending.json").exists()
+    records = settings.change_records(tmp_path, 5)["records"]
+    assert [(record["origin"], record["changed"]) for record in records] == [
+        ("install_runtime", []), ("install_runtime", []), ("install_bootstrap", [])]
 
 
 def test_bootstrap_runtime_edit_accepts_snapshot_before_new_editor_lock(tmp_path):
@@ -1013,7 +1016,8 @@ def _interrupt_commit(monkeypatch, point, failure):
             result = write_new(parent, name, raw, **kwargs)
             if (kind == "pending" and name == ".provider-settings-pending.json"
                     or kind == "backup" and name.startswith(".provider-settings-backup-")
-                    or kind == "staged" and name.startswith("new-")):
+                    or kind == "staged" and name.startswith("new-")
+                    or kind == "record" and name == settings.CHANGE_RECORD):
                 raise failure("synthetic interruption")
             return result
         monkeypatch.setattr(settings, "_write_new", interrupted)
@@ -1024,7 +1028,8 @@ def _tree_bytes(root):
             for path in [root / "config.json", *(root / "data").rglob("*")]}
 
 
-@pytest.mark.parametrize("point", ["pending", "backup", "staged", "replace-1", "replace-3", "replace-5", "link"])
+@pytest.mark.parametrize("point", ["pending", "backup", "staged", "replace-1", "replace-3", "replace-5", "link",
+                                   "record"])
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
 @pytest.mark.parametrize("split", [False, True])
 def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypatch, capsys, point, failure, split):
@@ -1646,3 +1651,205 @@ def test_human_confirmed_finalize_sets_the_pending_record_aside(tmp_path, monkey
     assert not (data / ".provider-settings-pending.json").exists()
     assert (data / f".provider-settings-pending.resolved-{operation}.json").exists()
     assert settings.read(tmp_path, model_owners=OWNERS)["mode"] == "split"
+
+
+def _recorded_commit(tmp_path, monkeypatch, original, **kwargs):
+    monkeypatch.setattr(mcs_config, "validate_config", lambda _: ([], []))
+    return settings.commit(tmp_path, original["snapshot"], original["common"], original["providers"],
+                           selected_provider="openai", model_owners=OWNERS, **kwargs)
+
+
+def _record_paths(tmp_path):
+    return sorted((tmp_path / "data").glob(".provider-settings-stage-*/" + settings.CHANGE_RECORD))
+
+
+def test_commit_records_origin_hashes_and_limit_changes_privately(tmp_path, monkeypatch):
+    import stat
+    from semantic_runtime import CLOUD_OPERATING_LIMITS
+
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    write_new, pending = settings._write_new, []
+    def capture(parent, name, raw, **kwargs):
+        if name == ".provider-settings-pending.json":
+            pending.append(json.loads(raw))
+        return write_new(parent, name, raw, **kwargs)
+    monkeypatch.setattr(settings, "_write_new", capture)
+    original["common"]["cloud_llm"]["daily_cost_limit_usd"] = 0
+    original["providers"]["openai"] = {"budget": {"daily_cost_limit_usd": 1, "monthly_cost_limit_usd": 2.5}}
+    original["providers"]["jev"] = {"until": None}
+    _recorded_commit(tmp_path, monkeypatch, original, origin="cloud_llm_budget")
+    path, = _record_paths(tmp_path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    record = json.loads(path.read_text())
+    assert record["operation"] == pending[0]["operation"] == path.parent.name.rsplit("-", 1)[1]
+    assert record["files"] == {"before": pending[0]["before"], "after": pending[0]["after"]}
+    assert (record["version"], record["origin"], record["command_id"]) == (1, "cloud_llm_budget", None)
+    before, after = record["limits"]["before"], record["limits"]["after"]
+    assert set(after) == ({"cloud_llm." + key for key in CLOUD_OPERATING_LIMITS if key != "provider_budgets"}
+                          | {f"cloud_llm.provider_budgets.{name}.{field}" for name in settings.CLOUD_PROVIDERS
+                             for field in ("daily_cost_limit_usd", "monthly_cost_limit_usd")}
+                          | {"semantic.daily_request_budget", "semantic.until"})
+    assert record["changed"] == ["cloud_llm.daily_cost_limit_usd",
+                                 "cloud_llm.provider_budgets.openai.daily_cost_limit_usd",
+                                 "cloud_llm.provider_budgets.openai.monthly_cost_limit_usd", "semantic.until"]
+    # absent falls back to a default; an explicit null is no limit: they stay distinct.
+    assert before["semantic.until"] == "absent" and after["semantic.until"] is None
+    assert (before["cloud_llm.daily_cost_limit_usd"], after["cloud_llm.daily_cost_limit_usd"]) == ("absent", 0)
+    assert after["cloud_llm.provider_budgets.openai.monthly_cost_limit_usd"] == 2.5
+    assert after["cloud_llm.provider_budgets.anthropic.daily_cost_limit_usd"] == "absent"
+    authority = json.loads((tmp_path / "data" / ".provider-settings-authority.json").read_text())
+    current = {"files": authority["files"], "common_policy_sha256": authority["common_policy_sha256"]}
+    assert record["authority"]["after"] == current and record["authority"]["before"]["files"] == {
+        name: pending[0]["before"][name] for name in settings.PROVIDERS}
+    assert settings.change_records(tmp_path, 5) == {
+        "records": [record], "current": current, "save_in_progress": False, "more": False,
+        "unrecorded_saves": 0, "rejected_records": 0}
+
+
+def test_a_save_without_limit_changes_is_recorded_and_reading_changes_nothing(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    original["common"]["cloud_llm"]["mode"] = "on"
+    _recorded_commit(tmp_path, monkeypatch, original, origin="settings")
+    read_before, probe_before, files_before = settings.read(tmp_path), settings.probe(tmp_path), _tree_bytes(tmp_path)
+    record, = settings.change_records(tmp_path, 1)["records"]
+    assert record["origin"] == "settings" and record["changed"] == []
+    assert record["limits"]["before"] == record["limits"]["after"]
+    assert settings.read(tmp_path) == read_before and settings.probe(tmp_path) == probe_before
+    assert probe_before["state"] == "requires_checked_read" and read_before["mode"] == "split"
+    assert _tree_bytes(tmp_path) == files_before
+
+
+@pytest.mark.parametrize(("origin", "command_id"), [
+    ("synthetic", None), (None, None), (["settings"], None), ("jev_model", "synthetic"),
+    ("jev_model", "123E4567-E89B-12D3-A456-426614174000")])
+def test_invalid_origin_is_refused_before_any_write(tmp_path, monkeypatch, origin, command_id):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["common"]["cloud_llm"]["daily_cost_limit_usd"] = 0
+    with pytest.raises(ValueError, match="provider_settings_origin_invalid"):
+        _recorded_commit(tmp_path, monkeypatch, original, origin=origin, command_id=command_id)
+    assert _tree_bytes(tmp_path) == before
+
+
+def test_committed_pending_accepts_a_commit_stopped_after_its_record(tmp_path, monkeypatch):
+    import config_edit
+
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    unlink = os.unlink
+    def crash(name, **kwargs):
+        if name == ".provider-settings-pending.json":
+            raise _Crash("synthetic interruption")
+        return unlink(name, **kwargs)
+    monkeypatch.setattr(settings.os, "unlink", crash)
+    with pytest.raises(_Crash, match="synthetic interruption"):
+        _recorded_commit(tmp_path, monkeypatch, original, origin="settings")
+    monkeypatch.setattr(settings.os, "unlink", unlink)
+    pending = json.loads((tmp_path / "data" / ".provider-settings-pending.json").read_text())
+    record, = settings.change_records(tmp_path, 1)["records"]
+    assert record["operation"] == pending["operation"] and record["files"]["after"] == pending["after"]
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        assert settings.committed_pending(tmp_path, fd) == pending["operation"]
+
+
+def test_change_records_are_newest_first_and_refuse_links_oversized_and_altered(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    state = settings.read(tmp_path)
+    for amount in (1, 2, 3):
+        state["common"]["cloud_llm"]["daily_cost_limit_usd"] = amount
+        state = _recorded_commit(tmp_path, monkeypatch, state, origin="cloud_llm_budget")
+    listed = settings.change_records(tmp_path, 2)
+    assert [record["limits"]["after"]["cloud_llm.daily_cost_limit_usd"] for record in listed["records"]] == [3, 2]
+    assert listed["more"] is True and listed["records"][0]["authority"]["after"] == listed["current"]
+    # Each record starts from the state the previous one saved, whatever the clocks say.
+    assert listed["records"][0]["authority"]["before"] == listed["records"][1]["authority"]["after"]
+    valid = _record_paths(tmp_path)[0]
+    data = tmp_path / "data"
+    def stage(letter):
+        path = data / (".provider-settings-stage-" + letter * 32)
+        path.mkdir(mode=0o700)
+        return path
+    stage("a")                                                        # a save from before records existed
+    oversized = stage("b") / settings.CHANGE_RECORD
+    oversized.write_bytes(b" " * (64 * 1024 + 1))
+    oversized.chmod(0o600)
+    (stage("c") / settings.CHANGE_RECORD).symlink_to(valid)
+    (data / (".provider-settings-stage-" + "d" * 32)).symlink_to(valid.parent, target_is_directory=True)
+    altered = json.loads(valid.read_text())
+    altered.update(operation="e" * 32, note="synthetic free text")
+    private_json(stage("e") / settings.CHANGE_RECORD, altered)
+    huge = json.loads(valid.read_text())
+    huge["operation"] = "f" * 32
+    for side in ("before", "after"):        # an unchanged limit, so only the number is wrong
+        huge["limits"][side]["cloud_llm.max_concurrency"] = 10 ** 400
+    private_json(stage("f") / settings.CHANGE_RECORD, huge)
+    listed = settings.change_records(tmp_path, settings.CHANGE_RECORDS_MAX)
+    assert len(listed["records"]) == 3
+    assert (listed["unrecorded_saves"], listed["rejected_records"]) == (1, 5)
+    for limit in (0, settings.CHANGE_RECORDS_MAX + 1, True, "1"):
+        with pytest.raises(ValueError, match="provider_record_limit_invalid"):
+            settings.change_records(tmp_path, limit)
+
+
+def test_record_build_failure_is_refused_before_any_write(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["common"]["cloud_llm"]["daily_cost_limit_usd"] = 0
+    def refused(*args):
+        raise ValueError("provider_file_too_large")
+    monkeypatch.setattr(settings, "_change_record", refused)
+    with pytest.raises(ValueError, match="provider_file_too_large"):
+        _recorded_commit(tmp_path, monkeypatch, original, origin="settings")
+    assert _tree_bytes(tmp_path) == before
+
+
+def test_reader_opens_only_the_newest_stages_and_reports_a_save_in_progress(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    state = settings.read(tmp_path)
+    for amount in (1, 2):
+        state["common"]["cloud_llm"]["daily_cost_limit_usd"] = amount
+        state = _recorded_commit(tmp_path, monkeypatch, state, origin="cloud_llm_budget")
+    newest, older = (path.parent for path in sorted(_record_paths(tmp_path), key=lambda p: p.parent.stat().st_mtime_ns,
+                                                    reverse=True))
+    # A clock step backwards reorders the stages; the hash chain still names the current save.
+    os.utime(newest, ns=(1, 1))
+    listed = settings.change_records(tmp_path, 2)
+    assert [record["operation"] for record in listed["records"]] == [older.name[-32:], newest.name[-32:]]
+    assert listed["records"][1]["authority"]["after"] == listed["current"]
+    opened, directory = [], settings._directory
+    monkeypatch.setattr(settings, "_directory", lambda parent, name, **kw: opened.append(name) or directory(
+        parent, name, **kw))
+    assert len(settings.change_records(tmp_path, 1)["records"]) == 1
+    assert [name for name in opened if name.startswith(".provider-settings-stage-")] == [older.name]
+    private_json(tmp_path / "data" / ".provider-settings-pending.json", {"synthetic": True})
+    assert settings.change_records(tmp_path, 1)["save_in_progress"] is True
+
+
+@pytest.mark.parametrize("value,expected", [
+    # Every separator until_epoch accepts, kept in one canonical form rather than as typed.
+    ("2026-11-25t12:00:00+00:00", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25X12:00:00+00:00", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25T12:00:00Z", "2026-11-25T12:00:00+00:00"),
+    ("2026-11-25T21:00:00+09:00", "2026-11-25T21:00:00+09:00"),
+    ("not a time at all", settings.INVALID),
+    ("2026-13-45T99:00:00+00:00", settings.INVALID),
+    ("2026-11-25T12:00:00", settings.INVALID),   # no offset: until_epoch refuses it
+])
+def test_record_keeps_every_time_until_epoch_accepts(value, expected):
+    assert settings._limit_value(value) == expected
+    assert settings._stored_limit_ok(expected)
+
+
+def test_an_end_time_change_with_any_accepted_separator_is_a_change():
+    before = settings._limits({}, {}, {"until": "2026-11-25X12:00:00+00:00"})
+    after = settings._limits({}, {}, {"until": "2026-11-26X12:00:00+00:00"})
+    same = settings._limits({}, {}, {"until": "2026-11-25T12:00:00Z"})
+    assert (before["semantic.until"], after["semantic.until"]) == (
+        "2026-11-25T12:00:00+00:00", "2026-11-26T12:00:00+00:00")
+    assert [key for key in after if before[key] != after[key]] == ["semantic.until"]
+    assert same == before   # the same end time written another way is no change
