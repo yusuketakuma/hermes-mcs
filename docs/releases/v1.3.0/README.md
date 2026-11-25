@@ -1,6 +1,6 @@
 # v1.3.0 リリース資料
 
-v1.3.0候補の変更記録54件（新機能12・改善12・不具合修正30）を `changes/archive/1.3.0/` へ集約し、CHANGELOG・README・説明図を現在の実装へ合わせた資料です。基準37件に患者コンテキスト関連3件とその他14件を追加しています。
+v1.3.0候補の変更記録62件（新機能14・改善13・不具合修正35）を `changes/archive/1.3.0/` へ集約し、CHANGELOG・README・説明図を現在の実装へ合わせた資料です。基準37件に患者コンテキスト関連3件とその他14件を追加しています。
 
 v1.3.0は、ローカルの患者画面に在宅ケアの患者台帳・職員・ケアチーム・訪問歴・処方歴・訪問ルートを追加する機能版です。患者コンテキストの品質確認と患者選定の競合を修正し、医薬品の検索・照会の共通入口、添付文書改訂・マスター差分から言及のある患者を並べる横断検索、薬局から医師への照会返答待ちのアラート、日次サマリーの処方期限一覧を含みます。意味解析と抽出監査に使う Jev を jev-1.14.0 へ更新し、切替は確認に合格したときだけコマンドで行います。書込みロックの待ち、意味解析・QCの滞留、クラウド費用集計、新規導入の途中停止に加え、状態不明の常駐処理起動、上限超過した薬名辞書の再走査、条件不変のクラウド再処理も抑えます。
 
@@ -9,10 +9,10 @@ v1.3.0は、ローカルの患者画面に在宅ケアの患者台帳・職員�
 - [release-notes-1.3.0.md](release-notes-1.3.0.md)・[release-title-1.3.0.txt](release-title-1.3.0.txt): CHANGELOGの1.3.0節からexportした公開本文とタイトル。
 - [release-summary-1.3.0.md](release-summary-1.3.0.md): 公開本文の比較表・説明図を含む要約原稿。
 - [changelog-1.3.0.md](changelog-1.3.0.md): 全変更項目を写した版別詳細ファイル（1MB未満を生成時に検査）。
-- [change-map.json](change-map.json): archive 54件全件のタイトル・保存先・SHA256対応表。
+- [change-map.json](change-map.json): archive 62件全件のタイトル・保存先・SHA256対応表。
 - homecare-drug-search-v130（SVG・PNG）: 合成の説明図1点。実画面・測定結果ではありません。来歴・hash・描画確認は [visual-source.json](visual-source.json)。
 - [ACCEPTANCE_1.3.0.md](ACCEPTANCE_1.3.0.md): 受入準備票。検証済み項目と未実行項目を分けて記録しています。
 
-選択した54件の外に `jev-health-qc-recovery` と `semantic-unread-verdicts` の2記録が `changes/` に残っていますが、関連コードは現在のmainにあります。リリース範囲との整合は未解決で、公開前の判断が必要です。
+当初の54件に加え、後からmainへ入った `jev-health-qc-recovery`・`semantic-unread-verdicts`・`local-model-mac-hardware-selection`・`auto-update-v3-owner-tick`・`collection-diagnostic-command-guidance`・`lineworks-text-target-validation`・`slack-direct-channel-setup-flags`・`docs-only-merge-gate-sdk-skips` の8記録も収録し、v1.2.1からの全変更を対象にしました。
 
 今回の文書・図の集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。公開時は PNG を `releases/download/v1.3.0/` の添付として配置し、到達と表示を確認します。
