@@ -813,8 +813,8 @@ Bot Token Scopes に追加: `chat:write`, `app_mentions:read`,
 
 Slackカードを使う導入・更新（`notify.interactive=slack`）では、この準備を自動で行います。
 新規導入で患者情報先がなければ`mcs`と`mcslog`を作り、操作を許可したユーザーだけを招待します。
-既存の患者情報先と、別に明示された運用先は保持します。`interactive=off`のテキスト専用設定では
-チャンネルを自動作成せず、分離済みの既存IDを`notify_system_target`へ指定します。
+既存の患者情報先と、別に明示された運用先は保持します。`interactive=off`のテキスト専用設定でも、
+`notify_target=slack:new`の明示指定では患者情報用・運用情報用のチャンネルを作成し、確定した分離済みIDを保存します。
 権限不足・名前の競合・作成結果の不明などで止まった場合は、案内された条件を確認してから
 `mcs setup slack-channels`で準備を再開してください。結果が不明な作成・招待は自動で繰り返しません。
 担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。

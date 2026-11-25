@@ -373,13 +373,15 @@ def _configured_channels(cfg):
 
 
 def _post_complete(state):
+    if state['state'] != 'applied':
+        return False
     if not surfaces_card(state):
-        return state['state'] == 'applied' and state.get('flags_ready') is True
-    return (state['state'] == 'applied'
-            and (state['plan']['runtime_mode'] != 'hermes'
-                 or state.get('worker_ready') is True
-                 or state.get('worker_ready') is not False
-                    and state['plan']['roles']['patient']['state'] != 'pending'))
+        return state.get('flags_ready') is True
+    if state['plan']['runtime_mode'] == 'standalone':
+        return state.get('flags_ready') is True
+    return (state.get('worker_ready') is True
+            or state.get('worker_ready') is not False
+            and state['plan']['roles']['patient']['state'] != 'pending')
 
 
 def surfaces_card(state):
@@ -732,6 +734,20 @@ def finish_runtime(root, cfg, args):
         return
     if state.get('applied_hash') != _hash(cfg):
         raise ValueError('slack_setup_not_ready_or_config_changed')
+    if state['plan']['runtime_mode'] == 'standalone':
+        # The standalone host owns its connector and restarts when the saved
+        # config changes; there is no Hermes card worker to rewire. The route
+        # flags are still the worker-visible publication and must be durable
+        # before this setup is treated as converged.
+        notify_spool.ensure_dirs(str(Path(root) / 'data'))
+        notify_spool.publish_flags(cfg, str(Path(root) / 'data'))
+        with config_edit._edit_lock(str(path(root))):
+            current = read(root)
+            if current != state:
+                raise ValueError('slack_setup_existing_intent_conflict')
+            current['flags_ready'] = True
+            save(root, current)
+        return
     args.plugin_profile = state['plan']['binding']['profile']
     args.plugin_user_ids = ','.join(state['plan']['users'])
     if not setup_integration._apply_plugin_integration(cfg, args):

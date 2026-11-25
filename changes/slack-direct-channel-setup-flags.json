@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "Slack直接接続のチャンネル準備が完了扱いになる問題を修正",
+  "summary": "MCS単独（standalone）でSlackカード用のチャンネルを新規作成または再開したとき、通知経路の公開ファイルがまだ無くても準備完了と判定される場合がありました。完了前に通知経路を公開し、その記録まで終わったときだけ完了として扱うように修正しました。チャンネル作成の条件、操作者の招待範囲、送信許可の範囲は変わりません。",
+  "upgrade": "更新後に独立実行の常駐処理（mcs_standalone）の再起動が必要です。これまでにSlack直接接続のチャンネル準備が済んでいる環境では、更新後に `mcs setup slack-channels` を実行すると不足している通知経路の公開だけを補完します。新しいチャンネルは作成されません。",
+  "details": [
+    "standaloneではHermesのカードworkerを起動しないため、Hermes用のworker確認ではなく通知経路 flags/notify.json の公開を完了条件にする。",
+    "初回受入候補のSlack直接接続について、fresh-install workflowのstandalone経路をDiscord初期設定からSlack初期設定へ変更し、合成値での新規導入・認証情報の保存・常駐agentの登録をCIで確認する。",
+    "テキスト専用設定でも slack:new を明示した場合はチャンネルを自動作成する既存挙動に合わせて、付録Bの食い違う説明を修正する。",
+    "standaloneの対話設定でプロジェクト自動解決がオフのとき、空のプロジェクトIDを保存できないように、その場で再入力を求める。"
+  ],
+  "refs": [
+    "mcs/ops/setup/slack_channel_setup.py",
+    "mcs/ops/setup/setup_wizard.py",
+    "tests/ops/test_slack_channel_setup.py",
+    "tests/ops/test_setup_guided.py",
+    ".github/workflows/fresh-install.yml",
+    "docs/guides/INSTALLATION.md"
+  ]
+}

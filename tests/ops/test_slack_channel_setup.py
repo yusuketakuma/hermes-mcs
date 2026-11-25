@@ -957,6 +957,44 @@ def test_text_only_flags_publish_gates_completion_and_resume_converges(tmp_path,
     assert flags == [saved, saved]
 
 
+def test_card_standalone_bootstrap_publishes_route_flags_without_hermes_worker(tmp_path, monkeypatch):
+    cfg, client = config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    cfg['notify']['slack']['project_ids'] = [101]
+    import notify_spool
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    def channels(root, binding):
+        consume(root, client, cfg)
+    monkeypatch.setattr(standalone, 'setup_channels', channels)
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    assert client.created == ['mcs', 'mcslog']
+    assert saved['notify_target'] == 'slack:C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000002'
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied'
+    assert setup.creation_unneeded(saved, state) is False
+
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration',
+                        lambda *a: pytest.fail('standalone postphase must not wire Hermes'))
+    monkeypatch.setattr(setup, 'reconnect_ready',
+                        lambda *a: pytest.fail('standalone owns no Hermes card worker'))
+    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
+    flags = []
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda c, r: flags.append(c))
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+    state = setup.read(tmp_path)
+    assert state['flags_ready'] is True
+    assert 'worker_ready' not in state
+    assert setup.creation_unneeded(saved, state) is True
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+
+
 def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, monkeypatch):
     cfg, client = text_config(), Client()
     cfg['runtime_mode'] = 'standalone'
