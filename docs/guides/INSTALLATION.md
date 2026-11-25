@@ -48,7 +48,7 @@ LINE WORKS 通知には Hermes の通知 plugin・gateway は不要です。
   ログインしていること（`sudo` や root では実行しない）
 - Xcode Command Line Tools（`xcode-select --install`）と
   [Homebrew](https://brew.sh/)
-- 空きディスク約 12 GB（LLM モデル 5.7 GB を含む）と、github.com・
+- 空きディスク約 12 GB以上（自動選択されるLLMモデルの容量による。512GB級のUltraでは約250 GB）と、github.com・
   huggingface.co へ接続できるネットワーク
 - MCS のログイン ID とパスワード
 - 通知を使う場合: Slack app（推奨・作り方は付録B）、Discord bot（付録A）、または[LINE WORKS Bot](LINEWORKS.md)
@@ -155,7 +155,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | Python | `install.sh` は両形態でPython 3.14系（`<3.15`）の実行環境を用意する。Hermesはhermes-agentのvenv、独立モードはMCS専用venvを使う。`--no-brew`では必要なPythonを別途準備する。通常の実行・診断はPython ≥3.14が必要。更新前のPython 3.10互換は移行用の限定経路であり、通常動作の対応下限ではない |
 | SQLite | 定期ジョブ・復旧 watchdog を実際に動かす Python がリンクする SQLite が WAL-reset 修正済みであること: 3.51.3 以降、または 3.50 系は 3.50.7 以降・3.44 系は 3.44.6 以降。`sqlite3` コマンドの版ではなく、その Python の `sqlite3.sqlite_version` で判定する。macOS 標準 `/usr/bin/python3` の SQLite（3.51.0 など）は対象外のため、復旧 watchdog には `--recovery-python` で安全な独立 Python を指定するか `--no-recovery` を使う。影響版・版不明は `services`・`update`・installer stage 6 が変更前に停止する |
 | Google Chrome | MCS にログインしたプロファイルで CDP ポート `:9333` を使う |
-| ディスク | `--preflight`の導入前閾値は通常12 GB、`--no-llm`またはモデルファイルが既存なら6 GB。モデル約5.7 GBは固定版を別途取得する。閾値は長期運用の必要容量ではなく、DB・添付・ログ・バックアップは利用量に応じた余裕が必要 |
+| ディスク | `--preflight`の導入前閾値は基本6 GBに、選択されたモデルの容量を加えた値（Qwen3.5-9Bでは約12 GB）。`--no-llm`または必要なモデルファイルがすべて既存なら6 GB。閾値は長期運用の必要容量ではなく、DB・添付・ログ・バックアップは利用量に応じた余裕が必要 |
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | Jev用。MCSの `.env`（0600）に登録しmode未指定ならassistで自動使用 |
 | MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録し、利用先の設定に従って患者文脈更新・履歴解析に使用 |
@@ -167,6 +167,19 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
+
+ローカルAIモデルの自動選択では、対応済みのQwen GGUFがすでに `models/` にあれば容量の大きいモデルへ置き換えずに再利用します。未導入のMacでは、どの低スペックMacでも下限をQwen3.5-9Bとし、次の容量・チップ条件で上位モデルを選びます。
+
+| 条件 | 選択 | 取得量 |
+|---|---|---:|
+| 32 GB未満、または検出不能 | Qwen3.5-9B Q4_K_M | 約5.7 GB |
+| 32 GB以上48 GB未満 | Qwen3.8-27B Q4_K_M | 約16.6 GB |
+| 48 GB以上128 GB未満 | Qwen3.6-35B-A3B Q4_K_M | 約22.1 GB |
+| 128 GB以上512 GB未満のMax/Ultraチップ | Qwen3.5-122B-A10B Q4_K_M（3分割） | 約76.5 GB |
+| 512 GB以上のUltraチップ | Qwen3.5-397B-A17B Q4_K_M（6分割） | 約244.1 GB |
+| 上記以外の128 GB以上のチップ | Qwen3.6-35B-A3B Q4_K_M | 約22.1 GB |
+
+近年のMacでは、16〜32 GBのMac mini・MacBook Air・iMacはQwen3.5-9BまたはQwen3.8-27B、48〜64 GBのPro/Max構成はQwen3.6-35B-A3B、128 GBのMacBook Pro・Mac StudioのMax構成と256 GBのMac Studio Ultra構成はQwen3.5-122B-A10B、512 GBのMac Studio Ultra構成はQwen3.5-397B-A17Bが対象です。M4・M5などの世代差は推論速度には影響しますが搭載可否を左右しないため世代では分けず、Pro/Max/Ultraの違いは128 GB以上の大型モデルだけに使います。チップ名やメモリを検出できない場合は安全側のQwen3.5-9Bです。自動判定を明示的に変える場合は、導入前に `MCS_LOCAL_MODEL` を `qwen3.5-9b`・`qwen3.8-27b`・`qwen3.6-35b-a3b`・`qwen3.5-122b-a10b`・`qwen3.5-397b-a17b` のいずれかへ設定してください。
 
 上の表は実装上の導入条件です。合成installer・版境界テストの成功と、新しいMacでの導入・通知到着・実モデルの速度やメモリの受入は区別します。1.1.0の正式な提供構成は[作業計画](../roadmap/v1.1.0-public-launch-plan.md)で決定・受入を追跡しています。
 
@@ -237,7 +250,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 1 | brew パッケージ: `git` `python@3.14` `uv` `llama.cpp` `google-chrome`(cask)。導入済みは skip | `brew` が無い・`brew install` 失敗で停止 |
 | 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・Python の無い venv・失敗した依存導入は再実行時にやり直す。clone・venv・依存導入の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
-| 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
+| 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`）。対応済みQwen GGUFが `~/.hermes/models/` にあればそれを維持し、なければMacのメモリとチップに応じたQwen GGUFを固定版でDLする。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。分割GGUFは全ファイルを照合する。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期7件（`backup.enabled=true`ならoffsiteを加え8件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`と補助4ファイルを同じ世代で配置。旧入口の`.prev`と対応する`runtime-<世代hash>`を一体で保持。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
@@ -587,7 +600,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `vital_urgency.mode` | choice | `off` | `off`/`flag`/`high`。バイタル数値の決定論的閾値判定。`flag` は閾値超過の測定値を確認用に記録・表示するのみ、`high` は緊急度を高にし閾値根拠を urgency_evidence にする。バイタル欄は測定対象・時制を保持しないため、本人以外の測定・条件節・過去報告・測定不能の文脈は近傍テキストのヒューリスティックで除外する（完全ではない）。有効化・閾値は臨床責任者の承認が前提 |
 | `vital_urgency.thresholds` | object | SpO2≤90 / SBP≤90 / SBP≥180 / BS≤70 | 閾値の上書き（`spo2_lte` / `sbp_lte` / `sbp_gte` / `bs_lte`） |
 | `local_llm.url` | str | `http://127.0.0.1:8080/v1/chat/completions` | ローカルLLMのエンドポイント（loopback http のみ — それ以外は `check` が拒否。別ポートの自前サーバを指せる） |
-| `local_llm.model` | str | `Qwen3.5-9B` | モデル名（OpenAI 互換 API の `model` フィールド） |
+| `local_llm.model` | str | `Qwen3.5-9B`（install.sh の新規導入では選択値を保存） | モデル名（OpenAI 互換 API の `model` フィールド） |
 | `semantic.mode` | choice | キーありなら`assist`、なしなら`off` | `off`以外は本文を外部Jev APIへ送信。明示OFFを維持。`shadow`=記録のみ、`assist`=既存の支援経路、`enforce`=評価・承認を満たした判定への使用 |
 | `semantic.project_ids` | list[int] / null | 自動有効化で対象も省略なら全対象 | 対象プロジェクトID。手動でmodeを有効にする場合は明示必須。`null`=全対象、`[]`=対象なし |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
@@ -646,7 +659,7 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | `Xcode Command Line Tools が未導入です`／`git が未導入です` | 開発ツール未導入 | `xcode-select --install` |
 | Homebrew が未導入です | Homebrew 未導入 | `対処:` 行の Homebrew 公式インストールコマンドを実行（brew を使わないなら `--no-brew`） |
 | 実行できる Python 3.14 が見つかりません | `--no-brew` 等で brew が Python を入れられない | `brew install python@3.14`（brew があれば stage 1 が入れるので 要対処 にならない） |
-| `ディスク: <パス> の空きは N GB です（必要容量は約 N GB、モデルは5.7 GB）` | 空き容量不足（モデル込みで約 12 GB） | 空きを作って再実行 |
+| `ディスク: <パス> の空きは N GB です（必要容量は約 N GB、モデルは…）` | 空き容量不足（必要容量は選択されたモデルで変わる） | 空きを作って再実行 |
 | `通信: <接続先> に接続できません` | clone・モデル DL に必要な通信ができない | ネットワーク・プロキシを確認し `curl -I <URL>` で疎通確認 |
 | `ポート8080が AI サーバー以外の処理に使用されています` | 別のプロセスが :8080 を使用 | `lsof -nP -iTCP:8080 -sTCP:LISTEN` で特定して停止、または自前 LLM なら `--no-llm` |
 | 既存の導入先は別のフォルダです | 別の checkout から導入済み | 旧 checkout の `install.sh` を使うか、切り替えるなら `./install.sh --force-repo`（§A-7） |

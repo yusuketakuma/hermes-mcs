@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "Macの性能に応じて導入するローカルAIモデルを自動選択",
+  "summary": "新規導入時、32GB以上のMacではQwen3.8-27B、48GB以上ではQwen3.6-35B-A3B、128GB以上のMax/UltraチップではQwen3.5-122B-A10B、512GB以上のUltraチップではQwen3.5-397B-A17Bを選びます。低スペックや検出不能のMacでも下限は従来のQwen3.5-9Bです。すでに対応済みのQwenモデルが導入されているMacでは、そのモデルを維持します。",
+  "upgrade": "既存のQwenモデルがある環境では自動的にそのモデルを再利用するため追加操作は不要です。新規導入ではメモリとチップに応じたモデルを取得します。128GB以上のMax/Ultraでは約76.5GB、512GB以上のUltraでは約244.1GBを取得します。自動判定を変える場合は導入前にMCS_LOCAL_MODELを指定してください。",
+  "details": [
+    "選択候補はQwen3.5-9B、Qwen3.8-27B、Qwen3.6-35B-A3B、Qwen3.5-122B-A10B、Qwen3.5-397B-A17Bの固定revisionです。",
+    "122Bモデルは3分割、397Bモデルは6分割のGGUFで、各ファイルをsha256で照合し、llama-serverには先頭ファイルを指定します。",
+    "初回設定には選択したlocal_llm.modelを保存します。",
+    "MCS_LOCAL_MODELにqwen3.5-9b、qwen3.8-27b、qwen3.6-35b-a3b、qwen3.5-122b-a10b、qwen3.5-397b-a17bのいずれかを指定すると自動判定を上書きできます。"
+  ],
+  "refs": [
+    "install.sh",
+    "deployment/install/runtime.sh",
+    "mcs/core/provider_settings.py",
+    "docs/guides/INSTALLATION.md"
+  ]
+}

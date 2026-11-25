@@ -1,5 +1,6 @@
 """Synthetic install sh models contracts; shared helpers preserve isolated runtime state."""
 import hashlib
+import json
 import re
 import pytest
 from install_sh_testkit import INSTALL as INSTALL, _bootstraps as _bootstraps, _calls as _calls, _run as _run, _world as _world
@@ -17,6 +18,85 @@ def test_llama_stage_when_models_endpoint_unanswered(tmp_path):
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 1
+
+
+@pytest.mark.parametrize(("mem_gib", "chip", "filename", "model_name"), [
+    (16, "Apple M4", "Qwen3.5-9B-Q4_K_M.gguf", "Qwen3.5-9B"),
+    (32, "Apple M4", "Qwen3.8-27B-UD-Q4_K_M.gguf", "Qwen3.8-27B"),
+    (48, "Apple M4 Pro", "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf", "Qwen3.6-35B-A3B"),
+    (128, "Apple M4 Pro", "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf", "Qwen3.6-35B-A3B"),
+])
+def test_mac_memory_and_chip_select_qwen_model(tmp_path, mem_gib, chip, filename, model_name):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env = {**env, "STUB_MEMSIZE": str(mem_gib * 1024**3), "STUB_CPU_BRAND": chip}
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert (hermes_home / "models" / filename).read_text() == "stub-model-bytes\n"
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert filename in plist.read_text()
+    cfg = json.loads((home / ".mcs" / "config.json").read_text())
+    assert cfg["local_llm"]["model"] == model_name
+
+
+def test_explicit_model_choice_overrides_hardware_detection(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env = {**env, "STUB_MEMSIZE": str(16 * 1024**3), "STUB_CPU_BRAND": "Apple M4",
+           "MCS_LOCAL_MODEL": "QWEN3.6-35B-A3B"}
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert (hermes_home / "models" / "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf").read_text() == "stub-model-bytes\n"
+    cfg = json.loads((home / ".mcs" / "config.json").read_text())
+    assert cfg["local_llm"]["model"] == "Qwen3.6-35B-A3B"
+
+
+def test_invalid_explicit_model_choice_is_rejected_before_changes(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    r = _run({**env, "MCS_LOCAL_MODEL": "unsupported"}, hermes_home)
+    assert r.returncode == 1
+    assert "MCS_LOCAL_MODEL の指定が不正です" in r.stderr
+    assert not (hermes_home / "models").exists()
+
+
+def test_max_chip_with_128gb_selects_split_122b_model(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env = {**env, "STUB_MEMSIZE": str(128 * 1024**3), "STUB_CPU_BRAND": "Apple M4 Max"}
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    models = hermes_home / "models"
+    for number in range(1, 4):
+        assert (models / f"Qwen3.5-122B-A10B-Q4_K_M-0000{number}-of-00003.gguf").read_text() == "stub-model-bytes\n"
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf" in plist.read_text()
+    cfg = json.loads((home / ".mcs" / "config.json").read_text())
+    assert cfg["local_llm"]["model"] == "Qwen3.5-122B-A10B"
+
+
+def test_ultra_chip_with_512gb_selects_split_397b_model(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    env = {**env, "STUB_MEMSIZE": str(512 * 1024**3), "STUB_CPU_BRAND": "Apple M3 Ultra"}
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    models = hermes_home / "models"
+    for number in range(1, 7):
+        assert (models / f"Qwen3.5-397B-A17B-Q4_K_M-0000{number}-of-00006.gguf").read_text() == "stub-model-bytes\n"
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert "Qwen3.5-397B-A17B-Q4_K_M-00001-of-00006.gguf" in plist.read_text()
+    cfg = json.loads((home / ".mcs" / "config.json").read_text())
+    assert cfg["local_llm"]["model"] == "Qwen3.5-397B-A17B"
+
+
+def test_existing_qwen_model_is_kept_on_high_memory_mac(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"stub-model-bytes\n")
+    env = {**env, "STUB_MEMSIZE": str(128 * 1024**3), "STUB_CPU_BRAND": "Apple M4 Max"}
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert model.read_bytes() == b"stub-model-bytes\n"
+    assert not (hermes_home / "models" / "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf").exists()
+    plist = home / "Library" / "LaunchAgents" / "ai.mcs.llamaserver.plist"
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in plist.read_text()
 
 
 def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
@@ -193,9 +273,11 @@ def test_model_download_is_pinned_and_verified_by_default(tmp_path):
     """The GGUF comes from a fixed revision and is checked against its
     published sha256 even when MCS_MODEL_SHA256 is not set."""
     text = INSTALL.read_text()
-    assert re.search(r'^MODEL_URL="https://huggingface\.co/[^"]+/resolve/[0-9a-f]{40}/[^"]+\.gguf"$',
-                     text, re.M)
-    assert re.search(r'^MODEL_SHA256="[0-9a-f]{64}"$', text, re.M)
+    pinned = re.findall(
+        r"(?:^|\n|')([^\s'\n]+\.gguf)\|(https://huggingface\.co/[^|\n]+/resolve/[0-9a-f]{40}/[^|\n]+\.gguf)\|([0-9a-f]{64})\|([0-9]+)",
+        text)
+    assert len(pinned) == 12
+    assert all(len(entry[2]) == 64 and int(entry[3]) > 0 for entry in pinned)
     home, hermes_home, stub_root, env = _world(tmp_path)
     del env["MCS_MODEL_SHA256"]
     r = _run(env, hermes_home)
