@@ -10,7 +10,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
 from mcs_util import HOME
-from safe_io import open_lock_file, read_json_nofollow, read_regular_nofollow
+from safe_io import atomic_write, open_lock_file, read_json_nofollow, read_regular_nofollow
 from stats_math import finite_number
 
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
@@ -316,4 +316,43 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
                 return None
             return fd
     record_writer_refusal("run_lock_not_acquired", "write_lock")
+    return None
+
+
+RUN_LOCK_REFUSALS_NAME = "run_lock_refusals.json"
+# a gap longer than this breaks the starvation chain (the fleet either
+# recovered or stopped trying — either way it is a new episode)
+_REFUSAL_CHAIN_GAP_S = 1800
+
+
+def record_run_lock_refusal(data_dir: str, *, now: float | None = None) -> None:
+    """Record collection lock contention even when the ledger is inaccessible."""
+    now = time.time() if now is None else now
+    first, consecutive = now, 1
+    prior = read_run_lock_refusals(data_dir)
+    if prior and 0 <= now - prior["last_at"] <= _REFUSAL_CHAIN_GAP_S:
+        first, consecutive = prior["first_at"], prior["consecutive"] + 1
+    state = {"first_at": first, "last_at": now, "consecutive": consecutive}
+    with suppress(OSError):
+        atomic_write(os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME),
+                     lambda f: json.dump(state, f), mode=0o600)
+
+
+def clear_run_lock_refusals(data_dir: str) -> None:
+    """A successful collection lock acquisition ends the starvation chain."""
+    with suppress(OSError):
+        os.unlink(os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME))
+
+
+def read_run_lock_refusals(data_dir: str) -> dict | None:
+    """Read only bounded, valid observations from this private marker."""
+    try:
+        state = read_json_nofollow(os.path.join(data_dir, RUN_LOCK_REFUSALS_NAME), 2048)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (isinstance(state, dict)
+            and finite_number(state.get("first_at")) and finite_number(state.get("last_at"))
+            and 0 <= state["first_at"] <= state["last_at"]
+            and type(state.get("consecutive")) is int and state["consecutive"] > 0):
+        return state
     return None

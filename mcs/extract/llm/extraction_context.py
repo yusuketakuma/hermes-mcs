@@ -295,6 +295,15 @@ def _source(target):
         "project_id", "message_id", "content_hash", "posted_at", "posted_at_ts", "parent_id")}
 
 
+# Values of _context_contract() in the shipped writers. They certify only
+# an older source occurrence; these frames cannot resume a current request.
+_RETIRED_FRAME_CONTRACTS = (
+    "c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65",  # 48b438a5^
+    "2f3277d2e2c7e81393ea9de2001809b73de6f4787cd8ce17355a7f4386d3c040",  # 20ee72bc
+    "5659ec26c1dbf34d07cbd876c04ae77ea67826aa9b38e862b9a1184ef38c6e46",  # d847fdd3
+)
+
+
 def _prior_source_attempt(doc, meta, target, *, model, contract, attempt, compatible_contracts=()):
     # A different metadata hash alone is not proof of history. Link the stored
     # source fence back to the immutable attempt binding before ignoring it.
@@ -328,7 +337,7 @@ def _prior_source_attempt(doc, meta, target, *, model, contract, attempt, compat
                         for earlier in range(retry - 1, -1, -1))
     return any(matches_attempt(doc, old_target, model=model, contract=known,
                               attempt=candidate, enabled=doc["enabled"])
-               for candidate in attempts for known in (contract, *compatible_contracts))
+               for candidate in attempts for known in (contract, *compatible_contracts, *_RETIRED_FRAME_CONTRACTS))
 
 
 def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None,

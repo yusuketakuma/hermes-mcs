@@ -456,6 +456,7 @@ def test_entry_reports_only_observed_writer_refusal(
         refusal = json.loads(raw)
         assert _without_not_started(refusal, "commands" if mode == "commands" else "collection") == {
             "ok": False, "error": "lock_held", "writer_reason": reason, "writer_stage": stage}
+        assert bool(writer_lock.read_run_lock_refusals(data)) == (mode == "tick" and cause == "busy")
         if cause == "busy":
             assert refusal["wait_s"] >= run_check.LOCK_WAIT_S   # the fake clock's whole bounded wait
         assert "SYNTHETIC_SECRET_MUST_NOT_APPEAR" not in raw and str(tmp_path) not in raw
@@ -710,6 +711,7 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
             pass
 
     monkeypatch.setattr(run_check, "Ledger", FakeLedger)
+    monkeypatch.setattr(run_check, "_db_identity", lambda ledger: ("synthetic", 1, 1))
     monkeypatch.setattr(run_check, "_config", lambda: {})
     monkeypatch.setattr(run_check, "_hard_deadline", lambda: None)
     for name in ("ensure_dirs", "recover", "publish_flags", "publish_restore_holds"):
@@ -727,7 +729,8 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
 
     import snapshots
 
-    def refresh(db, *, dirty, deadline, commands_retry):
+    def refresh(db, *, dirty, deadline, commands_retry, verification_context):
+        assert callable(verification_context)
         calls.append((dirty, deadline, commands_retry))
         snapshots._reset_status()
         if state == "retry_deferred":
@@ -773,6 +776,7 @@ def test_commands_housekeeping_yields_run_lock_to_queued_tick(
             pass
 
     monkeypatch.setattr(run_check, "Ledger", FakeLedger)
+    monkeypatch.setattr(run_check, "_db_identity", lambda ledger: ("synthetic", 1, 1))
     monkeypatch.setattr(run_check, "_config", lambda: {})
     monkeypatch.setattr(run_check, "_hard_deadline", lambda: None)
     for name in ("ensure_dirs", "recover", "publish_flags",

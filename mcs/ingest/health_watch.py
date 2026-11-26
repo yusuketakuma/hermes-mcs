@@ -491,6 +491,24 @@ def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
 
 
 
+def _apply_collection_lock(obs: dict, home: str, now: float) -> None:
+    refusals = writer_lock.read_run_lock_refusals(os.path.join(home, "data"))
+    if refusals is None:
+        return
+    span = refusals["last_at"] - refusals["first_at"]
+    age = now - refusals["last_at"]
+    if refusals["consecutive"] < 2 or span < 900 or not 0 <= age <= 900:
+        return
+    obs["run_lock_starved"] = {"consecutive": refusals["consecutive"], "span_s": round(span, 1),
+                               "last_refusal_age_s": round(age, 1)}
+    reasons = list(obs.get("state_reasons") or [])
+    if "run_lock_starved" not in reasons:
+        reasons.append("run_lock_starved")
+    obs["state_reasons"] = reasons
+    if obs["status"] == "ok":
+        obs["status"] = "degraded"
+
+
 def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
     """Replace recorded OCR evidence with its own current bounded observation."""
     from health_report import attachment_ocr_health
@@ -816,6 +834,7 @@ def evaluate(home: str = HOME, now: float | None = None,
         obs["notify_transport"] = "lineworks"
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
+    _apply_collection_lock(obs, home, now)
     _apply_attachment_ocr(obs, home, now, cfg)
     state = load_config(state_path)
     previous_delivery = state.get("delivery_current_reason")
@@ -890,7 +909,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
                        or any(r.startswith(("standalone_", "attachment_ocr_", CONFIG_BLOCKED))
-                              or r in _DELIVERY_CURRENT.values()
+                              or r == "run_lock_starved" or r in _DELIVERY_CURRENT.values()
                               for r in gained))) or recorded_new
     from mcs_util import valid_hash
     ocr_detail = obs.get('attachment_ocr') or {}
@@ -1111,6 +1130,7 @@ _BACKUP_FAILURE_JA = {
 }
 
 _REASON_JA = {
+    "run_lock_starved": ("収集が実行ロックを繰り返し取得できていません", "収集と同時に実行中の台帳処理を確認してください"),
     'attachment_ocr_acknowledged_gap': ('過去のOCR警報は受付済みですが、本文は未回収です',
         '原本の確認状況は未確認です。必要な情報は元の添付で確認してください'),
     'attachment_ocr_policy_excluded': ('表構造を検証できない添付を設定に従ってOCR採用対象から除外しています',
@@ -1563,6 +1583,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             action = _STANDALONE_ACTION.get(base, action)
         else:
             action = lw_actions.get(base, action)
+        if base == "run_lock_starved" and report.get("run_lock_starved"):
+            evidence = report["run_lock_starved"]
+            meaning += f"（{evidence['span_s'] / 60:.0f}分間に{evidence['consecutive']}回）"
         if base == 'collection_incomplete' and _collection_known_empty(report):
             meaning = "収集判定と現在の患者別の取得内訳に差があります"
             action = (f"前回の収集判定または今回の観測対象との差を{_DOCTOR} で確認。"

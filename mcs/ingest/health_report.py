@@ -652,7 +652,7 @@ def watcher_health(data_dir: str, cfg, now: float) -> dict:
 
 
 def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
-                   observation: dict | None = None) -> list:
+                   observation: dict | None = None, checkpoint=None) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH old
     waiting work and no completion inside the window, so a large but
@@ -684,6 +684,11 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     from mcs_queries import current_v4_id
 
     def _phase(name):
+        # Phase transitions double as observation checkpoints: non-SQL work
+        # (file scans, worker diagnosis) never reaches the SQLite progress
+        # handler, so this is the only bound that can stop it.
+        if checkpoint is not None:
+            checkpoint()
         if observation is not None:
             observation["phase"] = name
 
@@ -1392,7 +1397,8 @@ def build_health(db, result: dict, status: str,
     try:
         stalls = (bounded_health_read(
                       db, lambda _check: backlog_stalls(
-                          db, cfg, now, marks=stall_marks, observation=stall_observation),
+                          db, cfg, now, marks=stall_marks, observation=stall_observation,
+                          checkpoint=_check),
                       seconds=remaining(), observation=stall_observation)
                   if checked else [])
     except Exception as e:

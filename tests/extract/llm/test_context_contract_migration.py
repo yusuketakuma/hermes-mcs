@@ -24,6 +24,7 @@ from test_cloud_response_recovery import legacy_cloud_routes
 __all__ = ['routed']
 # git show 710b1356:mcs/extract/llm/extraction_context.py | shasum -a 256
 PRE_FIX_SOURCE = '08a818e1843d577cca760be8db70ccb385803c3624bc6d92b70dc56672595088'
+PRE_RETIREMENT_SOURCE = 'a955b8fee2701834d7ddccd3f2db991088fdb9cef4216379eadfc5d305cb7820'
 
 
 def frozen(ledger, digest):
@@ -31,14 +32,14 @@ def frozen(ledger, digest):
     row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
     row.update(_source_binding=source_binding(ledger.db, 1, 1), _target=('', 'fictional-model'))
     hints = (extraction_medications.build(ledger.db, {}, row['body_text'], private=True,
-             deadline=time.monotonic() + 10) if digest == PRE_FIX_SOURCE else None)
+             deadline=time.monotonic() + 10) if digest in (PRE_FIX_SOURCE, PRE_RETIREMENT_SOURCE) else None)
     attempt = {'qc_src': None, 'thin_src': None, 'human_src': None, 'auto_retry': 0}
     frame = frames.prepare(ledger, row, model='fictional-model', contract=worker._context_contract(source_digest=digest),
         attempt=attempt, enabled=False, base_context=None, version=worker.EXTRACT_VERSION, medication_hints=hints)
     return row, frame, hints, attempt
 
 
-@pytest.mark.parametrize('digest', [worker._PRIOR_CONTEXT_SOURCE, PRE_FIX_SOURCE])
+@pytest.mark.parametrize('digest', [worker._PRIOR_CONTEXT_SOURCE, PRE_FIX_SOURCE, PRE_RETIREMENT_SOURCE])
 def test_known_contract_pending_chunk_resumes_unchanged(routed, digest):
     ledger, *_ = routed
     row, frame, _hints, attempt = frozen(ledger, digest)
@@ -53,7 +54,7 @@ def test_known_contract_pending_chunk_resumes_unchanged(routed, digest):
 
 
 @pytest.mark.parametrize('changed_source', [False, True])
-@pytest.mark.parametrize('digest', [worker._PRIOR_CONTEXT_SOURCE, PRE_FIX_SOURCE])
+@pytest.mark.parametrize('digest', [worker._PRIOR_CONTEXT_SOURCE, PRE_FIX_SOURCE, PRE_RETIREMENT_SOURCE])
 def test_known_contract_exact_input_reuse_or_proven_old_occurrence(routed, digest, changed_source):
     ledger, *_ = routed
     row, first, hints, attempt = frozen(ledger, digest)

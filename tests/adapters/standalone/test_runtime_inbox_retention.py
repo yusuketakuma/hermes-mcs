@@ -46,3 +46,17 @@ def test_empty_inbox_does_not_drop_failed_child_backoff(tmp_path, monkeypatch):
     names.append(SimpleNamespace(name="synthetic-new-click.json"))
     host.tick(2)
     assert host.retry_at["cmd_int"] == 31
+
+
+def test_empty_inbox_still_runs_notification_recovery_at_its_deadline(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
+    host.last_minute = 0
+    host.started_at = 0
+    host.exits["cmd_int"] = {"last_exit": 0, "ended_at": 20}
+    starts = []
+    monkeypatch.setattr(host, "start", lambda job, *args: starts.append(job))
+    host.tick(20 + runtime.RECOVER_INTERVAL_S - 1)
+    assert "cmd_int" not in starts
+    host.tick(20 + runtime.RECOVER_INTERVAL_S)
+    assert "cmd_int" in starts and "cmd" not in starts

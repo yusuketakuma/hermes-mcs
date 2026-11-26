@@ -880,6 +880,8 @@ def test_beyond_horizon_part_keeps_recover_from_reissuing_the_whole_spec(world):
         world.led.db.execute("UPDATE notification_render_parts SET error_code='synthetic' "
                              "WHERE delivery_id=? AND error_code=?",
                              (render["delivery_id"], notify_reconcile.BEYOND_HORIZON))
+        world.led.db.execute("UPDATE notify_recovery_state SET last_run_at=last_run_at-? "
+                             "WHERE singleton=1", (notify_spool.RECOVER_INTERVAL_S + 1,))
     assert notify_spool.recover(world.led, CFG, {})["republished"] == 1
 
 
