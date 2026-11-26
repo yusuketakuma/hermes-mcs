@@ -385,3 +385,38 @@ def test_hold_message_names_the_state(state, wording):
     assert external_transfer.HOLD_CODE in message
     if state is external_transfer.UNREADABLE:
         assert "削除しないでください" in message and '"acknowledged": null' in message
+
+
+def test_a_lost_record_keeps_the_review_in_force(tmp_path):
+    _keys(tmp_path)
+    explicit = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
+    assert external_transfer.require(tmp_path) is True
+    witness = external_transfer.witness_path(tmp_path)
+    assert stat.S_IMODE(os.stat(witness).st_mode) == 0o600
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"], confirm_human=True,
+                                  root=tmp_path)
+    assert cloud_policy.resolve_settings(explicit, tmp_path)[0]["mode"] == "on"
+    os.unlink(external_transfer.path(tmp_path))
+    # Gone is unreadable, never "not required": nothing is sent and a new review is refused until it is repaired.
+    assert external_transfer.status(tmp_path) == external_transfer.UNREADABLE
+    assert cloud_policy.resolve_settings({}, tmp_path)[0]["mode"] == "off"
+    assert cloud_policy.resolve_settings(explicit, tmp_path)[0]["mode"] == "off"
+    assert semantic_policy.runtime_config({}, root=tmp_path)[0]["mode"] == "off"
+    assert "見つからない" in external_transfer.hold_message("Anthropic", external_transfer.status(tmp_path))
+    with pytest.raises(ValueError, match="external_transfer_record_invalid"):
+        external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"], confirm_human=True,
+                                      root=tmp_path)
+    # Writing the pending record again is the repair; the earlier review does not come back with it.
+    assert external_transfer.require(tmp_path) is True
+    assert external_transfer.status(tmp_path)["state"] == "pending"
+
+
+def test_a_record_from_before_the_witness_gains_it_with_the_next_review(tmp_path):
+    _keys(tmp_path)
+    assert external_transfer.require(tmp_path) is True
+    os.unlink(external_transfer.witness_path(tmp_path))      # as an installation made before the witness existed
+    assert external_transfer.status(tmp_path)["state"] == "pending"
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["jev"], confirm_human=True, root=tmp_path)
+    assert os.path.exists(external_transfer.witness_path(tmp_path))
+    os.unlink(external_transfer.path(tmp_path))
+    assert external_transfer.status(tmp_path) == external_transfer.UNREADABLE

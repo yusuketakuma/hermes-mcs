@@ -177,6 +177,7 @@ def test_rejected_before_the_record_is_touched(install, changes, error):
 def test_installs_without_the_record_get_a_rejected_receipt(install):
     root, path = install
     os.unlink(external_transfer.path(root))
+    os.unlink(external_transfer.witness_path(root))  # an installation that predates the review has neither file
     receipt = _apply(path, _req())
     assert (receipt["outcome"], receipt["error"]) == ("rejected", "external_transfer_not_required")
     assert not os.path.exists(external_transfer.path(root))

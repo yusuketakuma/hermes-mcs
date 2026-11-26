@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "外部AI送信の確認記録が消えても送信を再開しない",
+  "summary": "施設の確認が必要な環境で `external_transfer.json` が見つからないときは、読めないときと同じく Anthropic・OpenAI・Jev への送信を止め、`external_transfer_unreadable` の警報を出します。これまでは、確認記録が消えると確認の無い既存環境と同じ扱いになり、キーがあれば送信していました。",
+  "upgrade": "追加操作は不要です。新規導入時と、施設の確認を記録したときに、目印 `~/.mcs/external_transfer.required` を作ります。すでに確認記録がある環境は、次に `mcs_compliance.py acknowledge` で確認を記録したときから有効です。確認記録の無い既存環境の動作は変わりません。",
+  "details": [
+    "目印がある間、確認記録が無い状態は「確認不要」ではなく「読取り不可」として扱う。",
+    "確認記録を作り直すには、内容を確認待ちに戻してから確認を記録し直す（docs/guides/COMPLIANCE.md 4節）。"
+  ],
+  "refs": [
+    "mcs/core/records/external_transfer.py",
+    "docs/guides/COMPLIANCE.md"
+  ]
+}
