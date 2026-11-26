@@ -364,14 +364,17 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding'),content='{}' "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
-        if damage in ('input', 'tokens'):
-            # A binding/output-envelope change does not bill the identical prompt again:
+        if damage == 'tokens':
+            # An output-envelope change does not bill the identical prompt again:
             # the settled paid answer is reused and current validation decides whether it applies.
-            answer = _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input',
-                               route='patient_context' if damage == 'tokens' else 'reextract',
-                               purpose='patient_context' if damage == 'tokens' else None),
-                          tokens=101 if damage == 'tokens' else 100)
+            answer = _ask(unit(ledger, binding='original-input', route='patient_context',
+                               purpose='patient_context'), tokens=101)
             assert isinstance(answer, dict) and answer['reused_response'] is True
+        elif damage == 'input':
+            # A binding change may be another source occurrence of the same text: the
+            # paid answer is never taken up across that provenance boundary.
+            with pytest.raises(cloud_client.CloudNotSent):
+                _ask(unit(ledger, binding='changed'), tokens=100)
         else:
             with pytest.raises(cloud_client.CloudNotSent):
                 _ask(unit(ledger), tokens=100)
