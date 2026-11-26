@@ -193,27 +193,31 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
     data = Path(home) / "data"
     path = card_worker_status._path(data, transport, profile)
     record = _read(path, 2048)
-    if (type(record) is not dict or set(record) != {"version", "reason", "pid", "at", "started_at"}
-            or record["version"] != card_worker_status.VERSION
-            or record["reason"] not in ("worker_started", "worker_start_failed")
-            or type(record["pid"]) is not int or record["pid"] <= 0
+    if type(record) is not dict or set(record) != {"version", "reason", "pid", "at", "started_at"}:
+        raise ValueError("witness_missing")
+    if record["version"] != card_worker_status.VERSION:
+        raise ValueError("witness_version")
+    if record["reason"] not in ("worker_started", "worker_start_failed"):
+        raise ValueError("witness_reason")
+    if (type(record["pid"]) is not int or record["pid"] <= 0
             or not _stamp(record["at"]) or record["at"] > now
             or not _stamp(record["started_at"]) or not 0 < record["started_at"] <= record["at"]):
-        raise ValueError("gateway_unavailable")
+        raise ValueError("witness_started_unknown")
     deadline = time.monotonic() + 3 if deadline is None else deadline
     pids = [environment_diagnostics.launchd_pid(f"{domain}/{os.getuid()}/{GATEWAY}", deadline=deadline)
             for domain in ("gui", "user")]
     if (any(pid is not None and (type(pid) is not int or pid <= 0) for pid in pids)
             or {pid for pid in pids if pid is not None} != {record["pid"]}):
-        raise ValueError("gateway_unavailable")
+        raise ValueError("launchd_pid_mismatch")
     birth = environment_diagnostics.process_started_at(record["pid"], deadline=deadline)
-    if (type(birth) not in (int, float) or birth != record["started_at"]
-            or time.monotonic() >= deadline):
-        raise ValueError("gateway_unavailable")
+    if type(birth) not in (int, float) or birth != record["started_at"]:
+        raise ValueError("birth_mismatch")
+    if time.monotonic() >= deadline:
+        raise ValueError("observation_timeout")
     worker = card_worker_status.status(data, transport, profile)
     expected = "started" if record["reason"] == "worker_started" else "disabled"
     if worker != {"state": expected, "reason": record["reason"]} or _read(path, 2048) != record:
-        raise ValueError("gateway_unavailable")
+        raise ValueError("witness_reason")
     identity = {"pid": record["pid"], "started_at": birth}
     return {**identity, "generation": payload_hash(identity), "healthy": expected == "started",
             "reasons": [] if expected == "started" else ["worker_start_failed"]}
