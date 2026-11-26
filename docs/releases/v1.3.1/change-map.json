@@ -65,6 +65,11 @@
    "sha256": "4ecd43983c4a841ee95c02194ede0f9d86d45c0ed365e122da5bdd2352c6f741",
    "title": "薬剤照合の持ち越しを進捗停止として警報する問題を修正"
   },
+  "extract-test-module-state-restore": {
+   "path": "changes/archive/1.3.1/extract-test-module-state-restore.json",
+   "sha256": "30d6bd4a0bcbd7a943e5517633ab6df168ac8b0947ec67842a0ef1fcec4bc545",
+   "title": "抽出テストの実行順による誤判定を修正"
+  },
   "ocr-runtime-dependency-lock": {
    "path": "changes/archive/1.3.1/ocr-runtime-dependency-lock.json",
    "sha256": "d51ab70a7921dbcbb2231b869a47cca07ac53f2fbd7af2d2b34498860aa875eb",
@@ -77,7 +82,7 @@
   },
   "retired-frame-occurrence-retry": {
    "path": "changes/archive/1.3.1/retired-frame-occurrence-retry.json",
-   "sha256": "cb9258037d4953cfa9cded070070bf8e42162d87ab286035920d44b830dbc937",
+   "sha256": "5025ef03b431aacd8f3909e803c88a0f847793b1800ae2178ccff698011e4ca3",
    "title": "投稿の更新後も過去の抽出記録を確認して処理を再開"
   },
   "run-lock-starvation-visibility-20261125": {
@@ -92,12 +97,12 @@
   },
   "semantic-cloud-repair-render-root-detection": {
    "path": "changes/archive/1.3.1/semantic-cloud-repair-render-root-detection.json",
-   "sha256": "250c8aee3ac8d1549223f3873ff8b40c293a65c0fabcd784dd957772b084be5c",
+   "sha256": "a8b22f8fa4489c621d1093a8ba3073d3b1bbffd39e6fe8eea1ac60b2122d14c5",
    "title": "クラウドで修復した要約が中断後に反映されない問題を修正"
   },
   "semantic-cloud-summary-receipt-settlement-20261126": {
    "path": "changes/archive/1.3.1/semantic-cloud-summary-receipt-settlement-20261126.json",
-   "sha256": "1827ba39e323694301228af8cdc74b6f36d995b008eac50d12ff7cb3acb69c40",
+   "sha256": "bf9ab11485a4661b1a238aed681c212ea4d5a3710e4ceb83330b8a9bd710b20b",
    "title": "要約の生成元をクラウドの決済記録で確認"
   }
  },
