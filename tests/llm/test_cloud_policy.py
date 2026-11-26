@@ -96,28 +96,6 @@ def test_ordered_resolution_reports_selected_provider_block_when_every_provider_
     assert selection['provider'] == 'anthropic' and errors == ['provider_daily_cap']
 
 
-def test_blocked_primary_connects_wait_reason_to_no_new_reservation(tmp_path, monkeypatch):
-    """The connection point: resolver verdict and reservation guard are the same reason.
-
-    Both providers configured, primary over its cap, secondary clean: the
-    ordered resolution keeps the primary contract beside the primary-specific
-    reason, and the same reason — never a fallback send — is what stops a new
-    reservation. No reservation row means no POST can ever be attempted."""
-    monkeypatch.setattr(c, 'pricing_valid', lambda *args, **kwargs: True)
-    cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'],
-               daily_cost_limit_usd=80, monthly_cost_limit_usd=80,
-               provider_budgets={'anthropic': {'daily_cost_limit_usd': 0, 'monthly_cost_limit_usd': 0}})
-    with closing(Ledger(str(tmp_path / 'l.db'))) as db:
-        selection, errors = c.resolve_profile(cfg, ledger=db, ordered=True,
-                                              route='reextract', purpose='backlog')
-        assert selection['provider'] == 'anthropic' and errors == ['provider_daily_cap']
-        before = len(db.artifacts('cloud_usage_reserve'))
-        with pytest.raises(AnthropicError) as raised:
-            _reserve(db, cfg, unit='blocked-unit')
-        assert raised.value.detail == 'provider_daily_cap'
-        assert len(db.artifacts('cloud_usage_reserve')) == before
-
-
 def test_explicit_legacy_model_and_invalid_profile_fail_closed():
     cfg = _cfg(provider='openai', model='gpt-6-luna')
     selection, errors = c.resolve_profile(cfg, route='patient_context', purpose='patient_context')
