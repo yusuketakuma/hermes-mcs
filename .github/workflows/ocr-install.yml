@@ -32,3 +32,13 @@ jobs:
           uv run --no-project --python 3.13 scripts/setup_yomitoku.py --root "$MCS_ROOT" --packages-only
           uv pip sync --check --python "$MCS_ROOT/ocr-venv/bin/python" deployment/requirements-ocr.lock
           test ! -e "$MCS_ROOT/ocr-venv/.mcs-ocr-requirements"
+      - name: Check a previously installed OCR environment after a lock change
+        env:
+          MCS_ROOT: ${{ runner.temp }}/mcs-ocr
+        run: |
+          venv="$MCS_ROOT/ocr-venv"
+          echo 'previous lock' > "$venv/.mcs-ocr-requirements"
+          uv pip uninstall --python "$venv/bin/python" jaconv
+          uv run --no-project --python 3.13 scripts/setup_yomitoku.py --root "$MCS_ROOT" --packages-only
+          uv pip sync --check --python "$venv/bin/python" deployment/requirements-ocr.lock
+          test "$(cat "$venv/.mcs-ocr-requirements")" = 'previous lock'
