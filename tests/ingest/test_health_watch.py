@@ -1371,3 +1371,6 @@ def test_attachment_ocr_partial_observation_states_counts_are_observed_range_onl
     assert "件数は確認できた範囲のものです" in detailless_text
     assert "直近の実行で失敗した記録が1件あります" in detailless_text
     assert "表の行列対応" not in detailless_text
+    detailless["attachment_ocr"]["pending_failed"] = 0
+    empty = "\n".join(health_watch._reason_rows(detailless, ["attachment_ocr_processing_failed"]))
+    assert "件数は確認できた範囲のものです" in empty and "直近の実行で失敗した記録が1件" in empty
