@@ -262,3 +262,28 @@ def test_notification_target_help_explains_where_to_find_id(monkeypatch, capsys)
     assert 'チャンネル名 → 詳細の最下部' in output
     assert 'docs/guides/EASY_SETUP.md' in output
     assert 'docs/guides/INSTALLATION.md' in output
+
+
+def test_wizard_back_returns_one_item_and_restores_prior_value(monkeypatch, capsys):
+    monkeypatch.setattr(setup_wizard, "WIZARD", [("確認対象", [
+        ("first", "opt", None, "最初", None),
+        ("second", "opt", None, "次", None),
+    ])])
+    answers = iter(["detailed", "wrong", "b", "fixed", "done"])
+    seen = []
+
+    def answer(key, kind, default, desc, cur, present=False):
+        seen.append(key)
+        return setup_wizard.BACK if (value := next(answers)) == "b" else value
+
+    monkeypatch.setattr(setup_wizard, "ask", answer)
+    cfg = {}
+    assert setup_wizard.wizard(cfg) == 2
+    assert seen == ["setup_detail", "first", "second", "first", "second"]
+    assert cfg == {"first": "fixed", "second": "done"}
+    assert "1つ前の項目へ戻るときは b" in capsys.readouterr().out
+
+
+def test_ask_accepts_back_command(monkeypatch):
+    monkeypatch.setattr('builtins.input', lambda prompt: 'b')
+    assert setup_wizard.ask('first', 'opt', None, '最初', None) is setup_wizard.BACK

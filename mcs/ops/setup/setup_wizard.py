@@ -1,6 +1,7 @@
 """Guide setup answers and dictionary consent before the caller saves configuration."""
 from __future__ import annotations
 
+import copy
 import re
 
 from mcs_config import positive_number_problem, transport_enabled
@@ -13,6 +14,7 @@ from mcs_config import positive_number_problem, transport_enabled
 #   when interactive delivery is on, digest knobs only when signals
 #   notify, semantic details only when a mode is enabled.
 UNSET = object()
+BACK = object()
 
 def _discord_on(cfg):
     return transport_enabled(cfg, "discord")
@@ -369,6 +371,8 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
               + (f" [{' / '.join(marks)}]" if marks else "") + ": ")
     while True:
         raw = input(prompt).strip()
+        if raw.lower() in ("b", "back") or raw == "戻る":
+            return BACK
         if raw.lower() in ("q", "quit", "中止"):
             raise KeyboardInterrupt
         if raw in ("?", "わからない"):
@@ -399,14 +403,20 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
         print(f"    {val}")
 
 
+def _restore_key(cfg: dict, dotted: str, present: bool, value) -> None:
+    set_key(cfg, dotted, copy.deepcopy(value) if present else UNSET)
+
+
 def wizard(cfg: dict):
     """Walk every config key in sections — Enter accepts the shown
     current/default value, so a beginner can step through safely.
     Recommended setup skips advanced items while retaining existing values.
-    Items whose feature is off are skipped via their gate."""
+    Items whose feature is off are skipped via their gate. ``b`` backs up
+    one answered item and restores that item's prior value before asking again."""
     print("\nMCS の設定を順番にご案内します。番号を入力して Enter を押してください。"
           "\n空欄で Enter を押すと、現在の設定を保持します。未設定なら推奨設定を使います。"
-          "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。"
+          "\n1つ前の項目へ戻るときは b、説明は ?、中止は q または Ctrl+C です。"
+          "\n必須のIDは施設の管理者に確認してください。"
           "\n総数はここで入力する設定項目の質問部分だけの段階数です。通知形式などを変えると増減します。"
           "\nこの後にも追加機能の選択、保存前の確認、必要に応じた辞書・接続設定、診断があります。")
     detailed = ask("setup_detail", "choice:recommended,detailed", "recommended",
@@ -425,46 +435,74 @@ def wizard(cfg: dict):
                         or item[1].startswith("req")
                         or item[0].endswith(("project_ids", "project_ids_auto", "allowed_role_ids"))])
                 for title, items in WIZARD]
-    step = 0
-    for index, (title, items) in enumerate(sections):
-        if not any(when is None or when(cfg) for *_, when in items):
-            continue
-        step += 1
-        total = step + sum(any(when is None or when(cfg) for *_, when in remaining)
-                           for _, remaining in sections[index + 1:])
-        print(f"\n【手順 {step}】{title}（現在の選択では全{total}段階）")
-        if not detailed:
-            print("  質問しない設定は現在の値を保持し、未設定ならその版の既定に従います。")
-        for key, kind, default, desc, when in items:
-            if when is not None and not when(cfg):
-                continue
-            if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
-                kind = "reqintlist"
-            if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
-                    and get_key(cfg, key) is None:
-                transport = key.split(".")[1]
-                for target in (cfg.get("notify_target"), cfg.get("notify_system_target")):
-                    if isinstance(target, str) and target.startswith(transport + ":"):
-                        channel = target.partition(":")[2]
-                        if ((transport == "slack" and re.fullmatch(r"[CGD][A-Z0-9]+", channel))
-                                or (transport == "discord" and channel.isdecimal()
-                                    and any(c != "0" for c in channel))):
-                            default = channel
-                            break
-            while True:
-                answer = ask(key, kind, default, desc, get_key(cfg, key),
-                             has_key(cfg, key))
-                if key in ("notify.slack.project_ids", "notify.discord.project_ids") \
-                        and cfg.get("runtime_mode") == "standalone":
-                    transport = key.split(".")[1]
-                    automatic = get_key(cfg, f"notify.{transport}.project_ids_auto") is True
-                    if not automatic and (answer is UNSET or answer == []):
-                        print("    自動解決がオフのため、1件以上のプロジェクトIDを入力してください。")
-                        continue
-                break
-            set_key(cfg, key, answer)
-    return step + 1
+    entries = [(title, item) for title, items in sections for item in items]
 
+    def visible(item):
+        return item[4] is None or item[4](cfg)
+
+    def section_has_items(title):
+        return any(entry_title == title and visible(item) for entry_title, item in entries)
+
+    step = 0
+    announced = set()
+    history = {}
+    index = 0
+    while index < len(entries):
+        title, (key, kind, default, desc, when) = entries[index]
+        if when is not None and not when(cfg):
+            index += 1
+            continue
+        if title not in announced:
+            step += 1
+            later = [section for later_index, (section, item) in enumerate(entries)
+                     if later_index >= index and section != title and visible(item)]
+            total = step + len(set(later))
+            print(f"\n【手順 {step}】{title}（現在の選択では全{total}段階）")
+            if not detailed:
+                print("  質問しない設定は現在の値を保持し、未設定ならその版の既定に従います。")
+            announced.add(title)
+        if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
+            kind = "reqintlist"
+        if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
+                and get_key(cfg, key) is None:
+            transport = key.split(".")[1]
+            for target in (cfg.get("notify_target"), cfg.get("notify_system_target")):
+                if isinstance(target, str) and target.startswith(transport + ":"):
+                    channel = target.partition(":")[2]
+                    if ((transport == "slack" and re.fullmatch(r"[CGD][A-Z0-9]+", channel))
+                            or (transport == "discord" and channel.isdecimal()
+                                and any(c != "0" for c in channel))):
+                        default = channel
+                        break
+        old_present = has_key(cfg, key)
+        old_value = copy.deepcopy(get_key(cfg, key))
+        while True:
+            answer = ask(key, kind, default, desc, get_key(cfg, key),
+                         has_key(cfg, key))
+            if answer is BACK:
+                previous = index - 1
+                while previous >= 0 and not visible(entries[previous][1]):
+                    previous -= 1
+                if previous < 0:
+                    print("    これ以上前の項目はありません。")
+                    continue
+                previous_key = entries[previous][1][0]
+                if previous_key in history:
+                    _restore_key(cfg, previous_key, *history[previous_key])
+                index = previous
+                break
+            if key in ("notify.slack.project_ids", "notify.discord.project_ids") \
+                    and cfg.get("runtime_mode") == "standalone":
+                transport = key.split(".")[1]
+                automatic = get_key(cfg, f"notify.{transport}.project_ids_auto") is True
+                if not automatic and (answer is UNSET or answer == []):
+                    print("    自動解決がオフのため、1件以上のプロジェクトIDを入力してください。")
+                    continue
+            history[key] = (old_present, old_value)
+            set_key(cfg, key, answer)
+            index += 1
+            break
+    return len(announced) + 1
 
 def wizard_optional_features(cfg: dict, *, interactive: bool | None = None) -> None:
     """Choose per optional feature whether its setup guidance follows the release default.
