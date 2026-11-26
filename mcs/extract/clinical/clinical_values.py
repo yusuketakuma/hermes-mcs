@@ -719,7 +719,7 @@ _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 # A dose direction or dosage form alone has no such label (カリウム 4、分2).
 _NAMED_PRESCRIPTION = rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))"
 _LAB_TAIL_END = re.compile(fold_surface(
-    rf"[。;]|の?ため|により|[、,](?!(?:{MED_FORMS})[0-9])(?=(?:{_READING}|{_NAMED_PRESCRIPTION}))"))
+    rf"[。;]|の?ため|により|[、,](?!(?:{MED_FORMS}))(?=(?:{_READING}|{_NAMED_PRESCRIPTION}))"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)

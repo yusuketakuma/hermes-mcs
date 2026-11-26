@@ -6,7 +6,7 @@ def test_prescription_lines_keep_unitless_electrolyte_amounts_unverified():
     items = (("カリウム", ("4", "5"), "塩化"), ("カルシウム", ("8", "9"), "乳酸"),
              ("ナトリウム", ("120", "150"), "炭酸水素"))
     instructions = ("分2", "分３で継続", "朝夕食後", "朝1錠", "1日2回", "1回1包",
-                    "就寝前に服用", "頓服", "シロップ1mL", "カプセル1個")
+                    "就寝前に服用", "頓服", "シロップ1mL", "カプセル1個", "シロップは1mL", "カプセルを1個")
     for name, values, stem in items:
         for value in values:
             for label in (name, stem + name, f"{stem} {name}", f"処方：{name}"):
