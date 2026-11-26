@@ -43,7 +43,7 @@ def _state_modules():
 
 def _snap_value(value):
     if isinstance(value, threading.local):
-        return ("threadlocal", dict(vars(value)))
+        return ("threadlocal", (value, {k: _snap_value(v) for k, v in vars(value).items()}))
     if isinstance(value, (dict, list, set)):
         # In-place mutation vectors need a real copy; everything else —
         # immutable scalars, identity sentinels like object(), locks,
@@ -59,12 +59,12 @@ def _snap_value(value):
 def _restore_value(obj, key, entry):
     kind, value = entry
     if kind == "threadlocal":
-        current = vars(obj)
-        for field in list(current):
-            if field not in value:
-                delattr(obj, field)
-        for field, field_value in value.items():
-            setattr(obj, field, field_value)
+        original, fields = value
+        for field in vars(original).keys() - fields.keys():
+            delattr(original, field)
+        for field, entry in fields.items():
+            _restore_value(original, field, entry)
+        setattr(obj, key, original)
     elif kind == "copy":
         # Importers share these objects. Restore their contents and original binding.
         original, contents = value
@@ -108,13 +108,7 @@ def _restore_extract_llm_module_state():
     snap, present = _snapshot(mods)
     yield
     for (mod, key), entry in snap.items():
-        target = mod if entry[0] != "threadlocal" else getattr(mod, key, None)
-        if target is None:
-            continue
-        if entry[0] == "threadlocal":
-            _restore_value(target, key, entry)
-        else:
-            _restore_value(mod, key, entry)
+        _restore_value(mod, key, entry)
     # Drop private attributes a test added that were absent at snapshot time.
     for mod in mods:
         for key in list(vars(mod)):
