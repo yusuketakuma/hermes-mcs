@@ -630,17 +630,16 @@ def _main() -> int:
                     sem, ran_semantic = None, False
                     jev_drain = args.semantic and _jev_only_semantic(load_config())
                     if jev_drain:
-                        # Jev-only semantic/QC work takes no local-model turn or
-                        # slot, so neither the extraction nor a carry waits on it.
-                        # A carried claim's lease still ticks through a long
-                        # drain, and the drain's worst span exceeds the lease the
-                        # renewal grants — so the pass may only start once the
-                        # carry is empty. Settle first: a taken lock commits the
-                        # result at once and frees the pass. When the lock stays
-                        # busy the carry keeps its claim and the loop moves on to
-                        # the carry processing below instead of starting the pass.
-                        _settle_carry(led, carry, final=False, fence=context_state)
-                        if not carry:
+                        # A Jev pass can outlive a carried claim. Settle within this run's budget first.
+                        if carry:
+                            settled, _, _ = _settle_carry(
+                                led, carry, final=False, fence=context_state, deadline=stop,
+                                lock_context=_write_lock(True, wait_s=_RESIDENT_WRITE_WAIT_S, deadline=stop),
+                                preserve_on_fence_loss=True)
+                            total["done"] += settled["done"]
+                            if not _writer_current(full=True):
+                                return retire()
+                        if not carry and (stop is None or time.monotonic() < stop):
                             sem, ran_semantic = semantic_pass()
                             if sem.get("run_lock_lost") in ("held", "updated"):
                                 _settle_carry(led, carry, write=False)

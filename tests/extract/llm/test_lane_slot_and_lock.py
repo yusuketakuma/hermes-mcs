@@ -489,6 +489,7 @@ def test_resident_never_starts_a_jev_pass_while_a_carry_remains(monkeypatch, cap
     def settle(led, carry, **kw):
         events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
         # the write lock stays busy: the renewal does not empty the carry
+        return {"done": 0}, 0, set()
 
     _resident_jev_harness(monkeypatch, events, now, settle)
     assert extract_llm.main() == 0
@@ -509,14 +510,18 @@ def test_resident_runs_the_jev_pass_once_the_settle_empties_the_carry(monkeypatc
 
     def settle(led, carry, **kw):
         events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
-        carry.clear()   # a taken write lock commits the result at once
+        committed = len(carry)
+        carry.clear()
+        return {"done": committed}, committed, set()
 
     _resident_jev_harness(monkeypatch, events, now, settle)
     assert extract_llm.main() == 0
     kinds = [event[0] for event in events]
     assert "semantic" in kinds
-    first_pass = kinds.index("semantic")
-    assert kinds[first_pass - 1] == "settle"
+    assert any(kinds[i:i + 2] == ["settle", "semantic"] for i in range(len(kinds)))
+    total = json.loads(capsys.readouterr().out.splitlines()[-1])
+    commits = sum(len(event[1]) for event in events if event[0] == "settle" and event[2] is False)
+    assert commits > 0 and total["done"] == kinds.count("run_pending") + commits
 
 
 @pytest.mark.parametrize("lane", ["0", "4"])
