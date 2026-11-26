@@ -55,6 +55,11 @@
    "sha256": "30a4293a49df53d6d7e68994a555da1f335fba7a57630daaf62b9ab7b3e4a951",
    "title": "コマンド処理が数秒おきに走るたび収集ロックを長く握る問題を修正"
   },
+  "conditional-lab-plan": {
+   "path": "changes/archive/1.3.1/conditional-lab-plan.json",
+   "sha256": "00170c00cc4effb6776e4ff6c9703fd5de3704e8e7a11b27c50e8277726b2c91",
+   "title": "別の処置だけを中止する条件付き検査予定を表示"
+  },
   "delivery-monitor-worker-and-attempts": {
    "path": "changes/archive/1.3.1/delivery-monitor-worker-and-attempts.json",
    "sha256": "7cb51469ed99bbae0589d917a0ec13a3d3d0ef93068be5d96c5d5a3abfbf9b4c",
