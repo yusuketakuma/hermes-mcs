@@ -30,7 +30,7 @@ def test_run_tick_calls_owner_and_health_once():
     store = _Store()
     calls = []
 
-    def deps_builder(*, store):
+    def deps_builder(*, store, wire=None):
         calls.append(('deps', store))
         return {'deps': True}
 
@@ -76,7 +76,7 @@ def test_run_tick_dependency_failure_is_fixed_hold_and_closes():
 
     result = release_auto_driver.run_tick(
         '/synthetic/control', store_factory=lambda root: store,
-        deps_builder=lambda *, store: (_ for _ in ()).throw(_DepsError('x')))
+        deps_builder=lambda *, store, wire=None: (_ for _ in ()).throw(_DepsError('x')))
     assert result['action'] == 'hold'
     assert result['stage'] == 'build_deps'
     assert result['code'] == 'DEPS_DENIED'
@@ -94,7 +94,7 @@ def test_run_tick_owner_failure_does_not_crash_scheduler():
 
     result = release_auto_driver.run_tick(
         '/synthetic/control', store_factory=lambda root: store,
-        deps_builder=lambda *, store: object(), owner_tick=owner_tick,
+        deps_builder=lambda *, store, wire=None: object(), owner_tick=owner_tick,
         health_report=lambda s, d: {'action': 'acked'})
     assert result['action'] == 'hold'
     assert result['stage'] == 'owner_tick'
@@ -114,7 +114,7 @@ def test_run_tick_health_failure_is_hold_but_owner_result_is_kept():
 
     result = release_auto_driver.run_tick(
         '/synthetic/control', store_factory=lambda root: store,
-        deps_builder=lambda *, store: object(),
+        deps_builder=lambda *, store, wire=None: object(),
         owner_tick=lambda s, d: {'action': 'observe_only', 'phase': 'APPLIED'},
         health_report=health_report)
     assert result['action'] == 'observe_only'
@@ -129,7 +129,7 @@ def test_run_tick_mutex_refuses_overlap(tmp_path):
         result = release_auto_driver.run_tick(
             '/synthetic/control', mutex_path=str(lock),
             store_factory=lambda root: store,
-            deps_builder=lambda *, store: object(),
+            deps_builder=lambda *, store, wire=None: object(),
             owner_tick=lambda s, d: {'action': 'idle'},
             health_report=lambda s, d: {'action': 'no_binding'})
     assert result == {'schema_version': release_auto_driver.RESULT_SCHEMA,
@@ -239,3 +239,39 @@ def test_cmd_auto_tick_unreadable_status_exits_3(control_root, monkeypatch, caps
         'health': {'action': 'no_binding'}})
     assert update_cli.cmd_auto_tick(object()) == 3
     json.loads(capsys.readouterr().out)
+
+
+def test_run_tick_passes_wire_to_deps(tmp_path):
+    seen = {}
+
+    def deps_builder(*, store, wire=None):
+        seen['wire'] = wire
+        return object()
+
+    sentinel = object()
+    result = release_auto_driver.run_tick(
+        str(tmp_path), store_factory=lambda root: _Store(),
+        deps_builder=deps_builder, wire_factory=lambda: sentinel,
+        owner_tick=lambda store, deps: {'action': 'hold', 'code': 'x'},
+        health_report=lambda store, deps: {'action': 'ok'})
+    assert seen['wire'] is sentinel
+    assert result['owner']['action'] == 'hold'
+
+
+def test_run_tick_wire_factory_failure_is_fail_closed(tmp_path):
+    seen = {}
+
+    def deps_builder(*, store, wire=None):
+        seen['wire'] = wire
+        return object()
+
+    def bad_factory():
+        raise RuntimeError('boom')
+
+    result = release_auto_driver.run_tick(
+        str(tmp_path), store_factory=lambda root: _Store(),
+        deps_builder=deps_builder, wire_factory=bad_factory,
+        owner_tick=lambda store, deps: {'action': 'hold', 'code': 'x'},
+        health_report=lambda store, deps: {'action': 'ok'})
+    assert seen['wire'] is None
+    assert result['owner']['action'] == 'hold'
