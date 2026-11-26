@@ -234,7 +234,7 @@ git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   #
 | `route` | `apply`（通常適用）/ `reinstall`（install.sh 再実行を伴う適用）/ `blocked`（§3で解消）/ `noop`（更新済み） |
 | `current` / `target` | 現在のタグ・SHA・DB schema / 移行先 |
 | `blockers` | 解消が必要なエラートークン |
-| `reinstall` | `install_sh_changed`（install.sh 変更）・`standalone_requirements_changed`（独立モード SDK 固定版の変更） |
+| `reinstall` | `install_sh_changed`（install.sh 変更）・`standalone_requirements_changed`（独立モード SDK 固定版の変更）・`ocr_requirements_changed`（前回 `--with-yomitoku` を選択し、OCR の依存一覧・固定版一覧・導入スクリプト・モデルの定義のいずれかが変わった場合） |
 | `schema_bump` | DB の版変更。あれば事前バックアップからの復元が巻戻しに含まれる |
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
 | `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
