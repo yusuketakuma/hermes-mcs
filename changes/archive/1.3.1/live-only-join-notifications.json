@@ -3,6 +3,13 @@
   "title": "新しく認識したグループでは新着だけを通知",
   "summary": "Slack・Discord・LINE WORKSでは、グループを初めて認識する前の投稿や投稿時刻が不明のものは履歴として保存・解析します。初回履歴のまとめ通知は送りません。過去の投稿に新しい返信が付いた場合は、その返信から通知を始めます。",
   "upgrade": "設定の変更は不要です。更新後は通知期間（notify_max_age_h）が既読の返信を通知する設定（notify_all_replies、既定はオフ）にも適用されます。",
-  "details": ["初回認識より前の本文や添付は、新着の返信カードに含めません。保存済みの履歴は患者情報や検索で確認できます。"],
-  "refs": ["mcs/core/initial_import_state.py", "mcs/notify/notify_cards.py"]
+  "details": [
+    "初回認識より前の本文や添付は、新着の返信カードに含めません。既存グループでも、LINE WORKSの返信カードには取込み時に通知期間を過ぎていた投稿の本文や添付を追加しません。保存済みの履歴は患者情報や検索で確認できます。",
+    "更新前にSlackの配送待ちだった新着返信は、元投稿が履歴扱いでも返信から通知します。送信を開始した部品や結果不明の部品は自動で再送しません。"
+  ],
+  "refs": [
+    "mcs/core/initial_import_state.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_render.py"
+  ]
 }

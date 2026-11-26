@@ -2,7 +2,7 @@
   "category": "added",
   "title": "v3自動更新のpin配布形式を追加",
   "summary": "利用者の動作は変わりません。v3自動更新で使う公開鍵pinの配布形式(mcs.auto-v3-pins.v1)と読込み部品を追加し、pinはrelease control rootのauto-v3-pins.jsonだけから読み、networkから取得・更新しません。",
-  "upgrade": "現行の動作は変わりません。consent wire実factoryとenrollmentが接続されるまで、この部品を呼ぶ製品経路はありません。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。",
+  "upgrade": "v3自動更新を利用する場合は、登録完了後に管理者または署名済みの配布手順で auto-v3-pins.json を配置してください。登録やファイルの配置が済むまでは同意を確認できません。",
   "details": [
     "閉じたschemaで検査し、symlink・16KiB超・未知keyを拒否する。",
     "pinの用途と期限の評価は既存の署名検証側が担う。"
