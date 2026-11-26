@@ -213,14 +213,16 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
     deadline = time.monotonic() + 3 if deadline is None else deadline
     pids = [environment_diagnostics.launchd_pid(f"{domain}/{os.getuid()}/{GATEWAY}", deadline=deadline)
             for domain in ("gui", "user")]
+    if time.monotonic() >= deadline:
+        raise ValueError("observation_timeout")
     if (any(pid is not None and (type(pid) is not int or pid <= 0) for pid in pids)
             or {pid for pid in pids if pid is not None} != {record["pid"]}):
         raise ValueError("launchd_pid_mismatch")
     birth = environment_diagnostics.process_started_at(record["pid"], deadline=deadline)
-    if type(birth) not in (int, float) or birth != record["started_at"]:
-        raise ValueError("birth_mismatch")
     if time.monotonic() >= deadline:
         raise ValueError("observation_timeout")
+    if type(birth) not in (int, float) or birth != record["started_at"]:
+        raise ValueError("birth_mismatch")
     worker = card_worker_status.status(data, transport, profile)
     expected = "started" if record["reason"] == "worker_started" else "disabled"
     if _read_gateway_witness(path) != record or worker != {"state": expected, "reason": record["reason"]}:

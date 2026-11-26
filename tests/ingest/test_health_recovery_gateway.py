@@ -73,6 +73,24 @@ def _record(world, *, reason="worker_start_failed", **changes):
     return path
 
 
+@pytest.mark.parametrize("probe,mismatch", [
+    ("launchd_pid", "launchd_pid_mismatch"), ("process_started_at", "birth_mismatch")])
+@pytest.mark.parametrize("expired", [False, True], ids=["within_budget", "deadline"])
+def test_worker_native_probe_missing_result(gateway, monkeypatch, probe, mismatch, expired):
+    clock = [100.0]
+    monkeypatch.setattr(recovery.time, "monotonic", lambda: clock[0])
+
+    def unavailable(target, *, deadline):
+        if expired:
+            clock[0] = deadline
+        return None
+
+    monkeypatch.setattr(environment_diagnostics, probe, unavailable)
+    result = health_delivery._worker(gateway["home"], gateway["cfg"], NOW)
+    assert result == {"state": "unknown", "reason": "observation_timeout" if expired else mismatch,
+                      "started_at": None}
+
+
 @pytest.mark.parametrize("during_status", [False, True], ids=["absent", "disappeared"])
 def test_delivery_probe_identifies_missing_witness(gateway, monkeypatch, during_status):
     path = _record(gateway, reason="worker_started")
