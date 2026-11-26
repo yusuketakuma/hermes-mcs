@@ -34,6 +34,20 @@ def _health(home, *, at=1000, overall="ok", reasons=()):
         "at": at, "overall": overall, "state_reasons": list(reasons)}))
 
 
+def test_interrupted_ocr_ack_read_waits_for_next_check(tmp_path, monkeypatch):
+    import attachment_ocr_ack
+    import sqlite3
+
+    sqlite3.connect(tmp_path / "ledger.db").close()
+
+    def interrupted_read(db):
+        db.set_progress_handler(lambda: 1, 1)
+        db.execute("SELECT 1").fetchone()
+
+    monkeypatch.setattr(attachment_ocr_ack, "database_identity", interrupted_read)
+    assert health_report._ocr_ack_current(tmp_path, {}) == "attachment_ocr_ack_recheck_incomplete"
+
+
 def test_disabled_never_reads_status_and_unknown_config_is_not_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report.safe_io, "read_private_bytes", lambda *args, **kwargs:
                         pytest.fail("disabled OCR read status"))

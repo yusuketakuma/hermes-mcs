@@ -77,7 +77,8 @@ def _ocr_ack_current(data, value, cfg=None):
                 return "attachment_ocr_ack_unverified"
             return None
     except sqlite3.OperationalError as error:
-        if "locked" in str(error).lower() or "busy" in str(error).lower():
+        if (_observation_failure(error) == "observation_limit"
+                or "locked" in str(error).lower() or "busy" in str(error).lower()):
             return "attachment_ocr_ack_recheck_incomplete"
         return "attachment_ocr_ack_unverified"
     except sqlite3.Error:
