@@ -88,7 +88,7 @@ case "$1" in
   pip)
     pwd > "$STUB_ROOT/uv-pip-cwd"
     [ -z "$STUB_FAIL_PIP" ] || { echo "error: build failed" >&2; exit 1; }
-    case "$*" in *requirements-standalone.txt*)
+    case "$*" in *requirements-standalone.lock*--require-hashes*)
         touch "$STUB_STATE/sdk-ready"
         printf '%s' "${STUB_SDK_POST_FAULT:-}" > "$STUB_STATE/sdk-fault"
         exit 0 ;;
@@ -226,7 +226,7 @@ VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
   *mcs-standalone-sdk-probe*) exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/sdk-check.py" "$@" ;;
-  *"-m pip install -r "*requirements-standalone.txt*)
+  *"-m pip install -r "*requirements-standalone.lock*--require-hashes*)
     [ -z "$STUB_FAIL_PIP" ] || exit 1
     touch "$STUB_STATE/sdk-ready"
     printf '%s' "${STUB_SDK_POST_FAULT:-}" > "$STUB_STATE/sdk-fault"
