@@ -126,7 +126,7 @@ def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
     assert "次回の収集で再確認" in rows and "0件" not in rows and "5件" not in rows
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
     assert "件数は未測定" in lines
-    assert "送信が未完了" not in lines
+    assert "送信完了が未確認" not in lines
 
 
 def test_legacy_unmeasured_input_with_the_old_code_stays_unmeasured(tmp_path):
@@ -185,7 +185,7 @@ def test_stale_file_history_wording_follows_write_time_measurement_evidence(tmp_
     report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
     assert report["status"] == "stale"
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
-    assert "送信完了の件数が未確認" in lines and "送信が未完了" not in lines
+    assert "送信完了の件数が未確認" in lines and "送信完了が未確認" not in lines
 
 
 def test_stale_file_history_keeps_measured_wording_for_a_genuine_measurement(tmp_path):
@@ -196,7 +196,7 @@ def test_stale_file_history_keeps_measured_wording_for_a_genuine_measurement(tmp
     report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
     assert report["status"] == "stale"
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
-    assert "送信が未完了" in lines and "送信完了の件数が未確認" not in lines
+    assert "送信完了が未確認" in lines and "送信完了の件数が未確認" not in lines
 
 
 def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
@@ -256,6 +256,8 @@ def test_legacy_parts_without_a_usable_clock_read_as_unmeasured(tmp_path, observ
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
                    parts=_legacy_parts(observed_at=observed_at))
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert report["notify_parts_measured"] is False
     rows = _rows(report)
     assert "件数は未測定" in rows
 
@@ -264,6 +266,8 @@ def test_legacy_parts_with_inconsistent_counts_read_as_unmeasured(tmp_path):
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
                    parts=_legacy_parts(total=6))
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert report["notify_parts_measured"] is False
     rows = _rows(report)
     assert "件数は未測定" in rows and "6件" not in rows
 
@@ -275,6 +279,8 @@ def test_legacy_parts_inconsistent_counts_stay_unmeasured_past_the_window(tmp_pa
                    parts=_legacy_parts(
                        observed_at=5000, total=6))
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert report["notify_parts_measured"] is False
     rows = _rows(report)
     assert "件数は未測定" in rows and "記録時点の観測値" not in rows
 

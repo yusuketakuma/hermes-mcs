@@ -86,7 +86,7 @@ _RECORDED_DELIVERY_JA = {
     "notification_parked": "通知の待機",
     "notification_held": "通知の保留",
     "notification_pending": "通知の送信待ち",
-    "notification_parts_incomplete": "通知の本文・添付の送信が未完了",
+    "notification_parts_incomplete": "通知の本文・添付の送信完了が未確認",
     "notification_parts_unavailable": "通知の本文・添付の送信完了の件数が未確認",
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
@@ -251,9 +251,34 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     tracking = _tracking_parts(parts)
     tracking_present = isinstance(parts, dict) and any(key in parts for key in (
         'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
-    parts_unknown = (_measurement_unknown(parts, now)
-                     or tracking_present and tracking is None)
-    parts_active = parts_unknown or bool(tracking and (tracking['total'] or tracking['unknown']))
+    states = parts.get('by_state') if isinstance(parts, dict) else None
+    part_total = (
+        parts['total'] if isinstance(states, dict)
+        and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
+        and _count(parts.get('total')) and all(_count(n) for n in states.values())
+        and sum(states.values()) == parts['total'] else None)
+    measurement = None
+    measured = False
+    if isinstance(parts, dict):
+        observed = parts.get('observed_at')
+        status = parts.get('status')
+        clock_valid = finite_number(observed) and observed <= now
+        counts_valid = part_total is not None and (not tracking_present or tracking is not None)
+        measurement = 'unknown'
+        if counts_valid:
+            if status == 'recorded':
+                measurement = 'recorded'
+                measured = True
+            elif clock_valid and status == 'stale_measurement':
+                measured = True
+                if not _measurement_unknown(parts, now):
+                    measurement = 'stale'
+            elif clock_valid and 'status' not in parts:
+                measured = True
+                measurement = 'recorded' if now - observed <= CARD_STALL_S else 'stale'
+    parts_unknown = measurement == 'unknown'
+    parts_active = parts_unknown or (bool(tracking['total'] or tracking['unknown'])
+                                     if tracking else bool(part_total))
     if parts_active and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
@@ -281,10 +306,6 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             reasons.append("unread_collection_unknown")
     if reasons is not None and parts_active and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
-        # an unmeasurable read and a measured unfinished count are different
-        # findings: they alert under separate codes, never merged. A legacy
-        # producer's incomplete code for an unmeasurable read is kept as its
-        # own record — the measurement state already marks it unmeasured.
         if parts_unknown:
             # positive counts an expired carry still shows are the old
             # measurement's record, not current evidence: the current alert
@@ -329,12 +350,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     pending = notify.get("pending")
     report["notify_pending"] = (pending if finite_number(pending)
                                 and pending >= 0 else None)
-    states = parts.get('by_state') if isinstance(parts, dict) else None
-    report['notify_incomplete_parts'] = (
-        parts['total'] if not parts_unknown and isinstance(states, dict)
-        and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
-        and _count(parts.get('total')) and all(_count(n) for n in states.values())
-        and sum(states.values()) == parts['total'] else None)
+    report['notify_incomplete_parts'] = None if parts_unknown else part_total
     report['notify_parts_breakdown'] = _part_breakdown(parts, report['notify_incomplete_parts'])
     report['notify_active_incomplete_parts'] = (tracking['total'] if tracking else
         None if tracking_present else report['notify_incomplete_parts'])
@@ -342,34 +358,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
     report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
         if tracking else report['notify_parts_breakdown'])
-    # the alert must tell a fresh count, a carried one and an unmeasured
-    # one apart: only 'recorded' is the current observation
-    parts_status = parts.get('status') if isinstance(parts, dict) else None
-    measurement = ('unknown' if parts_unknown
-                   else 'stale' if parts_status == 'stale_measurement'
-                   else 'recorded' if parts_status == 'recorded' else None)
-    if measurement is None and isinstance(parts, dict) and 'status' not in parts:
-        # Writers before the status field stored only counts and observed_at;
-        # judge that observation by its own clock — consistent counts with
-        # a fresh clock are a current measurement, with an old clock a past
-        # one, anything else (missing, inconsistent, unreadable) is not a
-        # measurement at all.
-        observed = parts.get('observed_at')
-        if (finite_number(observed) and observed <= now
-                and report['notify_incomplete_parts'] is not None):
-            age = now - observed
-            if age <= CARD_STALL_S:
-                measurement = 'recorded'
-            else:
-                measurement = 'stale'
-        if measurement is None:
-            measurement = 'unknown'
     report['notify_parts_measurement'] = measurement
-    # write-time evidence for history wording: a measured block stays measured
-    # after its carry expires; only a never-measured block is unverified
-    report['notify_parts_measured'] = (
-        measurement in ('recorded', 'stale')
-        or isinstance(parts, dict) and parts.get('status') in ('recorded', 'stale_measurement'))
+    report['notify_parts_measured'] = measured
     if report['notify_parts_measurement'] == 'stale':
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
@@ -1749,20 +1739,18 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                             pieces.append(f"再試行の停止が確認されていない未解消の記録が{active}件")
                         if stopped:
                             pieces.append(f"再試行が止まっている記録が{stopped}件")
-                    elif not stopped_known and pending:
+                    elif pending:
                         pieces.append(f"未解消の記録が{pending}件"
                                       "（再試行の停止状況は確認できていません）")
                 if pieces:
-                    scope = ("観測範囲の確認が完了していないため、件数は確認できた範囲のものです。"
-                             if ocr.get("queue_status") not in (None, "known") else "")
                     note = "観測範囲で" + "、".join(pieces) + "あります。"
                     if "元の添付を確認してください" not in action:
                         note += "元の添付を確認してください。"
-                    if scope:
-                        note += scope
                     if not action.endswith("。"):
                         action += "。"
                     action += note
+                if ocr.get("queue_status") not in (None, "known"):
+                    action = action.rstrip("。") + "。キューの件数は確認できた範囲のものです。"
                 # 直近の実行の失敗はキュー内訳や pending の有効性に依らず独立に示す。
                 # 失敗した記録は未解消キューに残るのが普通なので、件数が未解消の
                 # 記録と重複し得る集団であることを明記する。数えられないときは言わない。
