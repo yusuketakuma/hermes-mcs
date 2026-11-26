@@ -52,6 +52,7 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
                                "notification_pending_unavailable",
+                               "notification_parts_unavailable",
                                "notification_delivery_unverified",
                                "provider_settings_unreadable"})
 STREAK_ALERT = 3
@@ -85,7 +86,8 @@ _RECORDED_DELIVERY_JA = {
     "notification_parked": "通知の待機",
     "notification_held": "通知の保留",
     "notification_pending": "通知の送信待ち",
-    "notification_parts_incomplete": "通知の本文・添付の送信完了が未確認",
+    "notification_parts_incomplete": "通知の本文・添付の送信が未完了",
+    "notification_parts_unavailable": "通知の本文・添付の送信完了の件数が未確認",
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
 }
@@ -279,7 +281,15 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             reasons.append("unread_collection_unknown")
     if reasons is not None and parts_active and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
-        if 'notification_parts_incomplete' not in reasons:
+        # an unmeasurable read and a measured unfinished count are different
+        # findings: they alert under separate codes, never merged. A legacy
+        # producer's incomplete code for an unmeasurable read is kept as its
+        # own record — the measurement state already marks it unmeasured.
+        if parts_unknown:
+            if ('notification_parts_unavailable' not in reasons
+                    and 'notification_parts_incomplete' not in reasons):
+                reasons.append('notification_parts_unavailable')
+        elif 'notification_parts_incomplete' not in reasons:
             reasons.append('notification_parts_incomplete')
     if reasons is not None and cards_unknown and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
@@ -1210,6 +1220,8 @@ _REASON_JA = {
         "通知先と配送記録、監視の状態を確認してください"),
     "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
+    "notification_parts_unavailable": ("本文・添付などの送信完了の件数を測定できていません",
+                                       "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
                                        "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_pending_unavailable": ("通知の送信待ち件数を確認できません",
@@ -1452,7 +1464,7 @@ def _unverified_reason(report: dict, reason: str) -> bool:
     if base == "notification_parts_incomplete":
         return report.get('notify_parts_measurement') != 'recorded'
     return base in (_DELIVERY_UNVERIFIED, "notification_cards_unavailable",
-                    "notification_pending_unavailable")
+                    "notification_pending_unavailable", "notification_parts_unavailable")
 
 
 def _impact(report: dict, reasons) -> str:
@@ -1649,7 +1661,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                               + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
                 unknown = report.get('notify_unknown_part_outcomes')
                 if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                    extra += f"／結果不明の全記録 {unknown}件"
+                    # the global count already contains the unknown rows the
+                    # breakdown shows: name the inclusion, never add them
+                    extra += f"／結果不明の全記録 {unknown}件（上記の結果不明を含む）"
                 closed = report.get('notify_tracking_closed_parts')
                 if _count(closed) and closed:
                     extra += f"／別に運用終了・未回収 {closed}件"
@@ -1657,6 +1671,11 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     observed = report.get('notify_parts_observed_at')
                     extra += (f"（記録時点の観測値: {_jst(observed)}）"
                               if finite_number(observed) else "（記録時点の観測値）")
+        elif base == "notification_parts_unavailable":
+            why = {'observation_limit': '観測が制限時間で打ち切られました',
+                   'observation_unavailable': '観測に失敗しました'}.get(
+                       report.get('notify_parts_reason'), '観測できませんでした')
+            extra = f"（件数は未測定: {why}）"
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""

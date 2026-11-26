@@ -28,6 +28,8 @@ HEALTH_REASONS = MappingProxyType({
     'notification_parked': ('notification', 'send', 'UNKNOWN', 'warning'),
     'notification_held': ('notification', 'send', 'UNKNOWN', 'warning'),
     'notification_pending': ('notification', 'send', 'UNKNOWN', 'info'),
+    'notification_parts_incomplete': ('notification', 'send', 'UNKNOWN', 'warning'),
+    'notification_parts_unavailable': ('notification', 'send', 'UNKNOWN', 'warning'),
     'disk_low': ('storage', 'run', 'RESOURCE_LIMIT', 'warning'),
     'ledger_relation_violations': ('storage', 'verify', 'INTEGRITY_FAILURE', 'error'),
     'backup_not_verified': ('storage', 'verify', 'UNKNOWN', 'warning'),

@@ -68,7 +68,9 @@ def test_explicit_unknown_parts_never_become_zero_or_healthy(tmp_path, overall):
     report = _tick(tmp_path, 400, [], overall=overall, parts=parts)
     assert report["status"] == ("failed" if overall == "failed" else "degraded")
     assert report["notify_incomplete_parts"] is None
-    assert "notification_parts_incomplete" in report["state_reasons"]
+    # an unmeasurable read alerts under its own code, never as measured work
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert "notification_parts_incomplete" not in report["state_reasons"]
     text = "\n".join(health_watch._reason_rows(report, report["state_reasons"]))
     assert "0件" not in text
 
@@ -115,14 +117,29 @@ def _rows(report):
 
 
 def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
-    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+    report = _tick(tmp_path, 400, ["notification_parts_unavailable"],
                    parts=_unmeasured_parts())
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
     rows = _rows(report)
     assert "件数は未測定: 観測が制限時間で打ち切られました" in rows
     assert "次回の収集で再確認" in rows and "0件" not in rows and "5件" not in rows
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
     assert "件数は未測定" in lines
+    assert "送信が未完了" not in lines
+
+
+def test_legacy_unmeasured_input_with_the_old_code_stays_unmeasured(tmp_path):
+    # pre-separation producers wrote notification_parts_incomplete for an
+    # unmeasurable read; a watcher reading such a file still never turns it
+    # into measured work, and adds the dedicated code beside it
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_unmeasured_parts())
+    assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_incomplete"]
+    rows = _rows(report)
+    assert "件数は未測定" in rows and "0件" not in rows and "5件" not in rows
+    assert rows.count("件数は未測定") == 1
 
 
 def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
@@ -131,7 +148,7 @@ def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
     assert report["notify_parts_measurement"] == "recorded"
     rows = _rows(report)
     assert ("5件（現行3・過去2／結果不明3・未送信2）"
-            "／結果不明の全記録 4件／別に運用終了・未回収 4件") in rows
+            "／結果不明の全記録 4件（上記の結果不明を含む）／別に運用終了・未回収 4件") in rows
     assert "記録時点の観測値" not in rows and "件数は未測定" not in rows
 
 
@@ -216,18 +233,23 @@ def test_expired_carried_parts_read_as_unmeasured(tmp_path):
 
 
 def test_measurement_states_keep_reason_and_breakdown_order(tmp_path):
-    # recorded -> carried -> unmeasured -> recorded: the reason stays put
+    # recorded -> carried -> unmeasured -> recorded: measured states keep the
+    # measured code, the unmeasured state moves to its own code and back,
     # and the breakdown keeps its fixed label order in every measurable state
-    for now, parts in ((400, _parts_block(observed_at=399)),
+    for now, parts, reason in ((400, _parts_block(observed_at=399),
+                                "notification_parts_incomplete"),
                        (700, {**_parts_block(status='stale_measurement',
                                              observed_at=400, unknown=4,
                                              not_sent=3),
-                              'reason': 'observation_limit', 'age_s': 300.0}),
-                       (1000, _unmeasured_parts()),
-                       (1300, _parts_block(observed_at=1299))):
+                              'reason': 'observation_limit', 'age_s': 300.0},
+                        "notification_parts_incomplete"),
+                       (1000, _unmeasured_parts(),
+                        "notification_parts_unavailable"),
+                       (1300, _parts_block(observed_at=1299),
+                        "notification_parts_incomplete")):
         parts.setdefault('observed_at', now - 1)
-        report = _tick(tmp_path, now, ["notification_parts_incomplete"], parts=parts)
-        assert report["state_reasons"] == ["notification_parts_incomplete"]
+        report = _tick(tmp_path, now, [reason], parts=parts)
+        assert report["state_reasons"] == [reason]
         rows = _rows(report)
         if report["notify_parts_measurement"] == "unknown":
             assert "件数は未測定" in rows

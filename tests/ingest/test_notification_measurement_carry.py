@@ -12,7 +12,7 @@ from ingest_testkit import _ledger
 NOW = 200_000.0
 SLACK = {'notify': {'interactive': 'slack'}}
 SCOPE = ('synthetic-profile', 'synthetic-application', None, 'synthetic-team', 'synthetic-channel')
-REASONS = ('notification_cards_unavailable', 'notification_parts_incomplete')
+REASONS = ('notification_cards_unavailable', 'notification_parts_unavailable')
 
 
 @pytest.fixture
