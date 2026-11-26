@@ -52,7 +52,7 @@ def test_ci_has_a_macos_lane_with_the_pinned_actions():
 
 def test_parallel_test_lanes_keep_diagnostics_and_pinned_dependency_caches():
     jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
-    setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
+    setup_uv = "astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d"
     for name in ("lint", "pytest-linux", "pytest-macos", "standalone-sdk", "hermes-integration"):
         assert setup_uv in jobs[name]
         assert 'version: "0.13.6"' in jobs[name]
