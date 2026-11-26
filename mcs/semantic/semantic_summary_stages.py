@@ -142,7 +142,7 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None,
         return unknown
     import extraction_provenance
     if (db is not None and bundle is not None and project_id is not None and message_id is not None
-            and extraction_provenance.cloud_produced(proof)
+            and extraction_provenance.cloud_produced(proof) and 'repair_evidence' not in proof
             and not _summary_cloud_producer_verified(db, bundle, project_id, message_id,
                                                      generation, artifact["meta"])):
         return unknown
