@@ -36,6 +36,7 @@ attempt_key = H("automatic-attempt", {scope,source_target_commit,profile_sha256,
 ```
 
 attempt_keyにtag、publication ID、日付、policy epoch、artifactの再圧縮digest、operation IDを入れて消費済み枠を迂回させない。通常の同じtarget commitへの自動STARTは同じattempt_keyとなる。
+attempt_keyの`config_contract_sha256`/`data_contract_sha256`は対象releaseの検証済みCompatibility payloadに含まれる値をそのまま使う。端末はconfig/data契約文書からdigestを計算せず配備値としても配置しない。`MetadataRequest(kind=compatibility)`で取得し署名検証・offer.selectedとの相互照合を済ませたpayloadの2項目だけを使い、Compatibilityに無いdigest・未検証payload・selected不一致ではstageへ進まずfail-closedとする。
 Publicationの同一tag予約はrequest_idより強いunique制約を持つ。後でacceptanceが更新されても同じtagで新しいbytesを公開しない。
 
 ### ENC04：署名の用途

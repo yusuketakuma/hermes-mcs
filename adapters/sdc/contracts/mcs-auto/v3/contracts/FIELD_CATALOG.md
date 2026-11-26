@@ -773,6 +773,7 @@
 |`reserved_owner_bytes`|`{"type":"integer","minimum":1,"maximum":8388608}`|
 |`error_code`|`{"anyOf":[{"$ref":"#/$defs/Token"},{"type":"null"}]}`|
 |`rollout`|`{"$ref":"#/$defs/RolloutBinding"}`|
+|`contract_digests`|`{"type":"object","additionalProperties":false,"required":["config_contract_sha256","data_contract_sha256"],"properties":{"config_contract_sha256":{"$ref":"#/$defs/Sha256"},"data_contract_sha256":{"$ref":"#/$defs/Sha256"}}}` — STAGED時に解決した検証済みCompatibilityのdigest耐久保存(required)。prepare/measureはnetwork再取得せずこの値を使う|
 
 ## TerminalRecord
 

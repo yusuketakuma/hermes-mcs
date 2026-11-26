@@ -208,12 +208,21 @@ def confirm_standing_policy(store, wire, *, preview, clock,
                'request_id': request_id, 'request_nonce': request_nonce,
                'preview_id': preview['preview_id'],
                'preview_sha256': preview_sha256, 'consent': consent}
+    # 送信中のauto-disable撤回をconfirmで上書きしないよう、送信前の
+    # local consentを固定し保存時にcompare-and-swapする。
+    before = auto_state.load(store).get('consent')
+    before_raw = json.dumps(before, sort_keys=True, separators=(',', ':'),
+                            ensure_ascii=False) if before is not None else None
     receipt = _active_receipt(_send(
         wire, CONSENT_CONFIRM_PATH, request, 'ConsentConfirmRequest'))
     _require(receipt.get('consent_sha256') == contract.hash_v3(
         'standing-consent', consent), 'CONSENT_RECEIPT')
 
     def apply(new):
+        current = new.get('consent')
+        current_raw = json.dumps(current, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=False) if current is not None else None
+        _require(current_raw == before_raw, 'CONSENT_CONCURRENT_CHANGE')
         new['consent'] = consent
 
     saved = _mutate(store, apply)
