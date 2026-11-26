@@ -1683,18 +1683,20 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                          else "（直近の実行で保留の原因は特定できていません）")
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
-            if (isinstance(ocr, dict)
-                    and isinstance(ocr.get("failure_reason_counts"), dict)
-                    and type(ocr.get("exhausted_failed")) is int):
-                failed_counts = ocr["failure_reason_counts"]
-                overlap = failed_counts.get("output_schema_table_overlap")
-                if type(overlap) is int and overlap > 0:
-                    action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
-                              "元の添付を確認してください。解消しない場合は開発元へ連絡"
-                              f"（照会コードと {_DOCTOR} --share の結果を添える）。")
-                    if any(type(n) is int and n > 0 for key, n in failed_counts.items()
-                           if key != "output_schema_table_overlap"):
-                        action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
+            if isinstance(ocr, dict):
+                # 個別理由の説明(表の行列対応など)だけが内訳の有効性に依存する。
+                if (isinstance(ocr.get("failure_reason_counts"), dict)
+                        and type(ocr.get("exhausted_failed")) is int):
+                    failed_counts = ocr["failure_reason_counts"]
+                    overlap = failed_counts.get("output_schema_table_overlap")
+                    if type(overlap) is int and overlap > 0:
+                        action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
+                                  "元の添付を確認してください。解消しない場合は開発元へ連絡"
+                                  f"（照会コードと {_DOCTOR} --share の結果を添える）。")
+                        if any(type(n) is int and n > 0 for key, n in failed_counts.items()
+                               if key != "output_schema_table_overlap"):
+                            action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
+                # 未解消の件数と観測範囲は内訳に依らない上位の測定なので独立に示す。
                 # 3回到達は終了ではない: 一般失敗は日次で再試行が続く。再試行の停止を
                 # 証明するのは policy_rejected_exhausted だけ。残りは再試行中とは証明
                 # できない(再試行予約の状態はここからは分からない)ので、観測できる
@@ -1725,10 +1727,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     if not action.endswith("。"):
                         action += "。"
                     action += note
-            # 直近の実行の失敗はキュー内訳や pending の有効性に依らず独立に示す。
-            # 失敗した記録は未解消キューに残るのが普通なので、件数が未解消の
-            # 記録と重複し得る集団であることを明記する。数えられないときは言わない。
-            if isinstance(ocr, dict):
+                # 直近の実行の失敗はキュー内訳や pending の有効性に依らず独立に示す。
+                # 失敗した記録は未解消キューに残るのが普通なので、件数が未解消の
+                # 記録と重複し得る集団であることを明記する。数えられないときは言わない。
                 latest = ocr.get("failed")
                 if type(latest) is int and latest > 0:
                     if not action.endswith("。"):

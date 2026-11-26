@@ -1359,3 +1359,15 @@ def test_attachment_ocr_partial_observation_states_counts_are_observed_range_onl
     assert "未解消の記録が5件（再試行の停止状況は確認できていません）" in text
     assert "再試行を続ける記録" not in text
     assert "件数は確認できた範囲のものです" in text
+    # a valid status read without any failure breakdown still shows the queue
+    # counts and the partial-observation note: only per-reason explanations
+    # are gated on the breakdown (review regression)
+    detailless = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed",
+        "pending_failed": 3, "failed": 1, "queue_status": "partial"}}
+    detailless_text = "\n".join(health_watch._reason_rows(
+        detailless, ["attachment_ocr_processing_failed"]))
+    assert "未解消の記録が3件（再試行の停止状況は確認できていません）" in detailless_text
+    assert "件数は確認できた範囲のものです" in detailless_text
+    assert "直近の実行で失敗した記録が1件あります" in detailless_text
+    assert "表の行列対応" not in detailless_text
