@@ -164,6 +164,8 @@ KNOWN_ERROR_CODES = frozenset({
     "semantic_prior_registry_unavailable", "slack_setup_client_unverified", "still_assigned", "tally_invalid", "too_many_stops", "unknown_module", "unknown_section", "upgrade_scope_kind_invalid",
     "upgrade_scope_version_invalid", "visit_not_qualified",
     "llm_admission_path_unset", "registered_unfetched_items_limit",
+    "birth_mismatch", "database_identity", "launchd_pid_mismatch", "marker_present",
+    "witness_missing", "witness_reason", "witness_started_unknown", "witness_version",
 })
 
 
