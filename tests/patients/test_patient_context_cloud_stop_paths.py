@@ -93,12 +93,15 @@ def _drain(runtime, cfg, *, limit=40, until=None, **kw):
     """Step until the context is complete (or ``until`` holds); the outcomes of every pass."""
     ledger, _, _ = runtime
     outcomes = []
+    clock = runtime[1]
     for _ in range(limit):
         outcome = step(runtime, cfg=cfg, **kw)
         outcomes.append(outcome)
         assert outcome['status'] in ('progressed', 'deferred', 'complete'), outcome
         if (until(outcome) if until is not None else outcome['status'] == 'complete'):
             return outcomes
+        clock.wall += 301
+        clock.mono += 301
     pytest.fail(repr(([(o['status'], o.get('reason'), o.get('lane'), o.get('guard_error'), o.get('cloud_refusal'))
                        for o in outcomes[-12:]], _dispositions(ledger))))
 
@@ -154,9 +157,9 @@ def test_multi_send_unit_with_later_503_finishes_locally(runtime, real_cloud, mo
     assert len([payload for payload in sent if 'source' in payload]) == 1 + cap
     assert _reservations(ledger, 'scan:1') == reservations
     assert [payload.get('derived_summaries') for payload in _local_sources(local_calls)[:2]] == [
-        payload['derived_summaries'] for payload in scans]
+        payload['derived_summaries'] for payload in scans[:2]]
     assert _dispositions(ledger) == [(answered, 'superseded_local')]
-    assert _usage(ledger)[:4] == paid
+    assert _usage(ledger)[:len(paid)] == paid
 
 
 def _partial_cloud_scan(runtime, cfg, monkeypatch, *, adopted=1, script=None):
@@ -233,12 +236,15 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     model = state._route(cfg, 1)['provider']['model']
 
     def script(index, payload, limit):
+        if failure in ('transport', 'timeout'):
+            # An uncertain failure permits bounded in-pass retries, each billed: the
+            # fallback path is exercised only when every bounded attempt fails.
+            if index < 6:
+                return OSError('synthetic uncertain transport') if failure == 'transport' \
+                    else TimeoutError('synthetic timeout')
+            return None
         if index:
             return None
-        if failure == 'transport':
-            return OSError('synthetic uncertain transport')
-        if failure == 'timeout':
-            return TimeoutError('synthetic timeout')
         if failure == 'too_large':
             return 200, {}, b'x' * (limit + 1)
         return 200, {}, json.dumps({'model': model, 'stop_reason': 'end_turn',
@@ -247,10 +253,10 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     first = step(runtime, cfg=cfg)
     assert first['status'] == 'progressed', first
     assert first['cloud_refusal'] == {'too_large': 'response_too_large', 'no_usage': 'usage_unknown'}.get(failure, failure)
-    assert len(sent) == 1 and len(_local_sources(local_calls)) == 1
+    assert len(sent) == (6 if failure in ('transport', 'timeout') else 1) and len(_local_sources(local_calls)) == 1
     assert _local_sources(local_calls)[0] == sent[0]
-    lost, = _reservations(ledger, 'scan:1')
-    assert _dispositions(ledger) == [(lost, 'superseded_local')]
+    lost = _reservations(ledger, 'scan:1')
+    assert sorted(_dispositions(ledger)) == sorted((rid, 'superseded_local') for rid in lost)
     paid = _usage(ledger)
     if failure == 'no_usage':
         # A 200 without usage latches the pricing circuit, which only a person resumes.
@@ -258,8 +264,8 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
         paid = _usage(ledger)
     _drain(runtime, cfg)
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
-    assert len([payload for payload in sent if 'source' in payload]) == 1
-    assert _dispositions(ledger) == [(lost, 'superseded_local')]
+    assert len([payload for payload in sent if 'source' in payload]) == (6 if failure in ('transport', 'timeout') else 1)
+    assert sorted(_dispositions(ledger)) == sorted((rid, 'superseded_local') for rid in lost)
     assert _usage(ledger)[:len(paid)] == paid
 
 
@@ -1198,7 +1204,7 @@ def test_local_result_is_not_saved_unless_every_replaced_request_is_recorded(run
         assert [tuple(row) for row in ledger.db.execute(_KEPT, kept)] == before
         assert _usage(ledger)[:len(paid)] == paid and _reservations(ledger, 'scan:other') == []
     assert len(recorded) == (3 if fault == 'another_unit_key' else 0) and not _dispositions(ledger)
-    assert len(sent) == 2   # the adopted chunk and the rejected one; nothing was asked again
+    assert len(sent) == 7   # the adopted chunk plus the rejected one's bounded attempts (1 initial + 5 retries); nothing was asked again
 
 
 def _facility_review(monkeypatch, review):
