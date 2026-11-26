@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "v3復旧closureが存在しない状態moduleを要求する問題を修正",
+  "summary": "v3自動更新の移行用closureが、存在しない mcs/ops/release_auto_state.py を必須ファイルとして要求していました。実際に復旧処理が使う adapters/sdc/release_auto_state.py は従来どおり検証するため、移行用closureを実在する構成へ合わせました。",
+  "upgrade": "追加操作は不要です。v3自動更新へ未移行の環境では、この修正後の移行処理でclosureが正しく構成されます。",
+  "details": [
+    "存在しないファイルの要求を取り除くだけで、復旧時に検証する状態module自体は変更していません。",
+    "この修正はv3自動更新の移行・復旧closureに限定され、通常の更新確認や通知処理へ影響しません。"
+  ],
+  "refs": [
+    "mcs/ops/update/release_auto_bridge.py",
+    "adapters/sdc/release_auto_state.py"
+  ]
+}

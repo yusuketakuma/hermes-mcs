@@ -30,10 +30,9 @@ _KNOWN_FILES = frozenset(_SIDECAR_DISPOSITION) | {'release-start-intent.json', '
 # manifest自体はfilesに含めない(04 §4.3)。run_migrationはこの部分集合を
 # 必須として拒否する — 配備後にrecoveryが動けないclosureを作らない。
 RECOVERY_REQUIRED_CLOSURE = frozenset({
-    'mcs/ops/release_auto_state.py',
-    'mcs/ops/release_auto_owner.py',
-    'mcs/ops/release_auto_apply.py',
-    'mcs/ops/release_runtime_proof.py',
+    'mcs/ops/update/release_auto_owner.py',
+    'mcs/ops/update/release_auto_apply.py',
+    'mcs/ops/update/release_runtime_proof.py',
     'mcs/ops/release_auto_recovery.py',
     'adapters/sdc/release_auto_contract.py',
     'adapters/sdc/release_auto_state.py',

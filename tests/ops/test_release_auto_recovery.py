@@ -109,7 +109,7 @@ def test_verify_generation_happy(tmp_path):
 
 def test_verify_generation_rejects_tampered_file(tmp_path):
     gen, manifest, canonical = _deploy(tmp_path, _full_files())
-    target = os.path.join(gen, 'mcs', 'ops', 'release_auto_state.py')
+    target = os.path.join(gen, 'mcs', 'ops', 'update', 'release_auto_owner.py')
     with open(target, 'wb') as f:
         f.write(b'tampered')
     with pytest.raises(rec.RecoveryError) as e:

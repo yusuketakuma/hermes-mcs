@@ -159,7 +159,7 @@ def test_entry_reference_changes_are_named():
 
 def test_tick_invocation_stays_at_single_driver_boundary():
     """owner.tick is live only through release_auto_driver; recover_tick stays waiting."""
-    driver = ROOT / 'mcs/ops/release_auto_driver.py'
+    driver = ROOT / 'mcs/ops/update/release_auto_driver.py'
     trees = {p: _parse(p) for p in _files()}
     owner_offenders = []
     recovery_offenders = []

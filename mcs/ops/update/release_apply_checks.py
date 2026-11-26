@@ -239,7 +239,7 @@ def _initial_provider_source(control, repository, *, deadline):
     import release_apply_owner as entry
     from adapters.sdc import release_state
     try:
-        if (Path(__file__).resolve() != Path(repository).resolve() / 'mcs/ops/release_apply_checks.py'
+        if (Path(__file__).resolve() != Path(repository).resolve() / 'mcs/ops/update/release_apply_checks.py'
                 or Path(entry.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/release_apply_owner.py'
                 or Path(source.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/release_owner_source.py'):
             raise ReleaseApplyError('PROVIDER_HOLD')

@@ -968,13 +968,13 @@ P0完了条件: 現行経路対応表、実lock DAG、bridge対象、backend int
 |W01|新`adapters/sdc/release_auto_contract.py`＋contracts JSON|parse_typed/canonical_typed/hash_v2、SEM01–34、既存v1dispatch保持|全構造/意味vector、v1未知schema拒否、署名purpose分離|
 |W02|`mcs/ops/sdc_support_signatures.py`|新v2 purpose wrapper、独立pins/expected、historical検査分離|旧用途の受入集合不変。historicalはgrant発行不可|
 |W03|新`adapters/sdc/release_auto_state.py`＋`storage.py`|OwnerState load/validate/CAS、capacity、intent/spent/terminal/outbox|fault injection、連続2更新、ACK遅延でexecution_revision不変|
-|W04|新`mcs/ops/release_auto_bridge.py`、既存recovery一式|ControlManifest/MigrationIntent、初期baseline、既存v1から明示移行|pending/unknown拒否、before/after crash、旧入口閉鎖、`.prev`世代維持|
+|W04|新`mcs/ops/update/release_auto_bridge.py`、既存recovery一式|ControlManifest/MigrationIntent、初期baseline、既存v1から明示移行|pending/unknown拒否、before/after crash、旧入口閉鎖、`.prev`世代維持|
 |W05|新`mcs/core/runtime_entry.py`＋各launcher|Q寿命gate、prepared fence、世代/boot、quarantine admission|import途中の切替禁止、旧process拒否、全入口coverage|
 |W06|`update_services.py`、service_management、standalone、Hermes/LINE WORKS入口|profile別drain/退役/起動観測、独立owner起動|R外drain、強制kill非流用、自己deadlockなし|
 |W07|新`adapters/sdc/release_auto_transport.py`|固定JSON v2 path＋別artifact stream|16KiB既存上限維持、256MiB stream/hash/timeout/no-redirect|
-|W08|新`mcs/ops/release_auto_owner.py`＋既存owner private dispatch|stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|正常経路が最後まで前進、未知時は証拠保持|
+|W08|新`mcs/ops/update/release_auto_owner.py`＋既存owner private dispatch|stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|正常経路が最後まで前進、未知時は証拠保持|
 |W09|`mcs/ops/update/update_apply.py`、既存repository/journal primitives|private `apply_code_only_v2(capability)`、既存v1bailとは異なるforward-onlypolicy|post-merge失敗でreset/DBrestoreゼロ、v1回帰維持|
-|W10|新`mcs/ops/release_runtime_proof.py`、独立recovery generation|quarantine/activation/proof/観測的終結|HEAD/PIDだけ不可、boot/loadedsource/heartbeatの束縛|
+|W10|新`mcs/ops/update/release_runtime_proof.py`、独立recovery generation|quarantine/activation/proof/観測的終結|HEAD/PIDだけ不可、boot/loadedsource/heartbeatの束縛|
 |W11|新`scripts/development/release_publish.py`、`release-publish.yml`|01のidentify/package/authorize/publish/verify-register、正式受入票|publisher fork拒否、samebytesretry、公開後証拠、OIDC/ID検証|
 |W12|`ci.yml`、`release-notes.yml`、既存release generators|request/evidence出力、日本語ノート維持、draft責任移管、event tag限定sync|新旧workflow競合なし、全suite強制方針変更なし|
 |W13|既存SDC backend（実repoを確認して実装）|03のtransaction/table/routes、CAS/cohort/grant/result|clientと共通vector、tenant分離、署名key分離、rate budgets|
@@ -1270,7 +1270,7 @@ GitHub公式の保証と、この製品が独自に定めた同意・予算・�
 |SRC12|adapters/sdc/storage.py（590–810）|A→M/O、G/U/Rの別寿命、nonblocking flock、private file境界|
 |SRC13|mcs/ops/install_options.py（1–175）|config_edit._edit_lock、raw snapshot/CAS。config_editの物理pathはP0で解決|
 |SRC14|mcs_standalone/service.py（1–140）/ update_services.py|status TTL/host generation、restart intent、3worker、quiesce/起動|
-|SRC15|mcs/ops/release_apply_checks.py|private backup/preflight、artifact/Git検査、child ticket、control root|
+|SRC15|mcs/ops/update/release_apply_checks.py|private backup/preflight、artifact/Git検査、child ticket、control root|
 |SRC16|tests/ops/test_release_apply_owner.py|既存capability/fork/FD/ticket試験。今回製品としては未実行|
 
 GitHub searchで0件・incomplete_results=trueになった結果を不存在の証拠にしていない。直接pathの404は「そのpathにない」という意味だけで、移動先を未読のまま断定しない。

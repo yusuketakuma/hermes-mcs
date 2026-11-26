@@ -90,7 +90,7 @@ def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_p
              'mcs/core/install_options_contract.py', 'mcs/ops/setup/config_edit.py',
              'mcs/ops/install_options.py', 'mcs/ops/update/settings_migration_receipt.py',
              'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update/update_journal.py',
-             'mcs/ops/release_apply_owner.py', 'mcs/ops/release_apply_checks.py')
+             'mcs/ops/release_apply_owner.py', 'mcs/ops/update/release_apply_checks.py')
     _release(tmp_path / 'remote-work', bare, 'v1.2.0', {name: (ROOT / name).read_text() for name in files})
     _git(repo, 'fetch', '-q', '--tags')
     _git(repo, 'remote', 'set-url', 'origin', str(tmp_path / 'missing-remote'))
