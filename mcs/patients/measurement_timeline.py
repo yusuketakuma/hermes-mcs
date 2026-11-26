@@ -37,16 +37,16 @@ _PLAN_MEASUREMENT_SUFFIX = re.compile(r"(?:の)?(?:検査|採血|測定)$")
 _SEPARATE_PROCEDURES = frozenset(("点滴", "輸液"))
 
 
-def _plan_is_withdrawn_or_uncertain(tail, name):
+def _plan_is_withdrawn_or_uncertain(tail, name, *, separate_target_required=False):
     predicate = tail[_PLAN_PREDICATE_LEAD.match(tail).end():]
     if _PLAN_ABSENCE.match(predicate):
         return True
     action = _PLAN_CANCEL_ACTION.match(predicate)
     if action is None:
-        return False
+        return separate_target_required
     ending = predicate[action.end():]
     if _PLAN_CANCEL_NEGATION.match(ending):
-        return False
+        return separate_target_required
     named_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
     if named_target is None:
         return True
@@ -210,6 +210,7 @@ def _candidate(record):
     comparison = (str(value), unit) if value_ok else (None, None)
     plan = record.get("status") in ("planned", "conditional")
     validation_quote = evidence
+    validation_source = body
     if verified_source and plan:
         if not isinstance(name, str) or evidence.count(name) != 1:
             verified_source = False
@@ -222,7 +223,15 @@ def _candidate(record):
             if marker is not None:
                 # Keep question marks so a question cannot match an affirmative predicate.
                 tail = re.match(r"[^。！？!?;；\n]*[？?]?", body[anchor + marker.end():])[0]
-                if _plan_is_withdrawn_or_uncertain(tail, name):
+                conditional = (re.match(r"なら(?:ば)?\s*[、,]\s*", tail)
+                               if record["kind"] == "lab" and period == "conditional"
+                               and marker[0].endswith(("予定", "計画")) else None)
+                if conditional:
+                    tail = tail[conditional.end():]
+                    # The entire predicate must name a different cancellation target.
+                    # Bind the label/value only to the clause ending in the explicit plan.
+                    validation_source = body[:anchor + marker.end()]
+                if _plan_is_withdrawn_or_uncertain(tail, name, separate_target_required=bool(conditional)):
                     verified_source = False
                 # This is a contiguous original prefix, used only to prove the label/value relation.
                 validation_quote = evidence[:evidence.index(name) + marker.start()]
@@ -231,7 +240,7 @@ def _candidate(record):
         if (record.get("kind") == "lab" and isinstance(name, str)
                 and (lab_analyte(name) or fold_surface(name)) == record.get("key")):
             lab = lab_candidate(name, value, unit, validation_quote, measured_on=measured, condition=condition,
-                                patient_name=record.get("patient_name"), source_body=body)
+                                patient_name=record.get("patient_name"), source_body=validation_source)
             comparison = (lab["value"], lab["unit"])
             verified_source = (lab["confirmation"] == "quote_supported" and lab["measured_on"] == measured
                                and patient_item_scope(record, body, patient_name=record.get("patient_name"),
