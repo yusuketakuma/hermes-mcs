@@ -181,6 +181,8 @@ def list_failures(root, after_attachment_id=0):
             for row in rows[:256]:
                 source = attachment_ocr._source(db, row[0])
                 prior = attachment_ocr._latest(db, source) if source is not None else None
+                if prior is not None and prior.get('_invalid'):
+                    raise ValueError('ocr_ack_target_invalid')
                 if (source is None or not attachment_ocr._matching(prior, source)
                         or prior['state'] not in ('failed', 'unavailable')):
                     continue

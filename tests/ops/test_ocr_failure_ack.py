@@ -270,6 +270,14 @@ def test_list_can_reach_later_exhausted_failure(case, capsys):
     assert second['next_after_attachment_id'] is None and not second['truncated']
 
 
+def test_list_rejects_unreadable_latest_ocr_record(case, capsys):
+    with case.db:
+        case.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', ('{', case.artifact))
+    assert operator.main(['--root', str(case.root), 'list']) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        'outcome': 'rejected', 'error': 'ocr_ack_target_invalid'}
+
+
 def test_list_rejects_unverifiable_receipt_instead_of_reporting_no_targets(case, capsys):
     applied = operator.apply(case.root, request(case))
     with case.db:
