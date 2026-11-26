@@ -667,7 +667,8 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
     repo, _ = _source_repo(tmp_path)
     previous = _head(repo)
     (repo / "mcs/ingest/consumer.py").write_text("# synthetic updated split consumer\n")
-    _git(repo, "add", "mcs/ingest/consumer.py")
+    (repo / "mcs/core/provider_settings.py").write_text("SINGLE_FILE_AUTHORITY_VERSION = 3\n")
+    _git(repo, "add", "mcs/ingest/consumer.py", "mcs/core/provider_settings.py")
     _git(repo, "commit", "-qm", "synthetic updated source")
     target = _head(repo)
     monkeypatch.setattr(updater, "REPO", str(repo))
@@ -697,12 +698,21 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
         return hashlib.sha256(raw).hexdigest()
 
     common = {"cloud_llm": {"mode": "off", "project_ids": []}, "semantic": {"mode": "off"}}
-    private_json(root / "config.json", common)
-    hashes = {name: private_json(directory / (name + ".json"), {}) for name in provider_settings.PROVIDERS}
+    providers = {name: {} for name in provider_settings.PROVIDERS}
+    private_json(root / "config.json", {**common, "provider_settings": providers})
     authority = data / ".provider-settings-authority.json"
-    private_json(authority, {"version": 2, "state": "committed", "files": hashes,
+    private_json(authority, {"version": 3, "state": "committed",
+                             "files": {name: hashlib.sha256(b"{}\n").hexdigest() for name in providers},
                              "common_policy_sha256": provider_settings.common_policy_digest(common)})
     authority_before = authority.read_bytes()
+    _git(repo, "checkout", "--detach", previous)
+    # An updater extracted from the new code may be checking an older installed
+    # tree with the same application version and module names.
+    assert updater._split_target_source_matches(previous)
+    with pytest.raises(updater.UpdateError, match="provider_rollback_target_unverified"):
+        updater._provider_rollback_preflight(previous)
+    _git(repo, "checkout", "--detach", target)
+    assert updater._provider_rollback_preflight(target) is True
     state = updater.journal_store.default_state()
     state["applying"] = {"tag": "synthetic", "sha": target, "prev_sha": previous, "rollback": False}
     state["stages"] = [{"stage": "post_merge"}]
@@ -739,7 +749,7 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: postchecks.append(sha) or [])
     monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
     monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
-    assert updater.recover_interrupted() == 0
+    assert updater.recover_interrupted() == 0, updater._last_report()
     assert postchecks == [target] and _head(repo) == target
     saved = updater.journal_store.load_state(updater.STATE_PATH)
     assert saved["applying"] is None and saved["stages"] == []

@@ -410,7 +410,7 @@ def finalize_provider_pending_tx(db, req, filesystem_changes):
     root = os.path.dirname(data_dir)
     try:
         lock_fd = filesystem_changes.enter_context(_edit_lock(os.path.join(root, "config.json")))
-        operation = provider_settings.committed_pending(root, lock_fd)
+        operation = provider_settings.committed_pending(root, lock_fd, cleanup_operation=req["operation"])
     except ConfigConflict:
         return "config_busy", {}
     except (OSError, ValueError) as error:

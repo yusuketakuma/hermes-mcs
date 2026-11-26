@@ -4,6 +4,18 @@
 
 利用手順は[文書索引](../README.md)、モジュール・CLIの生成表と検証入口は[開発リファレンス](DEVELOPMENT.md)が正本です。この文書は依存方向、共有状態、副作用の所有者を説明します。2026-11-05の補助モジュール配置と移動後の互換条件は[責務分離の詳細](RESPONSIBILITY_SPLIT.md)を参照してください。
 
+## 設定や記録をどこから読むか
+
+| 確認したいこと | 読む場所 | 関連する記録の役割 |
+|---|---|---|
+| この施設の共通設定・クラウド予算・提供元ごとのモデル | 施設の `config.json`。実行コードは `mcs_util.load_config_checked` から読む | 設定の確定記録は内容の照合に、変更履歴は変更前後の確認に使う。APIキーは専用の秘密ストアで管理する |
+| この施設で使う導入オプション | `config.json` の `install_args` | 更新時に旧形式を読み、移行途中の記録は復旧に使う |
+| ログインした本人の送信者ID | `self_identity.self_sender_id` | 最新の名簿の本人印と本人プロフィールの直接観測を使う。別の取得元から転載された値で本人を決めない |
+| Hermesへの通知先 | `config.json` の `notify.slack` または `notify.discord` | 初期設定が配送先をHermesにも反映する。ワーカーは接続したアプリと配送先を照合し、操作権限は別に確認する |
+| リリース元のリポジトリ所有者 | `deployment/release-publisher/policy.json` の `repository_owner_id` | 公開要求の所有者IDは、その要求を作ったときの記録として保持する |
+
+台帳のスナップショットは公開時点の表示に、配送記録は再送の可否の判断に使います。施設設定を変えるときは設定画面かCLIを使い、スナップショット・配送記録・バックアップを設定の入力には使いません。
+
 ## 実行コードの所有先
 
 `mcs/core/` は役割ごとのフォルダに分けます。`ledger/` は台帳の読み書きの補助（取込・意味解析の原典管理・投稿メタデータ・添付の後続通知・登録データ検証・snapshot参照）、`runtime/` は実行時の補助（worker回収・host時刻・healthの判定方針）、`records/` は監査・外部送信審査・backup名・保守エラーの記録です。次のファイルは `mcs/core/` 直下に残します。導入済みの更新処理・復旧スクリプトがパスや直接importで使うもの（`ledger.py`・`mcs_util.py`・`mcs_runtime.py`・`runtime_entry.py`・`writer_lock.py`・`quarantine_bootstrap.py` など）と、`semantic_candidate._MODULES` の候補指紋に含まれるもの（`mcs_queries`・`inference_version` など）です。候補指紋は関数のファイルパスを含むので、移すと承認済みの候補が一致しなくなります。import はflat（`_mcs_path`）なので、`mcs/` 内の移動でimport文は変わりません。

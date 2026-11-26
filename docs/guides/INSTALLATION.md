@@ -162,7 +162,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | MCS_OPENAI_API_KEY | OpenAI用。MCSの `.env`（0600）に登録し、選択時は用途別モデルで患者文脈更新・履歴解析に使用 |
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
-共通設定は `config.json`、提供元別の設定は `data/provider_settings/` の私有JSON、APIキーはMCS専用 `.env` に保持します。設定変更には既存の設定画面またはCLIを使います。
+各施設の設定は、その施設の `~/.mcs/config.json`（0600）に保存します。初回導入時に自動で作成し、共通設定と Anthropic・OpenAI・Jev の設定を一緒に管理します。提供元を切り替えても、選んでいない提供元の値を保持します。設定の変更は設定画面またはCLIから行います。APIキーは引き続きMCS専用の `.env` で管理します。
 提供元設定の全ファイルを保存した直後に中断し、保留記録が残った場合は、担当者が `mcs_setup.py provider-pending-finalize --operation <記録のoperation> --confirm-human --reason <理由>` を実行できます。保存済みファイルと記録のハッシュが一致すると、承認を記録して保留記録を退避します。
 Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 

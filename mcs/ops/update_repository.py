@@ -310,14 +310,26 @@ def _split_source_tree(ref):
             if any(entry[3] == root or entry[3].startswith(root + "/") for root in _SPLIT_SOURCE_ROOTS)]
 
 
-def _provider_prior_source_verified(ref):
+# These v2 parents pass both lock descriptors, reload the child's journal on
+# failure and reject the v3 authority before restoring an older checkout.
+_SPLIT_PARENT_SOURCE_WITNESSES = frozenset({
+    "734c78a82783a25fbfc85514c2dafbb739c7aef9ea5d87c466278b507e7840c4",  # v1.3.0
+    "3ed1a421ec3284a928ae1220474de299e5428f236c68eacab07c8a04f1f4f87f",  # 10b44ad85
+    "aa11cc186d15eabeeea91b426e05d31679d3f74ff71e089131a94eb1a94ae61c",  # 7c6ced7fe
+})
+
+
+def _provider_prior_source_verified(ref, *, split_parent=False):
     if not isinstance(ref, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", ref) is None:
         return False
     tree = _split_source_tree(ref)
     if not tree:
         return False
     raw = json.dumps(tree, ensure_ascii=True, separators=(",", ":")).encode("ascii")
-    return hashlib.sha256(raw).hexdigest() in _PROVIDER_PRIOR_SOURCE_WITNESSES
+    witnesses = _SPLIT_PARENT_SOURCE_WITNESSES
+    if not split_parent:
+        witnesses = witnesses | _PROVIDER_PRIOR_SOURCE_WITNESSES
+    return hashlib.sha256(raw).hexdigest() in witnesses
 
 
 def _split_source_extras(trees=()) -> list[str]:

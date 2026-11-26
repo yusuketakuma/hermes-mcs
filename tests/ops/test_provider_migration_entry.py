@@ -13,6 +13,7 @@ import textwrap
 import pytest
 
 import cloud_policy
+import provider_settings
 import update_journal
 import update_migrations
 
@@ -44,6 +45,7 @@ def legacy_entry(tmp_path, monkeypatch):
     _git(repo, 'commit', '-qm', 'synthetic reviewed reader')
     previous = _git(repo, 'rev-parse', 'HEAD')
     (repo / 'mcs/core/synthetic_version.py').write_text('# synthetic target\n')
+    (repo / 'mcs/core/provider_settings.py').write_text('SINGLE_FILE_AUTHORITY_VERSION = 3\n')
     _git(repo, 'add', '.')
     _git(repo, 'commit', '-qm', 'synthetic candidate')
     target = _git(repo, 'rev-parse', 'HEAD')
@@ -100,6 +102,8 @@ update.MARKER_PATH=str(Path(update.DATA)/__import__('writer_lock').UPDATE_MARKER
 update.REPORT_PATH=str(Path(update.DATA)/'recovery_report.json')
 update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
     update._split_source_tree(previous),ensure_ascii=True,separators=(',',':')).encode('ascii')).hexdigest()})
+repository._SPLIT_PARENT_SOURCE_WITNESSES=(
+    repository._PROVIDER_PRIOR_SOURCE_WITNESSES if case.startswith('v2_reviewed') else frozenset())
 if case in ('old_reader','already_split','early_old_reader'):
     update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
 events=[]
@@ -118,7 +122,7 @@ if case.startswith('mode_selected_'):
     update._provider_prior_source_verified=migration._provider_prior_source_verified=change_after_selection
 def quiesce(mode):
     events.append('quiesce:'+mode)
-    if case=='reinstall_second_stop_failure' and events.count('quiesce:'+mode)==2:
+    if case in ('reinstall_second_stop_failure','v2_reviewed_second_stop_failure') and events.count('quiesce:'+mode)==2:
         raise update.UpdateError('synthetic second stop failure')
     if case.startswith('mode_quiesced_'):change_mode()
     if case=='stop_unverified':raise update.UpdateError('synthetic stop failure')
@@ -130,8 +134,9 @@ def quiesce(mode):
         path.write_text(json.dumps(saved)); path.chmod(0o600)
     return []
 def services():
-    settings=Path(update.DATA)/'provider_settings'
-    assert all((settings/(name+'.json')).is_file() for name in ('anthropic','openai','jev'))
+    assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==3
+    assert set(json.loads(Path(home,'config.json').read_text())['provider_settings'])=={'anthropic','openai','jev'}
+    assert not list((Path(update.DATA)/'provider_settings').glob('*.json'))
     events.append('services')
 update._quiesce_for_mode=migration._quiesce_for_mode=quiesce
 update._plan_runtime_migration=migration._plan_runtime_migration=lambda *_a,**_k:None
@@ -150,12 +155,12 @@ if case.startswith('mode_before_publication_'):
     update.update_migrations.migrate_provider_settings=change_before_publication
 if case.startswith('mode_after_publication_'):
     import provider_settings
-    original_commit=provider_settings.commit
+    original_commit=provider_settings.consolidate_locked
     def change_after_publication(*args,**kwargs):
         saved=original_commit(*args,**kwargs)
         change_mode()
         return saved
-    provider_settings.commit=change_after_publication
+    provider_settings.consolidate_locked=change_after_publication
 if case in ('reinstall_success','reinstall_second_stop_failure'):
     update._verify_install_options_base=migration._verify_install_options_base=lambda *_a,**_k:events.append('verify-install')
     def plan(state):
@@ -200,7 +205,7 @@ def _run_child(fixture, case, *, locked=True):
                '_MCS_UPDATE_PM': fixture['target'], 'MCS_UPDATE_LOCK_FD': str(descriptors[0]),
                'MCS_UPDATE_RUN_LOCK_FD': str(descriptors[1])}
         previous = fixture['previous']
-        if case in ('already_split', 'missing_required', 'invalid_required'):
+        if case in ('already_split', 'missing_required', 'invalid_required') or case.startswith('v2_'):
             path = data / 'update_state.json'
             value = json.loads(path.read_text())
             if case == 'invalid_required':
@@ -359,16 +364,80 @@ def test_legacy_entry_mode_change_keeps_services_stopped(legacy_entry, phase, va
     assert authority.exists() == (phase == 'after_publication')
 
 
-def test_legacy_entry_existing_split_is_noop_without_old_reader_witness(legacy_entry):
+def test_legacy_entry_existing_single_is_noop_without_old_reader_witness(legacy_entry):
     root = legacy_entry['runtime']
     assert update_migrations.migrate_provider_settings(root) is True
-    files = [root / 'config.json', root / 'data/.provider-settings-authority.json',
-             *(root / 'data/provider_settings' / (name + '.json') for name in ('anthropic','openai','jev'))]
+    files = [root / 'config.json', root / 'data/.provider-settings-authority.json']
     before = [(p.read_bytes(), p.stat().st_ino) for p in files]
     outcome = _run_child(legacy_entry, 'already_split')
     assert outcome['result'] == 0
     assert outcome['events'] == ['quiesce:hermes', 'services', 'restart']
     assert [(p.read_bytes(), p.stat().st_ino) for p in files] == before
+
+
+def _previous_split(fixture):
+    root = fixture['runtime']
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    current = provider_settings.read(root, model_owners=owners)
+    common, providers = provider_settings.split_legacy(current['common'], owners)
+    provider_settings.commit(root, current['snapshot'], common, providers, selected_provider='openai',
+                             model_owners=owners)
+    assert json.loads((fixture['data'] / '.provider-settings-authority.json').read_text())['version'] == 2
+    return providers
+
+
+@pytest.mark.parametrize('reviewed', [False, True])
+def test_split_parent_without_requirement_adopted_only_for_reviewed_source(legacy_entry, reviewed):
+    providers = _previous_split(legacy_entry)
+    outcome = _run_child(legacy_entry, 'v2_reviewed' if reviewed else 'v2_unknown')
+    root = legacy_entry['runtime']
+    authority = json.loads((legacy_entry['data'] / '.provider-settings-authority.json').read_text())
+    state = update_journal.load_state(legacy_entry['data'] / 'update_state.json')
+    if reviewed:
+        assert outcome == {'result': 0, 'events': ['quiesce:hermes', 'quiesce:hermes', 'services', 'restart']}
+        assert authority['version'] == 3 and state['applying'] is None
+        assert json.loads((root / 'config.json').read_text())['provider_settings'] == providers
+    else:
+        assert outcome['result'] != 0 and not outcome['events']
+        assert authority['version'] == 2 and 'provider_settings_migration_required' not in state['applying']
+
+
+def test_split_parent_crash_keeps_requirement_for_manual_recovery(legacy_entry):
+    providers = _previous_split(legacy_entry)
+    path = legacy_entry['data'] / 'update_state.json'
+    state = update_journal.load_state(path)
+    state['stages'].insert(0, {'stage': 'merge', 'at': 0})
+    update_journal.save_state(path, state)
+    outcome = _run_child(legacy_entry, 'v2_reviewed_second_stop_failure')
+    assert outcome['result'] != 0 and 'services' not in outcome['events']
+    assert legacy_entry['marker'].is_file()
+    assert update_journal.load_state(path)['applying']['provider_settings_migration_required'] is True
+    authority = legacy_entry['data'] / '.provider-settings-authority.json'
+    assert json.loads(authority.read_text())['version'] == 2
+    assert _run_recovery(legacy_entry, 'v2_reviewed')['result'] == 0
+    assert json.loads(authority.read_text())['version'] == 3
+    assert json.loads((legacy_entry['runtime'] / 'config.json').read_text())['provider_settings'] == providers
+
+
+@pytest.mark.parametrize('case', ['v2_reviewed', 'v2_unknown', 'default_recovery'])
+def test_recover_split_parent_interrupted_before_postmerge(legacy_entry, case):
+    _previous_split(legacy_entry)
+    path = legacy_entry['data'] / 'update_state.json'
+    state = update_journal.load_state(path)
+    state['applying'].pop('provider_settings_migration_required')
+    state['stages'] = [{'stage': 'merge', 'at': 1}]
+    update_journal.save_state(path, state)
+    outcome = _run_recovery(legacy_entry, case)
+    authority = json.loads((legacy_entry['data'] / '.provider-settings-authority.json').read_text())
+    if case == 'v2_reviewed':
+        assert outcome['result'] == 0
+        assert outcome['events'][-3:] == ['services', 'restart', 'restart-services']
+        assert authority['version'] == 3
+    else:
+        assert outcome['result'] != 0
+        assert 'services' not in outcome['events'] and 'restart' not in outcome['events']
+        assert legacy_entry['marker'].is_file() and authority['version'] == 2
+        assert update_journal.load_state(path) == state
 
 
 _RECOVER_CHILD = r'''
@@ -395,6 +464,8 @@ update.REPORT_PATH=str(Path(update.DATA)/'recovery_report.json')
 previous=json.loads(Path(update.STATE_PATH).read_text())['applying']['prev_sha']
 update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
     update._split_source_tree(previous),ensure_ascii=True,separators=(',',':')).encode('ascii')).hexdigest()})
+repository._SPLIT_PARENT_SOURCE_WITNESSES=(
+    repository._PROVIDER_PRIOR_SOURCE_WITNESSES if case.startswith('v2_reviewed') else frozenset())
 if case=='bad_witness':update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
 events=[]
 reports=[]
@@ -415,8 +486,8 @@ def quiesce(mode):
 def services():
     locks_held()
     if case in ('resume','missing_marker','commit_before','commit_after','reinstall_done','runtime_reinstall_done'):
-        assert all((Path(update.DATA)/'provider_settings'/(name+'.json')).is_file()
-                   for name in ('anthropic','openai','jev'))
+        assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==3
+        assert not list((Path(update.DATA)/'provider_settings').glob('*.json'))
     events.append('services')
 update._quiesce_for_mode=migration._quiesce_for_mode=recovery._quiesce_for_mode=quiesce
 update._migrate_log_tail=recovery._migrate_log_tail=lambda:None
@@ -442,12 +513,12 @@ if case=='bad_fd':
     update._legacy_provider_migration_guard=recovery._legacy_provider_migration_guard=wrong_recovery_fd
 if case in ('commit_before','commit_after'):
     import provider_settings
-    original_commit=provider_settings.commit
+    original_commit=provider_settings.consolidate_locked
     def interrupted_commit(*args,**kwargs):
         if case=='commit_after':original_commit(*args,**kwargs)
         events.append('commit-interrupted')
         raise ValueError('synthetic interrupted commit')
-    provider_settings.commit=interrupted_commit
+    provider_settings.consolidate_locked=interrupted_commit
 try:
     if case=='default_recovery':result=update.recover_interrupted()
     elif case=='stale_recovery':result=update.recover_interrupted(if_stale=True)
@@ -672,7 +743,7 @@ def test_forward_recovery_rejects_active_release_owner(legacy_entry):
     assert not (legacy_entry['data'] / '.provider-settings-authority.json').exists()
 
 
-@pytest.mark.parametrize('child_case', ['success', 'mode_selected_changed', 'mode_selected_unknown'])
+@pytest.mark.parametrize('child_case', ['success', 'v2_options', 'mode_selected_changed', 'mode_selected_unknown'])
 def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_entry, tmp_path, monkeypatch, child_case):
     """Keep the parent/child FD path real; redirect only child argv to stub effects."""
     import importlib.util
@@ -682,6 +753,13 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     import update_apply
 
     repo, runtime, data = legacy_entry['repo'], legacy_entry['runtime'], legacy_entry['data']
+    if child_case == 'v2_options':
+        config = runtime / 'config.json'
+        config.write_text(json.dumps({**legacy_entry['config'], 'install_args': ['--no-llm']}))
+        _previous_split(legacy_entry)
+        options = data / 'install_options.json'
+        options.write_text(json.dumps({'v': 1, 'install_args': ['--no-llm']}))
+        options.chmod(0o600)
     # Construct a synthetic installed tree and copy only tracked development source.
     tracked = subprocess.run(['/usr/bin/git', '-C', str(_SOURCE), 'ls-files', '-z', '--', 'mcs/'],
                              check=True, capture_output=True).stdout.split(b'\0')
@@ -723,12 +801,12 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     }.items():
         patch_lifecycle_lookup(monkeypatch, updater, name, str(value))
     monkeypatch.setenv('HOME', str(runtime))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(runtime / 'config.json'))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: json.loads((runtime / 'config.json').read_text()))
     patch_lifecycle_lookup(monkeypatch, updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_local', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_tag', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, '_baseline_check', lambda *_a, **_k: [])
-    patch_lifecycle_lookup(monkeypatch, updater, '_provider_migration_needed', lambda: True)
     monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a, **_k: True)
     patch_lifecycle_lookup(monkeypatch, updater, '_plan_runtime_migration', lambda *_a, **_k: None)
     patch_lifecycle_lookup(monkeypatch, updater, 'quiesce', lambda: updater._write_marker())
@@ -771,7 +849,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     assert len(spawned) == 1
     assert _git(repo, 'rev-parse', 'HEAD') == target
     final = update_journal.load_state(data / 'update_state.json')
-    if child_case != 'success':
+    if child_case not in ('success', 'v2_options'):
         assert result == 1
         assert parent_effects == []
         assert legacy_entry['marker'].is_file() and final['applying'] is not None
@@ -781,8 +859,11 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         assert not (data / '.provider-settings-authority.json').exists()
         return
     assert result == 0, final
+    if child_case == 'v2_options':
+        assert not options.exists()
+        assert json.loads((runtime / 'config.json').read_text())['install_args'] == ['--no-llm']
     assert json.loads((runtime / 'synthetic-events.json').read_text()) == [
         'quiesce:hermes', 'quiesce:hermes', 'services', 'restart']
-    assert all((data / 'provider_settings' / (name + '.json')).is_file()
-               for name in ('anthropic', 'openai', 'jev'))
+    assert set(json.loads((runtime / 'config.json').read_text())['provider_settings']) == {'anthropic', 'openai', 'jev'}
+    assert not list((data / 'provider_settings').glob('*.json'))
     assert final['applying'] is None and final['applied'][-1]['sha'] == target

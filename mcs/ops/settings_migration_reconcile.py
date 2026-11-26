@@ -23,7 +23,10 @@ import update_journal  # noqa: E402
 def _classification(config, legacy, evidence):
     raw, base = config_edit._snapshot(config)
     config_edit._parse(raw)
-    central, _ = install_options._central(config)
+    central, embedded = install_options._central(config)
+    if embedded:
+        # The pre-merge receipt must be closed before a one-file authority can be published.
+        raise ValueError('settings_changed')
     old, digest = install_options._legacy(legacy)
     if old is None or digest != evidence['legacy_sha256']:
         raise ValueError('legacy_changed')

@@ -7,6 +7,21 @@ import pytest
 from install_sh_testkit import INSTALL as INSTALL, SAVED_FLAGS as SAVED_FLAGS, _calls as _calls, _inject_before_config_persistence as _inject_before_config_persistence, _race_config_writer as _race_config_writer, _real_config_writer as _real_config_writer, _run as _run, _world as _world
 
 
+def _fresh_config(runtime, *, saved=True):
+    config = {
+        'runtime_mode': runtime,
+        'cloud_llm': {'daily_cost_limit_usd': 80, 'monthly_cost_limit_usd': 350},
+        'provider_settings': {
+            'anthropic': {'budget': {'daily_cost_limit_usd': 40, 'monthly_cost_limit_usd': 175}},
+            'openai': {'budget': {'daily_cost_limit_usd': 40, 'monthly_cost_limit_usd': 175}},
+            'jev': {},
+        },
+    }
+    if saved:
+        config['install_args'] = SAVED_FLAGS
+    return config
+
+
 @pytest.mark.parametrize('no_services', [True, False])
 def test_interactive_no_services_defers_setup_and_preserves_normal_install(tmp_path, no_services):
     import errno
@@ -114,7 +129,7 @@ def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
+    assert json.loads(config.read_text()) == _fresh_config('standalone')
     assert config.stat().st_mode & 0o777 == 0o600
     assert 'まだ利用開始前の初期設定が必要' in result.stdout
     before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
@@ -166,7 +181,7 @@ def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
                   '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_text()) == {'runtime_mode': runtime, 'install_args': SAVED_FLAGS}
+    assert json.loads(config.read_text()) == _fresh_config(runtime)
     assert config.stat().st_mode & 0o777 == 0o600
 
 
@@ -362,7 +377,7 @@ def test_config_creation_race_preserves_and_checks_winner(tmp_path, explicit, ra
         accepted = raw == '{"runtime_mode":"standalone"}'
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
     if accepted:
-        assert json.loads((home / '.mcs/config.json').read_text()) == {**json.loads(raw), 'install_args': SAVED_FLAGS}
+        assert json.loads((home / '.mcs/config.json').read_text()) == {**_fresh_config(json.loads(raw)['runtime_mode']), **json.loads(raw)}
     else:
         assert (home / '.mcs/config.json').read_text() == raw
         assert '既存設定を保持' in result.stderr
@@ -482,7 +497,7 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
     result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
                   '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads((target / 'config.json').read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
+    assert json.loads((target / 'config.json').read_text()) == _fresh_config('standalone')
 
 
 def test_root_link_target_with_shared_parent_is_refused_before_software(tmp_path):
@@ -581,10 +596,10 @@ def test_failed_later_install_stage_keeps_created_config_for_retry(tmp_path):
     result = _run({**env, 'STUB_FAIL_SERVICES': '1'}, None, *flags)
     assert result.returncode != 0
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_bytes()) == {'runtime_mode': 'standalone'}
+    assert json.loads(config.read_bytes()) == _fresh_config('standalone', saved=False)
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
+    assert json.loads(config.read_text()) == _fresh_config('standalone')
 
 
 @pytest.mark.parametrize('race', [False, True])
@@ -600,7 +615,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
                   '--no-plugin', '--no-recovery')
     assert result.returncode != 0
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_bytes()) == {'runtime_mode': 'standalone'}
+    assert json.loads(config.read_bytes()) == _fresh_config('standalone', saved=False)
     winner = '{"runtime_mode":"hermes","synthetic":"kept"}'
     baseline_calls = len(_calls(stub))
     master, slave = pty.openpty()
@@ -645,7 +660,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
         assert config.read_text() == winner
         assert not any('mcs_setup.py services' in call for call in _calls(stub)[baseline_calls:])
     else:
-        assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
+        assert json.loads(config.read_text()) == _fresh_config('standalone')
     assert not hermes_home.joinpath('plugins/mcs-discord-commands').exists()
 
 

@@ -20,6 +20,7 @@ from mcs_util import CONFIG_MAX_BYTES, _provider_artifact_present, _weak_warned,
 from safe_io import create_exclusive, fdopen_owned
 
 
+SINGLE_FILE_AUTHORITY_VERSION = 3
 PROVIDERS = ("anthropic", "openai", "jev")
 # The cloud providers' files; provider_registry.CLOUD_PROVIDERS lists the same names.
 CLOUD_PROVIDERS = PROVIDERS[:2]
@@ -469,7 +470,7 @@ class VerifiedCommonUnavailable(TypedDict):
 
 
 def read(root, *, model_owners=None, jev_model=None, config_limit=CONFIG_MAX_BYTES):
-    """Read a stable private four-file snapshot; never create or migrate files."""
+    """Read a stable private settings snapshot without changing its storage format."""
     return _read(root, model_owners=model_owners, jev_model=jev_model, config_limit=config_limit,
                  allow_unavailable=False)
 
@@ -524,6 +525,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
         data_namespace = _provider_namespace(data_fd) if data_fd is not None else None
         settings_identity = _identity(os.fstat(settings_fd)) if settings_fd is not None else None
         mode = "legacy_unverified"
+        single = False
         authority_snapshot = None
         configuration_state = None
         if data_fd is not None:
@@ -561,12 +563,20 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                     raise ValueError("provider_authority_missing")
             else:
                 authority = _document(authority_raw)
+                single = authority.get("version") == SINGLE_FILE_AUTHORITY_VERSION
+                if single:
+                    if any(snapshots[name] is not None for name in PROVIDERS) or invalid_files:
+                        raise ValueError("provider_config_ambiguous")
+                    embedded = common.pop("provider_settings", None)
+                    if not isinstance(embedded, dict) or embedded.keys() != set(PROVIDERS):
+                        raise ValueError("provider_config_invalid")
+                    values = {name: _json_bytes(embedded[name]) for name in PROVIDERS}
                 hashes = authority.get("files")
                 policy_hash = authority.get("common_policy_sha256")
                 required_authority = {"version", "state", "files", "common_policy_sha256"}
                 if (set(authority) not in (required_authority, required_authority | {"configuration_state"})
                         or "configuration_state" in authority and authority["configuration_state"] != "bootstrap"
-                        or type(authority["version"]) is not int or authority["version"] != 2
+                        or type(authority["version"]) is not int or authority["version"] not in (2, SINGLE_FILE_AUTHORITY_VERSION)
                         or authority["state"] != "committed" or not isinstance(policy_hash, str)
                         or re.fullmatch(r"[0-9a-f]{64}", policy_hash) is None
                         or policy_hash != common_policy_digest(common)
@@ -576,7 +586,8 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                     raise ValueError("provider_authority_invalid")
                 configuration_state = authority.get("configuration_state")
                 provider_error = bool(invalid_files) or any(
-                    snapshots[key] is None or hashes[key] != snapshots[key]["sha256"] for key in PROVIDERS)
+                    values[key] is None or hashes[key] != hashlib.sha256(values[key]).hexdigest()
+                    for key in PROVIDERS)
                 if provider_error and not allow_unavailable:
                     raise ValueError("provider_authority_invalid")
                 if not provider_error:
@@ -604,7 +615,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                 cloud, semantic = common.get("cloud_llm"), common.get("semantic")
                 if provider_error:
                     # Without trusted provider documents, reject every possible overlap.
-                    if (settings_fd is None or not isinstance(cloud, (dict, type(None)))
+                    if (settings_fd is None and not single or not isinstance(cloud, (dict, type(None)))
                             or not isinstance(semantic, (dict, type(None)))
                             or isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud or "provider_profiles" in cloud
                                 or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
@@ -644,6 +655,8 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
         if settings_fd is not None and (settings_identity != _identity(os.fstat(settings_fd))
                 or settings_identity != _identity(os.stat("provider_settings", dir_fd=data_fd, follow_symlinks=False))):
             raise ValueError("provider_settings_changed")
+        if not single and "provider_settings" in common:
+            raise ValueError("provider_authority_missing" if authority_snapshot is None else "provider_config_ambiguous")
         identity = common_snapshot["identity"]
         path = str(root / "config.json")
         if (identity[2] & 0o022 or identity[3] != os.getuid()) and path not in _weak_warned:
@@ -651,6 +664,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
             print("mcs: local_file_permissions_weak (config.json)", file=sys.stderr)
         root_handle.check()
         return {"mode": mode, "common": common, "providers": providers,
+                **({"layout": "single"} if single else {}),
                 **({"configuration_state": configuration_state} if configuration_state is not None else {}),
                 "snapshot": {"files": snapshots, "authority": authority_snapshot,
                              "pending": pending_snapshot, "root": root_identity,
@@ -686,8 +700,9 @@ def _write_new(parent, name, raw, *, limit=CONFIG_MAX_BYTES):
 
 
 def _replace(parent, name, raw, stage_fd, expected, moved_name, moved, private, limit):
-    temporary = "new-" + uuid.uuid4().hex
-    _write_new(stage_fd, temporary, raw, limit=limit)
+    if raw is not None:
+        temporary = "new-" + uuid.uuid4().hex
+        _write_new(stage_fd, temporary, raw, limit=limit)
     if expected is not None:
         os.rename(name, moved_name, src_dir_fd=parent, dst_dir_fd=stage_fd)
         os.fsync(parent)
@@ -699,6 +714,9 @@ def _replace(parent, name, raw, stage_fd, expected, moved_name, moved, private, 
                 or captured["sha256"] != expected["sha256"]):
             raise ValueError("provider_snapshot_changed")
         moved.append((moved_name, captured, private))
+    if raw is None:
+        _must_be_absent(parent, name)
+        return None
     # A late old writer may create the destination after the rename. Never
     # overwrite it; the pending receipt keeps all new readers held.
     os.link(temporary, name, src_dir_fd=stage_fd, dst_dir_fd=parent, follow_symlinks=False)
@@ -728,7 +746,24 @@ def _verify_lock(root, lock_fd, *, root_fd=None):
         raise ValueError("provider_lock_invalid")
 
 
-def committed_pending(root, lock_fd) -> str:
+def _drop_staged_originals(data_fd, stage_fd, operation, hashes, pruned):
+    """After publication, retain the independent recovery copy and the change record."""
+    for name, digest in hashes.items():
+        if digest is None:
+            continue
+        limit = ALIAS_CONFIG_MAX_BYTES if name == "config" else CONFIG_MAX_BYTES
+        _, backup = _read_file(data_fd, ".provider-settings-backup-" + operation + "-" + name + ".bin",
+                               limit=limit)
+        _, original = _read_file(stage_fd, name, private=name != "config", limit=limit)
+        if backup is None or backup["sha256"] != digest or original is not None and original["sha256"] != digest:
+            raise ValueError("provider_backup_invalid")
+        if original is not None:
+            pruned.add(name)
+            os.unlink(name, dir_fd=stage_fd)
+    os.fsync(stage_fd)
+
+
+def committed_pending(root, lock_fd, *, cleanup_operation=None) -> str:
     """Operation of a pending record whose files all reached their "after" state.
 
     A power loss or SIGKILL after the last file and the authority were
@@ -752,21 +787,56 @@ def committed_pending(root, lock_fd) -> str:
                 or not isinstance(pending.get("operation"), str)
                 or re.fullmatch(r"[0-9a-f]{32}", pending["operation"]) is None):
             raise ValueError("provider_pending_invalid")
-        settings_fd = _directory(data_fd, "provider_settings", private=True)
-        for key in _FILES:
-            parent, name, private = ((handle.fd, "config.json", False) if key == "config"
-                                     else (settings_fd, key + ".json", True))
-            _, snapshot = _read_file(parent, name, private=private,
-                                     limit=ALIAS_CONFIG_MAX_BYTES if key == "config" else CONFIG_MAX_BYTES)
-            if snapshot is None or snapshot["sha256"] != after[key]:
+        authority_raw, authority_snapshot = _read_file(data_fd, ".provider-settings-authority.json")
+        authority = _document(authority_raw)
+        config, config_snapshot = _read_file(handle.fd, "config.json", private=False, limit=ALIAS_CONFIG_MAX_BYTES)
+        if config_snapshot is None or config_snapshot["sha256"] != after["config"]:
+            raise ValueError("provider_pending_not_committed")
+        if authority.get("version") == SINGLE_FILE_AUTHORITY_VERSION:
+            common = _document(config)
+            providers = common.pop("provider_settings", None)
+            if (not isinstance(providers, dict) or providers.keys() != set(PROVIDERS)
+                    or common_policy_digest(common) != authority.get("common_policy_sha256")):
                 raise ValueError("provider_pending_not_committed")
-        authority = _document(_read_file(data_fd, ".provider-settings-authority.json")[0])
-        if (authority.get("version") != 2 or authority.get("state") != "committed"
+            try:
+                settings_fd = _directory(data_fd, "provider_settings", private=True)
+            except FileNotFoundError:
+                pass
+            for name in PROVIDERS:
+                if settings_fd is not None:
+                    _must_be_absent(settings_fd, name + ".json")
+                if hashlib.sha256(_json_bytes(providers[name])).hexdigest() != after[name]:
+                    raise ValueError("provider_pending_not_committed")
+        else:
+            settings_fd = _directory(data_fd, "provider_settings", private=True)
+            for name in PROVIDERS:
+                _, snapshot = _read_file(settings_fd, name + ".json")
+                if snapshot is None or snapshot["sha256"] != after[name]:
+                    raise ValueError("provider_pending_not_committed")
+        if (authority.get("version") not in (2, SINGLE_FILE_AUTHORITY_VERSION) or authority.get("state") != "committed"
                 or authority.get("files") != {name: after[name] for name in PROVIDERS}):
             raise ValueError("provider_pending_not_committed")
-        if _read_file(data_fd, ".provider-settings-pending.json")[0] != raw:
+        if (_read_file(data_fd, ".provider-settings-pending.json")[0] != raw
+                or _read_file(data_fd, ".provider-settings-authority.json")[1] != authority_snapshot
+                or _read_file(handle.fd, "config.json", private=False, limit=ALIAS_CONFIG_MAX_BYTES)[1] != config_snapshot):
             raise ValueError("provider_snapshot_changed")
         handle.check()
+        if authority.get("version") == SINGLE_FILE_AUTHORITY_VERSION:
+            operation = pending["operation"]
+            stage_fd = _directory(data_fd, ".provider-settings-stage-" + operation, private=True)
+            try:
+                raw_record, _ = _read_file(stage_fd, CHANGE_RECORD, limit=_CHANGE_RECORD_MAX_BYTES)
+                if raw_record is None:
+                    raise ValueError("provider_pending_not_committed")
+                record = _checked_record(_document(raw_record), operation)
+                if (record["files"] != {"before": pending.get("before"), "after": after}
+                        or record["authority"]["after"] != _authority_state(authority)):
+                    raise ValueError("provider_pending_not_committed")
+                if operation == cleanup_operation:
+                    _drop_staged_originals(data_fd, stage_fd, operation,
+                                           {**pending["before"], "authority": pending["authority_before"]}, set())
+            finally:
+                os.close(stage_fd)
         return pending["operation"]
     finally:
         if settings_fd is not None:
@@ -901,12 +971,9 @@ def view_limits(view):
     return _limits(cloud, _member(cloud, "provider_budgets"), view.get("semantic", _MISSING))
 
 
-def _source_limits(old, split, model_owners, jev_model):
-    # The bytes the commit verified under the edit lock, never a second read.
-    common = _document(old["config"])
-    if split:
-        providers = {name: _document(old[name]) for name in PROVIDERS}
-    else:
+def _source_limits(current, model_owners, jev_model):
+    common, providers = current["common"], current["providers"]
+    if current["mode"] == "legacy_unverified":
         common, providers = split_legacy(common, model_owners, jev_model=jev_model)
     return _split_limits(common, providers)
 
@@ -1081,8 +1148,52 @@ def _bootstrap_common_valid(common):
             and not common.keys() & (known - allowed))
 
 
-def bootstrap_locked(root, expected_snapshot, common, *, model_owners, lock_fd, jev_model=None):
-    """Publish empty provider files for a separately verified fresh installation."""
+def _initial_budgets():
+    from cloud_policy import DEFAULT_DAILY_COST_LIMIT_USD, DEFAULT_MONTHLY_COST_LIMIT_USD
+    total = {"daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
+             "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD}
+    providers = {name: {"budget": {"daily_cost_limit_usd": 40, "monthly_cost_limit_usd": 175}}
+                 for name in CLOUD_PROVIDERS}
+    return total, {**providers, "jev": {}}
+
+
+def bootstrap_settings_valid(state):
+    """Accept the installer's untouched settings, including a migrated older empty bootstrap."""
+    common, providers = state["common"], state["providers"]
+    if providers == {name: {} for name in PROVIDERS}:
+        return _bootstrap_common_valid(common)
+    total, initial = _initial_budgets()
+    return (state.get("layout") == "single" and providers == initial and common.get("cloud_llm") == total
+            and _bootstrap_common_valid({k: v for k, v in common.items() if k != "cloud_llm"}))
+
+
+def bootstrap_single_locked(root, expected_snapshot, common, *, model_owners, lock_fd, jev_model=None):
+    """Create a single settings file for a separately verified fresh installation."""
+    return bootstrap_locked(root, expected_snapshot, common, model_owners=model_owners, lock_fd=lock_fd,
+                            jev_model=jev_model, single=True)
+
+
+def consolidate_locked(root, expected_snapshot, *, model_owners, selected_provider, lock_fd, jev_model=None):
+    """Move all providers into the installation config using the updater's reviewed snapshot."""
+    root = Path(root)
+    _verify_lock(root, lock_fd)
+    before = read(root, model_owners=model_owners, jev_model=jev_model)
+    if before["snapshot"] != expected_snapshot:
+        raise ValueError("provider_snapshot_changed")
+    if before.get("layout") == "single":
+        return before
+    common, providers = before["common"], before["providers"]
+    if before["mode"] == "legacy_unverified":
+        common, providers = split_legacy(common, model_owners, jev_model=jev_model)
+    bootstrap = before.get("configuration_state") == "bootstrap"
+    return _commit(root, expected_snapshot, common, providers, selected_provider=selected_provider,
+                   model_owners=model_owners, jev_model=jev_model, lock_fd=lock_fd, single=True,
+                   config_limit=CONFIG_MAX_BYTES, validate=_validate_bootstrap if bootstrap else _validate_standard,
+                   configuration_state=before.get("configuration_state"), origin="update_migration")
+
+
+def bootstrap_locked(root, expected_snapshot, common, *, model_owners, lock_fd, jev_model=None, single=False):
+    """Publish empty provider settings for a separately verified fresh installation."""
     if not _bootstrap_common_valid(common):
         raise ValueError("provider_bootstrap_invalid")
     common = deepcopy(common)
@@ -1093,10 +1204,12 @@ def bootstrap_locked(root, expected_snapshot, common, *, model_owners, lock_fd, 
             or before["snapshot"] != expected_snapshot):
         raise ValueError("provider_bootstrap_unverified")
     providers = {name: {} for name in PROVIDERS}
+    if single:
+        common["cloud_llm"], providers = _initial_budgets()
     return _commit(root, expected_snapshot, common, providers, selected_provider=CLOUD_PROVIDERS[0],
                    model_owners=model_owners, jev_model=jev_model, lock_fd=lock_fd,
                    config_limit=CONFIG_MAX_BYTES, validate=_validate_bootstrap, configuration_state="bootstrap",
-                   origin="install_bootstrap")
+                   origin="install_bootstrap", single=single)
 
 
 def bootstrap_runtime_locked(root, expected_snapshot, changes, *, model_owners, lock_fd, jev_model=None):
@@ -1107,8 +1220,7 @@ def bootstrap_runtime_locked(root, expected_snapshot, changes, *, model_owners, 
     _verify_lock(root, lock_fd)
     before = read(root, model_owners=model_owners, jev_model=jev_model)
     if (before["mode"] != "split" or before.get("configuration_state") != "bootstrap"
-            or not _bootstrap_common_valid(before["common"])
-            or before["providers"] != {name: {} for name in PROVIDERS}):
+            or not bootstrap_settings_valid(before)):
         raise ValueError("provider_bootstrap_unverified")
     common = deepcopy(before["common"])
     common.update(deepcopy(changes))
@@ -1120,8 +1232,8 @@ def bootstrap_runtime_locked(root, expected_snapshot, changes, *, model_owners, 
 
 def _commit(root, expected_snapshot, common, providers, *, selected_provider, model_owners, jev_model, lock_fd,
             config_limit, validate, configuration_state=None, require_completed_bootstrap=False,
-            origin="unattributed", command_id=None):
-    """Commit four settings with durable pending evidence and independent backups.
+            origin="unattributed", command_id=None, single=False):
+    """Commit private settings with durable pending evidence and independent backups.
 
     Initial migration requires the updater's verified quiescence before new
     services start. Later edits require the verified split snapshot and editor
@@ -1167,6 +1279,11 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
         if (any(actual.get(key) != expected_snapshot.get(key) for key in ("files", "authority", "pending", "data", "provider_settings", "root_link"))
                 or actual["root"][:4] != expected_snapshot["root"][:4]):
             raise ValueError("provider_snapshot_changed")
+        single = single or current.get("layout") == "single"
+        if single:
+            if "provider_settings" in common:
+                raise ValueError("provider_config_ambiguous")
+            new_bytes["config"] = _json_bytes({**common, "provider_settings": providers}, limit=config_limit)
         root_handle = _RootHandle(root)
         root_fd = root_handle.fd
         data_fd = settings_fd = stage_fd = None
@@ -1210,11 +1327,12 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                 (_authority_state(_document(old_authority)) if old_authority is not None else None,
                  {"files": {name: pending["after"][name] for name in PROVIDERS},
                   "common_policy_sha256": common_policy_digest(common)}),
-                (_source_limits(old, authority_snapshot is not None, model_owners, jev_model),
+                (_source_limits(current, model_owners, jev_model),
                  _split_limits(common, providers)), origin, command_id)
             stage_name = ".provider-settings-stage-" + operation
             pending_snapshot = authority_raw = None
             created_settings = False
+            pruned = set()
 
             def rollback(error):
                 # Restore the verified pre-commit files after an I/O failure or
@@ -1238,7 +1356,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                                    for fd, name in ((settings_fd, "provider_settings"), (stage_fd, stage_name)))):
                         raise ValueError("provider_snapshot_changed")
                     targets = [(root_fd, "config.json", "config", old["config"], new_bytes["config"], False, config_limit),
-                               *((settings_fd, key + ".json", key, old[key], new_bytes[key], True, CONFIG_MAX_BYTES)
+                               *((settings_fd, key + ".json", key, old[key], None if single else new_bytes[key], True, CONFIG_MAX_BYTES)
                                  for key in PROVIDERS),
                                (data_fd, ".provider-settings-authority.json", "authority", old_authority,
                                 authority_raw, True, CONFIG_MAX_BYTES)]
@@ -1255,7 +1373,14 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                                  if stage_fd is not None else None)
                         if saved is None and current == before:
                             continue
-                        if (stage_fd is None or saved != before or after is None
+                        if saved is None and moved_name in pruned:
+                            # The original was retired only after its independent backup was verified.
+                            saved, _ = _read_file(data_fd, ".provider-settings-backup-" + operation + "-"
+                                                  + moved_name + ".bin", limit=limit)
+                            if saved != before or saved is None:
+                                raise ValueError("provider_backup_invalid")
+                            _write_new(stage_fd, moved_name, saved, limit=limit)
+                        if (stage_fd is None or saved != before or after is None and not (single and moved_name in PROVIDERS)
                                 or current not in ((None, after) if saved is not None else (after,))):
                             raise ValueError("provider_snapshot_changed")
                         if current is not None:
@@ -1315,7 +1440,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                 original = authority_snapshot if name == "authority" else actual["files"][name]
                 if backup["sha256"] != original["sha256"] or backup["identity"][:2] == original["identity"][:2]:
                     raise ValueError("provider_backup_invalid")
-            if settings_fd is None:
+            if settings_fd is None and not single:
                 os.mkdir("provider_settings", 0o700, dir_fd=data_fd)
                 created_settings = True
                 os.fsync(data_fd)
@@ -1323,7 +1448,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             os.mkdir(stage_name, 0o700, dir_fd=data_fd)
             os.fsync(data_fd)
             stage_fd = _directory(data_fd, stage_name, private=True)
-            settings_anchor = _directory_anchor(os.fstat(settings_fd))
+            settings_anchor = _directory_anchor(os.fstat(settings_fd)) if settings_fd is not None else None
             stage_anchor = _directory_anchor(os.fstat(stage_fd))
             expected = dict(actual["files"])
             moved = []
@@ -1336,12 +1461,15 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                         _must_be_absent(data_fd, name)
                 if (_directory_anchor(os.fstat(root_fd)) != root_anchor
                         or _directory_anchor(os.stat("data", dir_fd=root_fd, follow_symlinks=False)) != data_anchor
-                        or _directory_anchor(os.stat("provider_settings", dir_fd=data_fd, follow_symlinks=False)) != settings_anchor
+                        or settings_fd is not None and _directory_anchor(os.stat(
+                            "provider_settings", dir_fd=data_fd, follow_symlinks=False)) != settings_anchor
                         or _directory_anchor(os.stat(stage_name, dir_fd=data_fd, follow_symlinks=False)) != stage_anchor
                         or _read_file(data_fd, ".provider-settings-pending.json")[1] != pending_snapshot
                         or _read_file(data_fd, ".provider-settings-authority.json")[1] != authority_snapshot):
                     raise ValueError("provider_snapshot_changed")
-                for key in _FILES:
+                if settings_fd is None:
+                    _must_be_absent(data_fd, "provider_settings")
+                for key in (_FILES if settings_fd is not None else ("config",)):
                     parent, name = (root_fd, "config.json") if key == "config" else (settings_fd, key + ".json")
                     if _read_file(parent, name, private=key != "config",
                                   limit=config_limit if key == "config" else CONFIG_MAX_BYTES)[1] != expected[key]:
@@ -1351,13 +1479,14 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                                   limit=config_limit if moved_name == "config" else CONFIG_MAX_BYTES)[1] != snapshot:
                         raise ValueError("provider_snapshot_changed")
 
-            for key in _FILES:
+            for key in (_FILES if settings_fd is not None else ("config",)):
                 check()
                 parent, name = (root_fd, "config.json") if key == "config" else (settings_fd, key + ".json")
-                expected[key] = _replace(parent, name, new_bytes[key], stage_fd, expected[key], key, moved,
+                content = None if single and key != "config" else new_bytes[key]
+                expected[key] = _replace(parent, name, content, stage_fd, expected[key], key, moved,
                                          key != "config", config_limit if key == "config" else CONFIG_MAX_BYTES)
             check()
-            authority = {"version": 2, "state": "committed",
+            authority = {"version": SINGLE_FILE_AUTHORITY_VERSION if single else 2, "state": "committed",
                          "common_policy_sha256": common_policy_digest(common),
                          "files": {name: pending["after"][name] for name in PROVIDERS}}
             if configuration_state is not None:
@@ -1369,6 +1498,11 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
             # Written while pending still holds readers; see the docstring for its failures.
             _write_new(stage_fd, CHANGE_RECORD, record_raw, limit=_CHANGE_RECORD_MAX_BYTES)
             check()
+            if single:
+                _drop_staged_originals(data_fd, stage_fd, operation,
+                                       {**pending["before"], "authority": pending["authority_before"]}, pruned)
+                moved.clear()
+                check()
             os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
             undo = None
             os.fsync(data_fd)
@@ -1378,6 +1512,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                 for name in (".provider-bootstrap-fresh.json", ".provider-bootstrap-complete.json"):
                     _must_be_absent(data_fd, name)
             if (final["mode"] != "split" or final["snapshot"]["files"] != expected
+                    or (final.get("layout") == "single") != single
                     or final.get("configuration_state") != configuration_state
                     or final["snapshot"].get("root_link") != actual.get("root_link")
                     or final["snapshot"]["root"][:4] != actual["root"][:4]):

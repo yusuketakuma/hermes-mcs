@@ -147,7 +147,7 @@ AnthropicとOpenAIを合わせた費用上限の既定値は、1日80ドル・1�
 設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
 
-**上限の変更記録**: 提供元別設定（`data/provider_settings/`）を使う環境では、設定を保存するたびに、その保存の作業フォルダ（`data/.provider-settings-stage-<操作ID>/change.json`、所有者だけが読める）へ変更記録を1件残します。記録は、保存した入口（`cloud_llm_budget`・`cloud_llm_providers`・`provider_dialog`・`settings`・`remote_access`・`jev_model`・`setup_init`・`setup_slack_channels`・`setup_fact_source`・`setup_features`・`update_migration`・`install_bootstrap`・`install_runtime`。経路を特定できない保存は `unattributed`）、保存日時（UTC、表示用）、保存前後の4ファイルのハッシュと設定の状態（提供元ファイルのハッシュと共通設定の要約値）、運用上限の保存前後の値と変わった項目です。Jevモデルの切り替えは承認記録の `command_id` も残します。上限を変えない保存でも記録します。
+**上限の変更記録**: 設定を保存するたびに、その保存の作業フォルダ（`data/.provider-settings-stage-<操作ID>/change.json`、所有者だけが読める）へ変更記録を1件残します。記録は、保存した入口（`cloud_llm_budget`・`cloud_llm_providers`・`provider_dialog`・`settings`・`remote_access`・`jev_model`・`setup_init`・`setup_slack_channels`・`setup_fact_source`・`setup_features`・`update_migration`・`install_bootstrap`・`install_runtime`。経路を特定できない保存は `unattributed`）、保存日時（UTC、表示用）、保存前後のハッシュと設定の状態（提供元ごとの値と共通設定を照合するための要約値）、運用上限の保存前後の値と変わった項目です。Jevモデルの切り替えは承認記録の `command_id` も残します。上限を変えない保存でも記録します。
 
 - 対象の上限は、`cloud_llm` の運用上限（日額・月額・期間予算と開始・終了日時・件数・同時送信数・再開期限など）、API別の日額・月額、`semantic.daily_request_budget`・`semantic.until` です。値は数値、`null`（上限なし）、日時、`absent`（未設定のため既定値を使う）、`invalid`（数値・日時として読めない値。値そのものは残しません）のどれかで、`absent` と `null` を区別します。
 - 記録には設定の文字列・認証情報・`.env` の内容・患者情報を含めません。台帳DBには書きません。記録の内容は書き込みの前に作り、書き込みでの入出力の失敗は保存前の状態へ戻します。同名の記録がすでにある場合、読み戻しが一致しない場合、直後の確認で設定が変わっていた場合は、保存中の記録を残して担当者の確認を待ちます。

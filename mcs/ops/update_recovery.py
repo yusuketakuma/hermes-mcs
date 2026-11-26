@@ -300,10 +300,18 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
             return 0                   # fresh journal — leave it alone
         provider_recovery_needs_migration = False
         provider_recovery_mode = None
+        try:
+            split = _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
+        except UpdateError as error:
+            if isinstance(applying, dict) and "provider_settings_migration_required" in applying:
+                return _provider_migration_recovery_hold()
+            _report("provider_rollback_blocked", str(error))
+            return 1
         if (isinstance(applying, dict) and not applying.get("rollback")
-                and "provider_settings_migration_required" in applying):
+                and ("provider_settings_migration_required" in applying or split)):
             try:
-                if applying["provider_settings_migration_required"] is not True:
+                if ("provider_settings_migration_required" in applying
+                        and applying["provider_settings_migration_required"] is not True):
                     raise ValueError("provider_migration_requirement_invalid")
                 target, previous = applying.get("sha"), applying.get("prev_sha")
                 if (not isinstance(target, str) or not isinstance(previous, str)
@@ -326,7 +334,6 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if provider_recovery_mode not in ("hermes", "standalone"):
                     return 1
         try:
-            split = _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
             if split and (applying or stages):
                 # Recovery normally continues on the current tree. A switch
                 # to another tree is separately checked at that operation.
