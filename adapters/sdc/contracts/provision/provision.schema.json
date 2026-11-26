@@ -70,7 +70,8 @@
       "enum": [
         "monitor",
         "support",
-        "restart"
+        "restart",
+        "auto"
       ]
     },
     "Generation": {
@@ -370,7 +371,7 @@
         "profiles": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 3,
+          "maxItems": 4,
           "items": {
             "oneOf": [
               {
@@ -381,6 +382,9 @@
               },
               {
                 "$ref": "#/$defs/RestartProfile"
+              },
+              {
+                "$ref": "#/$defs/AutoProfile"
               }
             ]
           },
@@ -412,6 +416,17 @@
                 "properties": {
                   "profile_id": {
                     "const": "restart"
+                  }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "profile_id": {
+                    "const": "auto"
                   }
                 }
               },
@@ -1508,6 +1523,177 @@
         },
         "request_id": {
           "$ref": "#/$defs/UUID"
+        }
+      }
+    },
+    "AutoPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "purposes",
+        "spki",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$(?![\\s\\S])"
+        },
+        "purposes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "mcs-auto-offer-v3",
+              "mcs-auto-compatibility-v3",
+              "mcs-auto-grant-v3",
+              "mcs-auto-ack-v3",
+              "mcs-auto-status-v3",
+              "mcs-auto-health-ack-v3",
+              "mcs-auto-consent-preview-v3",
+              "mcs-auto-consent-receipt-v3"
+            ]
+          }
+        },
+        "spki": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])",
+          "minLength": 1,
+          "maxLength": 2731
+        },
+        "not_before": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "description": "Public SPKI only. Runtime imports RSA3072/e65537/SHA256, rejects duplicate kid, validates key times and current usability; this shape is not key acceptance."
+    },
+    "AutoPins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/AutoPin"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-offer-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-compatibility-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-grant-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-ack-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-status-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-health-ack-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-consent-preview-v3"
+                }
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "purposes": {
+                "contains": {
+                  "const": "mcs-auto-consent-receipt-v3"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AutoProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "origin",
+        "audience",
+        "pins"
+      ],
+      "properties": {
+        "profile_id": {
+          "const": "auto"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "pins": {
+          "$ref": "#/$defs/AutoPins"
         }
       }
     }

@@ -40,8 +40,8 @@ def test_central_copies_and_existing_shared_contracts_keep_their_frozen_bytes():
     sources = json.loads((ROOT / 'sources.json').read_text())
     frozen = {'support/restart-registration.schema.json': '01a05565e821ab0b134e69903513b97c3608779da1818de217dad6fd87d774d8',
               'support/restart-registration-vectors.json': 'eb6ce02d696631810d3ab58ce98085407d8303da7adb1389eb98439e1338387c',
-              'provision/provision.schema.json': 'b2bea5be19d01a3fb3021408145e39aa9f8a4cd2d76fd7acc0d54c404f2b3649',
-              'provision/provision-vectors.json': 'd6c49ea2dc62d5780f87b8f26f3cb9106f7b36ca36fa66f88b84bcd396fd81aa',
+              'provision/provision.schema.json': 'a30a8e68357f553dd16a24f33fad345d0544c14adb88b2ec026c4e1b7781db60',
+              'provision/provision-vectors.json': '54f214d163470ccf41fe1cd5c7fa939eab0fb0af19abd5581ecec9afcb978d20',
               'diagnostics/diagnostics.schema.json': 'ada29dd8777db53672e75a14a16fc1ed175135a34c4fdb21e56e29908b3ac427',
               'diagnostics/diagnostics-vectors.json': '97ee03a1766fc538ac5c505a508b5e16f765b64c698c76b8bf04218a1b561fae'}
     release_files = {
@@ -60,7 +60,7 @@ def test_central_copies_and_existing_shared_contracts_keep_their_frozen_bytes():
     original = {path: digest for path, digest in sources['files'].items() if path not in release_files and path not in registration_files}
     # Pin the original 21 entries as well as the six byte-identical central release contracts.
     assert len(original) == 21
-    assert hashlib.sha256(raw(original)).hexdigest() == 'caf6060a34a56a960fe3cb660062d5799941b80a85f7070e6a248c862b7c432e'
+    assert hashlib.sha256(raw(original)).hexdigest() == '93a61c0ec98f47ec6a38de912206c71f44486848865c2a63cd6e2a560d13ec59'
     assert frozen.keys() <= sources['files'].keys()
     for path, expected in sources['files'].items():
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected

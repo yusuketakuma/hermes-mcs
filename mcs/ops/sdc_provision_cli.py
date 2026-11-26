@@ -33,8 +33,8 @@ def add_arguments(parser):
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--prepare-provision-root', action='store_true', help='新しい私有領域を準備し、Console発行用のroot IDを保存する')
     group.add_argument('--import-provision', type=Path, metavar='FILE', help='Consoleから受け取った公開bundleを取り込む')
-    group.add_argument('--provision-ack', choices=('monitor', 'support', 'restart'), metavar='PROFILE', help='R1登録後に対象profileの配布受領を中央へ照合・送信する')
-    group.add_argument('--provision-status', choices=('monitor', 'support', 'restart'), metavar='PROFILE', help='対象profileの配布状態を中央へ照会する')
+    group.add_argument('--provision-ack', choices=('monitor', 'support', 'restart', 'auto'), metavar='PROFILE', help='R1登録後に対象profileの配布受領を中央へ照合・送信する')
+    group.add_argument('--provision-status', choices=('monitor', 'support', 'restart', 'auto'), metavar='PROFILE', help='対象profileの配布状態を中央へ照会する')
     parser.add_argument('--confirm-human', action='store_true', help='この配布操作、または connect / rotate-key / disconnect の資格情報変更を本人が確認した')
     parser.add_argument('--reason', help='配布操作・資格情報変更の記録用理由（秘密を含まない半角文字、128文字以内）')
 

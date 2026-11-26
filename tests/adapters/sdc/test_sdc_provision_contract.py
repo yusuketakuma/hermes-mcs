@@ -64,12 +64,12 @@ def no_native_crypto_or_process(monkeypatch):
 
 def test_exact_local_oracle_bytes_and_all_vector_groups_are_accounted_for():
     expected = {
-        'provision.schema.json': 'b2bea5be19d01a3fb3021408145e39aa9f8a4cd2d76fd7acc0d54c404f2b3649',
-        'provision-vectors.json': 'd6c49ea2dc62d5780f87b8f26f3cb9106f7b36ca36fa66f88b84bcd396fd81aa',
+        'provision.schema.json': 'a30a8e68357f553dd16a24f33fad345d0544c14adb88b2ec026c4e1b7781db60',
+        'provision-vectors.json': '54f214d163470ccf41fe1cd5c7fa939eab0fb0af19abd5581ecec9afcb978d20',
     }
     for name, digest in expected.items():
         assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest
-    assert [len(V[group]) for group in ('positive', 'negative', 'runtime_only')] == [30, 104, 6]
+    assert [len(V[group]) for group in ('positive', 'negative', 'runtime_only')] == [31, 104, 6]
     assert {v['name'] for v in V['runtime_only']} == LOCAL_RUNTIME_REJECTIONS | EXTERNAL_RUNTIME_CHECKS
     assert LOCAL_RUNTIME_REJECTIONS.isdisjoint(EXTERNAL_RUNTIME_CHECKS)
 
@@ -134,7 +134,7 @@ DEFINITION_EXAMPLES = definition_examples()
 
 def test_every_fixed_schema_definition_has_a_direct_success_oracle():
     assert set(DEFINITION_EXAMPLES) == set(SCHEMA['$defs'])
-    assert len(DEFINITION_EXAMPLES) == 45
+    assert len(DEFINITION_EXAMPLES) == 48
 
 
 @pytest.mark.parametrize('definition,value', DEFINITION_EXAMPLES.items())

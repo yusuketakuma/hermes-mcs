@@ -28,6 +28,11 @@ VERIFY_TIMEOUT = 5
 MAX_SAFE_INTEGER = 2**53 - 1
 PURPOSES = frozenset({'operation', 'execution-grant', 'consent-preview'})
 RESTART_PURPOSES = frozenset({'restart-operation', 'restart-execution-grant', 'restart-consent-preview'})
+# v3自動更新のdevice pin purpose(=wire path全種+compatibility)。publisher用
+# publication purposeはdevice bundleへ含めない。
+AUTO_PURPOSES = frozenset({'mcs-auto-offer-v3', 'mcs-auto-compatibility-v3', 'mcs-auto-grant-v3',
+                           'mcs-auto-ack-v3', 'mcs-auto-status-v3', 'mcs-auto-health-ack-v3',
+                           'mcs-auto-consent-preview-v3', 'mcs-auto-consent-receipt-v3'})
 ENVIRONMENT = {'LC_ALL': 'C', 'OPENSSL_CONF': '/dev/null'}
 
 
@@ -129,6 +134,15 @@ def _validate_pins(pins, *, purpose, now_ms, purposes):
 def validate_pins(pins, *, purpose, now_ms):
     """Validate provisioned R4a public pins before HTTP; never discover or adopt keys."""
     return _validate_pins(pins, purpose=purpose, now_ms=now_ms, purposes=PURPOSES)
+
+
+def validate_auto_pins(pins, *, purpose, now_ms):
+    """Validate v3 auto-update device pins for provisioning cross-checks only."""
+    try:
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        return _validate_pins(pinned, purpose=purpose, now_ms=now_ms, purposes=AUTO_PURPOSES)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, ImportError):
+        raise SignatureError() from None
 
 
 def validate_restart_pins(pins, *, purpose, now_ms):

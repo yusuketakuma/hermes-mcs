@@ -37,20 +37,24 @@
     "../../src/security.js": "d5f6007b5b0dc87abee6b483a4a689ebf284a764a4a403fdd80bcbf8ce050928"
   },
   "canonical": {
-    "policy": "{\"channel_ref\":\"authenticated-console-manual-v1\",\"issuer_ref\":\"synthetic-provision\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"profiles\":[{\"audience\":\"sdc:synthetic\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"profile_id\":\"monitor\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"profile_id\":\"support\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"profile_id\":\"restart\"}],\"schema_version\":\"sdc.provision.policy.v1\"}",
-    "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+    "policy": "{\"channel_ref\":\"authenticated-console-manual-v1\",\"issuer_ref\":\"synthetic-provision\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"profiles\":[{\"audience\":\"sdc:synthetic\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"profile_id\":\"monitor\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"profile_id\":\"support\"},{\"audience\":\"sdc:synthetic\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"profile_id\":\"restart\"},{\"audience\":\"sdc:auto\",\"origin\":\"https://auto.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"a6903e7013bb759c627215ce5c6be08cb6791473a08c839e45852f84b2e5c0ea\",\"not_before\":1792663140000,\"purposes\":[\"mcs-auto-offer-v3\",\"mcs-auto-compatibility-v3\",\"mcs-auto-grant-v3\",\"mcs-auto-ack-v3\",\"mcs-auto-status-v3\",\"mcs-auto-health-ack-v3\",\"mcs-auto-consent-preview-v3\",\"mcs-auto-consent-receipt-v3\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"profile_id\":\"auto\"}],\"schema_version\":\"sdc.provision.policy.v1\"}",
+    "policy_hash": "aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8",
     "bundles": {
       "monitor": {
-        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":null,\"console_origin\":\"https://console.invalid\",\"device_epoch\":null,\"device_id\":null,\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792749600000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"monitor\",\"provision_id\":\"00000000-0000-4000-8000-00000000000a\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
-        "sha256": "2d26846dbd296f39f39688184b09fd8cb1836c3b61619513135fa30031d99240"
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":null,\"console_origin\":\"https://console.invalid\",\"device_epoch\":null,\"device_id\":null,\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792749600000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://ingest.invalid\",\"pins\":[],\"policy_hash\":\"aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"monitor\",\"provision_id\":\"00000000-0000-4000-8000-00000000000a\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "b6f07081fa3a6a8cb30dd89091024caf69be2a025fc6e53608ced8b2a32b42ec"
       },
       "support": {
-        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"support\",\"provision_id\":\"00000000-0000-4000-8000-00000000000b\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
-        "sha256": "64a64b83643f182fc3125e5f7c56e5b2599ce2135760af4d065d1fe01097c7ae"
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-support-3072\",\"not_before\":1792663140000,\"purposes\":[\"operation\",\"execution-grant\",\"consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"policy_hash\":\"aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"support\",\"provision_id\":\"00000000-0000-4000-8000-00000000000b\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "68b2f97f5afbc90872c925c61fec790a81b795dc68bbed96480894e0b1fbfe07"
       },
       "restart": {
-        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"policy_hash\":\"ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"restart\",\"provision_id\":\"00000000-0000-4000-8000-00000000000c\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
-        "sha256": "1d9903313e6e6dd10a0d41fec3f199f55c5212998654b00a91550c04e84847b9"
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"synthetic-restart-3072\",\"not_before\":1792663139000,\"purposes\":[\"restart-operation\",\"restart-execution-grant\",\"restart-consent-preview\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAlA50K5sKI4LJSTJug0UtFUHr8JtegZNDNxynV8XE6X9W_XCy_iy8GPSOTZ3L8q8t1Dcru6dva9c2d-CXh9Da70WIByfRaLK3BykmDE14zVrUC95Rw9_CtlE9dygJxriArP7Dv0BN86E-LQz7j4j6pq9wHI0vhKXbiCLfj9vsDc6-8Locvyw1Iu45qhLHqKDc7_srbpEQG0xGBHGV0I3vZjPDb1dfzebVNJEqBV_SuX6EHP6Xrr6iFH8IdOdORDpV_mLvK2oXQZqFh5XBmi00tRtbGYX51Fke-xZnXzlTKHKVPe69yVsoUSjuMLhPbLYaoJPgqIspliVhuwRnBy4uOQWTHhufVhghWkOnQ2rGYWB--oHGfm174C0XkQUk9Ru27vLub_sqrI08EwV35-RFxZg2sqJAXaWMHC-7lfjFuT4onWTgfWRbCEH-yAPJMBp6b9WLYuScUiZsejdUmOaTFj0w7NND8aoaQ8SOZJog9W6qzuRHjL5wc0keIhJLct-HAgMBAAE\"}],\"policy_hash\":\"aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"restart\",\"provision_id\":\"00000000-0000-4000-8000-00000000000c\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "097f9fbde4ba58126bfa7e524ca1b2f73dd9b02cd07f46da906b09f9d3904348"
+      },
+      "auto": {
+        "canonical": "{\"audience\":\"sdc:synthetic\",\"channel_ref\":\"authenticated-console-manual-v1\",\"claim_id\":\"00000000-0000-4000-8000-000000000006\",\"console_origin\":\"https://console.invalid\",\"device_epoch\":1,\"device_id\":\"00000000-0000-4000-8000-000000000005\",\"enrollment_id\":\"00000000-0000-4000-8000-000000000003\",\"environment\":\"synthetic\",\"expires_at\":1792665000000,\"generation\":1,\"import_expires_at\":1792664100000,\"installation\":\"self\",\"issued_at\":1792663200000,\"issued_by\":\"1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06\",\"issuer_ref\":\"synthetic-provision\",\"origin\":\"https://support.invalid\",\"pins\":[{\"expires_at\":1792666800000,\"kid\":\"a6903e7013bb759c627215ce5c6be08cb6791473a08c839e45852f84b2e5c0ea\",\"not_before\":1792663140000,\"purposes\":[\"mcs-auto-offer-v3\",\"mcs-auto-compatibility-v3\",\"mcs-auto-grant-v3\",\"mcs-auto-ack-v3\",\"mcs-auto-status-v3\",\"mcs-auto-health-ack-v3\",\"mcs-auto-consent-preview-v3\",\"mcs-auto-consent-receipt-v3\"],\"spki\":\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE\"}],\"policy_hash\":\"aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8\",\"policy_revision\":\"00000000-0000-4000-8000-000000000004\",\"previous_provision_id\":null,\"profile_id\":\"auto\",\"provision_id\":\"00000000-0000-4000-8000-00000000000b\",\"realm_epoch\":\"synthetic-provision-realm\",\"root_id\":\"00000000-0000-4000-8000-000000000002\",\"schema_version\":\"sdc.provision.bundle.v1\",\"tenant\":\"self\",\"validator_revision\":\"sdc.provision.validator.v1\"}",
+        "sha256": "9275e9581464112bb142d8fdce516bc5c9a9f2e6bce0dd5f44e3d12a8d15174d"
       }
     }
   },
@@ -105,6 +109,29 @@
                 "expires_at": 1792666800000
               }
             ]
+          },
+          {
+            "profile_id": "auto",
+            "origin": "https://auto.invalid",
+            "audience": "sdc:auto",
+            "pins": [
+              {
+                "kid": "a6903e7013bb759c627215ce5c6be08cb6791473a08c839e45852f84b2e5c0ea",
+                "purposes": [
+                  "mcs-auto-offer-v3",
+                  "mcs-auto-compatibility-v3",
+                  "mcs-auto-grant-v3",
+                  "mcs-auto-ack-v3",
+                  "mcs-auto-status-v3",
+                  "mcs-auto-health-ack-v3",
+                  "mcs-auto-consent-preview-v3",
+                  "mcs-auto-consent-receipt-v3"
+                ],
+                "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+                "not_before": 1792663140000,
+                "expires_at": 1792666800000
+              }
+            ]
           }
         ]
       }
@@ -136,7 +163,7 @@
         "channel_ref": "authenticated-console-manual-v1",
         "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
         "validator_revision": "sdc.provision.validator.v1",
-        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "policy_hash": "aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8",
         "issued_at": 1792663200000,
         "import_expires_at": 1792664100000,
         "expires_at": 1792749600000
@@ -181,7 +208,7 @@
         "channel_ref": "authenticated-console-manual-v1",
         "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
         "validator_revision": "sdc.provision.validator.v1",
-        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "policy_hash": "aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8",
         "issued_at": 1792663200000,
         "import_expires_at": 1792664100000,
         "expires_at": 1792665000000
@@ -226,7 +253,7 @@
         "channel_ref": "authenticated-console-manual-v1",
         "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
         "validator_revision": "sdc.provision.validator.v1",
-        "policy_hash": "ebcea3d3959598376698f86bc0f62bae9fb6ddbaed7febe6a6233e2e95240936",
+        "policy_hash": "aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8",
         "issued_at": 1792663200000,
         "import_expires_at": 1792664100000,
         "expires_at": 1792665000000
@@ -755,6 +782,56 @@
       "value": {
         "code": "SCOPE_DENIED",
         "request_id": "00000000-0000-4000-8000-00000000001e"
+      }
+    },
+    {
+      "name": "auto bundle",
+      "definition": "Bundle",
+      "value": {
+        "schema_version": "sdc.provision.bundle.v1",
+        "provision_id": "00000000-0000-4000-8000-00000000000b",
+        "root_id": "00000000-0000-4000-8000-000000000002",
+        "enrollment_id": "00000000-0000-4000-8000-000000000003",
+        "policy_revision": "00000000-0000-4000-8000-000000000004",
+        "previous_provision_id": null,
+        "tenant": "self",
+        "installation": "self",
+        "environment": "synthetic",
+        "realm_epoch": "synthetic-provision-realm",
+        "profile_id": "auto",
+        "generation": 1,
+        "device_id": "00000000-0000-4000-8000-000000000005",
+        "claim_id": "00000000-0000-4000-8000-000000000006",
+        "device_epoch": 1,
+        "origin": "https://support.invalid",
+        "audience": "sdc:synthetic",
+        "pins": [
+          {
+            "kid": "a6903e7013bb759c627215ce5c6be08cb6791473a08c839e45852f84b2e5c0ea",
+            "purposes": [
+              "mcs-auto-offer-v3",
+              "mcs-auto-compatibility-v3",
+              "mcs-auto-grant-v3",
+              "mcs-auto-ack-v3",
+              "mcs-auto-status-v3",
+              "mcs-auto-health-ack-v3",
+              "mcs-auto-consent-preview-v3",
+              "mcs-auto-consent-receipt-v3"
+            ],
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA0KRZb8C0rprZBD0V0QtrYyWo3kI5Jb_BjBLO5qYOO_c8q4pCscU5BZnc5Uif1ZREnTHf9b_TBV0kBOusZwuz7x7P3y8hKqXyEMbQAB9Q7QKSYvb4VsqNmLGJOkLJW9C0vp3fMEjwQYosT65c_rVjlZGWzJlDog8sYH2sY-VIS8WghOtVAPljrRfPl1EPmRyMkvOTCKZb0VGkz9CAfVGYvW5El5NOr0vCnzR1lBkBsb2uL0DEDWAzPQgxydUR6v_m0revaBt-W1nf3sosn9WpkunS_9-92tSVv6YZiGA5-bbznOXFp4js_CFj29krldZOFKF_56rgCsg9haS56gfBNtX059TbXVJ8ObAZzvLA-7qW_cHr1iTaIX1qPorb52iMCFqfXO2OKIgDY2_8OveWsXuYXBo7DhXIpLUk5Hpz16yEIeGtM9-wOvVpjXwIpmxxQGih55Dy1-qDLG_02eBTGDGDPuG4cnO0uw-4JL5xL4mAQdipnWFZpjAjZq-Tq9t9AgMBAAE",
+            "not_before": 1792663140000,
+            "expires_at": 1792666800000
+          }
+        ],
+        "console_origin": "https://console.invalid",
+        "issuer_ref": "synthetic-provision",
+        "channel_ref": "authenticated-console-manual-v1",
+        "issued_by": "1dd992cfec03ec9c67c6270620b1b38db03d571d722ca3d60d245f7fc524af06",
+        "validator_revision": "sdc.provision.validator.v1",
+        "policy_hash": "aff700f8d1d83d4e8415323bf3a43c83849fb36098d914d5f5ed4f62485413b8",
+        "issued_at": 1792663200000,
+        "import_expires_at": 1792664100000,
+        "expires_at": 1792665000000
       }
     }
   ],
