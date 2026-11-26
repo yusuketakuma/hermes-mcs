@@ -310,6 +310,13 @@ class OpenAIClient(CloudClient):
         if obj.get("service_tier") != "default":
             raise AnthropicError("pricing_unverified", "service_tier_unknown")
         meta["usage"] = validate_usage(obj.get("usage"))
+        # The provider's own top-level filter verdict classifies before any
+        # body parsing: a filtered answer is the proven refusal even when the
+        # output parts it carries are themselves broken.
+        status = obj.get("status")
+        details = obj.get("incomplete_details")
+        if status == "incomplete" and isinstance(details, dict) and details.get("reason") == "content_filter":
+            raise AnthropicError("contract_error", "refusal")
         output = obj.get("output")
         if not isinstance(output, list) or any(not isinstance(b, dict) for b in output):
             raise AnthropicError("protocol_error", "content_invalid")
@@ -323,11 +330,18 @@ class OpenAIClient(CloudClient):
             if not isinstance(content, list):
                 raise AnthropicError("protocol_error", "content_invalid")
             for part in content:
+                if isinstance(part, dict) and part.get("type") == "refusal":
+                    # A provider-proven refusal may be billed: never resent or counted.
+                    # The official shape carries its refusal string; without it the
+                    # part proves nothing and stays resendable-unknown output. The
+                    # string itself is never read or stored.
+                    if not isinstance(part.get("refusal"), str):
+                        raise AnthropicError("contract_error", "unexpected_output")
+                    raise AnthropicError("contract_error", "refusal")
                 if not isinstance(part, dict) or part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                     raise AnthropicError("contract_error", "unexpected_output")
                 texts.append(part["text"])
-        status = obj.get("status")
-        length = status == "incomplete" and obj.get("incomplete_details") == {"reason": "max_output_tokens"}
+        length = status == "incomplete" and details == {"reason": "max_output_tokens"}
         answer = "".join(texts)
         reasoning_only = bool(output) and all(item.get("type") == "reasoning" for item in output)
         if ((status != "completed" and not length) or not output
