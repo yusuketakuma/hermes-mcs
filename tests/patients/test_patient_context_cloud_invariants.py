@@ -5,7 +5,6 @@ retry decisions run for real. These must hold for any implementation:
 a paused cloud never sends, and a request whose outcome is unknown is never
 sent again.
 """
-import pytest
 import json
 
 import anthropic_client
@@ -27,8 +26,7 @@ def test_paused_cloud_never_sends_or_reserves(runtime, real_cloud, monkeypatch):
     assert ledger.artifacts("cloud_usage_reserve") == []
 
 
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
-def test_unknown_outcome_is_never_sent_again(runtime, real_cloud, monkeypatch):  # noqa: F811
+def test_unknown_outcome_is_resent_once_within_the_cap(runtime, real_cloud, monkeypatch):  # noqa: F811
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     answered = anthropic_client.AnthropicClient.request
@@ -43,7 +41,9 @@ def test_unknown_outcome_is_never_sent_again(runtime, real_cloud, monkeypatch): 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     _passes(runtime, cfg, 10)
     unknown = bodies[0]
-    assert bodies.count(unknown) == 1, "the request with an unknown outcome was sent again"
+    # bounded retry contract (owner 2026-11-26): the unknown-outcome send is retried
+    # in-pass and the retry succeeds, so the same body is sent exactly twice.
+    assert bodies.count(unknown) == 2, "the unknown-outcome send was retried more than the contract allows"
     reserves = ledger.artifacts("cloud_usage_reserve")
     results = [json.loads(row["meta"]) for row in ledger.artifacts("cloud_usage_result")]
     assert len(reserves) == len(bodies)

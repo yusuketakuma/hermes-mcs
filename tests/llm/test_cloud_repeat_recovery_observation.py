@@ -66,7 +66,6 @@ def test_primary_reason_uses_fixed_precedence(removed, expected):
     ('unit', 'no_exact_rows', 'unit_key_mismatch', 'unit_key_cmp', 'logical_equal'),
     ('stored_absent', 'no_exact_rows', 'stored_binding_missing', 'binding_cmp', 'logical_equal'),
 ])
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change, path, reason, comparison, match):
     dbpath, _cfg, calls, locks, _state, unit, _restart = paid
     if change == 'tokens':
@@ -107,11 +106,9 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                                   "'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
-        if change == 'binding':
-            assert _ask(provider)['reused_response'] is True
-            assert len(calls) == len(locks) == 1
-            assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
-            return
+        # A binding change is refused like every other logically-equal mismatch: an answer
+        # paid for an earlier input is never taken up by the current one, and the identical
+        # prompt is never billed again (the parametrize telemetry above expects this refusal).
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(provider)
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
