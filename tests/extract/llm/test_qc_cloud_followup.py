@@ -9,12 +9,14 @@ stubbed cloud transport only.
 import copy
 import dataclasses
 import json
+import sqlite3
 import time
 
 import pytest
 
 import cloud_backlog
 import cloud_policy
+import extract_llm_store
 import extract_llm as worker
 import external_transfer
 import mcs_util
@@ -406,6 +408,13 @@ def test_a_flipped_provider_preference_resumes_on_the_original_provider_once_its
     assert cloud_backlog.backlog_admits(worker.HOME, cfg, settings, ledger)
     allowed, blocked = cloud_backlog._backlog_admission(worker.HOME, cfg, settings, ledger, "reextract")
     assert blocked is None and allowed == {ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['message_id']}
+    def busy(db):
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(extract_llm_store, "_open_cloud_attempts", busy)
+        assert cloud_backlog._backlog_admission(worker.HOME, cfg, settings, ledger, "reextract") == (
+            None, "window_history_unverified")
     assert worker.run_pending(ledger, limit=1, budget_s=180, workers=1, background=True, cloud_only=True, admitted_ids=allowed)['done'] == 1
     assert not openai_calls, "nothing moves to the preferred provider"
     assert {call['model'] for call in cloud_calls} == {pin['backlog']['model']}

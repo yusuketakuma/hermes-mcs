@@ -639,7 +639,11 @@ def _main() -> int:
                             total["done"] += settled["done"]
                             if not _writer_current(full=True):
                                 return retire()
-                        if not carry and (stop is None or time.monotonic() < stop):
+                            if carry:
+                                carry_waiting()
+                                pause(2)
+                                continue
+                        if stop is None or time.monotonic() < stop:
                             sem, ran_semantic = semantic_pass()
                             if sem.get("run_lock_lost") in ("held", "updated"):
                                 _settle_carry(led, carry, write=False)

@@ -342,7 +342,16 @@ def _backlog_admission(root, cfg, settings, ledger, route):
                        for name in settings["provider_order"])):
         return None, reason
 
-    # New requests wait for the primary. An open QC attempt already owns its provider.
+    try:
+        allowed = _resumable_qc_ids(root, cfg, settings, ledger)
+    except sqlite3.Error:
+        return None, "window_history_unverified"
+    return (allowed, None) if allowed else (None, reason)
+
+
+def _resumable_qc_ids(root, cfg, settings, ledger):
+    """New requests wait for the primary. An open QC attempt already owns its provider."""
+    import cloud_policy
     from extract_llm_qc import _open_attempt_contracts
     from extract_llm_store import _open_cloud_attempts
     allowed = set()
@@ -356,7 +365,7 @@ def _backlog_admission(root, cfg, settings, ledger, route):
                                               root=root, ledger=ledger, wait=False)
         if state.state == "usable" and cloud_policy.in_scope(state.settings, "reextract", row["project_id"]):
             allowed.add(row["message_id"])
-    return (allowed, None) if allowed else (None, reason)
+    return allowed
 
 
 def backlog_admits(root, cfg, settings, ledger):

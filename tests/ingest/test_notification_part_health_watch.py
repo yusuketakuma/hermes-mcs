@@ -129,6 +129,13 @@ def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
     assert "送信完了が未確認" not in lines
 
 
+def test_malformed_notification_block_has_no_delivery_count(tmp_path):
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts="invalid")
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert report["notify_incomplete_parts"] is None
+    assert "件数は未測定" in _rows(report)
+
+
 def test_legacy_unmeasured_input_with_the_old_code_stays_unmeasured(tmp_path):
     # pre-separation producers wrote notification_parts_incomplete for an
     # unmeasurable read; the current observation is the unmeasurable read, so
@@ -291,6 +298,8 @@ def test_expired_carried_parts_read_as_unmeasured(tmp_path):
     stale['reason'] = 'observation_limit'
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=stale)
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["notify_active_incomplete_parts"] is None
+    assert report["notify_unknown_part_outcomes"] is None
     rows = _rows(report)
     assert "件数は未測定" in rows and "5件" not in rows
 
