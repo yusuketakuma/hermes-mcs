@@ -36,6 +36,23 @@ class ReadFailure:
         return self.db.execute(sql, *args, **kwargs)
 
 
+class TransientReadFailure:
+    """Fail the matching read exactly once, then let the fresh snapshot through."""
+
+    def __init__(self, db, phase, error):
+        self.db, self.phase, self.error = db, phase, error
+        self.failures = 0
+
+    def __getattr__(self, name):
+        return getattr(self.db, name)
+
+    def execute(self, sql, *args, **kwargs):
+        if self.failures == 0 and _READS[self.phase] in sql:
+            self.failures += 1
+            raise self.error
+        return self.db.execute(sql, *args, **kwargs)
+
+
 def _ask(provider, prompt="synthetic prompt"):
     return provider(prompt, deadline=time.monotonic() + 60, max_tokens=100)
 
@@ -76,6 +93,7 @@ def _events(capsys):
 @pytest.mark.parametrize("existing_paid", [False, True])
 @pytest.mark.parametrize("kind,code,name", [
     ("sqlite_error", sqlite3.SQLITE_BUSY, "SQLITE_BUSY"),
+    ("sqlite_error", sqlite3.SQLITE_LOCKED, "SQLITE_LOCKED"),
     ("sqlite_error", sqlite3.SQLITE_INTERRUPT, "SQLITE_INTERRUPT"),
     ("sqlite_error", sqlite3.SQLITE_IOERR_READ, "SQLITE_IOERR_READ"),
     ("sqlite_error", None, None),
@@ -103,7 +121,10 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         with monkeypatch.context() as patch:
             patch.setattr(ledger, "db", proxy)
             _assert_refusal(provider, phase, "synthetic prompt" if phase == "recover_response" else _SECRET)
-        assert proxy.failures == 1
+        # A transiently busy exact-answer read earns one bounded fresh-snapshot
+        # retry before the same hold; every other failure classifies on first read.
+        assert proxy.failures == (2 if phase == "recover_response"
+                                  and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) else 1)
         assert len(calls) == sent and len(locks) == slots
         assert _history(ledger) == before
         assert not ledger.db.in_transaction
@@ -213,6 +234,30 @@ def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, 
             patch.setattr(cloud_inference, "sys", SimpleNamespace(stderr=SimpleNamespace(write=failed_log)))
             patch.setattr(ledger, "db", ReadFailure(ledger.db, phase, sqlite3.OperationalError(_SECRET)))
             _assert_refusal(provider, phase, "synthetic prompt" if phase == "recover_response" else _SECRET)
+        assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
+    assert _events(capsys) == []
+
+
+def test_one_transient_busy_recover_read_retries_a_fresh_snapshot_and_reuses_the_paid_answer(
+        paid, monkeypatch, capsys):
+    """A locked database on the exact paid-answer read is often gone one snapshot
+    later: a single bounded retry recovers the answer with zero reservation and
+    zero POST instead of parking the unit unresolved."""
+    path, _cfg, calls, locks, _state, unit, _restart = paid
+    busy = sqlite3.OperationalError(_SECRET)
+    busy.sqlite_errorcode, busy.sqlite_errorname = sqlite3.SQLITE_BUSY, "SQLITE_BUSY"
+    with closing(Ledger(path)) as ledger:
+        with legacy_cloud_routes():
+            original = _ask(unit(ledger))
+        before, sent, slots = _history(ledger), len(calls), len(locks)
+        provider = unit(ledger)
+        proxy = TransientReadFailure(ledger.db, "recover_response", busy)
+        with monkeypatch.context() as patch:
+            patch.setattr(ledger, "db", proxy)
+            recovered = _ask(provider, "synthetic prompt")
+        assert proxy.failures == 1
+        assert recovered.pop("reused_response") is True and recovered == original
+        assert provider.unresolved is False
         assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
     assert _events(capsys) == []
 
