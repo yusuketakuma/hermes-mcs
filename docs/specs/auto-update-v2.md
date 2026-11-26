@@ -4,7 +4,7 @@
 
 本書はパッケージ内の正本章とfield一覧を結合したもの。JSON Schema、interfaces.pyi、合成fixture、98項目の受入JSONもZIPに含む。製品実装・配備は未実施。
 
-なお直前の「製品実装・配備は未実施」はこの統合読取り版を作成した 2026-11-10 時点の状態を指す。実装配線の現状（2026-11-24 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール30個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は9個（`release_auto_consent`/`contract`/`health`/`owner`/`state`/`status`/`transport`/`wire` と `runtime_entry`）、残り21個はW14ドライバ接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` は `None` を返すスタブ、owner の `tick`/`recover_tick` 呼出側は未接続（`AUTO_ELIGIBLE=false`）であり、製品ファイルがtick系を呼ばないことは同テストが別途固定している。配備は引き続き未実施である。
+なお直前の「製品実装・配備は未実施」はこの統合読取り版を作成した 2026-11-10 時点の状態を指す。実装配線の現状（2026-11-25 JST・`tests/ops/test_release_auto_wiring.py` が名指しで固定）: v3モジュール33個のうち、製品入口（`update_cli`・`mcs_setup`・`adapters/sdc/protocol`・3ランチャ）からの非テストimportで到達可能な「配線済み」は29個、残り4個（`release_auto_bridge`/`migration`/`recovery` と `release_publish_api`）は接続待ちの「配線待ち」。`scripts/development/release_publish.py` はモジュールではなくW11パブリッシャ入口として別枠。ここでいう配線済みはimport到達可能性の意味であり稼働性ではない: `_v3_consent_wire()` とowner tick driverはpin配布fileとenrollment credentialの揃った端末でだけwireを返すが、contract digest規則・trusted recovery driverは未接続であり、製品ファイルが `recover_tick` を呼ばないことは同テストが別途固定している。配備は引き続き未実施である。
 
 ---
 
@@ -722,6 +722,8 @@ request_id(BuildRequest) = H("publication-request", {repository_id,tag,tag_oid,c
 attempt_key = H("automatic-attempt", {scope,source_target_commit,profile_sha256,config_contract_sha256,data_contract_sha256})
 ```
 
+attempt_keyの`config_contract_sha256`/`data_contract_sha256`は、対象releaseの**検証済みCompatibility payloadに含まれる値**をそのまま使う。端末はconfig/data契約文書からdigestを計算しない・配備値としても配置しない。端末は`MetadataRequest(kind=compatibility)`で取得し署名検証・offer.selectedとの相互照合を済ませたpayloadの2項目だけを使い、同一targetへの自動STARTでは常に同じ値になるためattempt_keyの安定性は中央の署名済みmetadataに帰着する。Compatibilityに無いdigest・未検証のpayload・selected不一致ではstageへ進まずfail-closedとする。
+
 attempt_keyにtag、publication ID、日付、policy epoch、artifactの再圧縮digest、operation IDを入れて消費済み枠を迂回させない。通常の同じtarget commitへの自動STARTは同じattempt_keyとなる。
 Publicationの同一tag予約はrequest_idより強いunique制約を持つ。後でacceptanceが更新されても同じtagで新しいbytesを公開しない。
 
@@ -740,6 +742,8 @@ Publicationの同一tag予約はrequest_idより強いunique制約を持つ。�
 |mcs-release-acceptance-v2|ReleaseAcceptance|正式な検証受入|
 
 rootは既存2-of-3とchain更新を維持。日常release署名keyとdevice grant keyは用途・アクセス権を分離する。公開鍵は初回bridgeで独立確認し、HTTP応答から新keyを自己登録しない。
+
+端末側pin集合の配布形式は`mcs.auto-v3-pins.v1`とする。release control rootの`auto-v3-pins.json`に、閉じたtop-level key集合`{schema_version,pins}`だけを持つcanonical JSONで置く。各pinは`{kid,purposes,spki,not_before,expires_at}`の5keyだけを持ち、kidはsha256hex一意、16件まで。管理者または署名済みrelease closureが配置し、端末のいかなるnetwork経路もこのfileを取得・更新しない。symlink・非regular file・16KiB超・schema違反・未知keyは全てfail-closedで拒否する。用途と期限の評価は`validate_auto_v3_pins`の責務とし、loaderは形状の検査だけを行う。
 BuildRequestのupstream_run_id/attemptは両方存在または両方null。nullは認証済みmanual/composed受入だけで許可し、workflow_runの対象SHA確認を省くためには使わない。
 
 署名payloadが8KiBを超える場合は拒否する。上限拡大で済ませず、対応profile/asset数を減らすか、詳細証拠をcontent-addressed referenceへ分離する。大きいcompatibility catalogueはprofile別envelopeを最大4件まとめる保管物で、端末には該当envelope一件だけを返す。

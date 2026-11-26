@@ -11,11 +11,12 @@ import pytest
 from adapters.sdc.storage import Store
 from runtime_entry import control_root
 import release_auto_deps as deps_mod
+import release_auto_owner as owner_mod
 from release_auto_owner import OwnerError
 from release_auto_services import ServiceError
 from release_auto_wire import WireError
 from release_auto_backup import BackupEvidenceError
-from test_release_auto_witness import seed_owner
+from test_release_auto_witness import seed_owner, CURRENT, PROFILE
 
 
 class _FakeGit:
@@ -122,7 +123,7 @@ def test_unavailable_stubs_fail_closed(env):
     with pytest.raises(WireError):
         deps.signed_send('/v3/x', b'{}')
     with pytest.raises(OwnerError):
-        deps.contract_digests()
+        deps.contract_digests(None, None)
     with pytest.raises(BackupEvidenceError):
         deps.backup_evidence()
     # backup_detail未注入でもwitness providerはfail-closed
@@ -162,11 +163,21 @@ def test_default_drain_labels_hermes_and_lineworks(env):
 
 
 def test_measure_state(env):
-    deps = _build(env, contract_digests=lambda: {
-        'config_contract_sha256': '4' * 64,
-        'data_contract_sha256': '5' * 64})
+    seen = {}
+
+    def digests(target=None, profile=None):
+        seen['target'] = target
+        seen['profile'] = profile
+        return {'config_contract_sha256': '4' * 64,
+                'data_contract_sha256': '5' * 64}
+
+    deps = _build(env, contract_digests=digests)
     seed_owner(env['store'])
     measured = deps.measure_state()
+    # active無しではinstalled releaseがmeasure対象になり、profileはowner正本。
+    # 別release/profileが渡っても通らないよう値まで照合する。
+    assert seen['target'] == dict(CURRENT)
+    assert seen['profile'] == dict(PROFILE)
     assert measured['head'] == 'a' * 40
     assert measured['config_contract_sha256'] == '4' * 64
     assert measured['installed_schema'] == 7
@@ -174,6 +185,32 @@ def test_measure_state(env):
                              'config_contract_sha256',
                              'data_contract_sha256', 'installed_schema',
                              'profile_sha256'}
+
+
+def test_measure_state_prefers_persisted_active_digests(env):
+    def digests(target=None, profile=None):
+        raise AssertionError('persisted digestがあるのにwire再取得した')
+
+    deps = _build(env, contract_digests=digests)
+    seed_owner(env['store'])
+    owner = env['store'].read('release-owner.json')
+    rollout = {'rollout_id': '12345678-1234-4234-8234-123456789abc',
+               'assignment_id': '12345678-1234-4234-8234-123456789abd',
+               'policy_sha256': 'a' * 64, 'cohort_sha256': 'b' * 64,
+               'allocation_epoch': 1, 'authorization_epoch': 1,
+               'stage': 'pilot', 'wave_index': 1}
+    target = dict(CURRENT)
+    target['source_commit'] = 'a' * 40
+    active = owner_mod._blank_active(
+        '12345678-1234-4234-8234-123456789abe', 'STAGED', target,
+        'c' * 64, rollout,
+        contract_digests={'config_contract_sha256': '6' * 64,
+                          'data_contract_sha256': '7' * 64})
+    owner['active'] = active
+    env['store'].write('release-owner.json', owner)
+    measured = deps.measure_state()
+    assert measured['config_contract_sha256'] == '6' * 64
+    assert measured['data_contract_sha256'] == '7' * 64
 
 
 def test_journal_apply_wiring(env, tmp_path):
@@ -229,3 +266,26 @@ def test_runtime_advance_with_quarantine(env):
     assert callable(deps.runtime_advance)
     assert callable(deps.service_desires)
     assert calls == []
+
+
+def test_wire_backed_digests_pass_through_and_fail_closed(env):
+    class FakeWire:
+        signed_send = verify = fetch_artifact = None
+
+        def release_metadata(self, target, profile):
+            return {'config_contract_sha256': '4' * 64,
+                    'data_contract_sha256': '5' * 64}
+
+    deps = _build(env, wire=FakeWire())
+    assert deps.contract_digests({'release_id': '1' * 64}, {'profile_sha256': '2' * 64}) == {
+        'config_contract_sha256': '4' * 64, 'data_contract_sha256': '5' * 64}
+
+    class BrokenWire:
+        signed_send = verify = fetch_artifact = None
+
+        def release_metadata(self, target, profile):
+            raise RuntimeError('WIRE_UNAVAILABLE')
+
+    deps = _build(env, wire=BrokenWire())
+    with pytest.raises(OwnerError):
+        deps.contract_digests({'release_id': '1' * 64}, {'profile_sha256': '2' * 64})
