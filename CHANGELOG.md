@@ -892,13 +892,13 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - 追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。
 
-- 追加操作は不要です。digest解決にはwire経由のmetadata検証が必要で、release_trust(attestation)配線が未完了の端末では従来どおりfail-closedのままです。
+- 追加操作は不要です。v1.3.0の製品経路ではdigest解決に必要なattestation配線がまだ接続されていないため、digestが必要な対象はすべての端末で従来どおりfail-closedのままです。
 
 - 追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。
 
-- 現行の動作は変わりません。consent wire実factoryとenrollmentが接続されるまで、この部品を呼ぶ製品経路はありません。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。
+- 現行の動作は変わりません。同意CLIと定期tickはpinが配置されたenrollment済みの端末でだけこの部品経由でwireを組み立て、未配置では従来どおりfail-closedです。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。
 
-- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、追加のクラウド送信は発生しません。
+- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、修復の再送は発生しません。未回答の項目を検証する再監査の送信は従来どおり行われます。
 
 ### 技術詳細
 
