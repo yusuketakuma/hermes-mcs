@@ -634,9 +634,13 @@ def patient_source_pass_content(db, pid, identity, descriptor):
     extra = policy.get('extra_propositions')
     if 'extra_propositions' in policy:
         import semantic_jev
-        if (not isinstance(extra, list) or len(extra) != len(set(extra))
-                or any(type(pid) is not str or pid not in semantic_jev.OPTIONAL_PROPOSITIONS
-                       for pid in extra)):
+        # element shape before the duplicate count: unhashable members
+        # (a corrupted persisted row) must classify as the same invalid
+        # descriptor, never an unhandled TypeError
+        if (not isinstance(extra, list)
+                or any(type(member) is not str or member not in semantic_jev.OPTIONAL_PROPOSITIONS
+                       for member in extra)
+                or len(extra) != len(set(extra))):
             raise ValueError('patient_source_descriptor_invalid')
     lo, hi = policy['nomatch_threshold'], policy['match_threshold']
     if (resolve_model(policy['model']) != policy['model'] or type(lo) not in (int, float) or type(hi) not in (int, float)
