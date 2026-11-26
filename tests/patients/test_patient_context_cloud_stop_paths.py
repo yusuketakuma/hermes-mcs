@@ -256,6 +256,7 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     assert len(sent) == (6 if failure in ('transport', 'timeout') else 1) and len(_local_sources(local_calls)) == 1
     assert _local_sources(local_calls)[0] == sent[0]
     lost = _reservations(ledger, 'scan:1')
+    assert len(lost) == len(sent)   # every send holds its own reservation
     assert sorted(_dispositions(ledger)) == sorted((rid, 'superseded_local') for rid in lost)
     paid = _usage(ledger)
     if failure == 'no_usage':
