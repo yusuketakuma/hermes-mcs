@@ -23,7 +23,7 @@ def test_notice_payload_survives_live_ledger_boundary(monkeypatch, tmp_path, lau
         def outbox_add(self, kind, patient, payload):
             calls.append((kind, patient, payload))
 
-    real_repo = str(Path(context.__file__).parents[2])
+    real_repo = str(Path(__file__).resolve().parents[2])
     monkeypatch.setattr(context, 'REPO', str(tmp_path) if launcher else real_repo)
     monkeypatch.setattr(context, 'LEDGER', str(tmp_path / 'synthetic.db'))
     monkeypatch.setattr(context, 'ledger', SimpleNamespace(Ledger=Ledger))
@@ -68,7 +68,7 @@ def test_notice_after_a_tree_move_never_migrates_with_the_loaded_ledger(monkeypa
         pytest.fail('the loaded Ledger must not open a DB of another schema')
 
     calls = []
-    monkeypatch.setattr(context, 'REPO', str(Path(context.__file__).parents[2]))
+    monkeypatch.setattr(context, 'REPO', str(Path(__file__).resolve().parents[2]))
     monkeypatch.setattr(context, 'LEDGER', str(database))
     monkeypatch.setattr(context, 'ledger', SimpleNamespace(Ledger=loaded_ledger, SCHEMA_VERSION=2))
     monkeypatch.setattr(context, '_run_with_lifetime',
@@ -90,7 +90,7 @@ def test_gateway_restart_helper_falls_back_to_the_installed_checkout(monkeypatch
         "raise FileNotFoundError('synthetic missing support file')\n")
     (live / 'deployment/recovery/mcs_recover.py').write_text(
         "def request_gateway_restart(data, agents, uid):\n    return 'installed'\n")
-    monkeypatch.setattr(context, '__file__', str(copy / 'mcs' / 'ops' / 'update_lifecycle_context.py'))
+    monkeypatch.setattr(context, '__file__', str(copy / 'mcs' / 'ops' / 'update' / 'update_lifecycle_context.py'))
     monkeypatch.setattr(context, 'REPO', str(live))
     assert context._load_gateway_restart()('data', 'agents', 501) == 'installed'
     monkeypatch.setattr(context, 'REPO', str(copy))
