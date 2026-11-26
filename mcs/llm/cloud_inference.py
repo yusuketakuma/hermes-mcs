@@ -109,6 +109,11 @@ def _current_cloud_settings():
 
 _RESULT_SAVE_TRIES = 5
 
+# One fresh-snapshot retry of a transiently busy history read is a bounded
+# probe: its sqlite wait stays far under the connection's busy timeout, and
+# the retry is skipped unless the unit still has the probe's cost to spare.
+_TRANSIENT_READ_RETRY_S = 0.25
+
 
 def _after_send_code(metadata):
     """The classifier's after-send code for one attempt's result metadata; None for a clean answer."""
@@ -525,7 +530,7 @@ class CloudInferenceUnit:
                     cloud_policy._observe_recovery(observation, 'skipped_binding')
                     return None
                 self.commit_guard()
-                try:
+                def read_once():
                     body = self.client.body(prompt, tokens, prefix)
                     return cloud_policy.recover_response(self.ledger, route=self.route,
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
@@ -535,6 +540,24 @@ class CloudInferenceUnit:
                         model=self.selection["model"], effort=self.selection.get("effort"),
                         owner=self.owner, scope=self.scope,
                         **({'observation': observation} if observation is not None else {}))
+                try:
+                    try:
+                        return read_once()
+                    except sqlite3.OperationalError as first:
+                        # Only a locked database may be gone one snapshot later; every
+                        # other failure classifies below. The probe re-reads on a fresh
+                        # snapshot, caps its sqlite wait far under the connection's, and
+                        # never runs without the probe's cost left before the deadline.
+                        if (getattr(first, "sqlite_errorcode", 0) & 0xff
+                                not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                                or time.monotonic() + 2 * _TRANSIENT_READ_RETRY_S >= http_deadline):
+                            raise
+                        prior = self.ledger.db.execute("PRAGMA busy_timeout").fetchone()[0]
+                        self.ledger.db.execute("PRAGMA busy_timeout=%d" % int(_TRANSIENT_READ_RETRY_S * 1000))
+                        try:
+                            return read_once()
+                        finally:
+                            self.ledger.db.execute("PRAGMA busy_timeout=%d" % prior)
                 except cloud_client.CloudNotSent:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
