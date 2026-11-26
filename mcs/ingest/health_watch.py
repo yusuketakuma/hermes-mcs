@@ -643,16 +643,6 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
     if snapshot is not None:
         obs["delivery_observation"] = snapshot
     current = snapshot["delivery"]["state"] if snapshot is not None else "unknown"
-    if current == "unknown" and snapshot is not None:
-        probe = snapshot["delivery"]
-        # A4: an unknown evaluation with a healthy read, no unknown renders and
-        # progress inside the stall window is delivery making progress, not an
-        # unverifiable scope; the reason closes while integrity counts stay as is.
-        if (probe.get("reason") is None and probe.get("unknown") == 0
-                and (probe.get("queued") or probe.get("sending"))
-                and probe.get("last_progress_at") is not None
-                and now - probe["last_progress_at"] <= CARD_STALL_S):
-            current = "progressing"
     if current in ("unknown", "pending"):
         reasons = ([_DELIVERY_UNVERIFIED] if current == "unknown" or previous in _DELIVERY_UNRESOLVED
                    else [])
@@ -1128,8 +1118,7 @@ _REASON_JA = {
     'attachment_ocr_ack_unverified': ('OCR警報の受付記録を現在の原資料と照合できません',
         '次回の処理後も続く場合は診断結果と照会コードを開発元へ連絡してください'),
     'attachment_ocr_ack_reconfirm_required': ('OCR警報の受付記録が現在の原資料と一致しません。受付のやり直しが必要です',
-        'python3 -m ocr_failure_ack list で対象を確認し、python3 -m ocr_failure_ack plan のあと '
-        'python3 -m ocr_failure_ack apply --confirm-human --reason <理由> で受付をやり直してください'),
+        '「通知の復旧手順」の「OCR警報の運用受付と本文未回収」に従い、対象を一覧で確認してから受付をやり直してください'),
     'attachment_ocr_ack_recheck_incomplete': ('OCR警報の受付記録の照合が完了しませんでした',
         '次回確認します。続く場合は診断結果と照会コードを開発元へ連絡してください'),
 

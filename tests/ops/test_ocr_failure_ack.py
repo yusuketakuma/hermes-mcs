@@ -253,6 +253,32 @@ def test_cli_plan_and_apply_use_fixed_nonclinical_summary(case, capsys):
     assert 'reason' not in result and 'actor' not in result and 'backup' not in result
 
 
+def test_list_can_reach_later_exhausted_failure(case, capsys):
+    with case.db:
+        case.db.executemany("INSERT INTO attachments(attachment_id,message_id,state,sha256,bytes,downloaded_at) "
+                            "VALUES(?,1,'downloaded',?,32,1)",
+                            [(key, 'a' * 64) for key in range(2, 258)])
+    last = case.ledger.artifact_add(ocr.KIND, json.dumps(dict(case.doc, attachment_id=257)),
+                                    project_id=1, message_id=1, meta={'attachment_id': 257})
+    args = ['--root', str(case.root), 'list']
+    assert operator.main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first['truncated'] and first['unacknowledged_exhausted'] == [case.artifact]
+    assert operator.main(args + ['--after-attachment-id', str(first['next_after_attachment_id'])]) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second['unacknowledged_exhausted'] == [last]
+    assert second['next_after_attachment_id'] is None and not second['truncated']
+
+
+def test_list_rejects_unverifiable_receipt_instead_of_reporting_no_targets(case, capsys):
+    applied = operator.apply(case.root, request(case))
+    with case.db:
+        case.db.execute('DELETE FROM command_receipts WHERE command_id=?', (applied['command_id'],))
+    assert operator.main(['--root', str(case.root), 'list']) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        'outcome': 'rejected', 'error': 'ocr_ack_receipt_unverified'}
+
+
 def test_partial_cohort_and_expired_read_budget_never_prove_complete_ack(case):
     operator.apply(case.root, request(case))
     with case.db:

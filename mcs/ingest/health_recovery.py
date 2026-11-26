@@ -179,6 +179,13 @@ def _host_idle(live: dict) -> bool:
             and "update_marker" in live and live["update_marker"] is None)
 
 
+def _read_gateway_witness(path):
+    try:
+        return _read(path, 2048)
+    except FileNotFoundError:
+        raise ValueError("witness_missing") from None
+
+
 def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | None = None) -> dict:
     import card_worker_status
     import environment_diagnostics
@@ -192,7 +199,7 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
     profile = notify[transport]["profile"]
     data = Path(home) / "data"
     path = card_worker_status._path(data, transport, profile)
-    record = _read(path, 2048)
+    record = _read_gateway_witness(path)
     if type(record) is not dict or set(record) != {"version", "reason", "pid", "at", "started_at"}:
         raise ValueError("witness_missing")
     if record["version"] != card_worker_status.VERSION:
@@ -216,7 +223,7 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
         raise ValueError("observation_timeout")
     worker = card_worker_status.status(data, transport, profile)
     expected = "started" if record["reason"] == "worker_started" else "disabled"
-    if worker != {"state": expected, "reason": record["reason"]} or _read(path, 2048) != record:
+    if _read_gateway_witness(path) != record or worker != {"state": expected, "reason": record["reason"]}:
         raise ValueError("witness_reason")
     identity = {"pid": record["pid"], "started_at": birth}
     return {**identity, "generation": payload_hash(identity), "healthy": expected == "started",

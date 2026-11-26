@@ -1,35 +1,58 @@
 """Delivery observation budget separation, failure reasons and windowed progress."""
+from contextlib import closing
 import sqlite3
-import time
+from types import SimpleNamespace
+
+import pytest
 
 import health_delivery as delivery
 import health_watch
 
-from test_health_delivery import CFG, NOW, STARTED, _render, _observe  # noqa: F401
+from test_health_delivery import CFG, NOW, STARTED, _attempt, _render, _observe  # noqa: F401
 from test_health_delivery import world as world  # noqa: F811,F401
 
 
-def test_worker_observed_even_when_delivery_consumes_its_budget(world, monkeypatch):
-    """A1: a delivery scan that runs into the worker reserve must not suppress
-    the worker observation."""
-    _render(world.db, "queued")
-    calls = []
+def test_worker_observed_even_when_delivery_consumes_its_budget(tmp_path, monkeypatch):
+    clock = 10.0
+    monkeypatch.setattr(delivery, "time", SimpleNamespace(monotonic=lambda: clock))
 
     def slow_delivery(data, cfg, now, deadline):
-        while time.monotonic() < deadline + 5:
-            pass  # outlast the whole observation budget
-        raise TimeoutError("observation_timeout")
+        def interrupt():
+            nonlocal clock
+            clock = deadline
+            return 1
 
-    def fast_worker(home, cfg, now, deadline=None):
-        calls.append("worker")
-        return {"state": "started", "reason": "worker_started", "started_at": STARTED}
+        with closing(sqlite3.connect(":memory:")) as db:
+            db.set_progress_handler(interrupt, 1)
+            db.execute("SELECT 1")
+
+    def gateway(home, cfg, now, *, deadline):
+        assert clock < deadline
+        return {"healthy": True, "reasons": [], "started_at": STARTED}
 
     monkeypatch.setattr(delivery, "_delivery", slow_delivery)
-    monkeypatch.setattr(delivery, "_worker", fast_worker)
-    result = delivery._observe(world.home, CFG, NOW, time.monotonic() + 1.5)
-    assert calls == ["worker"]
-    assert result["worker"]["state"] == "started"
+    monkeypatch.setattr(delivery.health_recovery, "_gateway_observation", gateway)
+    result = delivery._observe(tmp_path, CFG, NOW, clock + delivery.OBSERVATION_S - delivery._CLEANUP_S)
     assert result["delivery"]["reason"] == "observation_timeout"
+    assert result["worker"]["state"] == "started"
+
+
+@pytest.mark.parametrize("invalid_attempt", [False, True], ids=["missing", "future"])
+def test_recent_delivery_keeps_unverified_sending_alert(world, monkeypatch, invalid_attempt):
+    _render(world.db, "queued")
+    _render(world.db, "complete", state="delivered", updated=NOW - 1)
+    _render(world.db, "inflight", state="sending")
+    if invalid_attempt:
+        _attempt(world.db, "inflight", created=NOW + 1)
+    snapshot = _observe(world)
+    assert snapshot["delivery"]["state"] == "unknown"
+    assert snapshot["delivery"]["last_progress_at"] == NOW - 1
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: snapshot)
+    obs = {"status": "ok"}
+    state = {}
+    health_watch._apply_delivery_observation(obs, state, world.home, NOW, CFG, config_blocked=False)
+    assert obs["status"] == "degraded"
+    assert state["delivery_current_reason"] == health_watch._DELIVERY_UNVERIFIED
 
 
 def test_update_marker_reports_marker_present(world):

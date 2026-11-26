@@ -160,20 +160,23 @@ def apply(root, request, *, wait_seconds=0):
             os.close(fd)
 
 
-def list_failures(root):
+def list_failures(root, after_attachment_id=0):
     """Read-only listing of current unacknowledged OCR failures for planning.
 
     Never writes: the same bounded cohort walk as the health proof, exposing
     artifact ids and counts only — no paths, text or source content."""
     import attachment_ocr
+    if type(after_attachment_id) is not int or not 0 <= after_attachment_id < 2**63:
+        raise ValueError('ocr_ack_targets_invalid')
     with closing(sqlite3.connect((root / 'data/ledger.db').resolve().as_uri() + '?mode=ro',
                                  uri=True, timeout=1)) as db:
         db.row_factory = sqlite3.Row
         db.execute('BEGIN')
         try:
-            unacknowledged, acknowledged_ids, pending = [], [], 0
+            unacknowledged, acknowledged_count, pending = [], 0, 0
             rows = db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
-                              'ORDER BY attachment_id LIMIT 257').fetchall()
+                              'AND attachment_id>? ORDER BY attachment_id LIMIT 257',
+                              (after_attachment_id,)).fetchall()
             truncated = len(rows) > 256
             for row in rows[:256]:
                 source = attachment_ocr._source(db, row[0])
@@ -182,19 +185,18 @@ def list_failures(root):
                         or prior['state'] not in ('failed', 'unavailable')):
                     continue
                 pending += 1
-                if type(prior.get('attempts')) is not int or prior['attempts'] != 3:
+                if (prior['state'] != 'failed' or prior.get('reason') != 'output_schema_table_overlap'
+                        or type(prior.get('attempts')) is not int or prior['attempts'] != 3):
                     continue
-                try:
-                    current = ack.target(db, prior['artifact_id'])
-                    if ack.acknowledged(db, current):
-                        acknowledged_ids.append(prior['artifact_id'])
-                    else:
-                        unacknowledged.append(prior['artifact_id'])
-                except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
-                    pass  # an unverifiable target is never claimed as either side
+                current = ack.target(db, prior['artifact_id'])
+                if ack.acknowledged(db, current):
+                    acknowledged_count += 1
+                else:
+                    unacknowledged.append(prior['artifact_id'])
             return {'outcome': 'listed', 'unacknowledged_exhausted': unacknowledged,
                     'unacknowledged_count': len(unacknowledged),
-                    'acknowledged_count': len(acknowledged_ids),
+                    'acknowledged_count': acknowledged_count,
+                    'next_after_attachment_id': rows[255][0] if truncated else None,
                     'pending_failed_count': pending, 'truncated': truncated}
         finally:
             db.rollback()
@@ -209,7 +211,8 @@ def main(argv=None):
     parser = _Parser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('list')
+    listing = sub.add_parser('list')
+    listing.add_argument('--after-attachment-id', type=int, default=0)
     plan = sub.add_parser('plan')
     plan.add_argument('--artifact-id', type=int, action='append', required=True)
     apply_parser = sub.add_parser('apply')
@@ -225,7 +228,7 @@ def main(argv=None):
         if not sqlite_wal_safe(sqlite3.sqlite_version_info):
             raise ValueError('sqlite_runtime_unsafe')
         if args.action == 'list':
-            result = list_failures(args.root)
+            result = list_failures(args.root, args.after_attachment_id)
         elif args.action == 'plan':
             with closing(sqlite3.connect((args.root / 'data/ledger.db').resolve().as_uri() + '?mode=ro',
                                          uri=True, timeout=1)) as db:

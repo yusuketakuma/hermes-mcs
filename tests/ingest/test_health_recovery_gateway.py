@@ -9,6 +9,7 @@ import pytest
 
 import card_worker_status
 import environment_diagnostics
+import health_delivery
 import health_recovery as recovery
 import health_watch
 import writer_lock
@@ -70,6 +71,23 @@ def _record(world, *, reason="worker_start_failed", **changes):
     _private(path, {"version": card_worker_status.VERSION, "reason": reason,
                     "at": NOW, **world["native"], **changes})
     return path
+
+
+@pytest.mark.parametrize("during_status", [False, True], ids=["absent", "disappeared"])
+def test_delivery_probe_identifies_missing_witness(gateway, monkeypatch, during_status):
+    path = _record(gateway, reason="worker_started")
+    if during_status:
+        status = card_worker_status.status
+
+        def disappear(*args):
+            path.unlink()
+            return status(*args)
+
+        monkeypatch.setattr(card_worker_status, "status", disappear)
+    else:
+        path.unlink()
+    assert health_delivery._worker(gateway["home"], gateway["cfg"], NOW) == {
+        "state": "unknown", "reason": "witness_missing", "started_at": None}
 
 
 def _run(world, *, now=NOW, cfg=None, report=None):

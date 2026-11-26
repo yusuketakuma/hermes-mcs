@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "通知の配送記録の読取りが時間切れでも通知ワーカーの起動を確認",
+  "summary": "配送記録の読取りが時間切れになった場合は、その理由を表示し、残り時間で通知ワーカーの起動を確認します。送信中の通知で送信試行の記録がない場合や、その時刻に不備がある場合は、ほかの通知が届いても配送状況を確認できないことを警報に表示します。",
+  "upgrade": "HermesでSlackまたはDiscordに通知している環境が対象です。追加の操作は不要です。",
+  "details": ["通知ワーカーの起動記録が見つからない場合は、診断結果に witness_missing と記録します。"],
+  "refs": ["mcs/ingest/health_recovery.py", "mcs/ingest/health_delivery.py", "mcs/ingest/health_watch.py"]
+}

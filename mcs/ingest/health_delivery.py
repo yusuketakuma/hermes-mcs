@@ -26,7 +26,7 @@ import safe_io
 OBSERVATION_S = 3.0
 _CLEANUP_S = 0.5
 _STATUS_S = 1.0
-WORKER_RESERVE_S = 1.0
+WORKER_RESERVE_S = _STATUS_S + 0.5  # Allow the gateway witness to run before the status check.
 MAX_INPUT_BYTES = 16384
 MAX_OUTPUT_BYTES = 8192
 _RESTART_STATES = frozenset({"requested", "unknown", "failed", "supervisor_restart_verified"})
@@ -255,6 +255,8 @@ def _delivery_error_reason(error):
         return "database_busy"
     if isinstance(error, sqlite3.Error):
         text = str(error).lower()
+        if text == "interrupted":
+            return "observation_timeout"
         if "no such table" in text or "no such column" in text:
             return "schema_mismatch"
         return "database_busy" if "busy" in text else "schema_mismatch"
