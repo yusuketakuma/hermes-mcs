@@ -436,36 +436,26 @@ def select_settings(cfg, key_present, transfer_status, *, pinned=None):
 def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=False):
     """Resolve one explicit use to a bounded, immutable provider selection.
 
-    With ``ordered`` the first provider in ``provider_order`` that may actually
-    send wins: provider identity is not the inference generation, so the same
-    unit answers to whichever configured provider can pay for it. A provider
-    whose model is globally stopped or over budget falls through to the next
-    entry. When every provider is blocked the first resolvable selection is
-    still returned beside the block reason: a unit keeps the ordered contract
-    it was reserved under, and send-time admission reports the reason."""
+    With ``ordered`` the selection is always the configured provider's own:
+    the installation's key belongs to that provider alone, so a unit can only
+    ever send through it — a fallback entry could never leave the wire even
+    when its budget is clean. When that provider's model is globally stopped
+    or over budget the selection is still returned beside the block reason:
+    a unit keeps the ordered contract it was reserved under, history matching
+    uses it, and send-time admission reports the same reason again. The
+    reason never authorizes a new reservation or send."""
     settings, errors = resolve_settings(cfg, root)
     if errors:
         return None, errors
     if not ordered:
         return profile_for_settings(cfg, settings, route=route, purpose=purpose)
-    reason = None
-    first = None
-    for provider in settings["provider_order"]:
-        selection, provider_errors = profile_for_settings(
-            cfg, settings, route=route, purpose=purpose, provider=provider)
-        if provider_errors or selection is None:
-            errors = provider_errors or errors
-            continue
-        if first is None:
-            first = selection
-        limit = selection_max_tokens(selection)
-        reason = ledger is not None and (
-            global_block_reason(ledger, model=selection["model"])
-            or budget_block_reason(ledger, settings, max_tokens=limit, selection=selection))
-        if reason:
-            continue
-        return selection, []
-    return first, ([reason] if reason else []) + errors
+    selection, errors = profile_for_settings(cfg, settings, route=route, purpose=purpose)
+    if errors or selection is None or ledger is None:
+        return selection, errors
+    reason = (global_block_reason(ledger, model=selection["model"])
+              or budget_block_reason(ledger, settings, max_tokens=selection_max_tokens(selection),
+                                     selection=selection))
+    return selection, [reason] if reason else []
 
 
 def _profile_map_valid(module, mapping):
