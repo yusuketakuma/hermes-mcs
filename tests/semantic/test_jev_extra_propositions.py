@@ -155,3 +155,22 @@ def test_proposition_quality_report_excludes_changed_source(runtime):
     assert semantic_drain.proposition_quality_report(led, 1, cfg)['messages'] == 1
     led.db.execute("UPDATE messages SET body_text='異なる合成本文' WHERE message_id=1")
     assert semantic_drain.proposition_quality_report(led, 1, cfg)['messages'] == 0
+
+
+def test_source_pass_descriptor_refingerprints_with_extra_propositions():
+    import semantic_usage_receipts
+    scfg = semantic_policy.runtime_config(_cfg('assist', extra_propositions=['E01', 'E06']))[0]
+    assessment = {'code': 'synthetic', 'policy': semantic_policy.policy_fingerprint(scfg)}
+    descriptor = semantic_usage_receipts.patient_source_assessment_descriptor(assessment, scfg)
+    # the descriptor's policy must refingerprint to the original, or no source
+    # pass can ever verify while extra propositions are configured
+    assert semantic_policy.policy_fingerprint(descriptor['policy']) == assessment['policy']
+
+
+def test_source_pass_descriptor_refingerprints_without_extra_propositions():
+    import semantic_usage_receipts
+    scfg = semantic_policy.runtime_config(_cfg('assist'))[0]
+    assessment = {'code': 'synthetic', 'policy': semantic_policy.policy_fingerprint(scfg)}
+    descriptor = semantic_usage_receipts.patient_source_assessment_descriptor(assessment, scfg)
+    assert 'extra_propositions' not in descriptor['policy']
+    assert semantic_policy.policy_fingerprint(descriptor['policy']) == assessment['policy']
