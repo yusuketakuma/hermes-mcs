@@ -574,7 +574,9 @@ def test_only_200_contract_violations_count_toward_the_cloud_circuit(tmp_path, n
             c._circuit_result(db, AnthropicError("contract_error", detail, status=status))
         c._circuit_result(db, AnthropicError("transport", retryable=True))
         assert c.block_reason(db, _cfg(), "patient_context", 1) is None
-        for _ in range(2):
+        # the circuit limit is the bounded-retry attempt count: one logical
+        # failure per call, so the limit's worth of them must accumulate
+        for _ in range(c.CLOUD_MAX_ATTEMPTS):
             c._circuit_result(db, AnthropicError("contract_error", "incomplete_response", status=200))
         assert c.block_reason(db, _cfg(), "patient_context", 1) == "contract_error"
 
