@@ -335,7 +335,6 @@ def test_settled_paid_failure_resends_through_the_entry_as_a_new_billed_attempt(
 
 @pytest.mark.parametrize('damage', ['answer', 'duplicate', 'unknown', 'missing_answer',
                                    'missing_receipt', 'missing_reservation', 'discarded', 'legacy', 'input', 'tokens'])
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damage):
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
@@ -365,14 +364,18 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding'),content='{}' "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
-        if damage in ('input', 'tokens'):
-            # A binding/output-envelope change does not bill the identical prompt again:
-            # the settled paid answer is reused and current validation decides whether it applies.
-            answer = _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input',
-                               route='patient_context' if damage == 'tokens' else 'reextract',
-                               purpose='patient_context' if damage == 'tokens' else None),
-                          tokens=101 if damage == 'tokens' else 100)
+        if damage == 'tokens':
+            # An output-envelope change for the SAME input does not bill the identical prompt
+            # again: the settled paid answer is reused and validation decides whether it applies.
+            answer = _ask(unit(ledger, binding='original-input',
+                               route='patient_context', purpose='patient_context'), tokens=101)
             assert isinstance(answer, dict) and answer['reused_response'] is True
+        elif damage == 'input':
+            # An answer paid for an earlier input is never taken up by the current one
+            # (cloud_policy contract): the send is refused as logically already settled
+            # rather than resent, and no reuse happens either.
+            with pytest.raises(cloud_client.CloudNotSent):
+                _ask(unit(ledger, binding='changed'), tokens=100)
         else:
             with pytest.raises(cloud_client.CloudNotSent):
                 _ask(unit(ledger), tokens=100)

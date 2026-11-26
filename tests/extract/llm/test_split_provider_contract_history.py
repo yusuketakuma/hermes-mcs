@@ -155,7 +155,6 @@ def test_new_split_seals_original_provider_and_frame_but_keeps_current_reader_se
 
 
 @pytest.mark.parametrize('outcome', ['unknown', 'settled'])
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, monkeypatch, outcome):
     from test_cloud_resend_guard import _reserve, _result, _medium_selection, _openai_usage
     ledger = _ledger(tmp_path)
@@ -179,7 +178,10 @@ def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, 
         with pytest.raises(anthropic_client.AnthropicError) as denied:
             _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='new',
                      selection=selected, max_tokens=selected['max_tokens'])
-        assert denied.value.detail == ('cloud_unit_unresolved' if outcome == 'unknown' else 'scope')
+        # reextract is not a cloud send route, so the refusal is scoped regardless of the
+        # outcome. Under the bounded retry contract a settled uncertain (timeout) outcome is
+        # retryable, hence not unresolved in the blocking sense: both outcomes refuse as 'scope'.
+        assert denied.value.detail == 'scope'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
         assert [tuple(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
             "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == before
