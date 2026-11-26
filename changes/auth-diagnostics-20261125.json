@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "ログイン復帰に失敗したときの原因が実行記録に残るようになりました",
+  "summary": "ログインの復帰に失敗した場合、実行記録でChrome起動時の例外の種類、プロファイルに残ったロック、キーチェーンのロックを確認できます。予備の認証情報でログインできた場合にも、検出したキーチェーンのロックを記録します。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。keychain のロック解除や設定変更は引き続き行われず、ロックの検出は記録だけに使われます。",
+  "details": [
+    "Chrome の起動に失敗した場合は例外の種類を記録します。例外本文やプロファイルのパスは記録しません。",
+    "_ensure_chrome は、CDP が落ちているのに停止対象の Chrome プロセスが見つからず、かつプロファイルに SingletonLock がある場合（プロセス一覧で帰属できない保持者または stale lock）を chrome_singleton_lock として記録する。この状態では再起動が吸収されて CDP が立ち上がらない可能性が高い。",
+    "_login_password は keychain のロックを検出した時点で keychain_locked を記録する。.env フォールバックでログインできた場合も残る。",
+    "これらの事実は試行ごとに初期化され、値があるときだけ実行記録に載る。従来の記録（healed_tabs・chrome_restarted）と同じ扱い。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_authentication.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/ingest/collection_stages.py",
+    "tests/ingest/test_adapter_runtime_auth.py",
+    "tests/ingest/test_run_check_session_recovery.py"
+  ]
+}

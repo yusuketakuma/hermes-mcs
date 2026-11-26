@@ -77,7 +77,14 @@ class MCSAuthenticationMixin:
         # CDP is down: a hung browser, or this profile opened without the
         # debugging port, would absorb the relaunch (same-profile hand-off)
         # and CDP would never come up — stop that instance first
-        self._stop_profile_chrome(profile_dir, chrome_bin)
+        stopped = self._stop_profile_chrome(profile_dir, chrome_bin)
+        if not stopped and os.path.lexists(
+                os.path.join(profile_dir, "SingletonLock")):
+            # the profile is locked but no matching Chrome process was
+            # found — a holder the process listing cannot attribute
+            # (another binary/arch) or a stale lock: either way the
+            # relaunch below is likely to be absorbed, so journal it
+            self.chrome_singleton_lock = True
         subprocess.Popen([
             chrome_bin,
             f"--remote-debugging-port={urllib.parse.urlparse(self.cdp_url).port}",
@@ -284,6 +291,11 @@ class MCSAuthenticationMixin:
             locked = False
         except KeychainLocked:
             pw, locked = None, True
+        if locked:
+            # journal even when the .env fallback below still logs in:
+            # the same lock also breaks Chrome's cookie decryption, so
+            # a silent fallback hides the episode's root cause
+            self.keychain_locked = True
         self._pw_source = "keychain" if pw else None
         if not pw:
             pw = env_value("MCS_PASSWORD")
@@ -417,13 +429,18 @@ class MCSAuthenticationMixin:
         in by hand and no credential is filled."""
         # per-attempt journal facts (run_check records them)
         self.healed_tabs, self.chrome_restarted = 0, False
+        self.chrome_error = ""
+        self.chrome_singleton_lock = False
+        self.keychain_locked = False
         if _other_login_accounts():
             # the CDP port is reachable by every local account: never open
             # it or type the password while another account can log in
             return "manual_required:multi_user_host"
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
-        except (MCSError, OSError):  # incl. deadline_exceeded
+        except (MCSError, OSError) as exc:  # incl. deadline_exceeded
+            # Exception text may contain a profile path or browser response.
+            self.chrome_error = type(exc).__name__
             return "failed"
         # cheapest recovery first — before touching the login form at
         # all, a live session (fresh token + valid API check) ends it

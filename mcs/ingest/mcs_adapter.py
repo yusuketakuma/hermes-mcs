@@ -265,6 +265,9 @@ class MCSAdapter(MCSAuthenticationMixin):
         self._worker = bounded_call if worker is None else worker
         # per-attempt browser repair facts, journaled by run_check
         self.healed_tabs, self.chrome_restarted = 0, False
+        self.chrome_error = ""
+        self.chrome_singleton_lock = False
+        self.keychain_locked = False
         # submitted-but-rejected login outcomes persist across runs next to
         # the token cache (outside the sandbox-mounted data/)
         self._login_state = (os.path.join(os.path.dirname(
