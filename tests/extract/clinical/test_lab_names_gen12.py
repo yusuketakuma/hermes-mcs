@@ -705,6 +705,9 @@ _PANELS = [
     ("ナトリウム：137　カリウム：4.3", ("ナトリウム", "137"), ("カリウム", "4.3")),
     ("ナトリウム 140 カリウム 4.2 クロール 104", ("ナトリウム", "140")),
     ("ナトリウム 140 カリウム 4.2、クロール 104", ("ナトリウム", "140"), ("カリウム", "4.2")),
+    ("採血 カリウム 4.5、血清ナトリウム 140", ("カリウム", "4.5"), ("ナトリウム", "140")),
+    ("採血 カリウム 4.5，補正カルシウム 9.1", ("カリウム", "4.5"), ("カルシウム", "9.1")),
+    ("採血 カリウム 4.5、血清アルブミン 3.9 g/dL", ("カリウム", "4.5"), ("アルブミン", "3.9")),
     ("Na 140 カリウム 4.2", ("カリウム", "4.2")),
     ("ナトリウム 142，カリウム 4.1，カルシウム 9.3", ("ナトリウム", "142"), ("カリウム", "4.1"), ("カルシウム", "9.3")),
     ("ナトリウム 138 mEq/L カリウム 4.0", ("カリウム", "4.0")),
@@ -728,6 +731,11 @@ _PANELS = [
 ])
 def test_every_reading_of_a_panel_is_read(body, name, value):
     assert _confirmation(name, value, body) == "quote_supported"
+
+
+@pytest.mark.parametrize("tail", ["血清ナトリウム", "血清ナトリウム 1包", "補正ドライシロップは1mL"])
+def test_a_lab_qualifier_requires_a_named_result_after_the_comma(tail):
+    assert _confirmation("カリウム", "4.5", f"採血 カリウム 4.5、{tail}") == "unverified"
 
 
 # A reading with its own unit is never made a candidate by its neighbours.
