@@ -337,16 +337,16 @@ def stage_derive(ledger, result, deadline, cfg=None,
         invalid = error is not None
         if invalid:
             result["errors"].append(f"drug_map: {error}")
-        map_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 3
+        map_start = time.monotonic()
+        map_budget = max(0, work_deadline - map_start) / 3
         result["drug_map"] = _run_stage(
             result, "derive_medications", work_deadline,
-            lambda: drug_map.derive(ledger, dictionary, deadline=map_deadline), required=True)
+            lambda: drug_map.derive(ledger, dictionary, deadline=map_start + map_budget), required=True)
         if invalid:
             result["drug_map"]["status"] = "invalid"
         elif result["drug_map"]["status"] == "partial":
-            # a cut that moved the cursor resumes next tick like any other
-            # deadline cut; a cut that examined nothing is a real stall
-            if result["drug_map"].get("progressed"):
+            # A cursor stall requires time allocated to this scan.
+            if map_budget == 0 or result["drug_map"].get("progressed"):
                 _defer_stage(result, "derive_medications")
             else:
                 result["errors"].append("drug_map: no_progress")

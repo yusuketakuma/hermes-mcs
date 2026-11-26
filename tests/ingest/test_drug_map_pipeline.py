@@ -163,3 +163,23 @@ def test_deadline_cut_derive_without_progress_is_reported_as_error(tmp_path, mon
     assert "deferred_stages" not in result
     assert "stage_errors" in health["state_reasons"]
     assert health["overall"] == "degraded"
+
+
+def test_no_time_before_medication_scan_defers_without_reporting_a_stall(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        _seed(db)
+        dictionary = _dictionary(tmp_path)
+        monkeypatch.setattr(drug_map, "configured", lambda cfg: (dictionary, None))
+        monkeypatch.setattr(run_check, "_optional_work_deadline", lambda *args: 1)
+        monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
+        monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
+        monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
+        result = {"errors": []}
+        run_check.stage_derive(db, result, 100, {}, llm_budget_cap=0)
+        assert "derive_medications" in result["deferred_stages"]
+        assert "drug_map: no_progress" not in result["errors"]
+        assert result["drug_map"]["progressed"] is False
+        assert result["drug_map"]["done"] == 0
+    finally:
+        db.close()
