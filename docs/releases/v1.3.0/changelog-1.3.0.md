@@ -1,4 +1,4 @@
-## [1.3.0] — 2026-11-24
+## [1.3.0] — 2026-11-26
 
 **患者コンテキストと在宅ケアを拡張し、Jev 1.14.0へ更新**
 
@@ -62,6 +62,9 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
   v3自動更新に移行済みの端末では、10分ごとの定期処理がownerを1回だけ観測し、届いている作業の再開・証拠送付・health報告を行います。未移行の端末では何もせず終了し、従来の自動更新経路へ fallback しません。
 
 
+- **費用上限などの変更を設定の保存ごとに記録**
+  提供元別設定の環境では、設定を保存するたびに、保存した入口と、費用上限・期間予算・終了日時・API別上限・Jevの件数と期限の保存前後の値を小さな私有の記録に残します。cloud-llm budget・providers に最後の上限変更と、現在の設定が記録された保存の結果と一致するかを表示し、budget --history N で記録を確認できます。上限の判定・費用の集計・承認条件・設定内容は変わりません。
+
 ### 改善
 
 - **クラウド4モデルの料金を再確認し、確認期限を12月24日に更新**
@@ -103,6 +106,24 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **使われない意味解析の判定を作らない**
   要約（summary_mode）とループ（loop_mode）がともに off の設定では、通常の取込・再処理で意味解析ジョブを作らず、待機中のものも実行しません。人が確認した保留解除は既存の解除契約どおり置換jobを保留状態で残し、患者コンテキストは保留解除後にそのjobを待たずに進みます。
 
+
+- **cloud処理を初回送信と5回までの再試行に統一し、課金済み応答を安全に再利用**
+  個別チャット抽出・意味解析・患者コンテキスト管理・Jevのcloud処理で、失敗時に初回送信へ最大5回の再試行を行う上限へ統一しました。入力束縛の一部だけが変わっても論理的に同じpromptの課金済み応答は、追加送信せず再利用します。HTTP状態・request id・固定の失敗区分に加え、課金済み応答がローカル検証で不合格になった場合は固定の失敗理由を会計artifactへ記録し、その応答を再利用せず上限内で再試行します。患者データ本文やprovider応答本文は失敗理由へ記録しません。
+
+- **遠隔接続の患者画面で、MCS の記録の閲覧を閲覧記録に残す**
+  Tailscale 経由の常駐モードで患者一覧・投稿・検索・記録のまとめを開くと、表示の前に Tailscale のログイン名・患者ID・時刻を `data/access_log/` へ記録します。検索語・本文・患者名は記録しません。記録できないときは表示しません。この Mac だけで開く秘密URLのモードと、在宅ケア台帳の表示は対象外です。
+
+- **患者コンテキストの品質確認が止まった箇所を記録**
+  患者コンテキストの品質確認（資料と概況の Jev による確認と修復）が通らずに終わったとき、クラウド処理の記録（patient_context_pass）に、止まった確認の種類を固定の短いコード（quality_detail）で残します。処理期限、設定・鍵・判定方針の変更、確認中の別の書込み、修復の予算や送信の見送り、保存直前の再確認などを区別できます。記録は観察のためだけで、判定・保存される値・再試行の間隔は変わりません。本文・患者を特定する情報・設定値は含めず、一覧にない値は unclassified とします。
+
+- **意味解析の要約・loopの既定をassistに変更**
+  意味解析の mode が有効な環境で summary_mode・loop_mode を設定していない場合も、既定で assist モード（補助表示）として要約・loop の意味解析が動くようになります。これまで既定は off で意味解析 job は実行されず pending に残るだけでしたが、この変更で未設定の環境でも job が実行され、補助結果が蓄積されます。ローカルLLMの処理量と Jev の要求数が増えます。明示的に off を設定すれば従来どおり無効にできます。extract_qc の既定は off のままです。
+
+- **意味解析backlogの要約生成を非専用workerでもcloudへoffload**
+  semantic backlogを非専用workerの常駐処理が拾った場合でも、要約生成stageはownerが開いたsemantic backlog window内でcloud推論を使うようになりました。facts抽出stageは従来どおり専用backlog workerだけがcloudへ送り、realtime laneと新着10分以内の対象はcloudへ送りません。loop候補生成はもともとfactsからの決定的変換で、関係評価はJev APIのため、今回のlocal LLM offload対象ではありません。
+
+- **独立接続の SDK を SHA256 と照合して導入**
+  `install.sh` は Slack・Discord の SDK とその依存（合わせて13個）を、ハッシュ付きの一覧 `deployment/requirements-standalone.lock` から `--require-hashes` で導入します。記録と中身が違う配布物は導入しません。版は従来の `requirements-standalone.txt` と同じです。
 
 ### 不具合修正
 
@@ -211,6 +232,57 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **文書専用PRのmerge-gateが設計どおり進まない問題を修正**
   文書だけのPRではCI scopeが `standalone-sdk`・`hermes-integration`・`pytest-macos` を省略しますが、merge-gateは一部の省略だけを合格として扱っていたため、文書専用PRが必須ゲートを通りませんでした。設計どおりの省略を認めるように修正しました。`full-ci` で完全なCIを要求したPRでは、以前の省略結果を合格の根拠にしません。
 
+
+- **導入用mcsコマンドからtelemetry設定を開けない問題を修正**
+  リポジトリ内の `sh scripts/mcs telemetry ...` が操作名エラーで拒否されず、導入後の `mcs telemetry` と同じ固定テレメトリ設定入口へ進めます。
+
+- **cloud再試行統一の登録漏れerror codeを補完し、上限内再試行の契約を検証へ反映**
+  cloud処理の有界再試行統一（初回送信へ最大5回）で追加された固定エラー区分 cloud_validation_failure_invalid / cloud_validation_failure_transaction_required が error code 登録から漏れていたため補完しました。利用者向けの動作変更はありません。
+
+- **cloud意味解析backlogがrun lockを取得できず送信されない問題を修正**
+  cloud意味解析backlogがrun lockを取得できるよう、lock待機を連続ウィンドウに延長します。
+
+- **クラウドの背景ワーカー数を抑え、患者コンテキストの走査の時間切れを正しく記録**
+  クラウドを有効にした環境で、常駐処理が起動するクラウドの背景ワーカーを減らします。患者コンテキスト専用は最大2本、再開期間のワーカーと合わせた合計は空きメモリ（1本256MiB換算）と max_concurrency の小さい方までで、1回の判断で起動するのは最大2本です。また、患者コンテキストの走査が時間上限で止まった周回を読取り失敗ではなく走査の中断として記録し、読取り失敗には SQLite のエラー名を残します。
+
+- **外部AI送信の確認記録が消えても送信を再開しない**
+  施設の確認が必要な環境で `external_transfer.json` が見つからないときは、読めないときと同じく Anthropic・OpenAI・Jev への送信を止め、`external_transfer_unreadable` の警報を出します。これまでは、確認記録が消えると確認の無い既存環境と同じ扱いになり、キーがあれば送信していました。
+
+- **抽出の自動再試行で既存コンテキストを誤って無効扱いしないように修正**
+  クラウド抽出の自動再試行で、初回実行時に保存されたコンテキストが試行番号の違いだけで無効と判定され、以後の再試行が進まなくなる問題を修正しました。同一原文・同一経路の過去試行は履歴として再利用できます。
+
+- **Homebrew導入済みでPATH未設定の場合の導入案内を改善**
+  HomebrewがPATHに見つからない場合の導入エラーで、導入済みならインストーラのNext stepsにあるshellenvコマンドを確認する案内が表示されます。
+
+- **通知カード掃除の台帳走査を索引で限定**
+  通知カードの残骸掃除が通知履歴を広く走査してrun lockを長く占有する問題を修正しました。対象となる状態と更新時刻を既存の開設時索引で限定し、掃除に要する読取りを減らします。
+
+- **患者コンテキストの健全性観測が大きな台帳で観測上限に達する問題を修正**
+  doctor の患者コンテキスト観測が observation_limit（unknown）になりにくくなりました。最新行の照合を、患者の新しい履歴を候補ごとに辿る相関副問合せから、同じ種別の現行行を一回だけ集計する方式に変えました。集計結果・表示は変わりません。
+
+- **患者コンテキスト走査の中断理由を待機と読取障害に分けて記録**
+  患者コンテキストの候補選定が台帳の書込みロック待ちや走査期限で止まったとき、記録上の理由がすべて read_sqlite（読取障害）に集約されていたため、実際には候補の読取りまで到達していない停止を読取障害と区別できませんでした。ロック待ち・期限による中断は既存の scan_interrupted として記録し、本当の読取障害だけが read_sqlite になります。待機の扱いは従来どおりで、いずれの場合も後で再試行します。
+
+- **患者コンテキストの状態が件数のある環境でも「不明」になる問題を修正**
+  健康状態の記録（health.json）の患者コンテキストは、1時間ごとの再集計が2秒の上限に収まらなかった場合や読み取りに失敗した場合でも、直前に集計できた件数を失わず、元の集計時刻と経過秒数を付けた前回値（stale_measurement）として残します。前回値は元の集計から3時間までで、その後や台帳・抽出世代が変わった場合は従来どおり unknown です。doctor --probe data の作業待ちの件数は、1秒の上限で全員を確認できなかった場合に「患者N人のうちM人まで確認」と確認した範囲の件数を示し、合計としては扱いません。
+
+- **再取得で時刻だけが更新されても品質照合が偽の競合で止まらないよう修正**
+  同じ投稿を再取得して閲覧時刻だけが更新された場合に、患者要約の品質照合が「出所が変わった」と誤判定して要約生成が止まる問題を修正しました。本文・署名・版・権限など実際の入力が変わった場合は従来どおり拒否します。
+
+- **添付の依存captureが患者の全artifactsを走査して収集を停止させていた問題を修正**
+  患者コンテキストのscan選択が既存索引を使わず患者の全artifactsを走査していたため、添付依存captureが重くなり収集runが時間切れになることがありました。索引を明示して走査範囲を絞ります。返す行は変わりません。適用後は添付解析の指紋が失効し、既存の添付解析の一部を再処理します。
+
+- **semantic projection候補が無い環境で収集runが長くなる問題を修正**
+  semantic projectionの無効化確認は、対象kindが1件も無いとき全artifactsを走査していました。対象kindの有無を既存索引で先に確認し、無い場合は走査を省きます。対象がある場合の判定と更新は変わりません。
+
+- **旧形式のsemantic cloud receiptでbacklog再処理が止まる問題を修正**
+  member binding導入前のsemantic cloud receiptが、現在のinterpretation generationで必要な再処理送信を永久に拒否しなくなります。旧receiptの会計記録は保持したまま、現在generationの送信は論理unitごとに通常どおり予約・記録されます。
+
+- **同一内容の要約の再判定で推論元の記録が失われなくなりました**
+  公開の証跡が古い形式（文書ハッシュなし）のとき、意味解析の要約を再判定すると内容がまったく同じでも推論元の記録が空の複写が新たに作られ、どのモデルが作った要約かの情報が失われていました。内容が同一の再判定では、保存済みの行の推論元の記録を引き継いで再利用するようになりました。
+
+- **スナップショット複製の間も他の処理が書込みを続けられるように修正**
+  定期処理が台帳スナップショットを複製している間、run lockを保持し続けて患者コンテキストや抽出が待機する問題を修正しました。オンラインバックエップの一貫性を利用し、複製と検証の間だけロックを離して再取得します。
 
 ### 更新時の注意
 
@@ -324,6 +396,46 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - 追加操作は不要です。
 
+
+- 追加操作は不要です。既存のテレメトリ許可・停止状態は変わりません。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。同一論理promptの課金済み応答は入力束縛が変わっていてもモデル・effortが一致すれば再利用されます。再試行は初回送信と5回までの再試行までで、同一論理requestの課金済み失敗がこの上限へ達すると送信を停止します。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定変更や追加操作は不要です。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。
+
+- 通常の更新手順で Hermes gateway と抽出の常駐処理（独立実行では mcs_standalone）を再起動してください。設定の変更は不要です。添付抽出の契約に含まれる cloud_backlog.py を変えるため、添付OCRが有効な環境では保存済みの添付抽出結果が1回再処理の対象になり、クラウド再抽出が有効なら既存の対象と予算の範囲で再送が起こり得ます。fact_source が shadow なら意味解析と品質確認をやり直し、canonical なら更新後の候補で比較・承認をやり直してください（それまで semantic は設定不一致で止まります）。既定の legacy 構成では影響はありません。
+
+- 追加操作は不要です。新規導入時と、施設の確認を記録したときに、目印 `~/.mcs/external_transfer.required` を作ります。すでに確認記録がある環境は、次に `mcs_compliance.py acknowledge` で確認を記録したときから有効です。確認記録の無い既存環境の動作は変わりません。
+
+- 更新した抽出処理から適用されます。追加操作は不要です。
+
+- 追加操作は不要です。Homebrewの自動検出・自動変更は行いません。
+
+- `mcs setup remote` で設定した Mac は、更新後に常駐サービス `ai.mcs.local-chat` を再起動すると有効になります（追加の設定は不要）。`--tailnet-host` を手で指定して起動している場合は、`--access-log-dir` に MCS の data フォルダを指定してください。指定が無いと起動しません。
+
+- 更新後に台帳を開くと索引が自動作成されます。追加操作は不要です。
+
+- Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更は不要です。この変更は添付抽出の契約に含まれる cloud_backlog.py を変更するため、更新後は保存済みの添付抽出結果が現在の契約と一致しなくなり、添付OCRを有効にしている環境では従来の設定に従って再処理の対象になります。クラウド再抽出が有効な場合は、既存の対象患者と予算の範囲で再送が起こり得ます。変更した患者コンテキストのモジュールと cloud_backlog.py は意味解析の候補の指紋にも含まれるため、fact_source が shadow の場合は新しい条件で意味解析と品質確認をやり直します。canonical の場合は承認済みの候補と一致しなくなるので、更新後の候補で比較・承認をやり直してください（やり直すまで semantic は設定不一致として止まります）。既定の legacy 構成では fact_source への影響はありません。
+
+- 追加の設定は不要です。Hermes gateway または独立実行の mcs_standalone を再起動してください（通常の更新ツールは自動で再起動します）。health.json は更新後の次の定期実行から、doctor は次の実行から反映されます。患者コンテキストの処理コードの識別値が変わるため、fact_source が shadow の場合は新しい条件で品質を再確認します。canonical の場合は更新後の候補で比較・承認をやり直してください。
+
+- 追加操作は不要です。止まっていた要約は次の品質照合で進みます。
+
+- 追加操作は不要です。配備後、添付解析の一部が再処理されます。再処理はlocal LLMで行われるため時間を要します。
+
+- 設定の変更は不要です。summary_mode・loop_mode を明示設定している環境には影響ありません。
+
+- 追加操作は不要です。適用後はsemantic backlogの再処理がcloud送信へ進み、旧世代の回収不能なreceipt分はgenerationごとに再送信され得ます。事前見積ではmigration対象4815件・13患者に加え、input_binding導入前のowner付き旧世代receipt6776件も回収できません。対象unionは11591件・35患者・実支払済み14.80ドルで、過去最大予約額の単純合計は249.47ドルです。これは重複unitを含む保守的な上限目安で、必要なbacklog unitだけが順次送信されます。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。semantic_backlog_untilのwindowが開いている間だけ要約生成がcloudへ送られ、windowを閉じると新規送信は止まります。cloud送信量と費用は従来より増えます。
+
+- 追加操作は不要です。記録はこの版へ更新した後の保存から始まり、提供元別設定（data/provider_settings/）の環境だけで残します。従来形式（config.json だけ）の環境と、更新前の保存には記録がありません。上限の変更に新たな承認は求めません。
+
+- 更新した定期処理から適用されます。追加操作は不要です。
+
+- 追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。Hermes モードには影響しません。
 
 ### 技術詳細
 
@@ -869,5 +981,170 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - `full-ci` ラベルがあるPRでは、以前のdocs scope runに残ったskipを証拠にせず、full modeの結果を待つ。
 - 導入ガイドの既定runtime・設定コマンド・standaloneの接続設定例を実装に合わせて修正する。
 - 根拠: ci/agent_control.py、ci/auto_merge.py、tests/meta/test_agent_control.py、docs/development/AUTOMATION.md、docs/guides/INSTALLATION.md
+
+#### 導入用mcsコマンドからtelemetry設定を開けない問題を修正
+
+- `scripts/mcs` の操作名一覧とヘルプに `telemetry` を追加しただけで、テレメトリ送信の既定や対象項目は変更しません。
+- 根拠: scripts/mcs、tests/ops/test_mcs_cli.py
+
+#### cloud処理を初回送信と5回までの再試行に統一し、課金済み応答を安全に再利用
+
+- cloud provider client・semantic job・semantic backlog・患者コンテキスト・Jevの再試行上限を共通のcloud retry契約へ揃え、cloud circuitも同じ上限まで送信を止めません。
+- 429・5xx・transport/timeoutを上限内で再試行します。各送信は独立したusage reservation/resultとして記録され、応答喪失の可能性がある送信はnot_sentへ分類しません。認証・支払い・providerが内容を拒否した失敗は同じ入力のまま自動再送しません。
+- 課金済み応答の論理prompt fingerprintを会計へ保存し、output envelopeや入力束縛が変わっただけの同一promptは再送信せず再利用します。結合・改ざん・証拠不整合がある場合は従来どおりfail-closedです。
+- 抽出・意味解析・患者コンテキストでHTTP 200かつ課金済みでもローカル検証を通らなかった応答をcloud_usage_validation_failure artifactで注記し、固定のvalidation failure理由だけを残します。この注記がある応答は成功応答として再利用せず、上限内の再送対象です。
+- 抽出失敗artifactにはboundedなfailure_observationを追加し、fallback/refusal区分・validation failure理由・repair issue件数・receipt idだけを保持します。自由文・患者本文・provider応答本文は保存しません。
+- 例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、週次tick側のbackoff再試行に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。
+- 根拠: mcs/llm/transport/llm_retry.py、mcs/llm/transport/cloud_client.py、mcs/llm/cloud_policy.py、mcs/extract/llm/extract_llm_runner.py、mcs/extract/llm/extract_llm_errors.py、mcs/extract/llm/extract_llm_source_contract.py、mcs/patients/patient_context_refresh.py、mcs/semantic/semantic_transport.py、mcs/semantic/semantic_llm.py、mcs/semantic/semantic_jev.py、mcs/semantic/semantic_runtime.py、tests/llm/test_cloud_response_recovery.py、tests/llm/test_cloud_resend_guard.py、tests/llm/test_anthropic_client.py、tests/semantic/test_semantic_cloud.py、tests/semantic/test_semantic_circuit.py、tests/extract/llm/test_extract_llm_storage.py、mcs/patients/patient_context_quality_controller.py、tests/llm/test_openai_client.py、tests/llm/test_cloud_response_limit.py
+
+#### cloud再試行統一の登録漏れerror codeを補完し、上限内再試行の契約を検証へ反映
+
+- upgrade reconciliation launcher の再構築環境で provider_settings が llm_retry を import できず起動に失敗する問題を、使用箇所の遅延 import で修正しました。
+- 有界再試行の統一契約（上限6送信・各送信の独立したusage会計・auth/payment/content拒否は不再送・unknown outcome は not_sent へ分類しない）を検証テストの固定条件へ反映しました。
+- 根拠: mcs/core/error_codes.py、mcs/core/provider_settings.py
+
+#### cloud意味解析backlogがrun lockを取得できず送信されない問題を修正
+
+- cloud semantic phaseはこれまで10秒×3回の短いpollで諦めてextractターンに譲っていたため、収集tickがrun lockを長時間保持する時間帯には一度も取得できず、semantic_backlogのcloud送信が24時間で0件になっていました。
+- 患者コンテキストscanが勝てているのと同じ方式(最大60秒級の連続した待機ウィンドウ)に合わせ、1回のpollウィンドウを30秒へ延長します。3連続トライで最大90秒の連続待機となり、tickの合間の短い解放隙間を取得できる確率が上がります。
+- lock取得後の動作・課金・再試行の契約に変更はありません。extractのcloud処理にも影響しません。
+- 根拠: mcs/llm/cloud_backlog.py、tests/llm/test_cloud_backlog.py
+
+#### クラウドの背景ワーカー数を抑え、患者コンテキストの走査の時間切れを正しく記録
+
+- これまでは患者コンテキスト専用と再開期間の2つの組が、それぞれ空きメモリと max_concurrency の小さい方まで一度に起動していました。
+- 既定値の変更: 患者コンテキスト専用ワーカーの上限 CONTEXT_WORKERS_MAX=2、1回の判断（約10秒ごと）で起動する上限 SPAWN_PER_DECISION=2（いずれも cloud_backlog.py の定数で、設定項目はありません）。
+- 患者コンテキストを優先します。再開期間のワーカーは、空きメモリの本数から患者コンテキストの分（動いている本数、患者コンテキストが有効な間は再起動待ちでも少なくとも患者コンテキストの上限本数）を引いた範囲で起動します。患者コンテキストが無効な間は全体を使えます。再開期間が開いている間、患者コンテキスト専用は max_concurrency から1を引いた本数まで（max_concurrency が1なら1本）とし、再開期間のワーカーに少なくとも1本の枠を残します。患者コンテキストを無効にすると専用のワーカーは処理中の1単位を終えてから終了し、空いた枠は次の判断で再開期間のワーカーが使えます。再開期間のワーカーは、予算の上限・鍵・接続先の設定などで新たに起動できない状態になると、持ち越した支払済みの結果を精算（保存、または元の投稿が変わっていれば保留）してから次の確認（60秒おき）で終了し（理由 cloud_blocked。mode が on でない場合は従来どおり cloud_mode_off）、枠を空けます。終了するまでの間は、その分だけ患者コンテキスト専用の起動を控えます。患者コンテキストを無効にしている間に起動した再開期間のワーカーは、患者コンテキストを有効にすると、その分を超えた本数が次の確認（60秒おき）で終了します。空きメモリが減ったときは（前景用の予約を下回った場合はすぐに終了します）、超えた分のワーカーが次の確認で終了するまで合計が上回り、確認の後も最大2本上回ることがあります。あとから再開期間が開いたときも、枠を超えた専用のワーカーは処理中の1単位を終えた後の確認（60秒おき）で終了します。1回の判断で起動する2本は2つの組で共有します。
+- max_concurrency は従来どおり同時に送るクラウド要求の上限です。送信枠・予算・鍵・承認の判定と、従来の終了・再起動の判定（メモリ不足・mode・経路の閉鎖、短時間で終了した子の再起動待ち）は変わりません。追加した終了条件は、患者コンテキスト専用のワーカーの2つと、再開期間のワーカーの2つ（患者コンテキストの分を超えたとき capacity_reduced、そうでなく起動できない状態になったとき cloud_blocked）だけです。
+- 候補の読取りが SQLite の中断で止まったとき、その読取りの時間上限を過ぎている場合だけ走査の中断（scan_interrupted、理由 patient_context_scan_incomplete）とします。上限より前の中断とそのほかの SQLite の失敗は read_sqlite ですが、busy/locked の待ち切れは読取障害ではなく scan_interrupted として記録します。時間上限を過ぎた中断は、上限を過ぎた後の行の取得と同じく周回を打ち切り、これまでのように読取り中だった確認を未準備として扱って走査を続けることはしません。
+- read_sqlite と busy/locked の周回は、クラウド処理の記録（patient_context_pass）に SQLite の標準のエラー名（SQLITE_BUSY など）を scan_sqlite_error として残します。その形でない値は unclassified とし、エラーの本文・患者を特定する情報は残さず、DB にも保存しません。エラー名の記録は走査・選択・保存・再試行間隔の判定を変えません。
+- 根拠: mcs/llm/cloud_backlog.py、mcs/patients/patient_context_refresh_sources.py、mcs/patients/patient_context_refresh.py
+
+#### 外部AI送信の確認記録が消えても送信を再開しない
+
+- 目印がある間、確認記録が無い状態は「確認不要」ではなく「読取り不可」として扱う。
+- 確認記録を作り直すには、内容を確認待ちに戻してから確認を記録し直す（docs/guides/COMPLIANCE.md 4節）。
+- 根拠: mcs/core/records/external_transfer.py、docs/guides/COMPLIANCE.md
+
+#### 抽出の自動再試行で既存コンテキストを誤って無効扱いしないように修正
+
+- 現在の試行番号以前の自動再試行に限って履歴と照合します。別モデル・別契約・改変済み・証明できないスナップショットは従来どおり拒否します。
+- 根拠: mcs/extract/llm/extraction_context.py
+
+#### Homebrew導入済みでPATH未設定の場合の導入案内を改善
+
+- preflightと導入処理の案内文だけを変更し、Homebrewの場所を推測して黙って使う動作は追加していません。
+- 根拠: install.sh、deployment/install/runtime.sh
+
+#### 遠隔接続の患者画面で、MCS の記録の閲覧を閲覧記録に残す
+
+- 記録は `/mcs` 操作と同じハッシュ連鎖の閲覧記録で、利用者は `tailscale:` に続けたログイン名、経路は `local_chat`。
+- 範囲外の患者を指定して拒否された要求も記録する。
+- 薬の一覧など患者の記録を含まない応答は記録しない。
+- 根拠: mcs/ops/mcs_local_chat.py、docs/guides/LOCAL_CHAT.md、docs/guides/COMPLIANCE.md
+
+#### 通知カード掃除の台帳走査を索引で限定
+
+- 索引は既存台帳の開設時に作成され、schema versionは変更しません。
+- 削除対象や保持条件は変更しません。
+- 根拠: mcs/core/ledger_schema.py、mcs/notify/notify_cards.py
+
+#### 患者コンテキストの健全性観測が大きな台帳で観測上限に達する問題を修正
+
+- 対象は lane_metrics・品質集計・状態集計の3経路が共有する最新行判定です。
+- 同じ患者に同じ種別の履歴が多い場合でも、履歴行数に比例した一回の読み取りで済みます。
+- 観測処理による書き込み・公開の動作には変更ありません。
+- 根拠: mcs/patients/patient_context_status.py、mcs/patients/patient_context_refresh_readiness.py
+
+#### 患者コンテキストの品質確認が止まった箇所を記録
+
+- これまでは「品質確認を見送った」「入力が変わった」といった大まかな理由しか残りませんでした。
+- 品質確認の各段階（実行の許可と期限、Jev とクラウドの鍵、判定方針、対象範囲、読取りの照合、処理担当、Jev の利用状況、修復の予約・送信）で止まった最初の箇所を、確認1回ごとに記録します。例外で終わった場合は、期限切れなら deadline、それ以外は既存の保留理由と同じ固定コードか例外の種類名を記録します。
+- 保存直前の再確認で保存を見送った場合（status が source_changed）も、照合の失敗・判定方針や鍵の変更・確認記録の不一致・修復の検証失敗を区別して記録します。
+- このコードは処理単位の結果とクラウド処理の記録にだけ載り、DB には保存しません。進捗の quality_state と保留理由はこれまでと同じです。
+- 根拠: mcs/patients/patient_context_refresh_state.py、mcs/patients/patient_context_quality_controller.py、mcs/patients/patient_context_quality_receipts.py、mcs/patients/patient_context_refresh.py、mcs/llm/cloud_backlog.py
+
+#### 患者コンテキスト走査の中断理由を待機と読取障害に分けて記録
+
+- 走査の進捗書込み（BEGIN IMMEDIATE）が busy/locked で待ち切れた場合は、読取障害ではなく中断された走査（scan_interrupted）として扱います。
+- 候補読取り側の sqlite3.Error は errorcode で分類します。busy/locked は scan_interrupted、走査期限前の中断とそれ以外の失敗は read_sqlite です。SQLite のエラー名を記録し、時間上限を過ぎた中断だけは従来どおり scan_interrupted に集約します。
+- 候補を選んだ後の引受け書込みが sqlite3.Error で止まった場合も同じ分類で理由を記録します（これまでは理由なしで scan_incomplete にまとまっていました）。OSの入出力失敗は、候補選定では従来どおり read_io、引受け書込みでも今回から read_io として記録します。
+- 記録に使う拒否コードの集合は変えていません（既存の scan_interrupted/read_sqlite を使い回します）。
+- 根拠: mcs/patients/patient_context_refresh.py、tests/patients/test_context_scan_integration.py、tests/patients/test_context_scan_writer_wait.py
+
+#### 患者コンテキストの状態が件数のある環境でも「不明」になる問題を修正
+
+- health.json の patient_context は、同じ台帳・抽出世代の recorded を1時間再利用する動作を変えていません。その後の再集計が上限超過（observation_limit）か読み取り失敗（observation_unavailable）で終わると、直前の件数を status=stale_measurement として、元の observed_at・age_s・失敗の reason を付けて出します。
+- 前回値を再び引き継ぐ場合も observed_at は元の集計時刻のままで、毎回の定期実行で再集計を試みます。元の集計から3時間（health_policy.PATIENT_CONTEXT_CARRY_S）を過ぎた値、台帳・抽出世代が異なる値、件数が欠けた値は引き継がず unknown とします。publication は前回値ではなく現在の設定から読みます。
+- status_snapshot の patient_context_status に stale_measurement が出ることがあります。通知カード・未完了部品の前回値の扱い（30分・上限超過のときだけ）は変えていません。
+- doctor --probe data の患者コンテキスト作業待ちの走査は1秒の期限で患者の間に止まり、途中までの件数を JSON の patient_context.partial（checked・total・counts）に入れます。全員を確認できた場合だけ counts に入れ、途中の場合の状態は「確認できません」のままです。確認した範囲に失敗・読めない記録があれば注意にします。期限を過ぎた時点で読み途中だった患者は数えません。
+- doctor の JSON の patient_context に partial キーを追加しました（未確認・失敗・設定不正のときは null）。
+- 根拠: mcs/ingest/health_report.py、mcs/core/runtime/health_policy.py、mcs/ops/mcs_setup.py、mcs/patients/patient_context_refresh_readiness.py、docs/specs/patient-context.md、tests/ops/test_patient_context_observation.py、tests/ops/test_patient_context_refresh_setup.py、tests/patients/test_context_malformed_rows.py、tests/ingest/test_notification_measurement_carry.py
+
+#### 再取得で時刻だけが更新されても品質照合が偽の競合で止まらないよう修正
+
+- 品質確認の観測記録が、メッセージ行の管理用列（再取得のたびに更新される閲覧時刻）まで署名していたのが原因でした。
+- 品質確認が観測する確認済みの全行取得だけ、同じ行集合から閲覧時刻の列を除いて読む形に変えました。取得対象の行と観測回数は変えず、行数・列構成・本文・content_hash・first_seen・reply_count・is_unread・版・権限の変更は引き続き検出します。それ以外の読み取り（閲覧時刻を直接読むもの・別名列として返すもの・時刻を入力として使うもの）は従来どおり厳密に照合されます。
+- 根拠: mcs/patients/patient_context_quality_receipts.py
+
+#### 添付の依存captureが患者の全artifactsを走査して収集を停止させていた問題を修正
+
+- selected_scan の走査に idx_artifacts_lookup を明示。結果の行・順序・検証は同一。
+- 根本原因は idx_artifacts_project に sqlite_stat1 行がなく planner が誤選択していたこと。ANALYZE で統計を更新するとコード変更なしでも正しい plan になることを合成スケールモデルで検証済み。
+- 根拠: mcs/core/patient_context_artifacts.py
+
+#### 意味解析の要約・loopの既定をassistに変更
+
+- semantic_policy の summary_mode・loop_mode の未設定時の既定を off から assist に変更
+- assist は結果を補助表示に載せるが強制はしないモードで、enforce に必要なキャリブレーション証跡の要件は変わらない
+- mode が off の環境では従来どおり意味解析は動かない
+- 根拠: e407e2eac
+
+#### semantic projection候補が無い環境で収集runが長くなる問題を修正
+
+- 候補kindの有無だけを先に確認し、候補が無い場合はrowid pagingへ進まず終了する。
+- 候補がある場合は従来どおりscan開始時点の上限でpageし、判定結果を1回のcommitで反映する。
+- 根拠: mcs/semantic/semantic_publication.py
+
+#### 旧形式のsemantic cloud receiptでbacklog再処理が止まる問題を修正
+
+- semanticの送信重複判定にtarget・source・phaseへ加えてinterpretation generationを含め、旧generationの結果が現generationの再処理を妨げないようにしました。
+- 2026-10-30 00:46:08 +09以前の厳密な旧形式receiptだけを、現在generationの重複証拠から外します。receiptやfiscal tallyは削除・変更しません。
+- input_binding欠如のreceiptはscope bindingを再検証できないため再利用しません。ownerやgenerationが違う回答も再利用しません。
+- 根拠: mcs/llm/cloud_policy.py、tests/llm/test_cloud_resend_guard.py
+
+#### 意味解析backlogの要約生成を非専用workerでもcloudへoffload
+
+- backlog lane内の送信許可をsemantic phaseで区別し、summary stageだけ非専用workerのcloud送信を許可します。facts stageの専用worker制限は変更しません。
+- first_seen・notified_at・revisionが10分以内の対象はsummary stageでもcloudへ送りません。thread内のいずれかのmemberが10分以内に新着・通知・編集された場合も、そのthread全体をcloudへ送りません。
+- 同一target・同一phaseのlocal/cloud混在は従来どおり禁止しつつ、factsがlocalで要約がcloudになるstage間の分離を許可します。同一論理requestはlaneを跨いでも再送信せず再利用します。
+- cloud生成を名乗るsummary artifactは、inference_requestsに記録されたsettled済みsemantic_backlog reservationのowner（target・thread・source・generation・phase）と一致する場合だけ再利用します。不一致はlocal扱いで再生成方向へ倒します。
+- loop生成にはlocal LLM経路がないためコード変更はありません。関係評価は従来どおりJev APIです。
+- 根拠: mcs/semantic/semantic_transport.py、mcs/semantic/semantic_job_processor.py、mcs/semantic/semantic_summary_stages.py、mcs/llm/cloud_policy.py、mcs/llm/cloud_inference.py、mcs/extract/llm/extract_llm_provider.py、tests/semantic/test_semantic_backlog_window.py、tests/semantic/test_semantic_cloud.py
+
+#### 同一内容の要約の再判定で推論元の記録が失われなくなりました
+
+- 根拠: mcs/semantic/semantic_summary_stages.py
+
+#### 費用上限などの変更を設定の保存ごとに記録
+
+- 保存した入口は cloud-llm budget・providers・providers の対話画面・settings・remote-access・jev-model・init・slack-channels・fact-source・features・更新時の移行・導入時の初期化を区別します。記録が無いこと（この版より前の保存）と、上限が変わっていないことは別に表示します。
+- 記録は data/.provider-settings-stage-*/change.json（保存ごとの作業フォルダ）に置き、設定ファイル・台帳DBには書きません。設定の文字列・認証情報・.env の内容・患者情報は含めません。
+- 値は数値・null（上限なし）・日時・absent（未設定のため既定値を使う）・invalid（読めない値）のいずれかで、absent と null を区別します。
+- 現在の設定を作った保存は日時ではなくハッシュの一致で判定し、新しい保存200件分の記録だけを読みます。一致しない場合も記録の無い変更とは断定せず、記録を残さない保存（中断した保存の確定など）や範囲より前の記録などの可能性を示します。保存の途中は照合しません。
+- 記録の内容は書き込みの前に作ります。書き込みでの入出力の失敗は保存前の状態へ戻し、同名の記録がある場合・読み戻しが一致しない場合・直後の確認で設定が変わっていた場合は、保存中の記録を残して担当者の確認を待ちます。
+- doctor には表示しません。
+- 根拠: mcs/core/provider_settings.py、mcs/ops/cloud_cli.py、mcs/ops/setup/config_edit.py
+
+#### スナップショット複製の間も他の処理が書込みを続けられるように修正
+
+- 複製はSQLiteオンラインバックアップで行い、検証後に台帳と実行主体を再確認してから公開します。
+- 期限付きの公開だけ複製中にロックを離します。期限を指定しない保守処理の公開条件は従来どおりです。
+- 根拠: mcs/core/snapshots.py、mcs/ingest/run_check.py
+
+#### 独立接続の SDK を SHA256 と照合して導入
+
+- SDK の版を上げるときは、ファイル先頭のコマンドでハッシュ付きの一覧を作り直す。2つの一覧の版が違うとテストが失敗する。
+- 根拠: deployment/requirements-standalone.lock、deployment/install/runtime.sh、mcs/ops/update_preflight.py
 
 </details>
