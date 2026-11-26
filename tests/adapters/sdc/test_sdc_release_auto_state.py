@@ -339,6 +339,8 @@ def active_operation(**over):
           'candidate_generation': None, 'startup_nonce': None,
           'activation_receipt_id': None, 'runtime_proof': None,
           'reserved_owner_bytes': 4096, 'error_code': None,
+          'contract_digests': {'config_contract_sha256': '1' * 64,
+                               'data_contract_sha256': '2' * 64},
           'rollout': {'rollout_id': 'c2345678-1234-4234-8234-123456789abc',
                       'assignment_id': 'd2345678-1234-4234-8234-123456789abc',
                       'policy_sha256': 'e' * 64, 'cohort_sha256': 'f' * 64,

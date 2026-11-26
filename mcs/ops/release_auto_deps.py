@@ -66,9 +66,29 @@ def _unavailable_backup():
 
 
 def _unavailable_digests():
-    def fail():
+    def fail(target=None, profile=None):
         raise OwnerError('CONTRACT_DIGESTS_UNAVAILABLE')
     return fail
+
+
+def _wire_digests(wire):
+    """検証済みCompatibility payloadのdigestをwire.release_metadataから引く。
+
+    端末は契約文書から計算しない・配備値も使わない(spec 03 ENC03)。
+    attestation/compatibility相互照合・offer束縛・pin検証はwire側の責務で、
+    未配線・未検証ではwireがfail-closedする。
+    """
+    def digests(target, profile):
+        try:
+            meta = wire.release_metadata(target, profile)
+            return {'config_contract_sha256': meta['config_contract_sha256'],
+                    'data_contract_sha256': meta['data_contract_sha256']}
+        except OwnerError:
+            raise
+        except Exception as e:
+            raise OwnerError(getattr(e, 'code', None)
+                             or 'CONTRACT_DIGESTS_UNAVAILABLE') from e
+    return digests
 
 
 def _service_drain_unavailable():
@@ -367,7 +387,10 @@ def build_deps(*, store, cfg=None, runtime_home=None, paths=None,
     if wire is None:
         wire = _unavailable_wire()
     if contract_digests is None:
-        digests = _unavailable_digests()
+        if wire is not None and callable(getattr(wire, 'release_metadata', None)):
+            digests = _wire_digests(wire)
+        else:
+            digests = _unavailable_digests()
     else:
         digests = contract_digests
     if backup_evidence is None:
@@ -469,7 +492,21 @@ def _measure_state(*, git, repo, store, digests, local):
         owner = auto_state.load(store)
         if not isinstance(owner, dict):
             raise OwnerError('MEASURE_MISSING')
-        values = digests()
+        # measure対象はapply済みのactive targetそのもの。profileはowner正本から。
+        active = owner.get('active')
+        target = active.get('target') if isinstance(active, dict) else None
+        if not isinstance(target, dict):
+            target = owner.get('installed')
+        profile = owner.get('profile')
+        if not isinstance(target, dict) or not isinstance(profile, dict):
+            raise OwnerError('MEASURE_MISSING')
+        # stage時にactiveへ耐久保存されたdigestを優先し、apply後の観測で
+        # networkへ再取得しない。無ければ従来どおりdeps経由で解決する。
+        persisted = active.get('contract_digests') if isinstance(active, dict) else None
+        if isinstance(persisted, dict)                 and type(persisted.get('config_contract_sha256')) is str                 and type(persisted.get('data_contract_sha256')) is str:
+            values = persisted
+        else:
+            values = digests(target, profile)
         if not isinstance(values, dict):
             raise OwnerError('MEASURE_MISSING')
         profile = owner.get('profile')

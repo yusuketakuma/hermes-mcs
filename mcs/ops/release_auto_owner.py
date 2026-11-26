@@ -14,7 +14,7 @@ Deps contract (全て必須、testはfakeを注入):
   stage_verify(target, sink) -> bool               # stage内容の追加検査
   capacity_ok(required_bytes) -> bool
   backup_evidence() -> uuid str                     # local_backup_evidence_id
-  contract_digests() -> {'config_contract_sha256','data_contract_sha256'}
+  contract_digests(target, profile) -> {'config_contract_sha256','data_contract_sha256'}
   installed_schema() -> Positive int
   boot_id() -> Sha256                               # 仮名boot識別子
   witness_private(active) -> dict                   # PrivatePreparedWitnessの
@@ -33,7 +33,8 @@ Deps contract (全て必須、testはfakeを注入):
   acquire_locks(names) -> ctx mgr                   # ('G','U','Q','R','C','A','M')
       # Oはstate関数が各mutationで取得する(DAG順 G→…→M→O を維持)
   release_metadata(target, profile) -> dict         # 検証済み公開metadata:
-      # {'publication_id','manifest_digest','compatibility_sha256','rollout_epoch'}
+      # {'publication_id','manifest_digest','compatibility_sha256','rollout_epoch',
+      #  'config_contract_sha256','data_contract_sha256'}
   evidence_store(raw_bytes) -> object_key str       # control root evidence/への
       # O_EXCL耐久保存(0600/no symlink)。戻り値はsha256名のobject_key
   evidence_load(object_key) -> bytes                # 保存済み証拠の読戻し
@@ -153,7 +154,7 @@ def _blank_active(operation_id, phase, target, attempt_key, rollout, **over):
               'start_receipt_id': None, 'candidate_generation': None,
               'startup_nonce': None, 'activation_receipt_id': None,
               'runtime_proof': None, 'reserved_owner_bytes': 1, 'error_code': None,
-              'rollout': rollout}
+              'rollout': rollout, 'contract_digests': None}
     active.update(over)
     return active
 
@@ -299,6 +300,9 @@ def stage_candidate(store, deps, offer):
         return None
     if not deps.offer_eligible(offer, owner):
         return None
+    # digestはartifact fetch前に解決する — 検証済みCompatibilityが
+    # 取れないtargetのdownloadを毎tick繰り返さない(spec 03 ENC03)。
+    digests = deps.contract_digests(target, owner['profile'])
     if not deps.capacity_ok(target['artifact_size'] * 2):
         raise OwnerError('CAPACITY_HOLD')
     sink = deps.stage_sink(target)
@@ -316,14 +320,13 @@ def stage_candidate(store, deps, offer):
     if not deps.stage_verify(target, sink):
         raise OwnerError('STAGE_INVALID')
     operation_id = str(uuid.uuid4())
-    digests = deps.contract_digests()
     attempt_key = _attempt_key(owner, target, digests)
 
     def apply(new):
         if target['code_seq'] > new['highest_seen']['code_seq']:
             new['highest_seen'] = copy.deepcopy(target)
         new['active'] = _blank_active(operation_id, 'STAGED', target, attempt_key,
-                                      selected['rollout'])
+                                      selected['rollout'], contract_digests=digests)
 
     saved = _mutate(store, apply)
     return saved['active']['operation_id'] if saved['active'] else None
@@ -442,7 +445,13 @@ def _build_prepared_public(store, owner, deps, active, prepare_nonce):
     PREPARED遷移が唯一のpending safety変更なので post-save値は一意に決まる。
     grantはこのrevisionへ束縛され、以後のsafety変更をconsume時に検出する。
     """
-    digests = deps.contract_digests()
+    # digestはSTAGED時にactiveへ耐久保存済み — runtime排他lock内でnetworkへ
+    # 出さず、resume tickでoffer不束縛でも再取得しない(spec 03 ENC03)。
+    digests = active.get('contract_digests')
+    if not (isinstance(digests, dict)
+            and type(digests.get('config_contract_sha256')) is str
+            and type(digests.get('data_contract_sha256')) is str):
+        raise OwnerError('CONTRACT_DIGESTS_UNAVAILABLE')
     public = {'schema_version': 'mcs.prepared-public.v3',
               'local_preflight_id': _det_uuid('preflight|' + active['operation_id']),
               'local_backup_evidence_id': deps.backup_evidence(),

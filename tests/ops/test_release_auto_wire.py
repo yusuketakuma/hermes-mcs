@@ -55,7 +55,18 @@ class FakeTransport:
 def make_wire(transport=None, **kw):
     params = dict(transport=transport or FakeTransport(),
                   credential=lambda: (CONFIG, STATE, KEY),
-                  pins=lambda: [{'kid': 'a' * 64}],
+                  pins=lambda: [{'kid': 'a' * 64, 'spki': 'x',
+                                 'purposes': ['mcs-auto-offer-v3',
+                                              'mcs-auto-grant-v3',
+                                              'mcs-auto-status-v3',
+                                              'mcs-auto-ack-v3',
+                                              'mcs-auto-health-ack-v3',
+                                              'mcs-auto-consent-preview-v3',
+                                              'mcs-auto-consent-receipt-v3',
+                                              'mcs-auto-compatibility-v3',
+                                              'mcs-auto-attestation-v3'],
+                                 'not_before': 0,
+                                 'expires_at': 2 * NOW_MS}],
                   now_ms=lambda: NOW_MS)
     params.update(kw)
     return Wire(**params)
@@ -75,6 +86,29 @@ def test_signed_send_signs_and_posts():
     assert set(headers) == {'X-SDC-Device', 'X-SDC-Key-ID', 'X-SDC-Time',
                             'X-SDC-Nonce', 'X-SDC-Signature'}
     assert re.fullmatch(r'[0-9a-f]{32}', headers['X-SDC-Nonce'])
+
+
+def test_signed_send_rejects_path_without_verifiable_pin():
+    def bare_pins():
+        return [{'kid': 'a' * 64, 'spki': 'x', 'purposes': ['mcs-auto-offer-v3'],
+                 'not_before': 0, 'expires_at': 2 * NOW_MS}]
+
+    transport = FakeTransport()
+    wire = make_wire(transport, pins=bare_pins)
+    # status応答を検証できるpinが無いので送信自体を拒否する
+    with pytest.raises(WireError) as e:
+        wire.signed_send(STATUS_PATH, req_bytes({'a': 1}))
+    assert e.value.code == 'WIRE_PATH'
+    assert transport.sent == []
+    # 対象purposeが期限切れでも同様に拒否する
+    def expired_pins():
+        return [{'kid': 'a' * 64, 'spki': 'x', 'purposes': ['mcs-auto-status-v3'],
+                 'not_before': 0, 'expires_at': NOW_MS - 1}]
+
+    wire = make_wire(transport, pins=expired_pins)
+    with pytest.raises(WireError):
+        wire.signed_send(STATUS_PATH, req_bytes({'a': 1}))
+    assert transport.sent == []
 
 
 def test_signed_send_rejects_unknown_or_bad_input():
@@ -323,7 +357,9 @@ def test_release_metadata_requires_providers_and_offer():
 
 def test_release_metadata_full_flow(monkeypatch):
     attestation = {'release_id': TARGET['release_id'], 'core': {}}
-    compat_payload = {'scope': SCOPE, 'target': TARGET, 'profile': PROFILE}
+    compat_payload = {'scope': SCOPE, 'target': TARGET, 'profile': PROFILE,
+                      'config_contract_sha256': '4' * 64,
+                      'data_contract_sha256': '5' * 64}
     calls = []
 
     def responder(path, raw, headers):
@@ -377,7 +413,7 @@ def test_release_metadata_full_flow(monkeypatch):
         wire.release_metadata(TARGET, PROFILE)
     assert calls == []
 
-    # 正常系: attestation+compatibility両検証で4fieldを返す
+    # 正常系: attestation+compatibility両検証でdigest含む6fieldを返す
     offer = _offer_payload()
     offer['selected']['manifest_digest'] = manifest
     offer['selected']['compatibility_sha256'] = compat_sha
@@ -386,7 +422,9 @@ def test_release_metadata_full_flow(monkeypatch):
     assert result == {'publication_id': offer['selected']['publication_id'],
                       'manifest_digest': manifest,
                       'compatibility_sha256': compat_sha,
-                      'rollout_epoch': 7}
+                      'rollout_epoch': 7,
+                      'config_contract_sha256': '4' * 64,
+                      'data_contract_sha256': '5' * 64}
     assert calls == ['attestation', 'compatibility']
 
     # metadata requestはkind別に決定論的(同一bytes)

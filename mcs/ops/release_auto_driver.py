@@ -60,8 +60,19 @@ def _hold(stage, exc, fallback):
             'action': 'hold', 'stage': stage, 'code': _code(exc, fallback)}
 
 
+def _default_wire():
+    """v3 owner tick用のwire。enrollment/pin未配置ではNoneでbuild_depsがfail-closed。"""
+    try:
+        import mcs_util
+        import release_auto_wire_factory
+        return release_auto_wire_factory.build_wire(mcs_util.HOME)
+    except Exception:
+        return None
+
+
 def _run_tick_unlocked(control_root, *, store_factory=Store,
                        deps_builder=release_auto_deps.build_deps,
+                       wire_factory=_default_wire,
                        owner_tick=None,
                        health_report=release_auto_health.report_health):
     """Run one owner tick plus one health report attempt.
@@ -77,8 +88,12 @@ def _run_tick_unlocked(control_root, *, store_factory=Store,
     except Exception as exc:
         return _hold('open_store', exc, 'STORE_UNAVAILABLE')
     try:
+        wire = wire_factory()
+    except Exception:
+        wire = None
+    try:
         try:
-            deps = deps_builder(store=store)
+            deps = deps_builder(store=store, wire=wire)
         except Exception as exc:
             return _hold('build_deps', exc, 'DEPS_UNAVAILABLE')
         try:
