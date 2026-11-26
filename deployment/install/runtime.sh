@@ -295,6 +295,7 @@ if [ "$_fresh_authorized" -eq 1 ]; then
         || warn "Hermes の初回準備を確認できませんでした。このまま導入を続けます"
 fi
 
+
 # shim: published by rename, so an existing symlink is replaced rather
 # than written through (which would overwrite its target)
 mkdir -p "$HERMES_BIN_DIR"
@@ -329,6 +330,32 @@ case ":$PATH:" in
     *) warn "$HERMES_BIN_DIR が PATH にありません。hermes を使えるようシェルの設定で PATH に追加してください" ;;
 esac
 sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
+fi
+
+# A fresh install must fail before the first config write when an existing
+# MCS worker or registration is present, and equally when that cannot be
+# confirmed: either way the trap is a config written over foreign state that
+# no rerun can escape. The bootstrap re-checks everything under the locks;
+# this read-only inventory only decides whether the install may start at all.
+# Hermes mode reaches this point after the one-time preparation above, so the
+# bounded schedule inventory sees a Hermes that answers in time.
+if [ "$_fresh_authorized" -eq 1 ]; then
+    printf '  既存の処理や登録との競合を確認しています\n'
+    if _fresh_precheck_outcome="$(MCS_FRESH_RUNTIME_MODE="$RUNTIME_MODE" \
+            MCS_FRESH_HERMES_HOME="$HERMES_HOME" MCS_FRESH_HERMES_EXE="$VENV_HERMES" \
+            "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-precheck 2>/dev/null)"; then
+        :
+    else
+        _fresh_precheck_outcome="unknown"
+    fi
+    case "$_fresh_precheck_outcome" in
+        clear)
+            ok "既存の処理や登録との競合はありません" ;;
+        conflict)
+            die "既存の MCS の処理または登録を検出しました。設定は作成していません。競合を解消してから、同じ引数（--mode を含む）で install.sh を再実行してください" ;;
+        *)
+            die "既存の処理や登録との競合の有無を確認できません。設定は作成していません。原因を解消してから、同じ引数（--mode を含む）で install.sh を再実行してください" ;;
+    esac
 fi
 
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
