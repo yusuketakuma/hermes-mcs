@@ -180,8 +180,9 @@ def test_fresh_standalone_without_hermes_bootstraps_before_services(tmp_path):
     assert not hermes_home.exists()
     root = home / '.mcs'
     assert json.loads((root / 'config.json').read_text())['runtime_mode'] == 'standalone'
-    for provider in ('anthropic', 'openai', 'jev'):
-        assert json.loads((root / 'data' / 'provider_settings' / (provider + '.json')).read_text()) == {}
+    providers = json.loads((root / 'config.json').read_text())['provider_settings']
+    assert set(providers) == {'anthropic', 'openai', 'jev'}
+    assert not list((root / 'data' / 'provider_settings').glob('*.json'))
     assert (root / 'data' / '.provider-settings-authority.json').is_file()
     calls = _calls(stub_root)
     bootstrap = next(i for i, call in enumerate(calls) if call == 'fresh-runner bootstrap-fresh')

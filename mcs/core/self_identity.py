@@ -22,11 +22,23 @@ def normalize_sender_id(value) -> int | None:
     return value if type(value) is int and 0 < value < 2**63 else None
 
 
-def latest_self_profile(db):
-    """Most recent self_profile artifact (written from the MCS
-    /users/self response by record_self_profile) — the fetched default
-    for self identity. Returns {} when absent or unparsable."""
+def _stored_profile(db):
     return _latest_artifact(db, SELF_PROFILE_KIND)[1] or {}
+
+
+def needs_profile_fetch(db):
+    """Old profiles may contain a roster-derived ID indistinguishable from a directly observed one."""
+    return _stored_profile(db).get("sender_id_source") != "users/self"
+
+
+def latest_self_profile(db):
+    """Present the fetched profile with a current roster fallback when its ID was not observed."""
+    profile = _stored_profile(db)
+    if not profile:
+        return {}
+    if profile.pop("sender_id_source", None) != "users/self" or normalize_sender_id(profile.get("sender_id")) is None:
+        profile["sender_id"] = _station_self_id(latest_station_staff(db))
+    return profile
 
 
 def record_self_profile(db, prof) -> bool:
@@ -35,17 +47,15 @@ def record_self_profile(db, prof) -> bool:
     don't spam the log. Caller holds the transaction. Returns True
     when a row was written."""
     sid = normalize_sender_id(prof.get("sender_id"))
-    if sid is None:
-        sid = _station_self_id(latest_station_staff(db))
-    doc = {"sender_id": sid, "name": prof.get("name"),
+    doc = {"sender_id": sid, "sender_id_source": "users/self", "name": prof.get("name"),
            "professions": [x for x in (prof.get("professions") or [])
                            if isinstance(x, str) and x],
            "organizations": [x for x in (prof.get("organizations") or [])
                              if isinstance(x, str) and x],
            "fetched_at": int(time.time())}
     base = {k: doc[k] for k in
-            ("sender_id", "name", "professions", "organizations")}
-    cur = latest_self_profile(db)
+            ("sender_id", "sender_id_source", "name", "professions", "organizations")}
+    cur = _stored_profile(db)
     if cur and all(cur.get(k) == v for k, v in base.items()):
         return False
     db.execute(
@@ -69,28 +79,17 @@ def latest_station_staff(db) -> list:
 
 
 def record_station_staff(db, staff: list) -> bool:
-    """Persist a changed roster and fill a missing self-profile ID.
-
-    Caller holds the transaction. Returns True when either artifact
-    was appended; an unchanged roster can still repair the profile.
-    """
-    changed = staff != latest_station_staff(db)
-    if changed:
-        db.execute(
-            "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
-            " VALUES(?,NULL,?,?,?)",
-            (STATION_STAFF_KIND,
-             json.dumps({"staff": staff, "fetched_at": int(time.time())},
-                        ensure_ascii=False),
-             json.dumps({"type": "station_staff"}), time.time()))
-    # /users/self can omit its ID. Repair the existing profile even
-    # when this roster is unchanged; preserve its org/profession defaults.
-    sid = _station_self_id(staff)
-    prof = latest_self_profile(db)
-    if sid is not None and prof \
-            and normalize_sender_id(prof.get("sender_id")) is None:
-        changed = record_self_profile(db, {**prof, "sender_id": sid}) or changed
-    return changed
+    """Persist a changed roster as a separate observation from the self profile."""
+    if staff == latest_station_staff(db):
+        return False
+    db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at)"
+        " VALUES(?,NULL,?,?,?)",
+        (STATION_STAFF_KIND,
+         json.dumps({"staff": staff, "fetched_at": int(time.time())},
+                    ensure_ascii=False),
+         json.dumps({"type": "station_staff"}), time.time()))
+    return True
 
 
 def _station_self_id(staff) -> int | None:
@@ -125,7 +124,10 @@ def self_sender_id(db) -> int | None:
         # Ambiguous/invalid roster identities fail closed, even if the
         # profile has an ID. Display names never resolve an identity.
         return _station_self_id(staff)
-    return normalize_sender_id(latest_self_profile(db).get("sender_id"))
+    profile = _stored_profile(db)
+    if profile.get("sender_id_source") == "users/self":
+        return normalize_sender_id(profile.get("sender_id"))
+    return None
 
 
 def is_self_message(db, sender_id, *, self_id=_Unset) -> bool:

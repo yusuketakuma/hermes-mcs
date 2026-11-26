@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import initial_import_state
 import json
 import os
 import re
@@ -265,6 +266,7 @@ def _thread_plan_ids(db, card, shown, waiting=frozenset()) -> list:
     covered -= waiting
     if not covered - set(shown):
         return list(shown)
+    covered -= initial_import_state.quiet_notification_ids(db, card["project_id"], covered - set(shown))
     wanted = (covered | {m for m in shown if positive(m)}) - waiting
     # thread order, same query shape as the card face; ids outside
     # this card's thread/project never enter the plan

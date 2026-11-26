@@ -146,6 +146,7 @@ def command(args, *, services) -> int:
         print("遠隔接続をやめました。常駐サーバーを止めます。")
         print("tailnet への公開も止めるには `tailscale serve status` で確認し、`tailscale serve reset` を実行してください。")
         return services(args)
+    print("MCS 訪問薬剤管理は現時点では利用を推奨していません。")
     cli = tailscale_cli()
     if cli is None:
         print("Tailscale が見つかりません。install.sh --with-tailscale で導入するか、"
@@ -209,7 +210,8 @@ def command(args, *, services) -> int:
 
 
 def add_parser(sub, services) -> None:
-    p = sub.add_parser("remote", help="Mac mini 以外の端末（スマホなど）から患者画面を使えるよう、Tailscale で tailnet に公開して常駐させます")
+    description = "MCS 訪問薬剤管理を同じ tailnet の端末から使えるようにします。現時点では利用を推奨していません。"
+    p = sub.add_parser("remote", help=description, description=description)
     p.add_argument("--port", type=int, help=f"この Mac の中だけで待ち受ける番号（既定 {REMOTE_ACCESS_PORT}）")
     p.add_argument("--route-settings", help="訪問ルートの設定ファイル（所有者だけが読めるJSON）")
     p.add_argument("--off", action="store_true", help="遠隔接続をやめ、常駐サーバーを止めます")

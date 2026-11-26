@@ -337,16 +337,16 @@ def stage_derive(ledger, result, deadline, cfg=None,
         invalid = error is not None
         if invalid:
             result["errors"].append(f"drug_map: {error}")
-        map_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 3
+        map_start = time.monotonic()
+        map_budget = max(0, work_deadline - map_start) / 3
         result["drug_map"] = _run_stage(
             result, "derive_medications", work_deadline,
-            lambda: drug_map.derive(ledger, dictionary, deadline=map_deadline), required=True)
+            lambda: drug_map.derive(ledger, dictionary, deadline=map_start + map_budget), required=True)
         if invalid:
             result["drug_map"]["status"] = "invalid"
         elif result["drug_map"]["status"] == "partial":
-            # a cut that moved the cursor resumes next tick like any other
-            # deadline cut; a cut that examined nothing is a real stall
-            if result["drug_map"].get("progressed"):
+            # A cursor stall requires time allocated to this scan.
+            if map_budget == 0 or result["drug_map"].get("progressed"):
                 _defer_stage(result, "derive_medications")
             else:
                 result["errors"].append("drug_map: no_progress")
@@ -545,6 +545,7 @@ def _commands_only(lock_fd, deadline) -> int:
     cfg = _config()
     root = os.path.join(HOME, "data")
     try:
+        db_baseline = _db_identity(ledger)
         notify_spool.ensure_dirs(root)
         if notify_spool.restore_awaiting_consent(root) is not None:
             # schema-bump DB replace held for human consent — freeze
@@ -607,6 +608,10 @@ def _commands_only(lock_fd, deadline) -> int:
                 result["housekeeping_deferred"] = yield_diag.get("writer_reason", "run_lock_busy")
                 print(json.dumps(result, ensure_ascii=False))
                 return 0 if result["ok"] else 1
+            if _db_identity(ledger) != db_baseline or notify_spool.restore_writer_hold(root) is not None:
+                result["housekeeping_deferred"] = "writer_state_changed"
+                print(json.dumps(result, ensure_ascii=False))
+                return 0 if result["ok"] else 1
         notify_spool.publish_flags(cfg, root)
         notify_spool.publish_restore_holds(ledger, root)
         _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
@@ -614,8 +619,11 @@ def _commands_only(lock_fd, deadline) -> int:
         if dirty:
             # same interval/urgent-key decision as the tick: a background
             # mark waits out SNAPSHOT_MIN_INTERVAL_S ('deferred' keeps it)
+            gate_state = {"allowed": False, "attempted": False}
             state = _run_stage(result, "cmd_snapshot", deadline, lambda: maintenance.refresh_snapshot(
-                DB, dirty=True, deadline=deadline, commands_retry=True), required=True)
+                DB, dirty=True, deadline=deadline, commands_retry=True,
+                verification_context=_verification_context_factory(
+                    ledger, lock_fd, gate_state, db_baseline)), required=True)
             result["snapshot"] = state is not None and state != "retry_deferred"
             result["snapshot_state"] = state
             if state == "retry_deferred":
@@ -634,6 +642,12 @@ def _commands_only(lock_fd, deadline) -> int:
                 result["errors"].append("snapshot_publish_failed")
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result["ok"] else 1
+    except _SnapshotGateUnverified:
+        _record_gate_failure(result, gate_state)
+        result["ok"] = False
+        result["errors"].append("snapshot_gate_unverified")
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
     except Exception as e:
         # exception text can embed paths/user data — type name only,
         # matching the tick's outermost boundary
@@ -845,11 +859,10 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
     # as the signal engine's default self (config overrides). Never
     # fails the run — an unusable profile is a logged warning. The
     # profile rarely changes: refresh it on deep (--jobs-only) runs, and
-    # on a tick only until the first artifact exists.
+    # on a tick until a directly observed profile replaces any legacy copy.
     try:
         import self_identity
-        if args.jobs_only \
-                or not self_identity.latest_self_profile(ledger.db):
+        if args.jobs_only or self_identity.needs_profile_fetch(ledger.db):
             prof = adapter.self_profile()
             _require_closed_transaction(ledger, result)
             with ledger.db:
@@ -871,9 +884,10 @@ def _refresh_station_staff(adapter, ledger, prof, result):
     ``errors``, so it cannot degrade health on every jobs-only run."""
     import self_identity
     try:
-        staff = adapter.station_staffs(prof.get("stations") or [])
+        stations = prof.get("stations") or []
+        staff = adapter.station_staffs(stations)
         _require_closed_transaction(ledger, result)
-        if staff:
+        if stations:
             with ledger.db:
                 if self_identity.record_station_staff(ledger.db, staff):
                     result["station_staff"] = "updated"
@@ -1516,6 +1530,7 @@ def _main() -> int:
         # pending gateway restart can pass; fetch and mark-read stay coupled.
         print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
         return 3
+    collecting = not args.commands_only and not args.jobs_only
     lock_started = time.monotonic()
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
@@ -1530,9 +1545,13 @@ def _main() -> int:
                 refusal.update(writer_reason=diagnostic["writer_reason"],
                                writer_stage=diagnostic["writer_stage"])
             refusal.update(_not_started(args, lock_started))
+            if collecting and diagnostic["writer_reason"] == "run_lock_not_acquired":
+                writer_lock.record_run_lock_refusal(os.path.join(HOME, "data"))
             print(json.dumps(refusal))
             return 3
 
+    if collecting:
+        writer_lock.clear_run_lock_refusals(os.path.join(HOME, "data"))
     try:
         code_current = _entry_code_current()
         consent_only = False

@@ -2,16 +2,13 @@
 
 > コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
 
-この手順の対象は、[mcs_backup.py](../../mcs/ops/mcs_backup.py) の
+この手順の対象は [mcs_backup.py](../../mcs/ops/mcs_backup.py) の
 `keygen` / `offsite` / `verify` / `drill` / `restore` / `status` と、
-[mcs_local_backup.py](../../mcs/ops/mcs_local_backup.py) の `list` / `restore`。
-ローカル CLI と合成検証の実装を説明するもので、実機の復旧保証、
-外部保存の許可、定期登録、配備済み状態を意味しない。
-設定・health・Hermes cron／独立hostの接続は合成検証済み。
-実機のサービス設定・登録は未適用であり、設定ファイルの編集だけで定期実行が始まるとは扱わない。
+[mcs_local_backup.py](../../mcs/ops/mcs_local_backup.py) の `list` / `restore` です。
+定期実行を使う場合はサービスを配置し、登録と実行状態を確認してください。
 予定時刻・猶予・保持数はオーナーが決め、既定値を補わない。
 
-## 1.0.23の証拠と復元範囲
+## 復元後の収集と配送保留
 
 復元の受入は **collect-only（収集の再開まで）** です。通知は `hold_all` を維持し、
 `doctor` と監視に `restore_delivery_held` を表示します。部品の照合が成功しても復元保留や
@@ -30,14 +27,14 @@ FD入力だけの旧記録は保持しますが、独立保管の証拠がない
 `status` の `bundle_age_seconds` は保存bundle作成からの経過、`snapshot_data_lag_seconds` は
 bundle作成とDB最終正常runの差です。過去bundleの検証は最新offsiteの鮮度を変更しません。
 `max_rpo_seconds` は復元時点でも検証されます。端末交換所要時間を含む上限を事前に決めてください。
-上限超過の自動・人承認overrideはこの版では提供しません。新しい方針を承認なしに書き換えて
+上限を超えた場合は復元できません。新しい方針を承認なしに書き換えて
 期限検査を回避しないでください。期限超過は復元失敗として扱い、利用可能な別の復旧点を確認します。
 
 ## 1. 保存物と保証範囲
 
 | 保存物 | 内容と用途 | 限界 |
 |---|---|---|
-| ローカル日次 backup | [daily_backup](../../mcs/core/local_backup.py) が静的な `ledger-YYYYMMDD.db` を検証して保存。在宅記録の台帳 `data/homecare.db` があれば `homecare-YYYYMMDD.db` も同様に保存。現行 `BACKUP_KEEP=3`。一覧・検査・保留付き復元は[ローカル日次 backup の確認と復元](#local) | 同じ端末の平文 DB。端末喪失の対策ではない |
+| ローカル日次 backup | [daily_backup](../../mcs/core/local_backup.py) が静的な `ledger-YYYYMMDD.db` を検証して保存。MCS 訪問薬剤管理の台帳 `data/homecare.db` があれば `homecare-YYYYMMDD.db` も同様に保存。現行 `BACKUP_KEEP=3`。一覧・検査・保留付き復元は[ローカル日次 backup の確認と復元](#local) | 同じ端末の平文 DB。端末喪失の対策ではない |
 | 暗号化 offsite | 静的 DB を gzip、固定 `/usr/bin/openssl`、encrypt-then-MAC で `.mcsb` へ。公開前の復号検証と公開後の SHA 照合を実施 | 明示したディレクトリへ書くのみ。mount・同期先への転送完了・媒体の存続は別確認 |
 | SHA receipt | `bundle`、全ファイル `sha256`、時刻、`policy_id`、最後の正常 run 時刻 | 暗号化媒体と独立に保管しなければ、媒体ごとの置換や古い正当な世代への差替えを検出できない |
 | 鍵 escrow | `keygen` が人の明示操作で表示する 64 桁の小文字 hex（32 バイト） | Keychain は端末と共に失われる。外部保管者・回復手段が必要 |
@@ -63,7 +60,7 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 
 日次の `ledger-YYYYMMDD.db`（3世代）、更新前の `preupdate-*.db`、患者コンテキストの消去前の
 `patient-context-reset-*.db`（自動では削除しません）は `data/backups` にあります。
-鍵・policy・外部媒体は使いません。在宅記録の台帳（[ローカルのチャット表示](LOCAL_CHAT.md)の
+鍵・policy・外部媒体は使いません。MCS 訪問薬剤管理の台帳（[ローカルのチャット表示](LOCAL_CHAT.md)の
 `--homecare-db`）が `data/homecare.db` にあるときは、その日次の `homecare-YYYYMMDD.db`（3世代）と
 更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db`（適用が成功したときに新しい3つへ整理。`mcs recover` で完了した更新や強制終了で残ったコピーは、次に成功した適用で整理）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
 まだ作っていないときは、台帳のバックアップは作りません。
@@ -99,10 +96,10 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 承認は配置先の絶対パスに束縛され、承認後に移したディレクトリは再び保留になります。
 稼働中のデータディレクトリと入れ替える場合は、**承認の前に**最終の場所へ移します。
 
-1. 常駐サービスを人が止める。在宅記録の台帳を使っているときは、`--homecare-db` 付きのチャット表示も止める。
+1. 常駐サービスを人が止める。MCS 訪問薬剤管理の台帳を使っているときは、`--homecare-db` 付きのチャット表示も止める。
 2. `$MCS_ROOT/data` を別名（例 `data.before-restore`）へ移す。手元の `backups/` もそこに残る。
 3. `NEW_DATA_DIR` を `$MCS_ROOT/data` へ移す（同じファイルシステム内の改名にするため、
-   `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。在宅記録の台帳を使っているときは、
+   `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。MCS 訪問薬剤管理の台帳を使っているときは、
    `data.before-restore/homecare.db` と、あれば `homecare.db-wal`・`homecare.db-shm` も一緒に新しい `data/` へ移す
    （台帳は原本 DB と別のファイルで、原本 DB を戻しても台帳は戻りません。`-wal` には確定済みの入力が残っていることがあります）。
 4. 結果の `sha256` を `BUNDLE_SHA`、`$MCS_ROOT/data` を `DEST` として、
@@ -111,7 +108,7 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 再開するのは収集だけで、配送は `hold_all` のままです。
 
 <a id="homecare-restore"></a>
-### 在宅記録の台帳を戻す
+### MCS 訪問薬剤管理の台帳を戻す
 
 台帳は手入力の記録で MCS から取り直せません。壊れた・誤って変えたときは、台帳の1世代を
 新しい私有ディレクトリへ戻します。条件は原本 DB と同じです。
@@ -186,7 +183,7 @@ JSON の `true` だけ。文字列・整数・`null` などは拒否する。`of
 媒体の identity が変わった場合も拒否するため、エラー回避だけを目的に
 pin を書き換えず、対象の確認と方針の再承認を行う。
 
-### アプリ側の接続設定（合成検証済み・実機適用前）
+### アプリ側の接続設定
 
 提供済みの `config.json.backup` は以下のキーだけを持つ object。
 省略時は無効、明示する場合は boolean の `enabled` が必要。
@@ -472,11 +469,8 @@ receiptと一致させる。別の配置先や古い承認の値を流用しな�
 定期 [wrapper](../../deployment/scripts/mcs_offsite.sh) は既定無効。
 現行 wrapper は描画時の明示 opt-in（または `--enable`）と、私有 policy の
 `scheduled:true` の両方を要求し、更新中の marker があれば起動しない。
-設定からの描画値供給と health の記録接続は上記の実装を確認済みだが、
 `services`は明示した毎日の時刻でHermes cronへ追加し、独立runtimeは同じjob定義を
-単一host内で所有する。既定の6jobは維持し、backup無効化時は所有済みの追加jobだけを除く。
-共有jobの維持・追加・無効化と独立hostの所有を合成検証した。
-実機の登録・反映、新端末のサービス開始・hold解除は別工程。
+単一host内で実行する。backupを無効にすると、追加したバックアップ用のジョブだけを外す。
 描画済み wrapper が既にあり、一回の offsite 実行を明示承認した場合だけ、
 次の明示呼出しを使える。`RENDERED_WRAPPER` は private な配備候補の絶対パスで、
 未置換の source template をそのまま実行しない。この操作は定期登録を作らない。

@@ -1,0 +1,313 @@
+**要約の再開・薬剤照合・通知の監視を修正**
+
+クラウドで修復した患者要約は、再監査の途中で処理が止まっても、入力と成功した予約を照合できれば続きから処理できます。通知の監視はワーカーの起動記録と本文・添付の配送記録を個別に確認します。結果不明の部品は保留し、手動で配送先と照合できます。起動状態の照会が時間切れになったときは、その理由を表示します。
+
+処方に「カリウム 4、分2」のような単位のない記載がある場合、服薬量を検査値として確定せず、数値を候補として残します。採血の数値に「異常なし」などの所見だけが続く場合は、元の記載を根拠に検査値を確認します。短い引用の後に「未満なら連絡」などの条件が続く場合も、元の投稿を確認し、その基準値を実測値から除きます。検査の予定に続いて別の処置の中止が明記されている場合は、検査予定を表示します。薬剤照合に時間が残っていなければ、次回の収集に持ち越します。
+
+施設の共通設定とAnthropic・OpenAI・Jevの設定を `config.json` にまとめます。AnthropicとOpenAIの合計費用上限は、設定を省略した場合、1日80ドル・1か月350ドルです。新規導入では、各社の上限をそれぞれ1日40ドル・1か月175ドルに設定します。更新時は、未選択の提供元も含め、設定済みのモデルと予算を引き継ぎます。旧版の復旧監視を導入済みのMacでは、[更新ガイド §3-A](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.1/docs/guides/UPGRADE_AGENT.md#3-a-提供元設定の保存形式が変わるときの復旧監視)に沿って監視を切り替えてください。
+
+Slack・Discord・LINE WORKSでは、新しく認識したグループの過去ログを通知せず、新着だけを届けます。過去の投稿に新しい返信が付いたときは、その返信から通知します。履歴は引き続き閲覧・検索できます。
+
+投稿やスタンプの本人IDは、最新の職員名簿で確認します。本人の印がない場合は、MCSの本人プロフィールで確認したIDを使います。
+
+OCRを導入済みのMacでは、更新時に専用環境のライブラリを固定版に揃えます。Jevを使う設定では、保存前の確認画面で送信される可能性のある対象を確認できます。
+
+![通知ワーカーの起動と本文・添付の配送記録を確認する流れ](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.3.1/notification-observation.png)
+
+図は通知監視の仕組みを示します。ワーカーの起動時刻だけでは個々の部品の送信完了は分かりません。
+
+v1.2.1から更新する場合は、MCSを実行する利用者が .env を所有していることを確認してください。クラウドAPIキーを .env から読む場合は権限を 0600 に設定します。以前は所有者が正しくても権限が644や640のファイルを読めましたが、v1.3.0以降はその権限では読み込みません。在宅ケア台帳や医薬品検索の変更も適用されます。詳細は[在宅ケアと医薬品検索の変更一覧](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.0/docs/releases/v1.3.0/changelog-1.3.0.md)にまとめています。
+
+「MCS 訪問薬剤管理」は利用できますが、現時点では利用を推奨していません。
+
+### 新機能
+
+- **v3 consent wireをcredential storeとpin fileへ接続**
+  v3自動更新のconsent確認経路が、enrollment済みの端末credentialとpin配布fileから署名wireを組み立てられるようになりました。enrollment未完了・pin未配置では従来どおりfail-closedで利用できません。
+
+- **v3 contract digestを検証済みCompatibilityから解決**
+  v3自動更新のattempt_keyで使うcontract digestを、中央が署名配布する検証済みCompatibility metadataの値から解決するようになりました。digestが取れないtargetはdownload前にfail-closedし、繰り返しdownloadを防ぎます。enrollment・pin未配置の端末では従来どおり先へ進みません。
+
+- **v3 owner tick driverへwire接続を追加**
+  v3自動更新の定期tickと同意CLIが、enrollment済みcredentialとpin配置のある端末で中央への署名通信(offer照会・consent確定/撤回など)を行えるようになりました。未enrollment・pin未配置では従来どおりfail-closedで通信しません。
+
+- **v3自動更新のpin配布形式を追加**
+  利用者の動作は変わりません。v3自動更新で使う公開鍵pinの配布形式(mcs.auto-v3-pins.v1)と読込み部品を追加し、pinはrelease control rootのauto-v3-pins.jsonだけから読み、networkから取得・更新しません。
+
+### 改善
+
+- **クラウドAPIの合計費用上限の既定値を1日80ドル・1か月350ドルに変更**
+  AnthropicとOpenAIの合計費用上限は、設定を省略した場合、1日25ドルから80ドル、1か月75ドルから350ドルに変わります。
+
+- **施設ごとの設定を config.json に集約**
+  初回導入時に共通設定と全提供元の設定を一つのファイルに保存します。設定済みの施設では未選択の提供元のモデルや予算も引き継ぎます。
+
+### 不具合修正
+
+- **通知の配送記録とworkerの起動を個別に確認**
+  待機中の通知とworkerの起動を個別に調べ、配送を確認できなかった理由を監視警報に表示します。
+
+- **OCR警報の受付対象を一覧で確認**
+  OCR警報に、受付のやり直しが必要な場合と次の照合を待つ場合を分けて表示します。読取り専用の一覧で未受付の対象を確認できます。
+
+- **ログイン復帰に失敗したときの原因が実行記録に残るようになりました**
+  ログインの復帰に失敗した場合、実行記録でChrome起動時の例外の種類、プロファイルに残ったロック、キーチェーンのロックを確認できます。予備の認証情報でログインできた場合にも、検出したキーチェーンのロックを記録します。
+
+- **電解質の服薬量や連絡基準を検査の実測値と誤認する問題を修正**
+  単位のない電解質の数値に服薬の回数や飲み方だけが続く場合は、未確認の候補として残します。検査の数値がどのようなときに連絡するかを示す基準であれば、短い引用に条件が含まれていなくても、元の投稿を確認して実測値から除きます。
+
+- **通知操作後の台帳コピー中にも患者コンテキストを保存可能に**
+  通知操作後に台帳の読み取り用コピーを作る際、コピーと検証の間は共有ロックを解放します。この間も患者コンテキストや抽出結果を保存できます。
+
+- **コマンド処理が数秒おきに走るたび収集ロックを長く握る問題を修正**
+  通知の復旧確認を未処理の部品から始め、正常に確認した後は60秒間隔を空けます。通知コマンドと収集が同じロックを取り合う時間を減らし、時計が戻った場合は次の確認を実行します。
+
+- **別の処置だけを中止する条件付き検査予定を表示**
+  本人の検査予定に続いて別の処置だけを中止すると明記された場合、測定履歴に検査予定が表示されます。検査自体の中止や、中止対象が不明な記載は未確認として扱います。
+
+- **通知の配送記録の読取りが時間切れでも通知ワーカーの起動を確認**
+  配送記録の読取りが時間切れになった場合は、その理由を表示し、残り時間で通知ワーカーの起動を確認します。送信中の通知で送信試行の記録がない場合や、その時刻に不備がある場合は、ほかの通知が届いても配送状況を確認できないことを警報に表示します。
+
+- **薬剤照合の持ち越しを進捗停止として警報する問題を修正**
+  定期収集で薬剤照合を始める時点で処理時間が残っていない場合、次回への持ち越しとして記録します。処理時間があったのに照合位置が進まなかった場合は、引き続き進捗停止を報告します。
+
+- **抽出テストの実行順による誤判定を修正**
+  抽出ワーカーのテスト設定が次のテストに残ると、処理できるはずの投稿が0件と報告されることがありました。各テストの終了時にワーカーの設定や一時的な状態を元に戻します。
+
+- **新しく認識したグループでは新着だけを通知**
+  Slack・Discord・LINE WORKSでは、グループを初めて認識する前の投稿や投稿時刻が不明のものは履歴として保存・解析します。初回履歴のまとめ通知は送りません。過去の投稿に新しい返信が付いた場合は、その返信から通知を始めます。
+
+- **添付OCRで使うパッケージの版を固定**
+  添付OCRを選んで導入したMacでは、新規導入と更新で同じ版の依存パッケージを使い、必要なパッケージが欠けている場合は導入を停止します。
+
+- **リリース下書きの対象をタグのコミットに固定**
+  新しいGitHub Releaseの下書きには、タグが指すコミットSHAを設定します。公開処理がタグCIから必要な成果物を取得できない場合は、その名前を表示して停止します。
+
+- **投稿の更新後も過去の抽出記録を確認して処理を再開**
+  本文が同じまま投稿者などの情報が更新されたとき、旧版が保存した入力記録のために抽出が繰り返し先送りされる場合がありました。既知の3つの旧版の記録を照合し、以前の投稿状態の記録だと確認できた場合は、現在の入力で抽出を進めます。
+
+- **収集がロック不足で止まっているとき健康レポートが原因を示すようになりました**
+  収集が繰り返し実行ロックを取得できなかった場合、健康レポートに拒否の回数と継続時間が表示され、収集開始前の停滞を確認できます。
+
+- **本人IDの判定に最新の職員名簿を使う**
+  最新の職員名簿から本人の印が消えたとき、過去の名簿に載っていたIDで投稿やスタンプを本人のものと判定する問題を修正しました。名簿に本人の印がない場合は、MCSの本人プロフィールで確認したIDを使います。
+
+- **保存前確認の外部Jev追加解析表示を実効条件へ修正**
+  semantic.modeが明示offの設定では外部Jev追加解析を無効と表示し、mode未設定でsummary/loopの既定がassistの場合は、Jev key登録時に送信され得る条件付き表示のままにしました。
+
+- **クラウドで修復した要約が中断後に反映されない問題を修正**
+  クラウドで要約を修復した後、検証が時間切れなどで中断すると、支払い済みの結果が次の要約に反映されない場合がありました。処理を再開したときに修復時の記録を照合し、その結果を引き継ぎます。
+
+- **要約の生成元をクラウドの決済記録で確認**
+  中断した要約の処理を再開するとき、クラウドへの要求が失敗していても、その後の再試行が成功して決済された記録があれば、要約の生成元を確認できます。
+
+### 更新時の注意
+
+- 更新後の監視から反映されます。追加操作は不要です。
+
+- 受付のやり直しを案内された場合は、通知の復旧手順に沿って対象と計画を確認し、操作者が受付を行ってください。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。keychain のロック解除や設定変更は引き続き行われず、ロックの検出は記録だけに使われます。
+
+- 追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。
+
+- 追加操作は不要です。digest解決にはwire経由のmetadata検証が必要で、release_trust(attestation)配線が未完了の端末では従来どおりfail-closedのままです。
+
+- 追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。
+
+- v3自動更新を利用する場合は、登録完了後に管理者または署名済みの配布手順で auto-v3-pins.json を配置してください。登録やファイルの配置が済むまでは同意を確認できません。
+
+- 意味解析の事実源で canonical を承認済みの施設では、更新後に承認の照合が外れると legacy に戻ります。canonical を再開する場合は、この版で再評価し、合格した根拠を使って fact-source canonical で承認し直してください。
+
+- 更新前から合計上限や提供元別の上限を設定している場合は、その値を引き継ぎます。以前の既定値を維持したい場合は、更新前に `"$PY" mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 25 --monthly-usd 75`（MCSの導入先で、その環境のPythonをPYに指定） で指定してください。
+
+- 更新後の通知コマンド処理から適用されます。設定変更は不要です。
+
+- 追加操作は不要です。既存のDBには起動時に小さな記録テーブルが自動で作られます。
+
+- 追加操作は不要です。
+
+- HermesでSlackまたはDiscordに通知している環境が対象です。追加の操作は不要です。
+
+- 追加操作は不要です。更新後の定期収集から適用されます。
+
+- テスト環境の変更です。利用者の操作は不要です。
+
+- 設定の変更は不要です。更新後は通知期間（notify_max_age_h）が既読の返信を通知する設定（notify_all_replies、既定はオフ）にも適用されます。
+
+- OCRを追加済みの環境は通常の更新時に専用環境のパッケージを入れ直します。OCRの有効化は従来どおり設定が必要です。
+
+- 新しく作成する下書きに適用されます。追加操作は不要です。
+
+- 更新後の抽出ワーカーから適用されます。抽出に関わるソースが変わるため、以前の抽出結果を保持した自動保留は再評価の対象になります。
+
+- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。
+
+- 追加操作は不要です。更新後の最初の収集で本人プロフィールを取得し直します。出典を確認できない旧版のIDは、現在の名簿かプロフィールで確認できるまで本人判定に使いません。
+
+- 追加操作は不要です。保存前確認の表示が実際の有効条件へ合わせられます。
+
+- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、追加のクラウド送信は発生しません。
+
+- 追加操作は不要です。更新後に要約の生成元を再確認する際に適用されます。
+
+- 移行先の更新ツールを使います。旧版の復旧監視（org.mcs.recovery）が入っているMacでは、[更新ガイド §3-A](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.1/docs/guides/UPGRADE_AGENT.md#3-a-提供元設定の保存形式が変わるときの復旧監視)に従って監視を停止し、再導入後に新しい監視の配置と起動を確認してください。設定の変更には設定画面またはCLIを使います。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 通知の配送記録とworkerの起動を個別に確認
+
+- 配送の進捗は停滞判定に使う直近30分の記録を確認します。
+- 根拠: mcs/ingest/health_delivery.py、mcs/ingest/health_watch.py
+
+#### OCR警報の受付対象を一覧で確認
+
+- 一覧は添付256件ずつ確認できます。受付証跡を照合できない場合はエラーを返します。
+- 受付後も本文を回収できなかった記録は残ります。
+- 照合の読取りがSQLiteの期限で中断された場合も、次の照合を待つと表示します。
+- 根拠: mcs/ops/ocr_failure_ack.py、docs/guides/NOTIFICATION_RECOVERY.md
+
+#### ログイン復帰に失敗したときの原因が実行記録に残るようになりました
+
+- Chrome の起動に失敗した場合は例外の種類を記録します。例外本文やプロファイルのパスは記録しません。
+- _ensure_chrome は、CDP が落ちているのに停止対象の Chrome プロセスが見つからず、かつプロファイルに SingletonLock がある場合（プロセス一覧で帰属できない保持者または stale lock）を chrome_singleton_lock として記録する。この状態では再起動が吸収されて CDP が立ち上がらない可能性が高い。
+- _login_password は keychain のロックを検出した時点で keychain_locked を記録する。.env フォールバックでログインできた場合も残る。
+- これらの事実は試行ごとに初期化され、値があるときだけ実行記録に載る。従来の記録（healed_tabs・chrome_restarted）と同じ扱い。
+- 根拠: mcs/ingest/mcs_authentication.py、mcs/ingest/mcs_adapter.py、mcs/ingest/collection_stages.py、tests/ingest/test_adapter_runtime_auth.py、tests/ingest/test_run_check_session_recovery.py
+
+#### v3 consent wireをcredential storeとpin fileへ接続
+
+- credentialは使用毎にconnector storeから解決し、pinはnetworkから取得しない。
+- release_metadataのattestation trustは未配線のまま。
+- confirm応答の保存はcompare-and-swapで行い、送信中のauto-disable撤回をconfirmで上書きしない。pin fileの不備はwire構築時にfail-closedする。
+- 根拠: mcs/ops/update_cli.py、mcs/ops/release_auto_trust.py
+
+#### v3 contract digestを検証済みCompatibilityから解決
+
+- 端末はconfig/data契約文書からdigestを計算せず、配備値としても配置しない。
+- release_metadataの戻り値にconfig/data contract sha256を追加し、build_depsがwire注入時にdigest解決を自動構成する。
+- digest解決をartifact fetch前へ移し、stage不能なtargetの反復downloadを防ぐ。
+- 根拠: mcs/ops/release_auto_wire.py、mcs/ops/release_auto_deps.py、mcs/ops/release_auto_owner.py
+
+#### v3 owner tick driverへwire接続を追加
+
+- wire factoryをrelease_auto_wire_factoryへ集約し、consent CLIとowner tick driverが共有する。
+- wire構築の失敗はtickを停止させずunavailable wireとしてfail-closedする。
+- auto-disableでもwireが組み立てられる場合は中央consent-revokeを送る。
+- 根拠: mcs/ops/release_auto_wire_factory.py、mcs/ops/release_auto_driver.py、mcs/ops/update_cli.py
+
+#### v3自動更新のpin配布形式を追加
+
+- 閉じたschemaで検査し、symlink・16KiB超・未知keyを拒否する。
+- pinの用途と期限の評価は既存の署名検証側が担う。
+- 根拠: mcs/ops/release_auto_trust.py、docs/specs/auto-update-v2.md
+
+#### 電解質の服薬量や連絡基準を検査の実測値と誤認する問題を修正
+
+- 読点の後ろが別の検査項目や薬名を明記した処方の場合は、手前の検査値を従来どおり判定します。
+- 「採血 カリウム 4.5」に「異常なし」「経過観察」「次回再検」のいずれかの所見だけが続く場合は、4.5を検査値として扱います。「ドライシロップ1包」など剤形と用量だけが続く場合は、元の数値を未確認の候補に残します。
+- 採血の値が読点で並ぶ場合は、血清ナトリウムや補正カルシウムなど、後ろの検査項目まで確認します。同じ文の一連の数値に「未満なら連絡」などの条件がかかる場合は、実測値として確定しません。
+- 根拠の引用が数値だけで終わっていても、元の投稿でその後に続く服薬指示や連絡条件を確認します。すでに記録した数値を表示するときにも同じ照合を行います。
+- 服薬量の後に読点がある記載と、別の処方や結果共有の文が続く採血値を区別します。
+- 根拠: mcs/extract/clinical/clinical_values.py、tests/extract/clinical/test_electrolyte_prescription_lines.py、mcs/extract/llm/extract_validation.py、mcs/patients/measurement_sources.py、tests/extract/clinical/test_lab_names_gen12.py、tests/views/test_structured_view.py
+
+#### クラウドAPIの合計費用上限の既定値を1日80ドル・1か月350ドルに変更
+
+- 日・月のどちらかを省略した場合は、その項目だけに新しい既定値を使います。明示した0や上限解除（null）も引き継ぎます。
+- 根拠: mcs/llm/cloud_policy.py、mcs/ops/cloud_cli.py、docs/guides/ANTHROPIC.md
+
+#### 通知操作後の台帳コピー中にも患者コンテキストを保存可能に
+
+- コピーの公開前にロックを取り直して台帳と更新状態を確認します。処理中に加わった通知の変更は、次のコピー作成の対象として残します。
+- 通知操作の結果をすぐに反映するときは、コピーを始めるために必要な残り時間を450秒から300秒に短縮します。ロック待ちが長引いても、読み取り用コピーを更新しやすくなります。
+- 根拠: mcs/ingest/run_check.py、mcs/core/maintenance.py、mcs/core/snapshots.py
+
+#### コマンド処理が数秒おきに走るたび収集ロックを長く握る問題を修正
+
+- recover の走査は delivered 行ごとの相関 EXISTS ではなく pending 部品の駆動に変更（結果は同じ）。
+- recover は60秒に1回まで。最終実行時刻は ledger の notify_recovery_state に記録し、再起動後も間隔が維持される。独立実行でも、最後の通知コマンド処理から60秒経過したら、キューが空でも復旧処理を起動する。
+- backlog_stalls には checkpoint が渡され、SQLite の外側の処理（ファイル走査・worker 診断）でも観測上限で停止する。
+- 根拠: mcs/notify/notify_spool.py、mcs/core/ledger_schema.py、mcs/ingest/health_report.py
+
+#### 別の処置だけを中止する条件付き検査予定を表示
+
+- 元の投稿から中止の対象を確認し、検査名・値・単位を検査予定が書かれた箇所と照合します。
+- 根拠: mcs/patients/measurement_timeline.py
+
+#### 通知の配送記録の読取りが時間切れでも通知ワーカーの起動を確認
+
+- 通知ワーカーの起動記録が見つからない場合は、診断結果に witness_missing と記録します。
+- 根拠: mcs/ingest/health_recovery.py、mcs/ingest/health_delivery.py、mcs/ingest/health_watch.py
+
+#### 薬剤照合の持ち越しを進捗停止として警報する問題を修正
+
+- 収集全体の制限時間とスナップショット検証のために確保する時間は従来どおりです。
+- 根拠: mcs/ingest/run_check.py、tests/ingest/test_drug_map_pipeline.py
+
+#### 抽出テストの実行順による誤判定を修正
+
+- テストが書き換えた処理枠、直前の呼び出しの状態、推論の設定などを保存して復元します。共有辞書は同じ辞書を参照している処理にも復元後の値が伝わります。
+- 根拠: tests/extract/llm/conftest.py
+
+#### 新しく認識したグループでは新着だけを通知
+
+- 初回認識より前の本文や添付は、新着の返信カードに含めません。既存グループでも、LINE WORKSの返信カードには取込み時に通知期間を過ぎていた投稿の本文や添付を追加しません。保存済みの履歴は患者情報や検索で確認できます。
+- 更新前にSlackの配送待ちだった新着返信は、元投稿が履歴扱いでも返信から通知します。送信を開始した部品や結果不明の部品は自動で再送しません。
+- 根拠: mcs/core/initial_import_state.py、mcs/notify/notify_cards.py、mcs/notify/notify_render.py
+
+#### 添付OCRで使うパッケージの版を固定
+
+- macOS・Python 3.13の任意OCR環境で、固定したYomitoku本体と推移依存を導入し、依存関係を検査します。
+- 根拠: deployment/requirements-ocr.lock、scripts/setup_yomitoku.py
+
+#### リリース下書きの対象をタグのコミットに固定
+
+- 手動実行では、指定したIDから正式な受入票を取得する経路が未実装であることを表示して停止します。
+- 根拠: .github/workflows/release-notes.yml、.github/workflows/release-publish.yml
+
+#### 投稿の更新後も過去の抽出記録を確認して処理を再開
+
+- 以前の試行の本文や回答は流用しません。記録が一致しない場合は先送りし、課金済みの送信に関する照合も継続します。
+- クラウド再抽出で保留が確定した投稿は、保留の期限（6時間、短い準備待ちでは60秒）が過ぎると通常の選定に戻ります。その時点の条件で処理を続けるか、再び保留するか、保持を解除するかが決まります。
+- 根拠: mcs/extract/llm/extraction_context.py、mcs/extract/llm/extract_llm_context.py、mcs/extract/llm/extract_llm_runner.py
+
+#### 収集がロック不足で止まっているとき健康レポートが原因を示すようになりました
+
+- writer_lock に run_lock_refusals.json の記録・消去・読取を追加。収集（run_check）がロック待ちに失敗すると1件記録し、取得成功で消去する。30分を超える間隔が空くと連鎖は新しい事象として数え直す。
+- health_watch は、連鎖が2件以上・15分以上の幅・直近15分以内の拒否を含む場合に report.run_lock_starved（回数・幅・最終拒否からの経過）を載せ、state_reasons に run_lock_starved を追加する。状態記録が古い場合も、現在のロック拒否と過去の記録を区別して表示する。
+- 単発の拒否や古い連鎖では表示しない。抽出ワーカーの単一writeロックは対象外で、収集経路の拒否だけを数える。
+- 根拠: mcs/core/writer_lock.py、mcs/ingest/run_check.py、mcs/ingest/health_watch.py、tests/ingest/test_run_lock_starvation.py
+
+#### 本人IDの判定に最新の職員名簿を使う
+
+- 最新の職員名簿で本人の印が複数のIDに付いている場合や、印の付いたIDが無効な場合は、本人IDを不明として扱います。
+- 根拠: mcs/core/self_identity.py、mcs/ingest/run_check.py
+
+#### 保存前確認の外部Jev追加解析表示を実効条件へ修正
+
+- 外部Jev追加解析は、summary/loop/extract_qcのいずれかが有効で日次要求上限がある場合に条件付きで表示します。
+- semantic.modeを明示offにした場合は無効と表示します。mode未設定でkey不在のために現在offでも、key登録でassist既定が有効になり得る場合は送信可能性を隠しません。
+- 根拠: mcs/ops/setup/setup_wizard.py、tests/ops/test_setup_save_confirmation.py
+
+#### クラウドで修復した要約が中断後に反映されない問題を修正
+
+- 修復済みの要約を再利用する際は、修復時の指示、回答、対象の投稿、推論の設定を保存した記録と照合します。通常生成の予約を別に要求していたために、正当な修復まで退ける問題を修正しました。
+- 根拠: mcs/semantic/semantic_summary_stages.py、tests/semantic/test_semantic_budget_retry.py、tests/semantic/test_summary_fact_rebinding.py
+
+#### 要約の生成元をクラウドの決済記録で確認
+
+- 予約IDごとに予約と結果が1件ずつそろい、HTTP 200で決済済みかを確認します。同じ要約に失敗した予約があっても、別の予約IDの成功を確認できます。重複や未決着の結果は根拠に使いません。
+- 予約のメタデータが配列や数値などで保存されていても、生成元の確認中に処理が停止する問題を修正しました。
+- 投稿への返信と親投稿を区別するには、スレッド内の親子関係を使います。最初の投稿自体が要約の対象でも、対応する予約と照合できます。
+- 根拠: mcs/semantic/semantic_summary_stages.py、tests/semantic/test_semantic_cloud.py、tests/semantic/test_semantic_budget_retry.py、tests/semantic/test_summary_fact_rebinding.py
+
+#### 施設ごとの設定を config.json に集約
+
+- 新規導入時の上限は全体で日額80ドル・月額350ドル、AnthropicとOpenAIはそれぞれ日額40ドル・月額175ドルです。既存施設の明示値は引き継ぎます。
+- 外部送信の同意と認証情報は従来の手順で管理します。
+- 根拠: mcs/core/provider_settings.py、mcs/ops/install_options.py
+
+</details>

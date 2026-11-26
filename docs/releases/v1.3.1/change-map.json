@@ -1,0 +1,130 @@
+{
+ "records": {
+  "alert-delivery-observation-20261126": {
+   "path": "changes/archive/1.3.1/alert-delivery-observation-20261126.json",
+   "sha256": "fb27be290db0985b7ff3e53079c381b5b869ee33852cfd32d0fef7b077da289d",
+   "title": "通知の配送記録とworkerの起動を個別に確認"
+  },
+  "alert-ocr-ack-reasons-20261126": {
+   "path": "changes/archive/1.3.1/alert-ocr-ack-reasons-20261126.json",
+   "sha256": "f1941d931f5a825b7abd66d97f806e74121bbdcf3b65f50b6cb4dc7781cdd3f9",
+   "title": "OCR警報の受付対象を一覧で確認"
+  },
+  "auth-diagnostics-20261125": {
+   "path": "changes/archive/1.3.1/auth-diagnostics-20261125.json",
+   "sha256": "bb031c76a6888b8d08b2089678b2e138145245d981d3c9dce9114b70dfae5215",
+   "title": "ログイン復帰に失敗したときの原因が実行記録に残るようになりました"
+  },
+  "auto-update-v3-consent-wire": {
+   "path": "changes/archive/1.3.1/auto-update-v3-consent-wire.json",
+   "sha256": "63c8babb6e001da6b952f16f0562e00463ad6c2ffdd4735f9bf36e973b1ccac4",
+   "title": "v3 consent wireをcredential storeとpin fileへ接続"
+  },
+  "auto-update-v3-contract-digests": {
+   "path": "changes/archive/1.3.1/auto-update-v3-contract-digests.json",
+   "sha256": "37d47dfc93013b7277f1a7e1dfbbee55897df3c8ceadfc7324ef1e4392698f4d",
+   "title": "v3 contract digestを検証済みCompatibilityから解決"
+  },
+  "auto-update-v3-driver-wire": {
+   "path": "changes/archive/1.3.1/auto-update-v3-driver-wire.json",
+   "sha256": "25c9078bfd1b60cd916c68de2acc3903abc4e57802ec1e4c56c379bc9c22b182",
+   "title": "v3 owner tick driverへwire接続を追加"
+  },
+  "auto-update-v3-pin-distribution": {
+   "path": "changes/archive/1.3.1/auto-update-v3-pin-distribution.json",
+   "sha256": "a7f71336c35bbad2d29871fa5bf48a8831e23fedd67db20fc1266967d1d8b600",
+   "title": "v3自動更新のpin配布形式を追加"
+  },
+  "clinical-unitless-electrolyte-prescription": {
+   "path": "changes/archive/1.3.1/clinical-unitless-electrolyte-prescription.json",
+   "sha256": "ac09751552538ec1607063ae75bedbc3f82cceea723d6a3615a2af2b1af3b041",
+   "title": "電解質の服薬量や連絡基準を検査の実測値と誤認する問題を修正"
+  },
+  "cloud-combined-budget-defaults": {
+   "path": "changes/archive/1.3.1/cloud-combined-budget-defaults.json",
+   "sha256": "8262674804f4298c059a3054f818787728703dbd14c3e960c3888ee35c6d1e43",
+   "title": "クラウドAPIの合計費用上限の既定値を1日80ドル・1か月350ドルに変更"
+  },
+  "command-snapshot-release-lock": {
+   "path": "changes/archive/1.3.1/command-snapshot-release-lock.json",
+   "sha256": "3d62cadc3a65ab5ca8d761a5ee7ed09a96008e0d759fc068e5a2f2d8b29fb54a",
+   "title": "通知操作後の台帳コピー中にも患者コンテキストを保存可能に"
+  },
+  "commands-recover-cadence-20261125": {
+   "path": "changes/archive/1.3.1/commands-recover-cadence-20261125.json",
+   "sha256": "30a4293a49df53d6d7e68994a555da1f335fba7a57630daaf62b9ab7b3e4a951",
+   "title": "コマンド処理が数秒おきに走るたび収集ロックを長く握る問題を修正"
+  },
+  "conditional-lab-plan": {
+   "path": "changes/archive/1.3.1/conditional-lab-plan.json",
+   "sha256": "00170c00cc4effb6776e4ff6c9703fd5de3704e8e7a11b27c50e8277726b2c91",
+   "title": "別の処置だけを中止する条件付き検査予定を表示"
+  },
+  "delivery-monitor-worker-and-attempts": {
+   "path": "changes/archive/1.3.1/delivery-monitor-worker-and-attempts.json",
+   "sha256": "7cb51469ed99bbae0589d917a0ec13a3d3d0ef93068be5d96c5d5a3abfbf9b4c",
+   "title": "通知の配送記録の読取りが時間切れでも通知ワーカーの起動を確認"
+  },
+  "drug-map-zero-budget-deferral": {
+   "path": "changes/archive/1.3.1/drug-map-zero-budget-deferral.json",
+   "sha256": "4ecd43983c4a841ee95c02194ede0f9d86d45c0ed365e122da5bdd2352c6f741",
+   "title": "薬剤照合の持ち越しを進捗停止として警報する問題を修正"
+  },
+  "extract-test-module-state-restore": {
+   "path": "changes/archive/1.3.1/extract-test-module-state-restore.json",
+   "sha256": "30d6bd4a0bcbd7a943e5517633ab6df168ac8b0947ec67842a0ef1fcec4bc545",
+   "title": "抽出テストの実行順による誤判定を修正"
+  },
+  "live-only-join-notifications": {
+   "path": "changes/archive/1.3.1/live-only-join-notifications.json",
+   "sha256": "d49316c7ae4aa7d3532c4af479931ad63147ea225414cf4665bf5abd7725f718",
+   "title": "新しく認識したグループでは新着だけを通知"
+  },
+  "ocr-runtime-dependency-lock": {
+   "path": "changes/archive/1.3.1/ocr-runtime-dependency-lock.json",
+   "sha256": "d51ab70a7921dbcbb2231b869a47cca07ac53f2fbd7af2d2b34498860aa875eb",
+   "title": "添付OCRで使うパッケージの版を固定"
+  },
+  "release-draft-target-and-acceptance": {
+   "path": "changes/archive/1.3.1/release-draft-target-and-acceptance.json",
+   "sha256": "9140f8e3c48af84a8f1ea1d11cbe6735e10771471b15e69ae5c69d9bc516d351",
+   "title": "リリース下書きの対象をタグのコミットに固定"
+  },
+  "retired-frame-occurrence-retry": {
+   "path": "changes/archive/1.3.1/retired-frame-occurrence-retry.json",
+   "sha256": "5025ef03b431aacd8f3909e803c88a0f847793b1800ae2178ccff698011e4ca3",
+   "title": "投稿の更新後も過去の抽出記録を確認して処理を再開"
+  },
+  "run-lock-starvation-visibility-20261125": {
+   "path": "changes/archive/1.3.1/run-lock-starvation-visibility-20261125.json",
+   "sha256": "2e01fe31f29e789aff89c89d4e61e16248f14979c078f40ae6e0877bef60541b",
+   "title": "収集がロック不足で止まっているとき健康レポートが原因を示すようになりました"
+  },
+  "self-id-source": {
+   "path": "changes/archive/1.3.1/self-id-source.json",
+   "sha256": "80d473b5ae53ac4e9a5e29187afa64ef22afa5285bea4ff6e3e86b7174d5ff08",
+   "title": "本人IDの判定に最新の職員名簿を使う"
+  },
+  "semantic-assist-default-save-confirmation-20261126": {
+   "path": "changes/archive/1.3.1/semantic-assist-default-save-confirmation-20261126.json",
+   "sha256": "f8b2b23335ae3241c195ca104cb5da951b604d368b5248736b4ac9d7ab5bcf6c",
+   "title": "保存前確認の外部Jev追加解析表示を実効条件へ修正"
+  },
+  "semantic-cloud-repair-render-root-detection": {
+   "path": "changes/archive/1.3.1/semantic-cloud-repair-render-root-detection.json",
+   "sha256": "a8b22f8fa4489c621d1093a8ba3073d3b1bbffd39e6fe8eea1ac60b2122d14c5",
+   "title": "クラウドで修復した要約が中断後に反映されない問題を修正"
+  },
+  "semantic-cloud-summary-receipt-settlement-20261126": {
+   "path": "changes/archive/1.3.1/semantic-cloud-summary-receipt-settlement-20261126.json",
+   "sha256": "d6ed0bca020a4d2ecd6d5466cbaf8b193fa0d27540ae31fd0ea796889fdfb598",
+   "title": "要約の生成元をクラウドの決済記録で確認"
+  },
+  "single-tenant-settings": {
+   "path": "changes/archive/1.3.1/single-tenant-settings.json",
+   "sha256": "cce03b67367b7da2dda4e26fd0ed358c8d49f554ecea50abd9ee9517b9fd3418",
+   "title": "施設ごとの設定を config.json に集約"
+  }
+ },
+ "version": "1.3.1"
+}

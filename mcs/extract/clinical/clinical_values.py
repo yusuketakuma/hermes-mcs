@@ -104,9 +104,10 @@ class MedicationSurface(TypedDict):
 
 # dosage forms written right after a medicine name (shared with signal matching)
 MED_FORMS = r"od錠|錠|カプセル|顆粒|細粒|散|シロップ|テープ|パップ|軟膏|点眼液|注射液|坐剤"
+_MED_STRENGTH = r"[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%)"
 _MED_SUFFIX = re.compile(
     rf"(?P<form>{MED_FORMS})?"
-    r"(?P<strength>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%))?$")
+    rf"(?P<strength>{_MED_STRENGTH})?$")
 
 
 def medication_surface(name: str) -> MedicationSurface:
@@ -372,7 +373,8 @@ _COMPLETE_RESULT = re.compile(r"(?:デス|デシタ)?(?:[。、,;；]|$)")
 # of a drug name. Any acid glued to the item names its salt; a lab word ending in 酸
 # (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
 # so words that merely end in them (悪化, 尿素窒素) are no stems.
-_SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)$")
+_SALT_ENDING = r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)"
+_SALT_STEM = re.compile(_SALT_ENDING + "$")
 # Items also reported for urine, CSF, effusions, stool or sputum (尿中Ca, 尿TP, 尿沈渣WBC
 # 10-19/HPF): those specimens and qualitative or ranged results (1+, 10-19) are not the
 # blood item. The previous items (尿Cr) keep their earlier reading.
@@ -399,6 +401,7 @@ _LAB_NEXT_NUMBER = re.compile(
     r"(" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
     + r")(?:値|ハ|:|=)*[+-]?[0-9]")
 _LAB_RESULT_END = re.compile(r"[。、,;；]")
+_LAB_SOURCE_REST = re.compile(r"[^。!?！？;；\r\n\v\f\x1c-\x1e\x85\u2028\u2029]*")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -460,10 +463,13 @@ def _in_a_lab_layout(quote: str, at: int, value_end: int, lines: list[int]) -> b
     end_before = start - 1 if start > first else first
     if end_before and _SALT_STEM.search(quote, max(0, end_before - _LAYOUT_REACH), end_before):
         return False
-    stop = _LAB_TAIL_END.search(quote, value_end, min(last, value_end + _LAYOUT_REACH))
-    stop = stop.start() if stop else last
-    return (stop - value_end <= _LAYOUT_REACH and bool(_LAB_PREFIX.fullmatch(quote, start, at))
-            and bool(_LAB_TAIL.fullmatch(quote, value_end, stop)))
+    return bool(_LAB_PREFIX.fullmatch(quote, start, at)) and _closed_lab_tail(quote, value_end, last)
+
+
+def _closed_lab_tail(quote: str, start: int, line_end: int) -> bool:
+    stop = _LAB_TAIL_END.search(quote, start, min(line_end, start + _LAYOUT_REACH))
+    end = stop.start() if stop else line_end
+    return end - start <= _LAYOUT_REACH and _LAB_TAIL.fullmatch(quote, start, end) is not None
 
 
 def _glued_to_a_word(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
@@ -625,7 +631,7 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 # layout on its own source line. Before the item: a bullet, lab headers (the lab
 # section headings of medical_document plus the measurement words 採血/検査/測定 also
 # used for measured_on below), a date or other readings. After the number, up to the
-# end of its clause (、。,; or のため/により: what follows is another statement): units,
+# end of its clause (a comma separates a labelled reading or prescription): units,
 # flags, a note, a previous value, other readings or words about the value. Anything
 # else (塩化, 維持液, ロスバスタチン, 朝夕, 適宜, 分2, 1錠, 4→2) keeps it a candidate.
 # The words are folded once, like the quote they are matched on.
@@ -647,16 +653,11 @@ _LAB_HEADER = "|".join((
 # a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
 # every split of a run of readings that ends in an unknown word. Alternatives that
 # start alike are therefore listed longest first (低下 before 低).
+_LAB_QUALIFIER = r"(?:補正|血清)"
 _LAB_PREFIX = re.compile(fold_surface(
     r"(?>[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*+"
     rf"(?>[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
-    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*+"))
-_LAB_TAIL = re.compile(fold_surface(
-    rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
-    r"|[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
-    r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
-    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
-    r"|でした|です|だった|である)*+"))
+    rf"|{_READING}|{_LAB_QUALIFIER}|[、,/:|・\-~=])*+"))
 # A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
 # that item only (尿TP, 尿中Ca). With a closed suffix (検査, 検査の結果, 定性, 一般, 生化学,
 # 穿刺, 所見, の性状, データ, 検体 ...) or a bracket it is a heading wherever it starts, even
@@ -715,7 +716,23 @@ _SECTION_RESULT = re.compile(fold_surface(
     rf"({_LAB_SPELLINGS}|(?<![a-z0-9])[a-z][a-z0-9]*|(?<![ァ-ヺー])[ァ-ヺー]++|[一-龥]{{1,6}})") + _RESULT_NUMBER)
 # After a bare specimen word (尿 WBC 30) only a lab item is a result: 尿 量 500ml is a note.
 _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
-_LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
+# A comma can separate another labelled reading or a separate prescription (アスパラK 分3).
+# A dose direction or dosage form alone has no such label (カリウム 4、分2).
+_NAMED_PRESCRIPTION = (rf"(?:(?:[一-龥]*{_SALT_ENDING})?[ァ-ヺー]++|[一-龥]+薬)[a-z]*(?:{_MED_STRENGTH})?"
+                       rf"(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))")
+_AFTER_COMMA = rf"[、,](?!(?:ドライシロップ|{MED_FORMS}))"
+_PANEL_ITEM = re.compile(fold_surface(
+    rf"{_AFTER_COMMA}(?:{_LAB_QUALIFIER}{_LAB_RESULT.pattern}(?:{_READING_UNIT})?|{_READING})"))
+_LAB_COPULA = r"(?:でした|です|だった|である)"
+_LAB_TAIL = re.compile(fold_surface(
+    rf"(?>{_PANEL_ITEM.pattern}|[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
+    r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
+    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
+    r"|[、,](?:検査)?結果を(?:(?:主治医|医師|担当医)に)?(?:共有|報告)(?:しました|済み)$"
+    rf"|{_LAB_COPULA})*+"))
+_LAB_TAIL_END = re.compile(fold_surface(
+    rf"[。;]|の?ため|により|{_LAB_COPULA}(?={_PANEL_ITEM.pattern})|{_AFTER_COMMA}(?={_NAMED_PRESCRIPTION})"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
@@ -822,7 +839,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   evidence: str | None, *, unverified: bool = False,
                   flag: str | None = None, subject: str | None = None,
                   status: str | None = None, measured_on: str | None = None,
-                  condition: str | None = None, patient_name: str | None = None) -> LabCandidate:
+                  condition: str | None = None, patient_name: str | None = None,
+                  source_body: str | None = None) -> LabCandidate:
     """Keep unknown/mismatched values separate; quote support is not human approval."""
     label = fold_surface(name)
     analyte = lab_analyte(name)
@@ -838,6 +856,16 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     unit_key = fold_surface(unit).replace("µ", "μ") if unit else None
     normalized_unit = _LAB_UNITS.get(unit_key, unit_key) if unit_key else None
     quote = fold_surface(evidence or "").replace("µ", "μ")
+    # A cropped quote can establish a value, but cannot hide the panel's predicate in its source.
+    panel_quote = quote
+    source_tail = ""
+    if number is not None and isinstance(source_body, str) and evidence and source_body != evidence:
+        span = locate_quote_span(source_body, evidence)
+        if span is None:
+            unverified = True
+        elif not re.search(r"[\r\n]\s*$", source_body[slice(*span)]):
+            source_tail = _LAB_SOURCE_REST.match(source_body, span[1])[0]
+            panel_quote += fold_surface(source_tail).replace("µ", "μ")
     names = _LAB_NAMES[analyte] if analyte else (label,)
     pattern = (r"(?P<name>" + _lab_name_pattern(names)
                + r")(?![a-z])(?:値|ハ|:|=)*")
@@ -875,13 +903,23 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                     continue
                 # A lone slash separates readings (ナトリウム 141 / カリウム 4.4); it is no unit.
                 quoted = "" if result[2] == "/" else result[2]
-                if not quoted and not _unit_less_reading(analyte, number, quote, match, result.end(1), lines):
-                    continue
+                if not quoted:
+                    # Each unitless reading needs a lab layout in both the quote and its source line.
+                    layouts = (quote,) if panel_quote == quote else (quote, panel_quote)
+                    if not all(_unit_less_reading(analyte, number, layout, match, result.end(1), lines)
+                               for layout in layouts):
+                        continue
                 unit_matches = ((_LAB_UNITS.get(quoted, quoted) == normalized_unit) if unit_key
                                 else not quoted or quoted in allowed_units)
                 if result.end() > row_end:
                     tail_end = _LAB_RESULT_END.search(quote, result.end(), line_end)
                     row_end = tail_end.start() if tail_end else line_end
+                # A comma before another labelled result continues the panel's predicate.
+                panel_end = len(panel_quote) if line_end == len(quote) else line_end
+                panel_break = _LAB_RESULT_END.search(panel_quote, result.end(), panel_end)
+                if (panel_break and _PANEL_ITEM.match(panel_quote, panel_break.start(), panel_end)
+                        and not _closed_lab_tail(panel_quote, result.end(), panel_end)):
+                    continue
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.fullmatch(quote, result.end(), row_end):
                     readings.append((match, row_end))
                 elif unit_matches:
@@ -917,9 +955,10 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         supported = False
     if readings and isinstance(evidence, str):
         reading, _ = readings[0]
-        if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
-                                        patient_name=patient_name) \
-                not in ("patient", "past"):
+        begin, end = starts[reading.start()], ends[reading.end() - 1]
+        if (clinical_scope.patient_source_scope(evidence, begin, end, patient_name=patient_name)
+                not in ("patient", "past") or source_tail and clinical_scope.patient_source_scope(
+                    evidence + source_tail, begin, end, patient_name=patient_name) == "conditional"):
             supported = False
     if flag:
         cues = r"高|↑|high" if flag == "high" else r"低|↓|low"

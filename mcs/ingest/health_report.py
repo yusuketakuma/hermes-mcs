@@ -35,7 +35,16 @@ DB_MAINT_STATE_MAX_BYTES = 65536
 
 
 def _ocr_ack_current(data, value, cfg=None):
-    """Recheck receipt/source proof with a bounded read before suppressing one historical cause."""
+    """Recheck receipt/source proof with a bounded read before suppressing one historical cause.
+
+    Returns None when the recorded acknowledgements still match the live sources;
+    otherwise the fixed reason the check could not prove them:
+    - attachment_ocr_ack_reconfirm_required: the read completed and the live counts
+      no longer match the recorded state, so the acknowledgements must be redone
+    - attachment_ocr_ack_recheck_incomplete: the read itself did not finish
+      (deadline, lock or a partial pass) and the next pass will retry it
+    - attachment_ocr_ack_unverified: settings, policy or update markers mean the
+      comparison itself is not currently meaningful"""
     import attachment_ocr_ack
     import attachment_ocr
     from pathlib import Path
@@ -45,9 +54,9 @@ def _ocr_ack_current(data, value, cfg=None):
         policy = value.get("policy_binding")
         if policy and (policy != attachment_ocr.rejection_policy(cfg)
                        or not attachment_ocr._settings_current(cfg["attachment_ocr"])):
-            return False
+            return "attachment_ocr_ack_unverified"
         if any(os.path.lexists(path) for path in markers):
-            return False
+            return "attachment_ocr_ack_unverified"
         with closing(sqlite3.connect((Path(data) / 'ledger.db').resolve().as_uri() + '?mode=ro',
                                      uri=True, timeout=0.2)) as db:
             db.row_factory = sqlite3.Row
@@ -56,14 +65,26 @@ def _ocr_ack_current(data, value, cfg=None):
             db.execute('BEGIN')
             identity = attachment_ocr_ack.database_identity(db)
             current = attachment_ocr_ack.failure_counts(db, cfg=cfg if policy else None, deadline=until)
-            return (current['queue_status'] == 'known'
-                    and identity == attachment_ocr_ack.database_identity(db)
-                    and not any(os.path.lexists(path) for path in markers)
-                    and all(current[key] == value.get(key) for key in current)
-                    and (not policy or attachment_ocr._settings_current(cfg["attachment_ocr"]))
-                    and time.monotonic() < until)
-    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, RecursionError):
-        return False
+            if time.monotonic() >= until:
+                return "attachment_ocr_ack_recheck_incomplete"
+            if (current['queue_status'] != 'known'
+                    or identity != attachment_ocr_ack.database_identity(db)
+                    or any(os.path.lexists(path) for path in markers)):
+                return "attachment_ocr_ack_recheck_incomplete"
+            if not all(current[key] == value.get(key) for key in current):
+                return "attachment_ocr_ack_reconfirm_required"
+            if policy and not attachment_ocr._settings_current(cfg["attachment_ocr"]):
+                return "attachment_ocr_ack_unverified"
+            return None
+    except sqlite3.OperationalError as error:
+        if (_observation_failure(error) == "observation_limit"
+                or "locked" in str(error).lower() or "busy" in str(error).lower()):
+            return "attachment_ocr_ack_recheck_incomplete"
+        return "attachment_ocr_ack_unverified"
+    except sqlite3.Error:
+        return "attachment_ocr_ack_recheck_incomplete"
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return "attachment_ocr_ack_unverified"
 
 
 def _diagnostic_block(value) -> bool:
@@ -198,8 +219,9 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                              and value.get('queue_status') == 'known'
                              and not value.get('failed', 0) and reason in waiting_reasons)
     if acknowledged_failures:
-        if not _ocr_ack_current(data, value, cfg if policy_detail else None):
-            return {**detail, 'state': 'unknown', 'reason': 'attachment_ocr_ack_unverified'}
+        ack_reason = _ocr_ack_current(data, value, cfg if policy_detail else None)
+        if ack_reason is not None:
+            return {**detail, 'state': 'unknown', 'reason': ack_reason}
         detail.update(source_coverage='unrecovered', ack_checked_at=now,
                       clinical_review='not_proven', original_file_availability='not_rechecked')
         if (reason is None and not value.get('deferred', 0)
@@ -538,9 +560,10 @@ def transfer_review_holds(cfg) -> list:
     is configured. Otherwise a cloud provider or Jev that the recorded review
     does not name is reported when its valid configuration would send with a
     patient in scope once approved; without a record nothing is withheld. An
-    explicit mode is reported whether or not its key is present: the missing
-    key is named (cloud_llm_no_api_key, semantic_jev_no_api_key) once the
-    review allows the send, while an omitted mode is held only with a key."""
+    explicit mode is reported whether or not its key is present, while an
+    omitted mode is held only with a key. A missing key is not a reason here:
+    cloud_stop_reason and the Jev block reasons report it once the review
+    allows the send."""
     import cloud_policy
     import external_transfer
     import semantic_policy
@@ -631,7 +654,7 @@ def watcher_health(data_dir: str, cfg, now: float) -> dict:
 
 
 def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
-                   observation: dict | None = None) -> list:
+                   observation: dict | None = None, checkpoint=None) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH old
     waiting work and no completion inside the window, so a large but
@@ -663,6 +686,11 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     from mcs_queries import current_v4_id
 
     def _phase(name):
+        # Phase transitions double as observation checkpoints: non-SQL work
+        # (file scans, worker diagnosis) never reaches the SQLite progress
+        # handler, so this is the only bound that can stop it.
+        if checkpoint is not None:
+            checkpoint()
         if observation is not None:
             observation["phase"] = name
 
@@ -1371,7 +1399,8 @@ def build_health(db, result: dict, status: str,
     try:
         stalls = (bounded_health_read(
                       db, lambda _check: backlog_stalls(
-                          db, cfg, now, marks=stall_marks, observation=stall_observation),
+                          db, cfg, now, marks=stall_marks, observation=stall_observation,
+                          checkpoint=_check),
                       seconds=remaining(), observation=stall_observation)
                   if checked else [])
     except Exception as e:

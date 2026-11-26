@@ -1,0 +1,20 @@
+{
+  "artifacts": [
+    {
+      "path": "docs/releases/v1.3.1/notification-observation.svg",
+      "sha256": "a4c14b5b9b43e149cf290d83dc19ba5b81fcbd2a5250c256a87e8b922b83593b"
+    },
+    {
+      "path": "docs/releases/v1.3.1/notification-observation.png",
+      "sha256": "3731960f27ea13b847c192c199dbe6376ba22a219445a21b87835f0f9a48ba20"
+    }
+  ],
+  "kind": "synthetic explanatory diagram",
+  "source": "docs/releases/v1.3.1/notification-observation.svg",
+  "code": [
+    "mcs/ingest/health_delivery.py",
+    "mcs/ingest/health_watch.py"
+  ],
+  "renderer": "macOS sips, 800x430",
+  "visual_check": "Inspected at 390px width. Both labels and the unknown-delivery outcome are legible."
+}

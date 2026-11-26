@@ -173,7 +173,7 @@ def test_normalize_sender_id(value, expected):
 
 
 
-def test_station_self_id_repairs_profile_and_does_not_match_names(led):
+def test_station_self_id_is_resolved_without_copying_it_to_the_profile(led):
     prof = {"sender_id": None, "name": "SYNTH-A",
             "professions": [], "organizations": ["SYNTH-薬局"]}
     self_identity.record_self_profile(led.db, prof)
@@ -193,17 +193,35 @@ def test_station_self_id_repairs_profile_and_does_not_match_names(led):
     assert self_identity.is_self_message(led.db, 43) is False
     assert self_identity.is_self_message(led.db, None) is False
     current = self_identity.latest_self_profile(led.db)
-    assert current["sender_id"] == 42
+    assert current["sender_id"] == 42 and "sender_id_source" not in current
     assert all(current[k] == prof[k] for k in ("name", "professions", "organizations"))
     assert self_identity.self_sets({}, led.db) == (["SYNTH-薬局"], [], [])
     # A subsequent /users/self response missing its ID cannot erase it.
     assert self_identity.record_self_profile(led.db, prof) is False
     assert self_identity.record_station_staff(led.db, staff) is False
-    # Repair also runs if an old missing-ID profile follows an unchanged roster.
-    led.artifact_add(self_identity.SELF_PROFILE_KIND, json.dumps(prof))
-    assert self_identity.record_station_staff(led.db, staff) is True
-    assert self_identity.latest_self_profile(led.db)["sender_id"] == 42
+    stored = led.db.execute("SELECT content FROM artifacts WHERE kind='self_profile_v1'").fetchall()
+    assert len(stored) == 1 and json.loads(stored[0][0])["sender_id"] is None
+    self_identity.record_station_staff(led.db, [{"staff_id": 42, "is_self": False}])
+    assert self_identity.self_sender_id(led.db) is None
+    assert self_identity.latest_self_profile(led.db)["sender_id"] is None
 
+
+def test_legacy_profile_id_requires_fresh_evidence_and_keeps_history(led):
+    legacy = json.dumps({"sender_id": 42, "name": "SYNTH-A", "organizations": ["SYNTH-薬局"]})
+    led.artifact_add(self_identity.SELF_PROFILE_KIND, legacy)
+    assert self_identity.needs_profile_fetch(led.db)
+    assert self_identity.latest_self_profile(led.db)["name"] == "SYNTH-A"
+    assert self_identity.latest_self_profile(led.db)["sender_id"] is None
+    assert self_identity.self_sender_id(led.db) is None
+    self_identity.record_station_staff(led.db, [{"staff_id": 43, "is_self": True}])
+    assert self_identity.self_sender_id(led.db) == 43
+    assert self_identity.latest_self_profile(led.db)["sender_id"] == 43
+    self_identity.record_station_staff(led.db, [])
+    self_identity.record_self_profile(led.db, {"sender_id": 44})
+    assert not self_identity.needs_profile_fetch(led.db)
+    assert self_identity.self_sender_id(led.db) == 44
+    assert led.db.execute("SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id LIMIT 1",
+                          (self_identity.SELF_PROFILE_KIND,)).fetchone()[0] == legacy
 
 
 @pytest.mark.parametrize("self_ids", [[42, 43], [42, None], [True], [None]])

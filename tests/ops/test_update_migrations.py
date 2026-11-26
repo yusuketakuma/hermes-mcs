@@ -97,14 +97,14 @@ def test_provider_initial_migration_keeps_raw_values_and_split_noop(tmp_path, mo
     raw = _provider_root(tmp_path, monkeypatch)
     assert update_migrations.migrate_provider_settings(tmp_path) is True
     common = json.loads((tmp_path / 'config.json').read_text())
-    docs = {name: json.loads((tmp_path / 'data' / 'provider_settings' / f'{name}.json').read_text())
-            for name in provider_settings.PROVIDERS}
+    docs = common.pop('provider_settings')
+    assert all(not (tmp_path / 'data' / 'provider_settings' / f'{name}.json').exists()
+               for name in provider_settings.PROVIDERS)
     assert common['unknown'] == raw['unknown'] and common['cloud_llm'] == {'mode': 'off', 'provider': 'openai'}
     assert common['semantic'] == {'mode': 'off'}
     assert docs['openai'] == {'model': 'gpt-6-luna', 'budget': raw['cloud_llm']['provider_budgets']['openai']}
     assert docs['jev'] == {'daily_request_budget': 2} and docs['anthropic'] == {}
-    paths = [tmp_path / 'config.json', tmp_path / 'data' / '.provider-settings-authority.json',
-             *(tmp_path / 'data' / 'provider_settings' / f'{name}.json' for name in provider_settings.PROVIDERS)]
+    paths = [tmp_path / 'config.json', tmp_path / 'data' / '.provider-settings-authority.json']
     before = [(p.read_bytes(), p.stat().st_ino) for p in paths]
     assert update_migrations.migrate_provider_settings(tmp_path) is False
     assert [(p.read_bytes(), p.stat().st_ino) for p in paths] == before
@@ -153,10 +153,57 @@ def test_provider_initial_migration_keeps_pending_on_interrupted_publication(tmp
 
 def test_provider_initial_migration_rejects_postcommit_readback_mismatch(tmp_path, monkeypatch):
     _provider_root(tmp_path, monkeypatch)
-    original = provider_settings.commit
+    original = provider_settings.consolidate_locked
     def inconsistent(*args, **kwargs):
         result = original(*args, **kwargs)
         return {**result, 'common': {}}
-    monkeypatch.setattr(provider_settings, 'commit', inconsistent)
+    monkeypatch.setattr(provider_settings, 'consolidate_locked', inconsistent)
     with pytest.raises(update_migrations.MigrationError, match='readback_unverified'):
         update_migrations.migrate_provider_settings(tmp_path)
+
+
+def test_one_file_commit_retires_verified_options_and_ignores_stale_reappearances(tmp_path, monkeypatch):
+    raw = _provider_root(tmp_path, monkeypatch)
+    config = tmp_path / 'config.json'
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'v': 1, 'install_args': ['--no-llm'], 'future_option': {'retained': False}})
+    original = legacy.read_bytes()
+    needs_copy, base, options = update_migrations.plan(config, legacy)
+    assert needs_copy and options == ['--no-llm']
+    assert update_migrations.apply(config, legacy, base, lambda: None)
+    assert legacy.read_bytes() == original
+    assert update_migrations.migrate_provider_settings(tmp_path)
+    archive, = (tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')
+    assert archive.read_bytes() == original and not legacy.exists()
+
+    token = install_options.inspect(config, legacy)
+    legacy.write_text('synthetic obsolete bytes')
+    assert install_options.inspect(config, legacy) == token
+    assert install_options.selection(config, legacy) == ['--no-llm']
+    assert update_migrations.plan(config, legacy) == (False, token, None)
+    assert install_options.save(config, legacy, [], token) == 0
+    assert json.loads(config.read_text())['install_args'] == []
+    assert json.loads(config.read_text())['unknown'] == raw['unknown']
+    assert archive.read_bytes() == original and legacy.read_text() == 'synthetic obsolete bytes'
+    assert not update_migrations.migrate_provider_settings(tmp_path)
+    assert list((tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')) == [archive]
+
+
+@pytest.mark.parametrize('problem', ['not_copied', 'conflict', 'corrupt', 'pending'])
+def test_consolidation_cannot_skip_verifying_the_legacy_options(tmp_path, monkeypatch, problem):
+    raw = _provider_root(tmp_path, monkeypatch)
+    config = tmp_path / 'config.json'
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'install_args': ['--no-llm']})
+    if problem == 'conflict':
+        put(config, {**raw, 'install_args': []})
+    elif problem == 'corrupt':
+        legacy.write_text('synthetic invalid')
+    elif problem == 'pending':
+        put(tmp_path / '.install-options-migration.pending', {})
+    before = config.read_bytes(), legacy.read_bytes()
+    with pytest.raises(update_migrations.MigrationError):
+        update_migrations.migrate_provider_settings(tmp_path)
+    assert (config.read_bytes(), legacy.read_bytes()) == before
+    assert not list((tmp_path / 'data').glob('.install-options-pre-v3-*'))
+    assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()

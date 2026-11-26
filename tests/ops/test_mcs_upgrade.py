@@ -819,6 +819,8 @@ def test_plan_reports_the_provider_bridge_refusal_apply_would_make(updater, monk
     monkeypatch.setattr(update_planning, "_provider_migration_needed", migration_needed)
     monkeypatch.setattr(update_planning, "_provider_bridge_verified", lambda previous, target: bridged)
     p = updater.plan("v1.2.0")
+    assert p["provider_settings_migration"] == (
+        "unverified" if isinstance(needed, Exception) else "required" if needed else "none")
     if blocker is None:
         assert not {"provider_update_bridge_required", "provider_settings_unverified"} & set(p["blockers"])
     else:

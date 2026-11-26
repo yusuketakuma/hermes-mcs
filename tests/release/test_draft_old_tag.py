@@ -96,7 +96,7 @@ exit 0
 
 
 class ExistingDraftCompatibility(unittest.TestCase):
-    def _run(self, pages, *, api_status=0, sync_status=0):
+    def _run(self, pages, *, api_status=0, sync_status=0, tagged=False):
         workflow = (ROOT / ".github/workflows/release-notes.yml").read_text()
         step = workflow.split("      - name: Create a draft release\n", 1)[1]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
@@ -132,6 +132,16 @@ sys.exit(int(os.environ["SYNTHETIC_SYNC_STATUS"]) if sys.argv[1] == "scripts/dev
                 target = binary / name
                 target.write_text(f"#!{sys.executable}\n" + body)
                 target.chmod(0o700)
+            if tagged:
+                git = ["git", "-C", directory, "-c", "user.name=Synthetic",
+                       "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false",
+                       "-c", "tag.gpgsign=false"]
+                for args in (["init", "-q"], ["commit", "--allow-empty", "-qm", "release"]):
+                    subprocess.run([*git, *args], check=True, capture_output=True, timeout=10)
+                self.target_commit = subprocess.check_output([*git, "rev-parse", "HEAD"],
+                                                             text=True, timeout=10).strip()
+                subprocess.run([*git, "tag", "-a", "v1.1.2", "-m", "release"], check=True, timeout=10)
+                subprocess.run([*git, "commit", "--allow-empty", "-qm", "later"], check=True, timeout=10)
             result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], cwd=repo,
                                     env={**os.environ, "PATH": str(binary) + os.pathsep + os.defpath,
                                          "RELEASE_TAG": "v1.1.2", "GH_REPO": "synthetic/repo",
@@ -143,10 +153,11 @@ sys.exit(int(os.environ["SYNTHETIC_SYNC_STATUS"]) if sys.argv[1] == "scripts/dev
             return result, calls[1:]
 
     def test_absent_tag_creates_one_verified_draft(self):
-        result, calls = self._run([[{"tag_name": "v1.1.1", "draft": False}], []])
+        result, calls = self._run([[{"tag_name": "v1.1.1", "draft": False}], []], tagged=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [["gh", "release", "create", "v1.1.2", "--verify-tag", "--draft",
-                                 "--title", "Synthetic title", "--notes-file", "release-notes.md"]])
+                                 "--target", self.target_commit, "--title", "Synthetic title",
+                                 "--notes-file", "release-notes.md"]])
 
     def test_existing_draft_on_a_later_page_uses_safe_synchronization(self):
         result, calls = self._run([[], [{"tag_name": "v1.1.2", "draft": True}]])

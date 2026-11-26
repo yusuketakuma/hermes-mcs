@@ -6,7 +6,6 @@
 統一入口は `sh scripts/mcs install`、導入後は `mcs setup`・`mcs update`・`mcs doctor`。
 URLだけを渡されても、新規か導入途中か既存更新かを確認し、README冒頭の表から分岐する。新規のstandalone指定はPhase 1で`--mode standalone`付きの事前確認を行い、Phase 6へ進む。既存のcheckoutがあれば新しくcloneしない。ソフトの準備後に設定が未完なら同じ場所の`~/.local/bin/mcs setup`から再開し、更新・復旧は[UPGRADE_AGENT.md](UPGRADE_AGENT.md)を使う。ローカル操作の権限がなければ、利用者のMacで実行するコマンドを案内し、導入済みとは報告しない。
 導入する公開タグの仕様はCHANGELOGと[更新ガイド](UPGRADE_AGENT.md)で確認する。合成検証と実機受入は区別し、実接続・鍵・通知先の受入は各環境で確認する。
-1.0.13の歴史的な開発・実機受入条件は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)に保持する。
 
 > **この文書は AI エージェント（Devin / Claude Code / Codex 等）が
 > 読み込み、ユーザーと対話しながら MCS を自動セットアップするための
@@ -96,7 +95,7 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は
   保持し、キーがない場合は送信しません。
 
-OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復、およびownerが開いた`semantic_backlog` window内の意味解析backlog送信に限ります。意味解析ではrealtime laneと、対象threadのいずれかのmemberが新着・通知・編集から10分以内のものはcloudへ送らず、facts抽出は専用backlog worker、summary生成はwindow内のbacklog処理が送ります。添付OCRへの新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。
+OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復、およびownerが開いた`semantic_backlog` window内の意味解析backlog送信に限ります。意味解析ではrealtime laneと、対象threadのいずれかのmemberが新着・通知・編集から10分以内のものはcloudへ送らず、facts抽出は専用backlog worker、summary生成はwindow内のbacklog処理が送ります。添付OCRへの新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。AnthropicとOpenAIを合わせた費用上限の既定値は1日80ドル・1か月350ドルです。
 
 質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
 コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
@@ -152,7 +151,7 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 
 ## Phase 2 — 導入形態の選択【ユーザー確認】
 
-今回の初回受入候補はmacOS・Apple silicon・SlackのPath Bです。この候補が指定済みなら確認を繰り返さず、`--mode standalone`を明示してPhase 6へ進みます。既存設定と指定がある場合はそれを維持します。installerの新規導入の推奨とEnter既定はstandaloneです。既存環境の方式は維持し、この既定変更を正式対応・実機受入済みとは扱いません。
+新規導入の推奨はmacOS・Apple silicon・SlackのPath Bです。この方式が指定済みなら確認を繰り返さず、`--mode standalone`を明示してPhase 6へ進みます。既存設定と指定がある場合はそれを維持します。installerの新規導入の推奨とEnter既定はstandaloneです。既存環境の方式は維持し、この既定変更を正式対応・実機受入済みとは扱いません。
 
 導入形態がまだ決まっていなければ、ユーザーに次を尋ねる:
 
@@ -338,7 +337,7 @@ security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 
 ### 5-1a. 任意機能のセットアップ案内
 
-`init` の対話の最後に、任意機能の案内（現在はCSDC: 状態監視・遠隔支援）を「既定に従う／案内を表示する／案内を省略する」から選びます。この版の既定は「省略」で、空欄のEnterは現在の選択を保持します。選ぶのは案内の表示だけで、CSDCの登録・同意・送信はここでは行いません。この任意項目は端末から実行したときだけ質問します。端末以外では質問せず、この項目の選択も変えません（`--yes` ではこの項目自体を表示しません。初期設定のほかの設定は従来どおり保存されます）。後から変える場合は端末で `mcs setup features`（PATH未設定なら `~/.local/bin/mcs setup features`）を実行します。内容は[状態監視の説明](SDC_SELF_MONITORING.md)を参照してください。
+`init` の対話の最後に、任意機能の案内（現在はCSDC: 状態監視・遠隔支援）を「既定に従う／案内を表示する／案内を省略する」から選びます。既定は「省略」で、空欄のEnterは現在の選択を保持します。選ぶのは案内の表示だけで、CSDCの登録・同意・送信はここでは行いません。この任意項目は端末から実行したときだけ質問します。端末以外では質問せず、この項目の選択も変えません（`--yes` ではこの項目自体を表示しません。初期設定のほかの設定は従来どおり保存されます）。後から変える場合は端末で `mcs setup features`（PATH未設定なら `~/.local/bin/mcs setup features`）を実行します。内容は[状態監視の説明](SDC_SELF_MONITORING.md)を参照してください。
 
 ### 5-2. サービスの再同期（必要時のみ）
 
@@ -355,7 +354,7 @@ gateway を同期するため、この操作は不要。`--no-services` を使�
 【検証】cron/launchd/gateway が登録されたこと:
 
 ```bash
-hermes cron list --all | grep -iE "mcs|llamacpp"   # 定期7件登録（backup.enabled=trueなら8件）
+hermes cron list --all | grep -iE "mcs|llamacpp"   # 定期8件登録（backup.enabled=trueなら9件）
 launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```

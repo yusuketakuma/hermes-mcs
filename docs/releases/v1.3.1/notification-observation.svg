@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="430" viewBox="0 0 800 430" role="img" aria-labelledby="title desc">
+<title id="title">通知の配送状況を確認する</title>
+<desc id="desc">通知ワーカーの起動記録と各部品の配送記録を別々に照合する。結果が不明な部品は保留する。</desc>
+<rect width="800" height="430" fill="#f7faf9"/>
+<g font-family="Hiragino Sans, sans-serif" fill="#18382f">
+<text x="44" y="69" font-size="35" font-weight="700">通知の配送状況を確認する</text>
+<path d="M44 100H756" stroke="#638579" stroke-width="2"/>
+<text x="44" y="153" font-size="27" font-weight="700">ワーカーの起動記録</text>
+<text x="44" y="196" font-size="25">時刻と起動を確認できたかを表示</text>
+<text x="44" y="268" font-size="27" font-weight="700">本文・添付の配送記録</text>
+<text x="44" y="311" font-size="25">部品ごとに送信完了を照合</text>
+<rect x="36" y="345" width="728" height="57" rx="8" fill="#dcece4"/>
+<text x="55" y="382" font-size="25">結果不明の部品は保留し、自動再送を防ぐ</text>
+</g></svg>

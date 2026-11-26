@@ -1059,9 +1059,12 @@ def test_switched_away_transport_leaves_live_health(led, tmp_path,
                          "x.json.claimed")
     open(claim, "w").close()
     os.utime(claim, (NOW - 3600, NOW - 3600))
-    for cfg, live in ((slack, 0), (CFG, 1)):
+    for offset, (cfg, live) in enumerate(((slack, 0), (CFG, 1))):
+        now = NOW + offset * notify_spool.RECOVER_INTERVAL_S
+        monkeypatch.setattr(notify_spool.time, "time", lambda now=now: now)
         result = {"errors": []}
         fixed = notify_spool.recover(led, cfg, result)
+        assert "deferred" not in fixed
         assert fixed["missing_claimed"] == live
         assert bool(result["errors"]) == bool(live)
     os.remove(claim)

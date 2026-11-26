@@ -127,16 +127,6 @@ def _write(db, project_id, state):
                (json.dumps(state, ensure_ascii=False), project_id))
 
 
-def emit_tx(ledger, project_id, state, ids=()):
-    """Reserve an aggregate intent, never an individual delivered receipt."""
-    current = load(ledger.db, project_id)
-    if state.get("notification_cancelled") is True or current and current.get("notification_cancelled") is True:
-        return None
-    return ledger._outbox_insert("patient_history", project_id, {
-        "source": "initial_history", "cohort_id": state["cohort_id"],
-        "message_ids": list(ids)}, route="interactive")
-
-
 def cancel_notifications_tx(db, project_id, cohort_id):
     """Stop one matching cohort's future notifications without stopping capture or analysis."""
     state = load(db, project_id)
@@ -148,7 +138,7 @@ def cancel_notifications_tx(db, project_id, cohort_id):
 
 
 def start_tx(ledger, project_id, boundary_ts, now, *, boundary_source):
-    """Reserve a new patient's cohort and initial display in the registration TX."""
+    """Reserve the initial capture cohort in the registration transaction."""
     if load(ledger.db, project_id) is not None:
         return
     if type(boundary_ts) is not int or boundary_ts <= 0 or boundary_source not in ("server", "local"):
@@ -158,7 +148,6 @@ def start_tx(ledger, project_id, boundary_ts, now, *, boundary_source):
              "started_at": now, "capture_phase": "capturing", "saved_count": 0,
              "updated_at": now}
     _write(ledger.db, project_id, state)
-    emit_tx(ledger, project_id, state)
 
 
 def classify_tx(ledger, project_id, ids, now):
@@ -190,7 +179,7 @@ def classify_tx(ledger, project_id, ids, now):
             if role is None:
                 stamp = row["posted_at_ts"]
                 role = {"cohort_id": state["cohort_id"],
-                        "role": "history" if type(stamp) is int and 0 < stamp < state["boundary_ts"] else "live"}
+                        "role": "live" if type(stamp) is int and stamp >= state["boundary_ts"] else "history"}
                 content[META_KEY] = role
                 ledger.db.execute(
                     "INSERT INTO message_metadata(message_id,source,content,checked_at) "
@@ -205,6 +194,23 @@ def classify_tx(ledger, project_id, ids, now):
         _write(ledger.db, project_id, state)
         dirty_source_tx(ledger.db, project_id, next(iter(history)), now, new_member=True)
     return history
+
+
+def quiet_notification_ids(db, project_id, ids):
+    """Filter historical and undated posts when dispatching a previously queued event."""
+    if not ids:
+        return set()
+    state = load(db, project_id)
+    if state is None:
+        return set()
+    rows = db.execute(
+        "SELECT m.message_id FROM messages m LEFT JOIN message_metadata d "
+        "ON d.message_id=m.message_id AND d.source='capture' "
+        "WHERE m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?)) "
+        "AND (typeof(m.posted_at_ts) != 'integer' OR m.posted_at_ts < ? "
+        "OR json_extract(d.content,'$._initial_import.role')='history')",
+        (project_id, json.dumps(list(ids)), state["boundary_ts"]))
+    return {row[0] for row in rows}
 
 
 def history_predicate(alias="m", metadata_alias="im"):
@@ -333,7 +339,6 @@ def refresh_capture_tx(ledger, project_id, now):
         if phase == "complete":
             state["capture_proof"] = {k: proof["walk"][k] for k in ("v", "scope", "digest")}
         _write(ledger.db, project_id, state)
-        emit_tx(ledger, project_id, state)
 
 
 def dirty_source_tx(db, project_id, message_id, now, *, new_member=False):

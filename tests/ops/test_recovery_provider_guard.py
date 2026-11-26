@@ -384,12 +384,14 @@ def _settled(data, *, remnants=True, authority=None, common=COMMON):
     return directory
 
 
-def _checkout(monkeypatch, watchdog, *, head=HEAD, missing=(), foreign=(), untracked=""):
+def _checkout(monkeypatch, watchdog, *, head=HEAD, missing=(), foreign=(), untracked="", v3_reader=False):
     def git(args, *_a, **_k):
         if args[0] == "cat-file":
             return subprocess.CompletedProcess(args, 1 if args[2].split(":", 1)[1] in missing else 0, "", "")
         if args[0] == "ls-files":
             return subprocess.CompletedProcess(args, 0, untracked, "")
+        if args[0] == "grep":
+            return subprocess.CompletedProcess(args, 0 if v3_reader else 1, "", "")
         pytest.fail("split route ran an unexpected git command: " + " ".join(args))
     patch_lifecycle_lookup(monkeypatch, watchdog, "_head", lambda: head)
     patch_lifecycle_lookup(monkeypatch, watchdog, "_git", git)
@@ -407,6 +409,64 @@ def _no_effects(monkeypatch, watchdog):
 def test_settled_split_with_remnants_is_verified(watchdog):
     _settled(Path(watchdog.DATA))
     assert watchdog._provider_settings_state() == "split"
+
+
+def _single(data):
+    from provider_settings import _json_bytes, common_policy_digest
+
+    providers = {"anthropic": {"budget": {"daily_cost_limit_usd": 2, "monthly_cost_limit_usd": 10}},
+                 "openai": {}, "jev": {}}
+    hashes = {name: hashlib.sha256(_json_bytes(values)).hexdigest() for name, values in providers.items()}
+    _private(data.parent / "config.json", _json_bytes({**COMMON, "provider_settings": providers}))
+    _private(data / ".provider-settings-authority.json", _json_bytes({
+        "version": 3, "state": "committed", "files": hashes, "common_policy_sha256": common_policy_digest(COMMON)}))
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("single", "single"), ("empty_directory", "single"), ("sidecar", "provider_settings_unverified"),
+    ("tampered", "provider_settings_unverified"), ("missing_marker", "provider_settings_unverified"),
+    ("v2_marker", "provider_settings_unverified")])
+def test_single_provider_snapshot(watchdog, case, expected):
+    data = Path(watchdog.DATA)
+    _single(data)
+    authority = data / ".provider-settings-authority.json"
+    if case in ("empty_directory", "sidecar"):
+        directory = data / "provider_settings"
+        directory.mkdir(mode=0o700)
+        if case == "sidecar":
+            _private(directory / "jev.json", b"{}")
+    elif case == "tampered":
+        cfg = json.loads((data.parent / "config.json").read_bytes())
+        cfg["provider_settings"]["jev"]["daily_request_budget"] = 1
+        _private(data.parent / "config.json", json.dumps(cfg).encode())
+    elif case == "missing_marker":
+        authority.unlink()
+    elif case == "v2_marker":
+        marker = json.loads(authority.read_bytes())
+        _private(authority, json.dumps({**marker, "version": 2}).encode())
+    assert watchdog._provider_settings_state() == expected
+
+
+@pytest.mark.parametrize("reader_version,expected", [(2, "provider_checkout_hold"), (3, None)])
+def test_single_provider_recovery_requires_capable_checkout(watchdog, monkeypatch, reader_version, expected):
+    repo = Path(watchdog.REPO)
+    source = repo / "mcs/core/provider_settings.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(f"SINGLE_FILE_AUTHORITY_VERSION = {reader_version}\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "mcs/core/provider_settings.py"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "synthetic reader"], cwd=repo, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    _checkout(monkeypatch, watchdog, head=head)
+    current_git = watchdog.mcs_recovery_core._git
+    def git(args, *rest, **kwargs):
+        if args[0] == "grep":
+            return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+        return current_git(args, *rest, **kwargs)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_git", git)
+    assert watchdog._split_checkout_hold({}, single=True) == expected
+    assert watchdog._split_checkout_hold({"rollback": True}, single=True) == "provider_rollback_hold"
 
 
 def test_settled_split_with_nothing_to_recover_is_silent(watchdog, monkeypatch, capsys):
@@ -715,3 +775,21 @@ def test_untrusted_root_hold_is_printed_only(watchdog, tmp_path, monkeypatch, ca
     patch_lifecycle_lookup(monkeypatch, watchdog, "_report", lambda *_a, **_k: pytest.fail("untrusted root recorded"))
     assert watchdog.recover() == 2
     assert "導入先フォルダーを確認できない" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reinstall", [False, True])
+def test_flagless_old_parent_at_new_head_keeps_split_pending_for_target_updater(watchdog, monkeypatch, reinstall):
+    _settled(Path(watchdog.DATA))
+    journal = Path(watchdog.STATE_PATH)
+    journal.write_text(json.dumps({"v": 1, "applying": {"sha": HEAD, "prev_sha": "b" * 40, "reinstall": reinstall},
+                                  "stages": [{"stage": "merge"}], "applied": []}))
+    before = journal.read_bytes()
+    _checkout(monkeypatch, watchdog, v3_reader=True)
+    _no_effects(monkeypatch, watchdog)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean_stale_git_locks",
+                           lambda: pytest.fail("flagless old-parent migration reached ordinary recovery"))
+    assert watchdog._recover_legacy() == 1
+    assert journal.read_bytes() == before and Path(watchdog.MARKER_PATH).is_file()
+    report = json.loads(Path(watchdog.REPORT_PATH).read_text())
+    assert report["result"] == "provider_migration_pending"
+    assert report["writers_stopped"] is False

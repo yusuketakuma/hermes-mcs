@@ -1,0 +1,44 @@
+name: ocr-install
+
+on:
+  pull_request:
+    paths:
+      - deployment/requirements-ocr.txt
+      - deployment/requirements-ocr.lock
+      - scripts/setup_yomitoku.py
+      - mcs/extract/ocr_model_contract.py
+      - .github/workflows/ocr-install.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          version: "0.13.6"
+          cache-dependency-glob: deployment/requirements-ocr.lock
+      - name: Install and check the locked OCR packages without model weights
+        env:
+          MCS_ROOT: ${{ runner.temp }}/mcs-ocr
+        run: |
+          uv run --no-project --python 3.13 scripts/setup_yomitoku.py --root "$MCS_ROOT" --packages-only
+          uv pip sync --check --python "$MCS_ROOT/ocr-venv/bin/python" deployment/requirements-ocr.lock
+          test ! -e "$MCS_ROOT/ocr-venv/.mcs-ocr-requirements"
+      - name: Check a previously installed OCR environment after a lock change
+        env:
+          MCS_ROOT: ${{ runner.temp }}/mcs-ocr
+        run: |
+          venv="$MCS_ROOT/ocr-venv"
+          echo 'previous lock' > "$venv/.mcs-ocr-requirements"
+          uv pip uninstall --python "$venv/bin/python" jaconv
+          uv run --no-project --python 3.13 scripts/setup_yomitoku.py --root "$MCS_ROOT" --packages-only
+          uv pip sync --check --python "$venv/bin/python" deployment/requirements-ocr.lock
+          test "$(cat "$venv/.mcs-ocr-requirements")" = 'previous lock'

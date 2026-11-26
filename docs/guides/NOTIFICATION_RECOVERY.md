@@ -358,8 +358,12 @@ DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結�
 対象を明示して運用警報を受付できます。受付はOCRの成功、本文回収、
 臨床職による原本確認を意味しません。元の失敗と欠落の表示は残します。
 
-1. 非公開の診断結果から対象の失敗artifactを確認します。患者名・本文・
-   元ファイル名を操作理由や共有する計画へ記載しないでください。
+1. `"$PY" mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" list` で未受付の
+   失敗artifactのidと件数を確認します。件数はこのページの分です。
+   `next_after_attachment_id` に数値があれば、同じコマンドの末尾に
+   `--after-attachment-id <その数値>` を付けて次のページを表示します。
+   証跡を照合できないときはエラーが返ります。
+   患者名・本文・元ファイル名を操作理由や共有する計画へ記載しないでください。
 2. `"$PY" mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
    で計画を作成し、非公開ファイルに保存します。対象は1回最大20件です。
 3. 計画を確認後、`"$PY" mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`

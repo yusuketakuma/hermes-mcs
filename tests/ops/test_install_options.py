@@ -378,8 +378,13 @@ def test_fresh_bootstrap_publishes_checked_split_before_services(tmp_path, monke
         assert install_options.bootstrap_fresh(config, data / 'install_options.json', proof, token, fd) == 0
         owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
         state = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
-        assert state['mode'] == 'split' and state['common'] == {'runtime_mode': 'standalone'}
-        assert state['providers'] == {name: {} for name in provider_settings.PROVIDERS}
+        assert state['layout'] == 'single' and state['common']['runtime_mode'] == 'standalone'
+        doc = json.loads(config.read_bytes())
+        assert doc['cloud_llm'] == {'daily_cost_limit_usd': 80, 'monthly_cost_limit_usd': 350}
+        for name in ('anthropic', 'openai'):
+            assert doc['provider_settings'][name]['budget'] == {
+                'daily_cost_limit_usd': 40, 'monthly_cost_limit_usd': 175}
+        assert not list((data / 'provider_settings').glob('*.json'))
         assert not (data / '.provider-settings-pending.json').exists()
         import external_transfer
         assert external_transfer.status(root)['state'] == 'pending'
@@ -888,3 +893,20 @@ def test_split_runtime_noop_refuses_replaced_root_link_even_for_same_target(tmp_
                                  base, '1', 'standalone', '/synthetic/python']) == 1
     assert alias.resolve() == physical and config.read_bytes() == before
     assert not (data / '.provider-settings-pending.json').exists()
+
+def test_inline_config_without_witness_is_not_editable_as_legacy(tmp_path, monkeypatch):
+    import config_edit
+    import mcs_util
+    from pathlib import Path
+
+    root = Path(tmp_path)
+    (root / "data").mkdir(mode=0o700)
+    config = root / "config.json"
+    put(config, {"provider_settings": {"anthropic": {}, "openai": {}, "jev": {}}})
+    before = config.read_bytes()
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
+    assert mcs_util._provider_config_active(config)
+    assert mcs_util.load_config_checked(str(config)) is None
+    with pytest.raises((ValueError, mcs_util.ProviderSettingsUnreadable)):
+        config_edit.read_strict()
+    assert config.read_bytes() == before

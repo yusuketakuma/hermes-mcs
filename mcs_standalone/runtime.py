@@ -28,6 +28,7 @@ from run_log_install import current_helper, helper_path, LogInstallError
 from xml.sax.saxutils import escape
 
 from mcs_runtime import python_executable
+from notify_spool import RECOVER_INTERVAL_S
 from scheduled_jobs import (CRON_TIMEOUT_S, TIMEOUT_PERL, calendar_entries,
                             configured_cron_jobs, latest_calendar_slots, render_template)
 from writer_lock import UPDATE_MARKER_NAME
@@ -1090,7 +1091,9 @@ class Runtime:
             if not updating:
                 for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
                     self.start(job, "background", now)
-                self._start_commands(now, COMMANDS)
+                last_pass = self.exits.get("cmd_int", {}).get("ended_at", self.started_at)
+                recovery_due = now - last_pass >= RECOVER_INTERVAL_S
+                self._start_commands(now, COMMANDS, ("cmd_int",) if recovery_due else ())
                 self._schedule(now)
             else:
                 self._start_commands(now, *self._restore_intakes(), hold=True)

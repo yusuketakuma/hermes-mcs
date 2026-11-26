@@ -63,7 +63,7 @@ def test_common_save_boundary_aggregates_all_old_history_and_keeps_live_reply_in
                          semantic=True, notify_all_new=True, notify_max_age_s=1)
     assert state.message_ids(store.db, 1) == [1]
     assert state.progress(store.db, 1)['saved_count'] == 1
-    assert _events(store, 'patient_history')[-1]['message_ids'] == [1]
+    assert _events(store, 'patient_history') == []
     assert _events(store, 'new_messages')[-1]['message_ids'] == [2]
     assert next(origin for ids, origin in origins if ids == {1})['notification_free'] is True
     assert next(origin for ids, origin in origins if ids == {2})['source'] == 'discovery'
@@ -84,12 +84,25 @@ def test_silent_import_and_body_timestamp_correction_preserve_first_role(store):
     assert len(store.db.execute('SELECT * FROM message_metadata').fetchall()) == 1
 
 
-@pytest.mark.parametrize('seconds', [BOUNDARY, BOUNDARY + 1, None])
-def test_boundary_same_second_new_and_missing_times_are_individual(store, seconds):
-    post = _post(1, seconds, unread=True) if seconds is not None else _message(mid=1, posted_at='', unread=True)
+@pytest.mark.parametrize('seconds', [BOUNDARY, BOUNDARY + 1])
+def test_boundary_and_newer_posts_are_individual(store, seconds):
+    post = _post(1, seconds, unread=True)
     store.save_thread_replies([post], 1, notify={'source': 'unread'})
     assert state.message_ids(store.db, 1) == []
     assert _events(store, 'new_messages')[-1]['message_ids'] == [1]
+
+
+def test_discovery_of_undated_reply_to_old_root_is_silent_on_replay(store):
+    store.notify_all_replies = True
+    root = _post(10, BOUNDARY - 500 * 86400)
+    root.replies = [_message(mid=11, posted_at='', parent_id=10, unread=True)]
+    for source in ('discovery', 'unread'):
+        store.save_messages([root], project_id=1, notify={'source': source}, notify_all_new=True)
+    assert state.message_ids(store.db, 1) == [10, 11]
+    assert not _events(store, 'new_messages')
+    reply = _post(12, BOUNDARY + 60, parent_id=10, unread=True)
+    store.save_thread_replies([reply], 1, notify={'source': 'unread'})
+    assert [event['message_ids'] for event in _events(store, 'new_messages')] == [[12]]
 
 
 def test_registration_failure_rolls_back_patient_cohort_job_and_intent(tmp_path, monkeypatch):
@@ -156,7 +169,7 @@ def test_mixed_project_silent_init_save_classifies_history_without_individual_no
     assert state.load(store.db, 3) is None
     assert _events(store, "new_messages") == []
     history = _events(store, "patient_history")
-    assert {mid for event in history for mid in event["message_ids"]} == {10, 20}
+    assert history == []
     # Replaying init_data's overlapping page cannot increment counts or reserve another aggregate.
     store.save_messages([old, second, legacy], semantic=semantic)
     assert _events(store, "patient_history") == history
@@ -183,7 +196,7 @@ def test_full_body_save_retires_failed_reply_and_unholds_capture_without_manual_
         store.save_messages([full], project_id=1 if path == "messages" else None)
     assert store.job_state("reply", 1, 1) == "done"
     assert state.progress(store.db, 1)["capture_phase"] == "complete"
-    assert _events(store, "patient_history")[-1]["message_ids"] == []
+    assert _events(store, "patient_history") == []
     assert _events(store, "new_messages") == []
 
 

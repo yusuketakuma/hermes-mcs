@@ -217,11 +217,11 @@ def _provider_migration_needed() -> bool:
     if (first["mode"] not in ("legacy_unverified", "split")
             or second["mode"] != first["mode"] or second["snapshot"] != first["snapshot"]):
         raise ValueError("provider_settings_unverified")
-    return first["mode"] == "legacy_unverified"
+    return first.get("layout") != "single"
 
 
 def _provider_bridge_verified(previous: str, target: str) -> bool:
-    """Legacy settings migrate only from a reviewed bridge source, as the post-merge guard requires."""
+    """Verify the reviewed pre-migration source and its forward ancestry."""
     return (_provider_prior_source_verified(previous)
             and _git(["merge-base", "--is-ancestor", previous, target]).returncode == 0)
 
@@ -237,7 +237,10 @@ def _provider_rollback_preflight(target: str | object) -> bool | None:
         owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
         first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if (first["mode"] != "split" or target is not _PROVIDER_SETTINGS_ONLY
-                and not _split_target_source_matches(target, allow_reviewed_rollback=True)):
+                and (not _split_target_source_matches(target, allow_reviewed_rollback=True)
+                     or first.get("layout") == "single" and _git([
+                         "grep", "-q", "-E", "-e", "^SINGLE_FILE_AUTHORITY_VERSION = 3$",
+                         target, "--", "mcs/core/provider_settings.py"]).returncode != 0)):
             extras = _split_source_extras() if first["mode"] == "split" else []
             # Name what the operator must move; the hold itself is unchanged.
             raise ProviderRollbackUnverified("provider_rollback_target_unverified" + (
@@ -372,7 +375,7 @@ def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None)
         errors.append("standalone_requirements_changed")
     if "--with-yomitoku" in (recorded_install_args() or []) and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/requirements-ocr.txt", "scripts/setup_yomitoku.py",
+             "deployment/requirements-ocr.txt", "deployment/requirements-ocr.lock", "scripts/setup_yomitoku.py",
              "mcs/extract/ocr_model_contract.py"],
             **({} if deadline is None else {"deadline": deadline})).returncode != 0:
         errors.append("ocr_requirements_changed")

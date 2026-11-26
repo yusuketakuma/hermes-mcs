@@ -10,8 +10,8 @@ repo との drift になる。
 
 | パス | 内容 |
 |---|---|
-| `launchagents/` | launchd plist テンプレート10件。Hermes用6件、独立host、CSDC、LLMサーバ、復旧watchdog。CSDCはコードのみ同梱し、1.1.0では未提供。ジョブ構成・プレースホルダ規則は [launchagents/README.md](launchagents/README.md) |
-| `scripts/` | 定期ジョブ用wrapper 7件と、明示有効化するoffsite backup用1件。Hermesは`~/.hermes/scripts/`、独立実行は`~/.mcs/scripts/`へレンダリング |
+| `launchagents/` | Hermes、独立host、MCS 訪問薬剤管理の常駐、CSDC、ローカルLLM、復旧監視のplist。CSDCの常駐は `sdc.enabled` で制御し、省略時は有効。ジョブ構成・プレースホルダ規則は [launchagents/README.md](launchagents/README.md) |
+| `scripts/` | 定期収集、OCR、稼働監視、LLM処理、更新、任意の外部バックアップに使うラッパー。Hermesは`~/.hermes/scripts/`、独立実行は`~/.mcs/scripts/`へレンダリング |
 | `install/` | `runtime.sh`による実導入処理。`install.sh`がhashを確認した私有コピーから読み込む。入口と一緒に同梱する |
 | `recovery/` | `mcs_recover.py`と補助4ファイルの独立watchdog。`prepare_recovery.py`が同じ世代を`~/.mcs-recovery/`へ配置し、`org.mcs.recovery`で定期起動する |
 | `cco/` | [CCO terminal/file 隔離の候補設定・承認記録・検証説明](cco/cco-terminal-isolation.md) |
@@ -31,13 +31,13 @@ repo との drift になる。
 `cmd-proposals` 書込み用の候補で、実行用 `cmd` は公開しない。
 `cco/cco-approval-scope.json` は未承認の記入用テンプレート。YAMLの導入先パスとimage digestを
 私有領域で明示的に置換し、その候補hash・承認証跡をrepo外に保存する。テンプレートを承認・適用の証拠にしない。
-背景と過去の検証範囲は [CCOの隔離設定と検証記録](cco/cco-terminal-isolation.md)
+適用条件は [CCOの隔離設定と権限の確認](cco/cco-terminal-isolation.md)
 を参照する。
 
-## 責務別配置への更新
+## サービスと復旧ツールの同期
 
-抽出workerは `mcs/extract/llm/extract_llm.py`、共通推論は `mcs/llm/` に配置する。plistとcatchupスクリプトを同時に更新し、適用時は通常の更新手順でサービスを再同期する。`mcs/ops/mcs_cli.py`・setup/update/recover の公開入口は維持する。構造変更だけで実機のplistや稼働workerは更新されない。詳細は[責務・依存・移植範囲](../docs/development/REPOSITORY_STRUCTURE.md)と[今回の責務分離](../docs/development/RESPONSIBILITY_SPLIT.md)を参照する。
+抽出workerは `mcs/extract/llm/extract_llm.py`、共通推論は `mcs/llm/` に配置する。plistとcatchupスクリプトを同時に更新し、適用時は通常の更新手順でサービスを再同期する。`mcs/ops/mcs_cli.py`・setup/update/recover の公開入口は維持する。構造変更だけで実機のplistや稼働workerは更新されない。詳細は[責務・依存・移植範囲](../docs/development/REPOSITORY_STRUCTURE.md)と[モジュールの責務](../docs/development/RESPONSIBILITY_SPLIT.md)を参照する。
 
-復旧入口の`SUPPORT_FILES`が補助4ファイルのhashを固定する。導入先の`.prev`と対応する`runtime-<世代hash>`は一体で保持し、入口だけをコピー・巻戻ししない。同期の確認は入口hashだけで済ませず、記録済みの安全な復旧Pythonで`mcs_recover.py --help`が正常終了し、補助4ファイルの検証と読込みが完了することも確かめる。watchdogが読み込まれていることは別に確認する。この文書の変更だけでは実機へ適用されない。
+復旧入口の`SUPPORT_FILES`が補助4ファイルのhashを固定する。導入先の`.prev`と対応する`runtime-<世代hash>`は一体で保持し、入口だけをコピー・巻戻ししない。同期の確認は入口hashだけで済ませず、記録済みの安全な復旧Pythonで`mcs_recover.py --help`が正常終了し、補助4ファイルの検証と読込みが完了することも確かめる。watchdogが読み込まれていることは別に確認する。
 
 スタンプ管理は`mcs/stamps/`を同梱し、既存の収集ジョブから実行する。新しい常駐サービスは追加しない。送信は操作者とMCSアカウントを設定すると既定で有効になり、設定と復元時の記録は[スタンプ管理契約](../docs/specs/stamp-management.md)を参照する。

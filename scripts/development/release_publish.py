@@ -75,9 +75,11 @@ def inspect_event(event_path, policy_path, main_snapshot_sha, output):
              'MAIN_SNAPSHOT_INVALID')
     repo = event.get('repository') or {}
     owner = repo.get('owner') or {}
-    _require(repo.get('id') == policy.get('repository_id'),
+    _require(type(policy.get('repository_id')) is int and type(repo.get('id')) is int
+             and repo['id'] == policy['repository_id'],
              'REPOSITORY_MISMATCH')
-    _require(owner.get('id') == policy.get('owner_id'),
+    _require(type(policy.get('repository_owner_id')) is int and type(owner.get('id')) is int
+             and owner['id'] == policy['repository_owner_id'],
              'OWNER_MISMATCH')
     tag = commit = tag_oid = None
     if event.get('ref', '').startswith('refs/tags/'):

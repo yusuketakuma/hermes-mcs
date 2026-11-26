@@ -88,3 +88,23 @@ def direct(call, *args, **kw):
 
 def rows(led, kind):
     return led.db.execute("SELECT * FROM artifacts WHERE kind=?", (kind,)).fetchall()
+
+
+def summary_receipt(ledger, owner, prompt, *, failed=False):
+    """Record a synthetic summary request and its result through the accounting writer."""
+    cfg = {"cloud_llm": {
+        "mode": "on", "project_ids": [1], "provider": "anthropic",
+        "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 25, "monthly_cost_limit_usd": 75}},
+        "semantic_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    reserve = cloud_policy.usage_reserver(
+        ledger, cfg, route="semantic_backlog", project_id=1,
+        unit_key="semantic:synthetic-summary", message_id=owner["semantic_target_id"], owner=owner)
+    body = {"model": anthropic_client.MODEL, "max_tokens": 100, "system": "synthetic system",
+            "messages": [{"role": "user", "content": prompt}]}
+    reservation = reserve(body, 2)
+    cloud_policy.record_result(ledger, reservation, {
+        "model": anthropic_client.MODEL, "request_fp": reservation["request_fp"],
+        "usage": None if failed else {"input_tokens": 10, "output_tokens": 2},
+        "http_class": "transport" if failed else "http_200",
+        "request_id": None if failed else "req_synthetic", "error_kind": "transport" if failed else None})
+    return reservation["reservation_id"]

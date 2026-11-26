@@ -77,14 +77,14 @@ def _connect(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True)
 
 
-def _historical(root: Path, origin: Origin) -> Path:
+def _historical(root: Path, origin: Origin, *, runtime_sql: str = "") -> Path:
     """Build a genuine historical shape without calling the current writer."""
     root.mkdir(mode=0o700, parents=True)
     path = root / "ledger.db"
     ddl = (FIXTURES / origin["fixture"]).read_bytes()
     assert hashlib.sha256(ddl).hexdigest() == origin["fixture_sha256"]
     with closing(sqlite3.connect(path)) as db:
-        db.executescript(ddl.decode())
+        db.executescript(ddl.decode() + "\n" + runtime_sql)
         db.execute("PRAGMA foreign_keys=ON")
         db.executescript((FIXTURES / "core-seed.sql").read_text())
         if origin["schema_version"] >= 7:
@@ -150,6 +150,25 @@ def _preserved(path: Path, expected: Records) -> None:
         ).fetchone()
         assert (path.parent / attachment[0]).read_bytes() == ATTACHMENT
         assert attachment[1:] == (len(ATTACHMENT), hashlib.sha256(ATTACHMENT).hexdigest())
+
+
+def test_v130_enforced_relations_survive_upgrade(tmp_path):
+    origin = next(row for row in RELEASES if row["release"] == "v1.3.0")
+    guards = FIXTURES / "v1.3.0-runtime-guards.sql"
+    assert _sha(guards) == "e525fde7e423b96aae6e3e44a4e1c7648d80139b722ae300a0928acff1bc31ac"
+    path = _historical(tmp_path / "guarded", origin, runtime_sql=guards.read_text())
+    before = _records(path)
+    modes = "SELECT relation,mode FROM ledger_relation_guards ORDER BY relation"
+    expected_modes = [("artifacts", "enforce"), ("attachments", "enforce")]
+    with closing(_connect(path)) as source:
+        assert source.execute(modes).fetchall() == expected_modes
+    with closing(ledger.Ledger(str(path))) as upgraded:
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION
+        assert [tuple(r) for r in upgraded.db.execute(modes)] == expected_modes
+        for relation in ("artifacts", "attachments"):
+            with pytest.raises(sqlite3.IntegrityError, match=f"g1: {relation} message relation"):
+                upgraded.db.execute(f"INSERT INTO {relation}(message_id) VALUES(999)")
+    _preserved(path, before)
 
 
 @pytest.mark.parametrize("origin", HISTORICAL, ids=lambda o: o["release"])

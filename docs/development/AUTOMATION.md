@@ -184,7 +184,7 @@ Dots は15分おきに、次の3つを順に行います。
    1回の巡回でマージするのは、同じ base につき1件までです（1件入ると、ほかの PR は main に遅れるため）。
 3. 担当付け: 担当ラベルは1件ずつ付けます。付けるのは、クラウドの Claude の実行が動いていないときと、待っていないときだけです。
 
-所有者（admin）のアカウントは main-protect を迂回できるので、`merge-gate` や `merge-ready` が `failure`・`pending` でも `gh pr merge` が通ります（2026-11-17 の PR #163）。
+所有者（admin）のアカウントは main-protect を迂回できるので、`merge-gate` や `merge-ready` が `failure`・`pending` でも `gh pr merge` が通ります。
 そのため Dots と席は、マージの前に現在の head の `merge-ready` が `success` であることを API で確かめ、head を固定して（`--match-head-commit`）マージします。
 `merge-ready` が無い PR は、`merge-gate` だけでマージしません。次の判定を待ちます。
 `--admin` などの迂回は使いません。

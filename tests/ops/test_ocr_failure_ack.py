@@ -236,7 +236,7 @@ def test_live_source_change_invalidates_even_fresh_ack_status(case):
     _status(case.data, **observed(case))
     case.ledger.save_messages([_message(1, body='完全合成の改訂本文。')])
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
-    assert report['state'] == 'unknown' and report['reason'] == 'attachment_ocr_ack_unverified'
+    assert report['state'] == 'unknown' and report['reason'] == 'attachment_ocr_ack_reconfirm_required'
     assert report.get('alert_required') is not False
 
 
@@ -251,6 +251,40 @@ def test_cli_plan_and_apply_use_fixed_nonclinical_summary(case, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result['outcome'] == 'applied' and result['source_coverage'] == 'unrecovered'
     assert 'reason' not in result and 'actor' not in result and 'backup' not in result
+
+
+def test_list_can_reach_later_exhausted_failure(case, capsys):
+    with case.db:
+        case.db.executemany("INSERT INTO attachments(attachment_id,message_id,state,sha256,bytes,downloaded_at) "
+                            "VALUES(?,1,'downloaded',?,32,1)",
+                            [(key, 'a' * 64) for key in range(2, 258)])
+    last = case.ledger.artifact_add(ocr.KIND, json.dumps(dict(case.doc, attachment_id=257)),
+                                    project_id=1, message_id=1, meta={'attachment_id': 257})
+    args = ['--root', str(case.root), 'list']
+    assert operator.main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first['truncated'] and first['unacknowledged_exhausted'] == [case.artifact]
+    assert operator.main(args + ['--after-attachment-id', str(first['next_after_attachment_id'])]) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second['unacknowledged_exhausted'] == [last]
+    assert second['next_after_attachment_id'] is None and not second['truncated']
+
+
+def test_list_rejects_unreadable_latest_ocr_record(case, capsys):
+    with case.db:
+        case.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', ('{', case.artifact))
+    assert operator.main(['--root', str(case.root), 'list']) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        'outcome': 'rejected', 'error': 'ocr_ack_target_invalid'}
+
+
+def test_list_rejects_unverifiable_receipt_instead_of_reporting_no_targets(case, capsys):
+    applied = operator.apply(case.root, request(case))
+    with case.db:
+        case.db.execute('DELETE FROM command_receipts WHERE command_id=?', (applied['command_id'],))
+    assert operator.main(['--root', str(case.root), 'list']) == 2
+    assert json.loads(capsys.readouterr().out) == {
+        'outcome': 'rejected', 'error': 'ocr_ack_receipt_unverified'}
 
 
 def test_partial_cohort_and_expired_read_budget_never_prove_complete_ack(case):
@@ -503,7 +537,7 @@ def test_deferred_work_rechecks_ack_receipt_before_ignoring_historical_failures(
         case.db.execute("DELETE FROM command_receipts WHERE command_id=?", (receipt["command_id"],))
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
     assert report["state"] == "unknown"
-    assert report["reason"] == "attachment_ocr_ack_unverified"
+    assert report["reason"] == "attachment_ocr_ack_reconfirm_required"
     assert report.get("alert_required") is not False
 
 
@@ -559,6 +593,6 @@ def test_reboot_renumbering_the_device_keeps_the_ack_but_a_new_inode_voids_it(ca
     _restat(monkeypatch, database, lambda info: {'st_dev': info.st_dev + 1, 'st_ino': info.st_ino + 1})
     assert observed(case)['acknowledged_exhausted'] == 0
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
-    assert report['reason'] == 'attachment_ocr_ack_unverified'
+    assert report['reason'] == 'attachment_ocr_ack_reconfirm_required'
     operator.apply(case.root, request(case))       # an old acknowledgement is redone, never revived
     assert observed(case)['acknowledged_exhausted'] == 1

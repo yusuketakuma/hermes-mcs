@@ -337,6 +337,7 @@ def test_self_probe_incomplete_body_does_not_mark_latest(tmp_path):
 
 @pytest.mark.parametrize("jobs_only,has_profile,fetched", [
     (False, True, False),   # tick with a stored profile: no GET
+    (False, "legacy", True),   # old profiles can include an ID copied from an earlier roster
     (False, False, True),   # tick before the first profile: fetch it
     (True, True, True),     # deep run always refreshes
 ])
@@ -347,7 +348,9 @@ def test_self_profile_fetch_gate(tmp_path, monkeypatch, jobs_only,
     db = _ledger(tmp_path)
     prof = {"sender_id": 1, "name": "synthetic", "professions": [],
             "organizations": []}
-    if has_profile:
+    if has_profile == "legacy":
+        db.artifact_add(self_identity.SELF_PROFILE_KIND, json.dumps(prof))
+    elif has_profile:
         with db.db:
             self_identity.record_self_profile(db.db, prof)
     calls = []
@@ -430,4 +433,7 @@ def test_station_roster_follows_profile_cadence(tmp_path, monkeypatch):
     assert result["errors"] == []
     assert result["station_staff"] == "failed: RuntimeError"
     assert self_identity.latest_station_staff(db.db) == roster
+    roster.clear()
+    run_check._run_jobs(Adapter(), db, args, {}, result, time.monotonic() + 300, False, None)
+    assert self_identity.latest_station_staff(db.db) == []
     db.close()

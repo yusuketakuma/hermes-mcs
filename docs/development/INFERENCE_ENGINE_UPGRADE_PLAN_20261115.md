@@ -80,7 +80,7 @@
 - バッチ経路は、実測で正味マイナスだったため既定で無効です（`extract_llm_runner.py:281`、`_BATCH_K=0`：`extract_llm_source_contract.py:355`）。
 
 ### 意味解析（mcs/semantic）
-- 再利用の鍵が、スレッド全体の `bundle_fingerprint` です（`semantic_store.py:45-70`。全員の本文と5つのプロンプトをまとめて hash しています）。
+- 再利用の鍵が、スレッド全体の `bundle_fingerprint` です（`semantic_store.py:53-70`。全員の本文（`role` を除く）と5つのプロンプトに、Jev のモデル・registry・schema・policy・分割計画の版を加えて hash しています）。
   - 返信が1件増えるだけで、既存の投稿の抽出・照合・薬剤詳細まで失効します。費用は投稿数の2乗で増えます。
   - チャンクのキャッシュにも同じ fp が入っています（`semantic_fact_stages.py:149-151`、`semantic_extraction.py:919`）。
 - v2 の事実抽出は投稿日時を受け取らないのに、ISO 日付を求めています（`semantic_llm.py:71`、`semantic_extraction.py:57-58`）。

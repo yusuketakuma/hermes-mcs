@@ -746,3 +746,18 @@ def test_semantic_stall_alert_leaves_out_unread_detail(tmp_path, jobs):
     report, line = _stall_alert(tmp_path, {"pending": 3, "oldest_age_s": 7200.0, **jobs})
     assert report["state_reasons"] == ["semantic_backlog_stalled"]
     assert line == "・意味チェックが6時間以上止まっています（最古 2.0時間）"
+
+
+def test_backlog_stalls_checkpoint_stops_non_sql_work(stored):
+    """The checkpoint is the only bound reachable once execution leaves SQLite
+    (file scans, worker diagnosis): it must actually fire inside the scan."""
+    calls = []
+
+    def checkpoint():
+        calls.append(1)
+        if len(calls) >= 2:
+            raise RuntimeError("observation_limit")
+
+    with pytest.raises(RuntimeError, match="observation_limit"):
+        health_report.backlog_stalls(stored, SEMANTIC_ON, NOW, marks={}, checkpoint=checkpoint)
+    assert len(calls) == 2   # stopped at the second phase, not after the scan

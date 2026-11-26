@@ -1,10 +1,10 @@
-# 患者背景情報の構造化契約（1.0.16）
+# 患者背景情報の構造化契約
 
 既存の `extract_v1` / `extract_llm` artifact に `patient_context` 配列を追加する。患者テーブルやDB schemaを変更せず、保管済み本文・連携サマリーと同じ患者スコープで扱う。
 
 | 属性 | 契約 |
 |---|---|
-| `category` | 基本情報、診断、既往、経過、実施したケア・訪問、事故・ヒヤリハット、ADL・リハ、生活・家族・制度、介護度、サービス、担当者、連絡先、アレルギー、機器・処置、意向・看取り、服薬管理、栄養、排泄、皮膚・褥瘡、口腔、認知・行動、副作用経過、検査・観測、計画・目標・会議、指示・連携文書、フォローの26分類（1.0.25で7分類追加）。列挙正本は `patient_context.CATEGORIES` |
+| `category` | 基本情報、診断、既往、経過、実施したケア・訪問、事故・ヒヤリハット、ADL・リハ、生活・家族・制度、介護度、サービス、担当者、連絡先、アレルギー、機器・処置、意向・看取り、服薬管理、栄養、排泄、皮膚・褥瘡、口腔、認知・行動、副作用経過、検査・観測、計画・目標・会議、指示・連携文書、フォローの26分類。列挙正本は `patient_context.CATEGORIES` |
 | `text` | 根拠引用に含まれる原文値。否定・過去・予定・条件・未確認を残し、推測や臨床的な確定値への変換をしない |
 | `evidence` | 対象本文の一意に照合できる引用。別投稿・参考コンテキストの引用は拒否 |
 | `subject` | LLMは `patient` / `family` / `other` を必須にする。見出しルールは対象者を推測せず `unspecified` |
@@ -13,9 +13,9 @@
 
 ルールは明示された見出しから次の見出しまで複数行を保持する。対応外の装飾見出しやコロン見出しは境界として区切り、前項目に取り込まない。全ての自由文から網羅的に情報を得られるルールではない。見出しがない文章の追加抽出は既存ローカルLLM経路で行う。入力全体を既存の長文分割で処理し、一部の失敗を完全な抽出結果と扱わない。
 
-LLMのJSON grammar・項目検証・修復・chunk統合・batch・checkpointに同じ契約を適用する。LLM世代6・詳細契約2へ進め、既定1600 tokensは維持する。旧世代の成功・失敗結果を通常pendingへ戻し、新しい失敗予算・lease・chunk・QCの境界で再抽出する。ルール世代12への更新で既存本文の明示情報を通常のrun_pendingで補完する。
+LLMのJSON grammar・項目検証・修復・chunk統合・batch・checkpointに同じ契約を適用する。保存済みの結果は、抽出世代が変われば通常の処理待ちに戻し、現行の品質確認を通して保存する。
 
-## 職種別の見出し語彙（1.0.25）
+## 職種別の見出し語彙
 
 薬局以外の職種（訪問看護、訪問診療、ケアマネ、訪問介護、施設・通所、リハ、栄養、歯科、相談員）が日々書く定型見出しを `patient_context.LABELS` に持つ。1ラベルは1分類にだけ属し、長い見出しが接頭の短い見出しより先に一致する。「排泄」は状態として排泄分類に移り、動作は「トイレ動作」「排泄介助」で保持する。専用の分類は探しやすさのためで、見出しのない文章はLLM経路が同じ分類へ投影する。評価尺度（BI、FIM、MMSE、NRS、DESIGN-R、BMI等）は観測の見出しとして原文のまま残し、尺度名・版・部位・時点を結合して比較しない。訪問や会議の時点はcanonicalの `event_time` と原文で保持し、観測日と混ぜない。算定可否・正式文書の交付・提出の成立は表示も推定もしない。
 
@@ -55,7 +55,7 @@ rollupの `patient_context` は `memo` と `chat` を別々に持つ。チャッ
 
 利用方法は [USER_GUIDE](../guides/USER_GUIDE.md)、全体レビューと未修正事項は [レビュー記録](../dev-records/review-1.0.16-20261007.md) を参照。
 
-## 服薬管理の報告の集約と参照（1.0.21、抽出世代8への更新と同時に一貫させる）
+## 服薬管理の報告の集約と参照
 
 本節は実装済みの契約で、抽出世代8（ルール世代21）で適用する。配備後は通常の抽出workerが旧世代の結果を順次再抽出し、保存済みの結果を直接書き換えない。本番への配備と、参照情報（`patient_state_context`、既定false）の有効化は別の判断で、まだ行っていない。
 
@@ -102,7 +102,7 @@ canonicalのmanifestは共通分割と同じ原文境界にatom所有を割り�
 
 v6のprefilterは完全一致の短い挨拶3種だけを省き、語彙netで臨床情報の不存在を判定しない。了解・承知・ありがとうなどの返信、見出しなしの嚥下・支援情報もLLMへ送る。稼働枠・token予算・timeout・admission・認可を維持するため、旧履歴の再抽出と対象拡大は通常workerで順次処理される。
 
-canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引用・対象へ拘束して保存し、属性の意味づけも既存監査へ含める。新promptでbundle/chunk世代を更新し、投影世代3へ進める。source/doc_hash・PASS・公開fence・人承認・admissionを維持する。legacy書込みの制限を解除して同時書込みさせない。
+canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引用・対象へ拘束して保存し、属性の意味づけも既存監査へ含める。source/doc_hash・PASS・公開fence・人承認・admissionを維持する。legacy書込みの制限を解除して同時書込みさせない。
 
 登録データ・チャット・連携メモは別出典で読取り、原文・属性・以前の記載はdetailに保持する。自由文メモで見出し抽出できない部分はdetailのcomment/unclassified_textで原文と未分類状態を示す。aggregateでは値・引用・氏名・具体日時を返さない。候補・未取得・古い情報を現在の確定患者状態と推測しない。
 
@@ -112,18 +112,18 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 
 観測値は1項目1万行まで、登録観測項目は250項目までを支持する。容量超過はcapacity_limitとして未完を明示し、部分行を現在値にしない。他の項目の取得は続ける。既存manual取得の5page上限は維持する。未知のAPI項目や確認できない情報まで推測で作る意味での「全て」ではなく、指定情報の受入・保存・再処理と取得可能な全pageの対応である。
 
-## 次回の訪問診療予定日（2026-10-08）
+## 次回の訪問診療予定日
 
 ルール世代18では、次回／次の訪問診療・訪問・往診・診察の予定項目を共通の日付処理で読む。予定日・予定日時・日程、全角・日本語・スラッシュ・ISO形式、予定項目直後の単独日付／日時行を支持する。年の補完は既存の投稿日時に基づく解決を維持し、日付のない曜日だけ・相対日だけの記載は推測しない。
 
 中止・延期・未定、家族・他者・過去の予定、別文の検査日は本人の次回予定へ採用せず、予定から過去の訪問日を生成しない。担当者の割当項目や医療者の署名見出しを予定の対象者と混同しない扱いは、予定解析だけに限定する。旧世代のルール結果は通常の処理枠で更新し、患者まとめ・投稿表示・LLMへのルール候補は同じ抽出結果を利用する。
 
 
-## 患者コンテキスト作成と本人向け表示（1.0.25。2026-10-18に「夜間の患者背景」から改称）
+## 患者コンテキスト作成と本人向け表示
 
 `patient_context_refresh` が患者コンテキスト作成の入力確認・調査・保存・再開を所有し、`patient_context_plan` が入力の分割とscanの引用検証、`patient_context_selection` が要約に使う根拠の選択・要約入力・要約の検証、`patient_context_schedule` が一患者scanの予定組みとレーン巡回を担う。処理契約は、資料の走査契約・概況の要約契約・成果物ごとの出所（下記「処理契約と出所」）に分ける。`patient_context_view` が既存read modelから各画面を作る。日中の `patient_rollup` と抽出の固定参照情報を扱う `extraction_context` の契約は変更しない。保存には既存のartifactsを使い、新しいテーブル・外部依存は追加しない。利用手順と設定は [USER_GUIDE](../guides/USER_GUIDE.md)、要件の対応表は [実装・受入計画](../releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md) を参照する。
 
-モジュールと内部関数は終日処理を表す名前へ変更した。作業日の境界を返す関数は `workday_window`、レーン3から呼ぶ関数は `extract_llm._background_context_refresh`、限定閲覧の入力は `context_view_input` とする。旧モジュール名でのimportは提供しない。保存識別子も終日処理を表す名前へ改め、新規の記録は設定キー `extract.patient_context`、artifact種別 `patient_context_v1`、作業日id `workday_id`・`found_workday_id`、イベント項目 `context_facts`・`coverage.context`、失敗コード `patient_context_*` を使う。既存データとの互換のため、旧設定キー `extract.patient_context_nightly`（新キー優先）、旧artifact種別 `patient_context_nightly_v1`、保存JSONの `night_id`・`found_night_id`、イベント項目 `nightly_facts`・`coverage.nightly`、失敗コード `nightly_*` は読み取りを継続する。走査契約の文字列 `patient-context-nightly/1` は保存済み契約との一致照合に使う永続識別子のため維持し、要約契約の永続識別子は `patient-context-summary/1` とする。これらは夜間だけ処理する指定ではない。
+作業日の境界を返す関数は `workday_window`、レーン3から呼ぶ関数は `extract_llm._background_context_refresh`、限定閲覧の入力は `context_view_input` とする。旧モジュール名でのimportは提供しない。保存識別子も終日処理を表す名前へ改め、新規の記録は設定キー `extract.patient_context`、artifact種別 `patient_context_v1`、作業日id `workday_id`・`found_workday_id`、イベント項目 `context_facts`・`coverage.context`、失敗コード `patient_context_*` を使う。既存データとの互換のため、旧設定キー `extract.patient_context_nightly`（新キー優先）、旧artifact種別 `patient_context_nightly_v1`、保存JSONの `night_id`・`found_night_id`、イベント項目 `nightly_facts`・`coverage.nightly`、失敗コード `nightly_*` は読み取りを継続する。走査契約の文字列 `patient-context-nightly/1` は保存済み契約との一致照合に使う永続識別子のため維持し、要約契約の永続識別子は `patient-context-summary/1` とする。これらは夜間だけ処理する指定ではない。
 
 ### 処理契約と出所（P0-2a・P0-2b）
 
@@ -250,7 +250,7 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 - 停止と復旧: 時刻を決められない間は、数え済みの入力の再開を除いて、その患者のAの新規作成だけを固定の理由 `patient_context_generation_unverified`（読めない記録）または `patient_context_generation_clock_changed`（未来の時刻の記録）で止める。別患者とB/Cは止めない。その記録より後に現在以前の保存時刻を持つ行が1件でも書かれると自動で再開する。それまでの明示的な復旧は消去と作り直しとする。消去は読めない記録・未来の時刻の記録では拒否せず、会計記録の不備（`accounting_unverified`）とも扱わずに、件数だけを表示して消す（下記）。
 - 返す情報: 判定結果（`inspect`・`reserve_tx`）は理由と件数 `unverified_records` だけを返し、名前や本文を含めない。Aの候補選択は待ちを `wait_generation_quota` の件数として数え、あわせて1周の観測に最初の理由 `generation_reason` と件数 `unverified_records` を残す（`patient_context_generation_unverified` は他の理由より優先し、件数は残した理由のものだけ）。要約の取得範囲や追い付き生成の記録が読めず判定が例外になった場合も同じ理由を残す（件数 `unverified_records` は 0）。上限・予約の判定は変えない。間隔・日次上限などの理由も `generation_reason` に出る。読めない記録・未来の時刻の記録は処理権を持たない。
 
-### 消去と作り直し（2026-11-15 所有者決定）
+### 消去と作り直し
 
 `cloud-llm context-reset-plan` は、消去で消える件数・引き継ぐ使用額・今は実行できない理由を、本文や識別子を出さずに表示する（変更しない）。
 `cloud-llm context-reset --preview-hash <表示された値> --confirm-human --reason ...` は、人の確認と記録（receipt）を伴って消去する（`mcs/patients/patient_context_reset.py`）。

@@ -285,3 +285,12 @@ def test_loose_config_mode_names_the_cause_without_values(pending, capsys):
     assert 'config_unverified' in output.err and 'chmod 600' in output.err
     assert '--no-llm' not in output.out + output.err
     assert (config.read_bytes(), legacy.read_bytes(), (root / receipt.NAME).read_bytes()) == before
+
+
+def test_premerge_receipt_cannot_finalize_against_embedded_provider_settings(pending):
+    root, config, legacy = pending
+    config.write_text(json.dumps({'install_args': ['--no-llm'], 'provider_settings': {}}))
+    before = (config.read_bytes(), legacy.read_bytes(), (root / receipt.NAME).read_bytes())
+    with pytest.raises(ValueError, match='settings_changed'):
+        recovery.reconcile(root, 'synthetic review', confirm_human=True)
+    assert before == (config.read_bytes(), legacy.read_bytes(), (root / receipt.NAME).read_bytes())

@@ -8,7 +8,7 @@ the code itself, so the docs track feature additions automatically:
     <!-- BEGIN GENERATED:signals -->  mcs_signals.DETECTORS
     <!-- BEGIN GENERATED:stats   -->  mcs_stats.REGISTRY + PRESETS
     <!-- BEGIN GENERATED:cli     -->  mcs_view subcommands
-    <!-- BEGIN GENERATED:release -->  latest CHANGELOG for README
+    <!-- BEGIN GENERATED:release -->  current version and release links for README
     <!-- END GENERATED:<name>    -->
 
 Technical tables live in docs/development/DEVELOPMENT.md; the release overview lives

@@ -478,6 +478,9 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
 def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption, long_answer):
     """The repair answer stays provable up to its reservation's read bound (over 256KiB too)."""
     import bounded_http
+    import cloud_policy
+    import hashlib
+    import openai_client
     import inference_dependency_loss
     import mcs_util
     import semantic_policy
@@ -490,7 +493,15 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
     patient.messages = [_message(1, body='アムロジピン5mgを継続します。')]
     db.save_patient(patient, notify={'source': 'unread'}, semantic=True)
     state = {'audits': 0, 'repairs': 0, 'requests': [], 'receipt': None}
-    contract = {'backend': 'openai', 'model': 'synthetic-sol', 'prompt': 'synthetic-contract'}
+    cloud_cfg = {"cloud_llm": {
+        "mode": "on", "project_ids": [1], "provider": "openai",
+        "provider_budgets": {"openai": {"daily_cost_limit_usd": 25, "monthly_cost_limit_usd": 75}},
+        "semantic_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    selection, errors = cloud_policy.profile_for_settings(
+        cloud_cfg, cloud_cfg["cloud_llm"], route="semantic_backlog", purpose="quality_repair")
+    assert not errors
+    contract = cloud_inference.cloud_provider_contract(selection=selection)
+    provider = openai_client.OpenAIClient("synthetic", model=selection["model"], effort=selection["effort"])
 
     def llm(prompt, **_kwargs):
         value = _llm_v2(prompt)
@@ -498,7 +509,6 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
             state['repairs'] += 1
             if long_answer:
                 value += ' ' * bounded_http.MAX_RESPONSE_BYTES
-            rid = 'a' * 32
             mids = db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
                                  'AND (message_id=1 OR parent_id=1) ORDER BY message_id').fetchall()
             occurrences = [(row[0], inference_dependency_loss.source_binding(db.db, 1, row[0])) for row in mids]
@@ -509,15 +519,19 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
                 semantic_policy.runtime_config(cfg)[0])
             owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
                      'semantic_generation': generation, 'semantic_source': mcs_util.payload_hash(occurrences)}
-            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
-                                         meta={'reservation_id': rid, 'route': 'semantic_backlog',
-                                               'owner': owner})
-            db.artifact_add('cloud_usage_result', '{}', project_id=1, message_id=1,
-                            meta={'reservation_id': rid})
-            state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
-                         receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
-                                  'max_tokens': 32768})
-            state['requests'].append(rid)
+            reserve = cloud_policy.usage_reserver(
+                db, cloud_cfg, route="semantic_backlog", project_id=1, message_id=1,
+                unit_key="semantic:synthetic", owner=owner, selection=selection)
+            receipt = reserve(provider.body(prompt, selection["max_tokens"], None), 2)
+            cloud_policy.record_result(db, receipt, {
+                "model": selection["model"], "request_fp": receipt["request_fp"], "http_class": "http_200",
+                "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+                          "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                          "output_tokens_details": {"reasoning_tokens": 0}},
+                "error_kind": None, "answer_text_sha256_v1": hashlib.sha256(value.encode()).hexdigest(),
+                "answer_finish_reason_v1": "stop"})
+            state["receipt"] = receipt
+            state["requests"].append(receipt["reservation_id"])
             semantic_transport._record_inference('openai')
         else:
             semantic_transport._record_inference('local')
@@ -535,15 +549,7 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         return ([{'code': 'claim_not_supported', 'claim': claim_id, 'confidence': 0.95}]
                 if choice == 'not_supported' else []), True
 
-    def verify(_db, **kwargs):
-        if (kwargs['reservation_artifact_id'] != state.get('reserve_id')
-                or kwargs['prompt'] != state.get('prompt') or kwargs['answer_text'] != state.get('answer')
-                or kwargs['owner'] != state.get('owner') or kwargs['contract'] != contract):
-            raise ValueError('synthetic-receipt-invalid')
-        return {}
-
     monkeypatch.setattr(semantic_audit, 'audit_claims', audit)
-    monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', verify)
     monkeypatch.setattr(semantic_transport, 'inference_requests', lambda: list(state['requests']))
     monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: state['receipt'])
     monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: (
@@ -581,6 +587,6 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
                                                     project_id=1, message_id=1, generation=generation)
         assert producer['complete'] is True and producer['repair_render_phase'] == 'rendered'
         assert final['meta']['provider_provenance']['jev'] == 'done'
-        assert final['content']['mandatory_facts'] and state['requests'] == ['a' * 32]
+        assert final['content']['mandatory_facts'] and state['requests'] == [state['receipt']['reservation_id']]
     finally:
         db.close()

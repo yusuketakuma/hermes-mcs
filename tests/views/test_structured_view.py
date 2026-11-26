@@ -528,6 +528,15 @@ def test_unverified_labs_render_apart_from_confirmed(db, kind, flag):
         "検査候補（未確認）: 合成候補検査 2mg/dL(高)"]
 
 
+def test_historical_lab_with_short_evidence_keeps_the_sources_panel_condition(db):
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text=? WHERE message_id=1",
+                      ("カリウム 4.5、補正カルシウム 8.5未満なら連絡",))
+    text = _render(db, {"labs": [{"name": "カリウム", "value": "4.5", "evidence": "カリウム 4.5"}]})
+    assert "検査候補（未確認）: カリウム 4.5" in text
+    assert "検査: カリウム" not in text
+
+
 def test_unverified_only_labs_keep_candidate_label_and_every_value(db):
     # the 6-item cap silently dropped later labs (bug sweep 2026-11-13): every value is shown
     joined = _render(db, {"labs": [

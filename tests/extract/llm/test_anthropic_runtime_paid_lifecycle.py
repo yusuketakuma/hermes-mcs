@@ -479,7 +479,7 @@ def test_unreadable_config_never_auto_enables_the_paid_route(routed):
     # A readable config uses the spending defaults, without changing its scope.
     defaults = cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic"})
     assert defaults["mode"] == "on" and defaults["project_ids"] is None
-    assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (25, 75)
+    assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (80, 350)
     assert cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic", "cloud_llm": {
         "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}})["mode"] == "off"
     assert cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic",

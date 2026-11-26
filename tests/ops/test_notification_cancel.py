@@ -601,7 +601,9 @@ def _unsealed_cohort(case):
     with case.led.db:
         initial_import_state.start_tx(case.led, 1, int(NOW), NOW, boundary_source="server")
         state = initial_import_state.load(case.led.db, 1)
-        initial_import_state.emit_tx(case.led, 1, state, [100])
+        for mids in ([], [100]):
+            case.led._outbox_insert("patient_history", 1, {"source": "initial_history",
+                "cohort_id": state["cohort_id"], "message_ids": mids}, route="interactive")
     case.events = [case.led.db.execute("SELECT event_id FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id LIMIT 1").fetchone()[0]]
     return state
 
@@ -617,11 +619,8 @@ def test_unsealed_history_cancel_covers_explicit_cohort_without_worker_or_remote
     receipt = cancel.apply(case.root, request)
     assert receipt["event_ids"] == planned["event_ids"] and receipt["remote_operations"] == 0
     assert case.led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='patient_history' AND state='suppressed'").fetchone()[0] == 2
-    stale_state = state
     state = initial_import_state.load(case.led.db, 1)
     assert state["notification_cancelled"] is True and state["capture_phase"] == "capturing"
-    with case.led.db:
-        assert initial_import_state.emit_tx(case.led, 1, stale_state, [100]) is None
     assert cancel.apply(case.root, request) == receipt
     after = _snapshot(case.led.db)
     for table in ("messages", "artifacts", "notification_cards", "notification_renders", "notification_render_parts", "notification_delivery_attempts"):
@@ -640,7 +639,8 @@ def test_unsealed_history_cancel_revalidates_cohort_and_same_transaction_emits(c
             injected.append(True)
             with case.led.db:
                 if change == "new_intent":
-                    initial_import_state.emit_tx(case.led, 1, state, [200])
+                    case.led._outbox_insert("patient_history", 1, {"source":"initial_history",
+                        "cohort_id":state["cohort_id"], "message_ids":[200]}, route="interactive")
                 elif change == "cohort_identity":
                     changed = dict(state, cohort_id="b"*32)
                     initial_import_state._write(case.led.db, 1, changed)

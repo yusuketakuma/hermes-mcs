@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "リリース下書きの対象をタグのコミットに固定",
+  "summary": "新しいGitHub Releaseの下書きには、タグが指すコミットSHAを設定します。公開処理がタグCIから必要な成果物を取得できない場合は、その名前を表示して停止します。",
+  "upgrade": "新しく作成する下書きに適用されます。追加操作は不要です。",
+  "details": ["手動実行では、指定したIDから正式な受入票を取得する経路が未実装であることを表示して停止します。"],
+  "refs": [".github/workflows/release-notes.yml", ".github/workflows/release-publish.yml"]
+}

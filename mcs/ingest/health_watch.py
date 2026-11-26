@@ -89,9 +89,20 @@ _RECORDED_DELIVERY_JA = {
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
 }
+_WORKER_OBSERVATION_JA = {
+    "witness_missing": "起動記録を読み取れません",
+    "witness_version": "起動記録の形式に対応していません",
+    "witness_reason": "起動記録の状態を確認できません",
+    "witness_started_unknown": "起動記録の識別情報または時刻を確認できません",
+    "launchd_pid_mismatch": "プロセスの識別番号を起動記録と照合できません",
+    "birth_mismatch": "プロセスの開始時刻を起動記録と照合できません",
+    "observation_timeout": "起動状態の照会が時間切れ",
+}
 _WORKER_REASONS = frozenset({"worker_started", "worker_start_unverified", "worker_start_failed",
     "worker_restart_required", "route_flags_unready", "profile_mismatch", "owner_unverified",
-    "application_mismatch", "standalone_owned"})
+    "application_mismatch", "standalone_owned", *_WORKER_OBSERVATION_JA})
+_DELIVERY_REASONS = frozenset({"marker_present", "database_identity", "database_busy", "schema_mismatch",
+                               "observation_timeout", "queue_unverified"})
 
 # runtime_mode=standalone: the host's own status file (mcs_standalone)
 STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
@@ -488,6 +499,24 @@ def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
 
 
 
+def _apply_collection_lock(obs: dict, home: str, now: float) -> None:
+    refusals = writer_lock.read_run_lock_refusals(os.path.join(home, "data"))
+    if refusals is None:
+        return
+    span = refusals["last_at"] - refusals["first_at"]
+    age = now - refusals["last_at"]
+    if refusals["consecutive"] < 2 or span < 900 or not 0 <= age <= 900:
+        return
+    obs["run_lock_starved"] = {"consecutive": refusals["consecutive"], "span_s": round(span, 1),
+                               "last_refusal_age_s": round(age, 1)}
+    reasons = list(obs.get("state_reasons") or [])
+    if "run_lock_starved" not in reasons:
+        reasons.append("run_lock_starved")
+    obs["state_reasons"] = reasons
+    if obs["status"] == "ok":
+        obs["status"] = "degraded"
+
+
 def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
     """Replace recorded OCR evidence with its own current bounded observation."""
     from health_report import attachment_ocr_health
@@ -525,6 +554,7 @@ def _delivery_snapshot(value, now: float):
     if (worker.get("state") not in ("started", "disabled", "unknown")
             or not isinstance(worker.get("reason"), str) or worker["reason"] not in _WORKER_REASONS
             or delivery.get("state") not in (*_DELIVERY_CURRENT, "progressing", "pending", "idle", "unknown")
+            or delivery.get("reason") is not None and delivery["reason"] not in _DELIVERY_REASONS
             or restart.get("state") not in ("requested", "unknown", "failed",
                                              "supervisor_restart_verified", "unverified")):
         return None
@@ -544,7 +574,9 @@ def _delivery_snapshot(value, now: float):
     if any(stamp is not None and (not finite_number(stamp) or not 0 <= stamp <= now)
            for stamp in stamps):
         return None
-    if (issues and None in (queued, sending, unknown)
+    if ((delivery.get("reason") is not None) != (
+                delivery["state"] == "unknown" and not issues and queued is None)
+            or issues and None in (queued, sending, unknown)
             or "waiting_without_progress" in issues and (
             not queued or stamps[1] is None or now - stamps[1] <= CARD_STALL_S
             or stamps[2] is not None and now - stamps[2] <= CARD_STALL_S)
@@ -562,7 +594,7 @@ def _delivery_snapshot(value, now: float):
         "observed_at": now,
         "worker": {key: worker.get(key) for key in ("state", "reason", "started_at")},
         "delivery": {**{key: delivery.get(key) for key in (
-            "state", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
+            "state", "reason", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
             "issues": list(issues)},
         "restart_request": {key: restart.get(key) for key in ("state", "at")},
     }
@@ -810,6 +842,7 @@ def evaluate(home: str = HOME, now: float | None = None,
         obs["notify_transport"] = "lineworks"
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
+    _apply_collection_lock(obs, home, now)
     _apply_attachment_ocr(obs, home, now, cfg)
     state = load_config(state_path)
     previous_delivery = state.get("delivery_current_reason")
@@ -884,7 +917,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
                        or any(r.startswith(("standalone_", "attachment_ocr_", CONFIG_BLOCKED))
-                              or r in _DELIVERY_CURRENT.values()
+                              or r == "run_lock_starved" or r in _DELIVERY_CURRENT.values()
                               for r in gained))) or recorded_new
     from mcs_util import valid_hash
     ocr_detail = obs.get('attachment_ocr') or {}
@@ -1105,12 +1138,17 @@ _BACKUP_FAILURE_JA = {
 }
 
 _REASON_JA = {
+    "run_lock_starved": ("収集が実行ロックを繰り返し取得できていません", "収集と同時に実行中の台帳処理を確認してください"),
     'attachment_ocr_acknowledged_gap': ('過去のOCR警報は受付済みですが、本文は未回収です',
         '原本の確認状況は未確認です。必要な情報は元の添付で確認してください'),
     'attachment_ocr_policy_excluded': ('表構造を検証できない添付を設定に従ってOCR採用対象から除外しています',
         '原本内容は未評価です。元の投稿から確認してください。初期の再試行は継続し、上限到達後は入力・方針・版の変更か明示操作で再評価します'),
     'attachment_ocr_ack_unverified': ('OCR警報の受付記録を現在の原資料と照合できません',
         '次回の処理後も続く場合は診断結果と照会コードを開発元へ連絡してください'),
+    'attachment_ocr_ack_reconfirm_required': ('OCR警報の受付記録が現在の原資料と一致しません。受付のやり直しが必要です',
+        '「通知の復旧手順」の「OCR警報の運用受付と本文未回収」に従い、対象を一覧で確認してから受付をやり直してください'),
+    'attachment_ocr_ack_recheck_incomplete': ('OCR警報の受付記録の照合が完了しませんでした',
+        '次回確認します。続く場合は診断結果と照会コードを開発元へ連絡してください'),
 
     "attachment_ocr_config_unavailable": ("添付の文字起こし設定を確認できません", "設定の読込み状態を確認してください"),
     "attachment_ocr_config_invalid": ("添付の文字起こし設定に不備があります", "attachment_ocrの設定を確認してください"),
@@ -1553,6 +1591,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             action = _STANDALONE_ACTION.get(base, action)
         else:
             action = lw_actions.get(base, action)
+        if base == "run_lock_starved" and report.get("run_lock_starved"):
+            evidence = report["run_lock_starved"]
+            meaning += f"（{evidence['span_s'] / 60:.0f}分間に{evidence['consecutive']}回）"
         if base == 'collection_incomplete' and _collection_known_empty(report):
             meaning = "収集判定と現在の患者別の取得内訳に差があります"
             action = (f"前回の収集判定または今回の観測対象との差を{_DOCTOR} で確認。"
@@ -1717,19 +1758,38 @@ def _delivery_observation_lines(report: dict) -> list[str]:
         return []
     worker, delivery, restart = (snapshot[key] for key in ("worker", "delivery", "restart_request"))
     worker_label = {"started": "起動済み", "disabled": "起動していない", "unknown": "未確認"}[worker["state"]]
+    worker_detail = f"起動 {_jst(worker['started_at'], with_year=True)}"
+    if worker["state"] == "unknown":
+        worker_detail = _WORKER_OBSERVATION_JA.get(worker["reason"], worker_detail)
     restart_label = {"requested": "要求の記録", "unknown": "結果不明", "failed": "失敗の記録",
                      "supervisor_restart_verified": "gatewayプロセス確認の記録", "unverified": "未確認"}[restart["state"]]
     queued = str(delivery["queued"]) + "件" if delivery["queued"] is not None else "不明"
     sending = str(delivery["sending"]) + "件" if delivery["sending"] is not None else "不明"
     unknown = str(delivery["unknown"]) + "件" if delivery["unknown"] is not None else "不明"
-    return [
+    reason = delivery.get("reason")
+    if reason == "marker_present":
+        note = "更新・復元中のため配送記録を読んでいません"
+    elif reason is not None:
+        note = "配送記録を読めません（" + {
+            "database_identity": "データベースを特定できません",
+            "database_busy": "データベースが応答しません",
+            "schema_mismatch": "データベースの形が合いません",
+            "observation_timeout": "観測が時間内に終わりません",
+            "queue_unverified": "待機の記録を確認できません",
+        }.get(reason, reason) + "）"
+    else:
+        note = None
+    lines = [
         f"通知の現在の観測（{_jst(snapshot['observed_at'])} JST）: "
-        f"worker {worker_label}（起動 {_jst(worker['started_at'], with_year=True)}）、待機 {queued}、"
+        f"worker {worker_label}（{worker_detail}）、待機 {queued}、"
         f"送信中 {sending}、結果不明 {unknown}",
         f"配送の時刻: 待機中通知の最古の作成 {_jst(delivery['oldest_created_at'], with_year=True)} / "
         f"直近の進捗 {_jst(delivery['last_progress_at'], with_year=True)}（JST）",
         f"再起動の記録（{_jst(restart['at'], with_year=True)} JST）: {restart_label}",
     ]
+    if note is not None:
+        lines.insert(1, note)
+    return lines
 
 
 def _alert_lines(report: dict) -> list[str]:

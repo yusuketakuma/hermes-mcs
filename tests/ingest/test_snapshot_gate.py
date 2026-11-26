@@ -834,3 +834,58 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     with closing(sqlite3.connect(data / "ledger.db")) as conn:
         assert conn.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
         assert conn.execute("SELECT status FROM runs").fetchone()[0] == recorded[0]
+
+
+@pytest.mark.parametrize('update_during_copy', [False, True])
+def test_commands_copy_allows_writer_and_rechecks_before_publication(tmp_path, monkeypatch, update_during_copy):
+    db, updater, fd, _ = _finish_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, 'HOME', str(tmp_path))
+    monkeypatch.setattr(run_check, '_config', lambda: {})
+    monkeypatch.setattr(run_check.job_ops, 'drain_commands', lambda *a, **kw: None)
+    monkeypatch.setattr(notify_spool, 'recover', lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cards, 'gc', lambda *a, **kw: None)
+    monkeypatch.setattr(writer_lock, 'wait_run_lock', lambda path, **kw: writer_lock.acquire_run_lock(path))
+    assert maintenance.refresh_snapshot(run_check.DB) == 'published'
+    with db.db:
+        notify_cards.mark_snapshot_dirty(db.db)
+    # A minute of the commands worker's fixed budget was spent waiting for run.lock.
+    deadline = time.monotonic() + run_check.RUN_DEADLINE_S - 60
+    assert run_check._commands_only(fd, deadline) == 0
+    assert notify_cards.snapshot_dirty(db) == 1  # background dirtiness survived the interval
+    with db.db:
+        db.db.execute("INSERT INTO command_receipts VALUES('urgent','h',1,NULL,'applied','{}',?)",
+                      (time.time(),))
+    fd = run_check.acquire_run_lock(run_check.LOCKFILE)
+    assert fd is not None
+    assert run_check._commands_only(fd, time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S - 1) == 0
+    assert notify_cards.snapshot_dirty(db) == 1
+    fd = run_check.acquire_run_lock(run_check.LOCKFILE)
+    assert fd is not None
+    prepare = snapshots._prepare_in_child
+    copied = []
+
+    def interleaved(db_path, tmp, copy_deadline, fence_fd, state):
+        assert copy_deadline == deadline - snapshots.SNAPSHOT_GATE_RESERVE_S
+        competing_fd = writer_lock.acquire_run_lock(run_check.LOCKFILE)
+        assert competing_fd is not None
+        try:
+            notify_cards.mark_snapshot_dirty(db.db)
+            db.db.commit()
+            if update_during_copy:
+                updater['state'] = (True, 8)
+            copied.append(True)
+        finally:
+            os.close(competing_fd)
+        return prepare(db_path, tmp, copy_deadline, fence_fd, state)
+
+    monkeypatch.setattr(snapshots, '_prepare_in_child', interleaved)
+    try:
+        code = run_check._commands_only(fd, deadline)
+        assert copied == [True]
+        assert code == int(update_during_copy)
+        with closing(sqlite3.connect(_dest())) as published:
+            assert published.execute("SELECT COUNT(*) FROM command_receipts WHERE command_id='urgent'").fetchone()[0] \
+                == int(not update_during_copy)
+        assert notify_cards.snapshot_dirty(db) == 2
+    finally:
+        db.close()

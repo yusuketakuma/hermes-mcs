@@ -102,7 +102,7 @@ def test_unknown_import_is_rejected_without_bypassing_real_registration(tmp_path
         assert initial.load(store.db, 1)["capture_phase"] == "capturing"
         assert store.job_payload("history", 1)["since"] == 0
         assert store.job_payload("history", 1)["notify"] is True
-        assert store.db.execute("SELECT 1 FROM notify_outbox WHERE kind='patient_history'").fetchone()
+        assert not store.db.execute("SELECT 1 FROM notify_outbox WHERE kind='patient_history'").fetchone()
 
 
 @pytest.mark.parametrize("route", ["scan", "import"])

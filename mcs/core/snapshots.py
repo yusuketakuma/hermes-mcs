@@ -424,7 +424,10 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
                 # A write during the copy only leaves the freshness marker
                 # conservative, so the long copy must not hold the run lock.
                 gate = stack.enter_context(gate_context)
-            if not _prepare_in_child(db_path, tmp, deadline, fd, state):
+            # A stalled unlocked copy must leave the same reacquire and
+            # publication reserve as the validator that follows it.
+            copy_deadline = deadline - SNAPSHOT_GATE_RESERVE_S if gate is not None else deadline
+            if not _prepare_in_child(db_path, tmp, copy_deadline, fd, state):
                 _status.failure.setdefault("copy_s", round(monotonic() - started, 3))
                 return None
             copied = monotonic()

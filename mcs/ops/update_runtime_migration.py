@@ -294,7 +294,7 @@ def _restore_runtime(entry: dict) -> None:
 
 @contextmanager
 def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=None):
-    """Hold and recheck the legacy update evidence while settings are split."""
+    """Hold and recheck the legacy updater evidence while consolidating settings."""
     try:
         from release_apply_owner import _verify_inherited_lock
 
@@ -317,8 +317,7 @@ def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=
                 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target) is None
                 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", previous) is None
                 or target == previous or len(target) != len(previous)
-                or (not recovering and os.environ.get(_UPDATE_PM_ENV) != target)
-                or (recovering and applying.get("provider_settings_migration_required") is not True)):
+                or (not recovering and os.environ.get(_UPDATE_PM_ENV) != target)):
             raise ValueError("provider_update_target_unverified")
         marker = os.stat(MARKER_PATH, follow_symlinks=False)
         marker_id = (marker.st_dev, marker.st_ino)
@@ -374,17 +373,34 @@ def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=
             mode = mcs_runtime.mode(provider["common"])
             if expected_mode is not None and mode != expected_mode:
                 raise ValueError("provider_update_runtime_changed")
-            if provider["mode"] == "legacy_unverified":
-                if applying.get("provider_settings_migration_required") is not True:
+            if provider["mode"] not in ("legacy_unverified", "split"):
+                raise ValueError("provider_settings_unverified")
+            needs_migration = provider.get("layout") != "single"
+            requirement = "provider_settings_migration_required"
+            adopt_split = needs_migration and provider["mode"] == "split" and requirement not in applying
+            if needs_migration:
+                if adopt_split:
+                    # Deployed v2 parents omit the flag for an already split installation.
+                    if not _provider_prior_source_verified(previous, split_parent=True):
+                        raise ValueError("provider_update_bridge_required")
+                elif applying.get(requirement) is not True:
                     raise ValueError("provider_migration_requirement_missing")
                 check(prior=True)
-            elif provider["mode"] != "split":
-                raise ValueError("provider_settings_unverified")
+            elif recovering and applying.get(requirement) is not True:
+                raise ValueError("provider_migration_requirement_missing")
             check()
             _quiesce_for_mode(mode)
             check()
+            if adopt_split:
+                if read_provider() != provider:
+                    raise ValueError("provider_settings_changed")
+                applying[requirement] = True
+                journal_store.save_state(STATE_PATH, state)
+                check(prior=True)
 
             def before_publication():
+                if applying.get(requirement) is not True:
+                    raise ValueError("provider_migration_requirement_missing")
                 check(prior=True)
                 _quiesce_for_mode(mode)
                 check(prior=True)

@@ -86,6 +86,42 @@ def test_setup_separate_python_pinned_source_and_repeatable_cache(monkeypatch, t
     assert not (root / 'config.json').exists()
 
 
+def test_packages_only_uses_lock_without_fetching_models(monkeypatch, tmp_path):
+    deploy = tmp_path / 'source/deployment'
+    deploy.mkdir(parents=True)
+    for name in ('requirements-ocr.txt', 'requirements-ocr.lock'):
+        (deploy / name).write_bytes((REPO / 'deployment' / name).read_bytes())
+    root = tmp_path / 'install'
+    calls = fake_runtime(monkeypatch, root)
+    setup_yomitoku.setup(root, deploy.parent, packages_only=True)
+    install = next(call for call in calls if call[1:3] == ['pip', 'install'])
+    assert '--no-deps' in install and str(deploy / 'requirements-ocr.lock') in install
+    assert not any('snapshot_download' in str(call) for call in calls)
+    marker = root / 'ocr-venv/.mcs-ocr-requirements'
+    assert not marker.exists()
+    setup_yomitoku.setup(root, deploy.parent)
+    original = marker.read_bytes()
+    lock = deploy / 'requirements-ocr.lock'
+    lock.write_bytes(lock.read_bytes() + b'# changed\n')
+    calls.clear()
+    setup_yomitoku.setup(root, deploy.parent)
+    assert install in calls and marker.read_bytes() != original
+
+
+def test_dependency_failure_leaves_environment_unready(monkeypatch, tmp_path):
+    calls = fake_runtime(monkeypatch, tmp_path)
+    original = setup_yomitoku.run
+    def fail_check(args, *, env):
+        if args[1:3] == ['pip', 'check']:
+            raise subprocess.CalledProcessError(1, args)
+        return original(args, env=env)
+    monkeypatch.setattr(setup_yomitoku, 'run', fail_check)
+    with pytest.raises(subprocess.CalledProcessError):
+        setup_yomitoku.setup(tmp_path, REPO)
+    assert not any('snapshot_download' in str(call) for call in calls)
+    assert not (tmp_path / 'ocr-venv/.mcs-ocr-requirements').exists()
+
+
 def test_setup_failed_model_download_does_not_mark_complete(monkeypatch, tmp_path):
     calls = fake_runtime(monkeypatch, tmp_path)
     original = setup_yomitoku.run
@@ -114,7 +150,8 @@ def test_setup_preserves_foreign_or_incomplete_environment(monkeypatch, tmp_path
     assert venv.is_symlink() if not incomplete else (venv / 'keep').read_text() == 'synthetic'
 
 
-@pytest.mark.parametrize('changed', ['deployment/requirements-ocr.txt', 'mcs/extract/ocr_model_contract.py'])
+@pytest.mark.parametrize('changed', ['deployment/requirements-ocr.txt', 'deployment/requirements-ocr.lock',
+                                     'mcs/extract/ocr_model_contract.py'])
 @pytest.mark.parametrize('opted_in', [False, True])
 def test_updater_reinstall_only_for_opted_in_ocr(monkeypatch, opted_in, changed):
     monkeypatch.setattr(mcs_update, 'recorded_install_args',

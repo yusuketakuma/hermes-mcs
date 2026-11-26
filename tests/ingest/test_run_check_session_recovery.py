@@ -521,3 +521,45 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     assert row[0] == "session_expired"
     assert "auto_login=budget_exhausted" in row[1]
     db.close()
+
+
+def test_relogin_journal_carries_chrome_and_keychain_facts(tmp_path):
+    """The attempt journal must carry the CDP/chrome layer evidence and
+    the keychain lock even when the login itself ends in a simple
+    state — silent facts are why the layer broke for hours unnoticed."""
+    db = _ledger(tmp_path)
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "failed",
+        healed_tabs=0, chrome_restarted=True,
+        chrome_error="BootstrapError",
+        chrome_singleton_lock=True, keychain_locked=True)
+    result = {"errors": [], "run_id": 7}
+    state = collection_stages.attempt_relogin(
+        adapter, db, result, "unread",
+        mcs_contract.SessionExpired(status=403))
+    assert state == "failed"
+    assert result["relogin_attempts"] == [
+        {"stage": "unread", "error": "session_expired(status=403)",
+         "state": "failed", "chrome_restarted": True,
+         "chrome_error": "BootstrapError",
+         "chrome_singleton_lock": True, "keychain_locked": True}]
+    db.close()
+
+
+def test_relogin_journal_omits_absent_facts(tmp_path):
+    """Falsy facts stay out of the journal — a healthy attempt reads
+    exactly as before the diagnostics existed."""
+    db = _ledger(tmp_path)
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok",
+        healed_tabs=0, chrome_restarted=False,
+        chrome_error="", chrome_singleton_lock=False,
+        keychain_locked=False)
+    result = {"errors": [], "run_id": 7}
+    collection_stages.attempt_relogin(
+        adapter, db, result, "unread",
+        mcs_contract.SessionExpired(status=403))
+    assert result["relogin_attempts"] == [
+        {"stage": "unread", "error": "session_expired(status=403)",
+         "state": "ok"}]
+    db.close()

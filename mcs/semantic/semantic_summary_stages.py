@@ -105,28 +105,22 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
     expected_owner = {"semantic_target_id": mid, "semantic_thread_root": roots[0],
                       "semantic_source": mcs_util.payload_hash(occurrences),
                       "semantic_generation": generation, "semantic_phase": "summary"}
+    import cloud_policy
     try:
-        rows = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve' "
-                          "AND project_id=? AND message_id=? ORDER BY artifact_id", (pid, mid)).fetchall()
+        rows = db.execute(
+            "SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
+            "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) THEN "
+            "json_extract(meta,'$.reservation_id') END IN (SELECT value FROM json_each(?)) "
+            "ORDER BY artifact_id", (pid, mid, json.dumps(requests)))
+        for row in rows:
+            try:
+                reservation = cloud_policy.reservation_evidence(db, row["artifact_id"])["reservation"]
+            except ValueError:
+                continue
+            if reservation["route"] == "semantic_backlog" and reservation.get("owner") == expected_owner:
+                return True
     except sqlite3.Error:
         return False
-    for row in rows:
-        try:
-            reservation = json.loads(row["meta"])
-        except (TypeError, ValueError, KeyError):
-            continue
-        if (reservation.get("reservation_id") not in requests
-                or reservation.get("route") != "semantic_backlog"
-                or reservation.get("owner") != expected_owner):
-            continue
-        try:
-            import cloud_policy
-            cloud_policy.reservation_evidence(db, row["artifact_id"])
-        except sqlite3.Error:
-            return False
-        except ValueError:
-            continue
-        return True
     return False
 
 

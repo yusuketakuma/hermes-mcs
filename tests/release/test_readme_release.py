@@ -40,41 +40,19 @@ class ReadmeReleaseTest(unittest.TestCase):
         (root / "docs/development/readme-review.json").write_text(json.dumps(review), encoding="utf-8")
         return review
 
-    def test_latest_release_excerpt_preserves_all_upgrade_notes_and_manual_text(self):
-        new = readme.render(self.template(), self.changelog())
+    def test_readme_points_to_full_release_notes_without_copying_history(self):
+        changelog = self.changelog()
+        new = readme.render(self.template(), changelog)
         self.assertTrue(new.startswith("# Intro"))
         self.assertTrue(new.endswith("Footer\n"))
-        self.assertIn("不具合修正 · 合成の修正", new)
-        self.assertNotIn("不具合修正 · もう一つの修正", new)
-        self.assertIn("別の確認手順です。", new)
-        self.assertIn("> 更新前の確認", new)
-        self.assertNotIn("内部の詳細です。", new)
-        self.assertEqual(readme.render(new, self.changelog()), new)
-
-    def test_comparison_table_keeps_rows_and_stays_out_of_summary(self):
-        table = ("| 変更 | 以前 | 今回 | 利用者のメリット |\n"
-                 "|---|---|---|---|\n"
-                 "| 表示 | 別々 | 同じ場所 | 比較できる |")
-        changelog = self.changelog().replace("### 新機能", table + "\n\n### 新機能")
-        rendered = readme.render(self.template(), changelog)
-        self.assertEqual(rendered.count(table), 1)
-        self.assertIn("合成データだけを使用します。\n\n", rendered)
-        self.assertLess(rendered.index(table), rendered.index("<details>"))
-        self.assertEqual(readme.render(rendered, changelog), rendered)
-
-    def test_release_image_has_its_own_paragraph_and_a_repository_relative_source(self):
-        url = "https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.1/example.png"
-        alt = f"図 ({url})"
-        image = f"![{alt}]({url})"
-        changelog = self.changelog().replace("### 新機能", image + "\n\n### 新機能")
-        rendered = readme.render(self.template(), changelog)
-        self.assertIn(f"\n\n![{alt}](docs/releases/v1.1.1/example.png)\n\n", rendered)
-        self.assertEqual(readme.render(rendered, changelog), rendered)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaisesRegex(ValueError, "参照ファイル"):
-                readme.check_links(root, rendered)
-
+        self.assertIn("v1.0.8", new)
+        self.assertIn("(CHANGELOG.md)", new)
+        self.assertIn("github.com/yusuketakuma/hermes-mcs/releases", new)
+        self.assertNotIn("合成の修正", new)
+        self.assertNotIn("別の確認手順です。", new)
+        self.assertEqual(readme.render(new, changelog), new)
+        # Editing a version's history must not change the current manual.
+        self.assertEqual(readme.render(new, changelog.replace("合成の修正", "修正の補足")), new)
 
     def test_malformed_markers_never_mutate_release_build_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

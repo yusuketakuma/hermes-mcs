@@ -602,10 +602,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     bridge_needed = _provider_migration_needed()
                 except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                     return bail("provider_settings_unverified")
-                # The legacy post-merge guard refuses a split from any unreviewed source;
-                # refuse here, before writers stop, instead of holding after the merge.
+                # Check the migration source before stopping writers, using the
+                # same evidence required of the post-merge child.
                 if bridge_needed and not _provider_bridge_verified(_head_sha(), sha):
-                    return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
+                    return bail("provider_update_bridge_required: 現在の版から設定を移行できることを確認できません。"
+                                "docs/guides/UPGRADE_AGENT.md で移行元の版を確認してください（変更はありません）")
                 # The same guard refuses any untracked file in the source trees
                 # (ignored ones such as .DS_Store included); name it while nothing changed.
                 extras = _split_source_extras()
@@ -665,7 +666,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     if migrated and update_migrations.plan(
                             mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))[0]:
                         raise ValueError('settings_migration_lost')
-                    options_base, _ = _install_options_snapshot()
+                    options_base, options_before_merge = _install_options_snapshot()
                     if receipt is not None:
                         receipt.finish()
                 except (update_migrations.MigrationError, OSError, ValueError, TypeError, RecursionError):
@@ -748,7 +749,15 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     _run_post_merge(sha, run_lock_fd=run_fd)
                 finally:
                     _POST_MERGE_UPDATE_FD.reset(token)
-                _verify_install_options_base({"install_options_base": options_base})
+                if provider_migration_needed:
+                    if _provider_migration_needed():
+                        raise UpdateError("provider_settings_migration_unverified")
+                    # The v2 base includes the retired rollback file. The v3
+                    # snapshot validates the new authority and the same selection.
+                    if _install_options_snapshot()[1] != options_before_merge:
+                        raise UpdateError("install_options_unverified")
+                else:
+                    _verify_install_options_base({"install_options_base": options_base})
             else:
                 _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
 

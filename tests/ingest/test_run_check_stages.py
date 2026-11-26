@@ -178,9 +178,9 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
     assert marks == []
     db.close()
     db = ledger.Ledger(path)
+    assert not db.db.execute("SELECT 1 FROM notify_outbox WHERE kind='patient_history'").fetchone()
     expected = int(stop == "after_commit")
-    for table, where in (("messages", ""), ("notify_outbox", " WHERE kind='new_messages'"),
-                         ("notify_outbox", " WHERE kind='patient_history'")):
+    for table, where in (("messages", ""), ("notify_outbox", " WHERE kind='new_messages'")):
         assert db.db.execute(f"SELECT count(*) FROM {table}{where}").fetchone()[0] == expected
     assert db.db.execute(
         "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"

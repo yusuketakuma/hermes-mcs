@@ -1854,3 +1854,171 @@ def test_an_end_time_change_with_any_accepted_separator_is_a_change():
         "2026-11-25T12:00:00+00:00", "2026-11-26T12:00:00+00:00")
     assert [key for key in after if before[key] != after[key]] == ["semantic.until"]
     assert same == before   # the same end time written another way is no change
+
+
+def test_single_bootstrap_seeds_budgets_once_and_runtime_edit_preserves_them(tmp_path):
+    import config_edit
+    _fresh_root(tmp_path, {"runtime_mode": "standalone"})
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        before = settings.read(tmp_path, model_owners=OWNERS)
+        after = settings.bootstrap_single_locked(tmp_path, before["snapshot"], before["common"],
+                                                 model_owners=OWNERS, lock_fd=fd)
+        assert after["layout"] == "single" and settings.bootstrap_settings_valid(after)
+        saved = json.loads((tmp_path / "config.json").read_text())
+        assert saved["cloud_llm"] == {"daily_cost_limit_usd": 80, "monthly_cost_limit_usd": 350}
+        for name in settings.CLOUD_PROVIDERS:
+            assert saved["provider_settings"][name] == {"budget": {"daily_cost_limit_usd": 40,
+                                                                  "monthly_cost_limit_usd": 175}}
+        assert not (tmp_path / "data" / "provider_settings").exists()
+        edited = settings.bootstrap_runtime_locked(tmp_path, after["snapshot"], {"runtime_mode": "hermes"},
+                                                   model_owners=OWNERS, lock_fd=fd)
+        assert edited["layout"] == "single" and edited["providers"] == after["providers"]
+        assert edited["common"] == {**after["common"], "runtime_mode": "hermes"}
+
+
+def test_single_migration_preserves_dormant_models_unknowns_and_edits(tmp_path, monkeypatch):
+    import config_edit
+    common, _, directory = tree(tmp_path, split=True)
+    common["future_feature"] = {"enabled": False, "limit": None}
+    _replace_provider_and_hash(tmp_path / "data", directory, "anthropic", {
+        "model": "synthetic-anthropic", "budget": {"daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}})
+    _replace_provider_and_hash(tmp_path / "data", directory, "openai", {"model": "synthetic-openai"})
+    original = settings.read(tmp_path, model_owners=OWNERS)
+    monkeypatch.setattr(mcs_config, "validate_config", lambda _: ([], []))
+    original = settings.commit(tmp_path, original["snapshot"], common, original["providers"],
+                               selected_provider="openai", model_owners=OWNERS)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        def migrate(snapshot):
+            return settings.consolidate_locked(tmp_path, snapshot, selected_provider="openai",
+                                               model_owners=OWNERS, lock_fd=fd)
+        after = migrate(original["snapshot"])
+        assert after["layout"] == "single" and after["common"] == common
+        assert after["providers"] == original["providers"]
+        assert not list(directory.glob("*.json"))
+        assert migrate(after["snapshot"]) == after
+        with pytest.raises(ValueError, match="provider_snapshot_changed"):
+            migrate(original["snapshot"])
+        cloud = {**after["common"], "cloud_llm": {"mode": "off", "daily_cost_limit_usd": 0}}
+        edited = settings.commit_locked(tmp_path, after["snapshot"], cloud, after["providers"],
+                                        selected_provider="anthropic", model_owners=OWNERS, lock_fd=fd)
+        assert edited["layout"] == "single" and edited["providers"] == original["providers"]
+        assert edited["common"]["future_feature"] == {"enabled": False, "limit": None}
+        assert "monthly_cost_limit_usd" not in edited["common"]["cloud_llm"]
+        assert not list(directory.glob("*.json"))
+        private_json(directory / "openai.json", {})
+        with pytest.raises(ValueError, match="provider_config_ambiguous"):
+            settings.read(tmp_path, model_owners=OWNERS)
+
+
+def test_single_migration_failure_restores_old_files_and_allows_retry(tmp_path, monkeypatch):
+    import config_edit
+    _, data, _ = tree(tmp_path, split=True)
+    monkeypatch.setattr(mcs_config, "validate_config", lambda _: ([], []))
+    real_replace = settings._replace
+    def interrupt(parent, name, raw, *args):
+        if name == "openai.json":
+            raise OSError("synthetic interruption")
+        return real_replace(parent, name, raw, *args)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        def migrate():
+            before = settings.read(tmp_path, model_owners=OWNERS)
+            return settings.consolidate_locked(tmp_path, before["snapshot"], selected_provider="openai",
+                                               model_owners=OWNERS, lock_fd=fd)
+        with monkeypatch.context() as patch:
+            patch.setattr(settings, "_replace", interrupt)
+            with pytest.raises(OSError, match="synthetic interruption"):
+                migrate()
+        assert not (data / ".provider-settings-pending.json").exists()
+        assert "layout" not in settings.read(tmp_path, model_owners=OWNERS)
+        assert migrate()["layout"] == "single"
+
+
+@pytest.mark.parametrize("with_data", [False, True])
+def test_embedded_settings_without_authority_never_become_legacy(tmp_path, with_data):
+    tmp_path.chmod(0o700)
+    if with_data:
+        (tmp_path / "data").mkdir(mode=0o700)
+    private_json(tmp_path / "config.json", {"provider_settings": {k: {} for k in settings.PROVIDERS}})
+    with pytest.raises(ValueError, match="provider_authority_missing"):
+        settings.read(tmp_path)
+
+
+def test_completed_single_publication_can_finalize_pending_after_process_death(tmp_path, monkeypatch):
+    import config_edit
+    _, data, _ = tree(tmp_path, split=True)
+    monkeypatch.setattr(mcs_config, "validate_config", lambda _: ([], []))
+    real_unlink = os.unlink
+    def die_before_release(name, *args, **kwargs):
+        if name == ".provider-settings-pending.json":
+            raise SystemExit
+        return real_unlink(name, *args, **kwargs)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        before = settings.read(tmp_path, model_owners=OWNERS)
+        with monkeypatch.context() as patch:
+            patch.setattr(settings.os, "unlink", die_before_release)
+            with pytest.raises(SystemExit):
+                settings.consolidate_locked(tmp_path, before["snapshot"], model_owners=OWNERS,
+                                            selected_provider="anthropic", lock_fd=fd)
+        with pytest.raises(ValueError, match="provider_settings_pending"):
+            settings.read(tmp_path, model_owners=OWNERS)
+        assert settings.committed_pending(tmp_path, fd) == json.loads(
+            (data / ".provider-settings-pending.json").read_text())["operation"]
+
+
+def test_single_commit_keeps_one_independent_old_copy_and_preserves_prior_history(tmp_path, monkeypatch):
+    import config_edit
+    _, data, _ = tree(tmp_path, split=True)
+    original = settings.read(tmp_path, model_owners=OWNERS)
+    before = _commit(tmp_path, monkeypatch, original)
+    past = {path: path.read_bytes() for path in data.glob(".provider-settings-backup-*")}
+    past.update({path: path.read_bytes() for path in data.glob(".provider-settings-stage-*/*")})
+    assert past
+    old_config = (tmp_path / "config.json").read_bytes()
+    with config_edit._edit_lock(tmp_path / "config.json") as fd, (tmp_path / "config.json").open("ab") as old:
+        after = settings.consolidate_locked(tmp_path, before["snapshot"], model_owners=OWNERS,
+                                            selected_provider="openai", lock_fd=fd)
+        assert after["layout"] == "single"
+        current_record = settings.change_records(tmp_path, 1)["records"][0]
+        operation = current_record["operation"]
+        stage = data / (".provider-settings-stage-" + operation)
+        assert {path.name for path in stage.iterdir()} == {settings.CHANGE_RECORD}
+        backup = data / (".provider-settings-backup-" + operation + "-config.bin")
+        old.write(b"synthetic old writer")
+        old.flush()
+        assert backup.read_bytes() == old_config
+        assert all(path.read_bytes() == raw for path, raw in past.items())
+
+
+@pytest.mark.parametrize("process_died", [False, True])
+def test_single_cleanup_interruption_can_roll_back_or_finalize(tmp_path, monkeypatch, process_died):
+    import config_edit
+    _, data, _ = tree(tmp_path, split=True)
+    monkeypatch.setattr(mcs_config, "validate_config", lambda _: ([], []))
+    real_unlink = os.unlink
+    calls = []
+    def stop_during_prune(name, *args, **kwargs):
+        if name == "openai" and not calls:
+            calls.append(name)
+            if process_died:
+                raise SystemExit
+            raise OSError("synthetic interruption")
+        return real_unlink(name, *args, **kwargs)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        before = settings.read(tmp_path, model_owners=OWNERS)
+        with monkeypatch.context() as patch:
+            patch.setattr(settings.os, "unlink", stop_during_prune)
+            with pytest.raises(SystemExit if process_died else OSError):
+                settings.consolidate_locked(tmp_path, before["snapshot"], model_owners=OWNERS,
+                                            selected_provider="openai", lock_fd=fd)
+        if process_died:
+            operation = settings.committed_pending(tmp_path, fd)
+            stage = data / (".provider-settings-stage-" + operation)
+            assert (stage / "openai").exists()
+            assert settings.committed_pending(tmp_path, fd, cleanup_operation="different") == operation
+            assert (stage / "openai").exists()
+            assert settings.committed_pending(tmp_path, fd, cleanup_operation=operation) == operation
+            assert {p.name for p in stage.iterdir()} == {settings.CHANGE_RECORD}
+        else:
+            assert not (data / ".provider-settings-pending.json").exists()
+            restored = settings.read(tmp_path, model_owners=OWNERS)
+            assert not restored.get("layout") and restored["providers"] == before["providers"]

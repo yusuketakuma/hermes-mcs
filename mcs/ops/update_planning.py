@@ -141,6 +141,7 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         entry_context="installed_standalone" if installed else "external")
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
+    bridge_needed = False
     if not noop:
         # The same refusal apply makes before writers stop (IA-110): report it here.
         try:
@@ -194,6 +195,8 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
         "settings_migration": migration_status,
+        "provider_settings_migration": ("unverified" if "provider_settings_unverified" in blockers else
+                                        "required" if bridge_needed else "none"),
         "reinstall_requires_recovery_repair": bool(reinstall and service_management.recovery_repair_pending(cfg, paths=_service_paths())),
         "notes": (([{"notes": "旧導入記録の選択を現在の設定に引き継ぎます。旧記録は保持します。"}]
                    if migration_status == "required" else []) if noop

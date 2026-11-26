@@ -481,22 +481,13 @@ import はモジュール先頭に置くのが原則。関数内に残すのは�
 - `data/backups/`           — 日次検証済み sqlite backup (3世代。在宅記録の台帳は homecare-*)
 - `data/cmd/*.json`         — bot コマンドキュー (WatchPaths で即時実行)
 - `token_cache.json`        — bearer cache (0600; data/ 外=サンドボックス非公開)
-- `config.json`             — {mcs_login_id, notify_target,
-                              notify_bot_profile?, discover_archived?,
-                              notify_max_age_h?} —
-                              notify_bot_profile 設定時は通知投稿を
-                              ~/.hermes/profiles/<name>/.env のボット名義に固定
-                              (未指定時は選択runtimeの既定設定)。
-                              discover_archived は保管/削除でアーカイブ
-                              された患者の「新規列挙と取り込み予約」だけを
-                              止めるスイッチ — 既にpendingの取り込みジョブは
-                              false でも消化され続ける(完全停止ではない)。
-                              notify_max_age_h を設定すると、投稿から
-                              N時間以上経過した未読メッセージは通知せず
-                              取り込む(既読化のみ。一括追加された患者は
-                              過去分が未読として列挙されるため)。投稿日時が
-                              不明なメッセージは従来通り通知される
-                              (古い証明が無い限り落とさない)。
+- `config.json`             — 施設の共通設定、導入時の省略項目（`install_args`）、提供元別の設定（`provider_settings`）。
+                              保存形式と移行条件は[個人設定の集約](PERSONAL_SETTINGS_MIGRATION.md)を参照。
+                              `notify_bot_profile` はHermesの通知用プロファイルを選ぶ。
+                              `discover_archived=false` は保管済み患者の新規列挙と取込み予約を止める。予約済みのジョブは続行する。
+                              新しく認識したグループでは、初回認識前の投稿と日時不明の投稿を履歴として保存し、通知しない。
+                              `notify_max_age_h` を設定すると、その期間より古い投稿と返信も通知対象から外れる。
+                              期間内に新しく取得した既読投稿は、投稿時刻を確認できれば通知対象になる。
                               self_posts=true で毎 tick 全アクティブ患者の
                               `messages/latest` を probe し、未読APIが
                               構造的に拾えない投稿(自分の投稿・他者が先に
@@ -1274,22 +1265,19 @@ scripts/evaluation/llm_lane_bench.sh --report                                   
 
 - Bearer の絶対寿命 (auto_login があるため非ブロッカー)
 - timestamp 境界の厳密な意味論 (同時刻投稿の包含)
-- MFA 画面が出た場合は manual_required → Discord アラートで人へ戻す
+- MFAなど手動ログインが必要なときは `manual_required`。セッション失効は設定された運用通知先で確認する
 
-## 付録: README から移設した技術詳細
-
-旧READMEから転記した説明は現行の責務に対応する正本へ統合しました。
-この節は既存リンクの案内として残します。確定した過去版の記述は当時のタグ・リリース記録を参照してください。
+## 技術資料
 
 ### 付録A. システム構成図
 
 [責務・依存・状態所有](REPOSITORY_STRUCTURE.md)と
-[配備構成](../../deployment/launchagents/README.md)へ統合しました。
+[配備構成](../../deployment/launchagents/README.md)を参照してください。
 通知はspec/partの同一TX記録→commit後publish→worker配送→receipt照合、
 閲覧は公開済みread-only snapshot、という別の経路です。
 
 ### 付録B. AI・推論エンジンの技術詳細（ローカルLLM / TypeSafe Jev）
 
-[推論経路と処理結果の所有者](LLM_RUNTIME.md)へ統合しました。
+[推論経路と処理結果の所有者](LLM_RUNTIME.md)を参照してください。
 送信先・許可は[SECURITY](../../SECURITY.md)、実機へ配置するレーン・起動設定は
 [3レーン構成](../../deployment/launchagents/README.md#3レーン構成)を参照してください。

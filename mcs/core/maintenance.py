@@ -657,15 +657,17 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
               file=sys.stderr, flush=True)
         return "deferred"
     if deadline is not None:
-        # The gate path reserves the reacquire wait plus publish tail, so
-        # it needs the larger window before the copy may start.
-        min_window = (snapshots.SNAPSHOT_MIN_WINDOW_GATE_S
-                      if verification_context is not None
+        # Commands charge the initial lock wait to the same deadline. An urgent
+        # change can use the 300s window; the publisher still fences both child
+        # deadlines before the full reacquire and publication reserve.
+        gate = verification_context is not None
+        urgent_commands = (commands_retry and dirty and sig is not None
+                           and not _rows_appended_only(prev.get("sig"), sig))
+        min_window = (snapshots.SNAPSHOT_MIN_WINDOW_GATE_S if gate and not urgent_commands
                       else snapshots.SNAPSHOT_MIN_WINDOW_S)
         if deadline - monotonic() < min_window:
             # Too little window left for copy + verify + tail: defer before
             # the copy so the attempt cannot burn the verify budget.
-            gate = verification_context is not None
             snapshots._record_timing(defer_reason="window_insufficient",
                                      remaining_s=round(deadline - monotonic(), 3),
                                      gate=gate)

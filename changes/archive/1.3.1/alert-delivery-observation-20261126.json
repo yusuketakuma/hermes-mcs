@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "通知の配送記録とworkerの起動を個別に確認",
+  "summary": "待機中の通知とworkerの起動を個別に調べ、配送を確認できなかった理由を監視警報に表示します。",
+  "upgrade": "更新後の監視から反映されます。追加操作は不要です。",
+  "details": [
+    "配送の進捗は停滞判定に使う直近30分の記録を確認します。"
+  ],
+  "refs": [
+    "mcs/ingest/health_delivery.py",
+    "mcs/ingest/health_watch.py"
+  ]
+}

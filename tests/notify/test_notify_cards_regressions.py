@@ -11,7 +11,6 @@ import notify_recovery
 import notify_parts
 import notify_scope
 import json
-import sqlite3
 import time
 from datetime import datetime
 
@@ -209,20 +208,15 @@ def test_deferred_footer_uses_jst_on_utc_host(led, monkeypatch):
 
 # Regression: the thread delivery plan orders root-first like the card
 # face, so a reply with a NULL posted_at_ts never precedes the root.
-def test_thread_plan_puts_root_before_null_timestamp_reply(monkeypatch):
-    db = sqlite3.connect(":memory:")
-    db.row_factory = sqlite3.Row
-    db.execute("CREATE TABLE messages (message_id INTEGER, parent_id "
-               "INTEGER, project_id INTEGER, posted_at_ts INTEGER)")
-    db.executemany("INSERT INTO messages VALUES (?,?,?,?)",
-                   [(100, None, 1, 1000), (101, 100, 1, None),
-                    (102, 100, 1, 2000)])
+def test_thread_plan_puts_root_before_null_timestamp_reply(led, monkeypatch):
+    _seed_thread(led, mids=(100, 101, 102))
+    led.db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=101")
     monkeypatch.setattr(notify_parts, "_announced_ids",
                         lambda db, card: {100, 101, 102})
     monkeypatch.setattr(notify_parts, "delivered_members",
                         lambda db, card, legacy: set())
     card = {"kind": "thread", "root_message_id": 100, "project_id": 1}
-    assert notify_parts._thread_plan_ids(db, card, [102]) == [100, 101, 102]
+    assert notify_parts._thread_plan_ids(led.db, card, [102]) == [100, 101, 102]
 
 
 # apply_card_resolve without cfg must read MCS_ROOT's config, not ~/.mcs.

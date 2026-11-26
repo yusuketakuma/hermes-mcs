@@ -106,7 +106,8 @@ def attempt_relogin(adapter, ledger, result, where: str,
         state = "failed"
         attempt["detail"] = type(exc).__name__
     attempt["state"] = state
-    for key in ("healed_tabs", "chrome_restarted"):
+    for key in ("healed_tabs", "chrome_restarted", "chrome_error",
+                "chrome_singleton_lock", "keychain_locked"):
         if getattr(adapter, key, 0):
             attempt[key] = getattr(adapter, key)
     if state == "ok":

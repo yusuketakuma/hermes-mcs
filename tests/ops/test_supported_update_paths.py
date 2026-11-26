@@ -212,9 +212,10 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
-    # The in-process child skips the provider guard; its pre-merge bridge mirror is tested separately.
-    monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a: True)
-    monkeypatch.setattr(update_planning, '_provider_bridge_verified', update_apply._provider_bridge_verified)
+    # These synthetic trees exercise historical DB rollback without changing the provider layout.
+    # test_provider_migration_entry covers the real child's guarded migration from the bridge.
+    monkeypatch.setattr(update_apply, "_provider_migration_needed", lambda: False)
+    monkeypatch.setattr(update_planning, "_provider_migration_needed", update_apply._provider_migration_needed)
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 
@@ -251,12 +252,12 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.3.0"
-    assert RELEASES[-1]["release"] == "v1.2.1"
+    assert MANIFEST["target"]["version"] == "v1.3.1"
+    assert RELEASES[-1]["release"] == "v1.3.0"
     assert RELEASES[-1]["schema_version"] == 12
-    assert RELEASES[-1]["fixture"] == "shape-17.sql"
+    assert RELEASES[-1]["fixture"] == "shape-18.sql"
     expected_sources = {f"v1.0.{n}" for n in range(30)} | {
-        "v1.1.0", "v1.1.1", "v1.1.2", "v1.2.0", "v1.2.1"}
+        "v1.1.0", "v1.1.1", "v1.1.2", "v1.2.0", "v1.2.1", "v1.3.0"}
     assert {origin["release"] for origin in RELEASES} == expected_sources
     assert set(FEATURES) == set(ORIGINS) == {origin["release"] for origin in RELEASES}
     assert len(FEATURES) == len(MANIFEST["source_features"]) == len(RELEASES)
@@ -398,6 +399,20 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
                if table != "notify_outbox" and not table.startswith("notification_")}
     _preserved(Path(updater.LEDGER), durable)
     assert _records(backup) == original
+
+
+def test_consolidated_settings_block_rollback_to_a_historical_tree(tmp_path, monkeypatch, updater, capsys):
+    path = next(p for p in ELIGIBLE if p["source"] == "v1.3.0" and p["runtime"] == "hermes")
+    objects, _, config, _, _ = _world(tmp_path, monkeypatch, updater, path)
+    assert updater.apply(objects.target, objects.after, None) == 0
+    assert updater.update_migrations.migrate_provider_settings(objects.root) is True
+    before = config.read_bytes(), _records(Path(updater.LEDGER))
+    assert updater.rollback("synthetic-old-reader") == 1
+    assert objects.head == objects.after
+    assert "provider_rollback_target_unverified" in capsys.readouterr().out
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["applied"][-1]["sha"] == objects.after
+    assert (config.read_bytes(), _records(Path(updater.LEDGER))) == before
 
 
 @pytest.mark.parametrize("choice", [None, False, True], ids=["unset", "off", "on"])

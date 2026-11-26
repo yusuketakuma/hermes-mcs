@@ -68,6 +68,15 @@ def _provider_artifact_present(data_fd):
     return False
 
 
+def _inline_provider_settings(path):
+    # A lost witness must not turn a single-file installation into a legacy edit.
+    try:
+        document = parse_config(_read_local(path, CONFIG_MAX_BYTES))
+    except (OSError, ValueError, RecursionError):
+        return False
+    return isinstance(document, dict) and "provider_settings" in document
+
+
 def _provider_config_active(path):
     path = os.path.abspath(path)
     if os.path.basename(path) != "config.json":
@@ -93,7 +102,7 @@ def _provider_config_active(path):
                     raise ValueError("provider_settings_changed") from None
                 if os.path.lexists(data):
                     raise ValueError("provider_settings_unreadable") from None
-                return False
+                return _inline_provider_settings(path)
             try:
                 before = os.fstat(fd)
                 if retry_identity is not None and identity(before)[:4] != retry_identity:
@@ -119,8 +128,8 @@ def _provider_config_active(path):
                     # device/inode/mode/owner stayed equal through the whole
                     # scan on one pinned fd: churn elsewhere in data/ moved
                     # only the directory's times, so the result is consistent.
-                    return present
-                return present
+                    return present or _inline_provider_settings(path)
+                return present or _inline_provider_settings(path)
             finally:
                 os.close(fd)
         except (OSError, ValueError) as error:
@@ -202,6 +211,8 @@ def _load_config(path, *, allow_provider_unavailable=False, provider=None, wait=
     finally:
         if _provider_config_active(path):
             raise ProviderSettingsUnreadable("provider_settings_changed")
+    if isinstance(raw, dict) and "provider_settings" in raw:
+        raise ProviderSettingsUnreadable("provider_authority_missing")
     return raw if isinstance(raw, dict) else None
 
 

@@ -5,7 +5,7 @@ clinical facts.  The legacy `extract_llm` path stays available as the
 compatibility / shadow / rollback route.  This document covers the
 rollout stages, the evidence gate, and the operating commands.
 
-## Jevが利用できない場合（2026-10-29）
+## Jevが利用できない場合
 
 意味解析を有効にしている環境では、Jevが利用可能な間は従来の検証を行います。未設定、日次予算0、日上限・背景留保への到達、または正規のサービス障害では、Jevの検証を省略して処理を続けます。省略は `SKIPPED` と理由を保存し、`PASS` や実施済みの検証件数には加えません。設定不正、利用期限切れ、原文未取得、未確定の要求、既に判明した不一致は省略の対象にしません。
 

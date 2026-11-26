@@ -87,7 +87,7 @@ def _central(path):
     value = cfg.get(KEY)
     if KEY in cfg and not valid(value):
         raise ValueError('config_invalid')
-    return (sorted(set(value)) if KEY in cfg else None), None
+    return (sorted(set(value)) if KEY in cfg else None), 'provider_settings' in cfg
 
 
 def _provider_preflight(config_path, legacy_path):
@@ -108,18 +108,25 @@ def _provider_preflight(config_path, legacy_path):
         checked = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if checked['mode'] != 'split':
             raise ValueError('provider_settings_unverified')
+        return checked.get('layout') == 'single'
+    return False
+
+
+def _records(config_path, legacy_path):
+    single = _provider_preflight(config_path, legacy_path)
+    central, embedded = _central(config_path)
+    if bool(embedded) != bool(single):
+        raise ValueError('provider_settings_unverified')
+    legacy, digest = (None, None) if single else _legacy(legacy_path)
+    return central, legacy, digest
 
 
 def inspect(config_path, legacy_path, desired=None):
     """Token of the recorded selection; ``desired`` is a direct install.sh run.
 
-    A direct run may change the selection: save() then rewrites the legacy
-    record too, so a rollback to an old version repeats the operator's latest
-    choice (IA-015). A crash between the two writes leaves them different;
-    the same direct run (its selection matches one of them) repairs that."""
-    _provider_preflight(config_path, legacy_path)
-    central, _ = _central(config_path)
-    legacy, digest = _legacy(legacy_path)
+    Until the one-file migration commits, older installations still support
+    their rollback record and a same-selection retry (IA-015)."""
+    central, legacy, digest = _records(config_path, legacy_path)
     if desired is not None:
         if not valid(desired):
             raise ValueError('options_invalid')
@@ -134,8 +141,7 @@ def inspect(config_path, legacy_path, desired=None):
 
 
 def selection(config_path, legacy_path):
-    central, _ = _central(config_path)
-    legacy, _ = _legacy(legacy_path)
+    central, legacy, _ = _records(config_path, legacy_path)
     if central is not None and legacy is not None and central != legacy:
         raise ValueError('record_conflict')
     return central if central is not None else legacy
@@ -148,11 +154,47 @@ def recorded(config_path, legacy_path):
         return None
 
 
-def _write_legacy(legacy_path, desired):
-    """Keep the pre-1.1 record in step with a direct run's new selection."""
+def retire_legacy(path, digest):
+    """Move the verified pre-v3 record intact, only during the committed format transition."""
+    import secrets
+    path = Path(path)
+    parent, identity = settings_migration_receipt._open_directory(path.parent)
+    try:
+        raw = _read(path, 65536)
+        if raw is None or hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError('legacy_changed')
+        # A new private directory lets rename capture the exact old file without overwriting a backup.
+        name = '.install-options-pre-v3-' + secrets.token_hex(16)
+        os.mkdir(name, 0o700, dir_fd=parent)
+        os.fsync(parent)
+        archive = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            os.rename(path.name, path.name, src_dir_fd=parent, dst_dir_fd=archive)
+            os.fsync(archive)
+            os.fsync(parent)
+            current = os.stat(path.parent)
+            if (current.st_dev, current.st_ino) != identity or _read(path.parent / name / path.name, 65536) != raw:
+                raise ValueError('legacy_changed')
+        finally:
+            os.close(archive)
+    finally:
+        os.close(parent)
+
+
+def _write_legacy(legacy_path, desired, digest):
+    """Keep a pre-consolidation rollback record and its unrecognized fields intact."""
     import safe_io
-    body = json.dumps({'v': 1, KEY: desired}, ensure_ascii=False) + '\n'
-    safe_io.atomic_write(legacy_path, lambda stream: stream.write(body), 0o600,
+    raw = _read(legacy_path, 65536)
+    if raw is None or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError('legacy_changed')
+    obj = _parse_json(raw)
+    obj[KEY] = desired
+    body = json.dumps(obj, ensure_ascii=False, allow_nan=False) + '\n'
+    def write_checked(stream):
+        stream.write(body)
+        if _read(legacy_path, 65536) != raw:
+            raise ValueError('legacy_changed')
+    safe_io.atomic_write(legacy_path, write_checked, 0o600,
                          tmp_prefix='install_options.json.stage-', makedirs=False)
 
 
@@ -168,12 +210,11 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
             if inspect(config_path, legacy_path, desired) != expected:
                 raise config_edit.ConfigConflict('options_changed')
             if desired is None:
-                central, _ = _central(config_path)
-                legacy, _ = _legacy(legacy_path)
+                central, legacy, _ = _records(config_path, legacy_path)
                 if central is not None or legacy is None:
                     return 0
                 desired = legacy
-            legacy, _ = _legacy(legacy_path)
+            _, legacy, digest = _records(config_path, legacy_path)
             raw, base = config_edit._snapshot(config_path)
             cfg = config_edit._parse(raw)
             if os.lstat(config_path).st_uid != os.getuid():
@@ -182,7 +223,7 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
             if cfg.get(KEY) == desired:
                 if legacy is not None and legacy != desired:
                     publication_started = True
-                    _write_legacy(legacy_path, desired)
+                    _write_legacy(legacy_path, desired, digest)
                 return 0
             cfg[KEY] = desired
             body = json.dumps(cfg, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
@@ -198,7 +239,7 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
             safe_io.atomic_write(config_path, write_checked, 0o600,
                                  tmp_prefix='config.json.stage-', makedirs=False)
             if legacy is not None and legacy != desired:
-                _write_legacy(legacy_path, desired)
+                _write_legacy(legacy_path, desired, digest)
     except config_edit.ConfigConflict:
         print('導入の省略項目が変更されたか、別の設定保存が進行中です。現在の状態を確認してください。', file=sys.stderr)
         return 1
@@ -512,11 +553,11 @@ def bootstrap_fresh(config_path, legacy_path, proof, data_token, update_fd):
             # hold precedes the settings so an interrupted bootstrap cannot skip it.
             import external_transfer
             external_transfer.require(root)
-            provider_settings.bootstrap_locked(root, before['snapshot'], before['common'],
+            provider_settings.bootstrap_single_locked(root, before['snapshot'], before['common'],
                                                model_owners=owners, lock_fd=edit_fd,
                                                jev_model=semantic_jev.JEV_MODEL)
             checked = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
-            if checked['mode'] != 'split':
+            if checked.get('layout') != 'single':
                 raise ValueError('fresh_readback_unverified')
             marker, raw, identity = _fresh_marker_read(root)
             if marker['config'] is not None:
@@ -606,7 +647,7 @@ def _runtime_snapshot_token(snapshot):
     evidence = {'files': snapshot['files'], 'authority': snapshot['authority'],
                 'pending': snapshot['pending'], 'root': snapshot['root'][:4],
                 'root_link': snapshot.get('root_link'), 'data': snapshot['data'][:4],
-                'provider_settings': snapshot['provider_settings'][:4]}
+                'provider_settings': (snapshot['provider_settings'] or ())[:4]}
     return hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -640,7 +681,7 @@ def _bootstrap_runtime_read(config_path, legacy_path):
     for name in (_FRESH_MARKER, _FRESH_COMPLETE):
         if os.path.lexists(root / 'data' / name):
             raise ValueError('runtime_edit_unverified')
-    if any(checked['providers'][name] != {} for name in provider_settings.PROVIDERS):
+    if not provider_settings.bootstrap_settings_valid(checked):
         raise ValueError('runtime_edit_unverified')
     return root, owners, checked
 
@@ -844,8 +885,7 @@ def main(argv):
         try:
             token = inspect(config_path, legacy_path, desired if mode == 'inspect' else None)
             if mode == 'inspect-update':
-                central, _ = _central(config_path)
-                legacy, _ = _legacy(legacy_path)
+                central, legacy, _ = _records(config_path, legacy_path)
                 token = ('migrate:' if central is None and legacy is not None else 'skip:') + token
             print(token)
         except (OSError, ValueError, TypeError, RecursionError):

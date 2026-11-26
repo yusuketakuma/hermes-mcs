@@ -1,8 +1,18 @@
 # 責務別の構成と再利用の境界
 
-この文書はhermes-mcs開発候補の内部構造を説明します。調査した範囲と各候補の検証結果は、その候補の作業記録で確認してください。版の公開、本番適用、モジュール単体での独立配布を示すものではありません。
+実行コードの依存方向、共有状態と副作用の所有者を示します。利用手順は[文書索引](../README.md)、生成したモジュール・CLI一覧と検証の入口は[開発リファレンス](DEVELOPMENT.md)、配置変更時の互換性の根拠は[責務分離の記録](RESPONSIBILITY_SPLIT.md)を参照してください。
 
-利用手順は[文書索引](../README.md)、モジュール・CLIの生成表と検証入口は[開発リファレンス](DEVELOPMENT.md)が正本です。この文書は依存方向、共有状態、副作用の所有者を説明します。2026-11-05の補助モジュール配置と移動後の互換条件は[責務分離の詳細](RESPONSIBILITY_SPLIT.md)を参照してください。
+## 設定や記録をどこから読むか
+
+| 確認したいこと | 読む場所 | 関連する記録の役割 |
+|---|---|---|
+| この施設の共通設定・クラウド予算・提供元ごとのモデル | 施設の `config.json`。実行コードは `mcs_util.load_config_checked` から読む | 設定の確定記録は内容の照合に、変更履歴は変更前後の確認に使う。APIキーは専用の秘密ストアで管理する |
+| この施設で使う導入オプション | `config.json` の `install_args` | 更新時に旧形式を読み、移行途中の記録は復旧に使う |
+| ログインした本人の送信者ID | `self_identity.self_sender_id` | 最新の名簿の本人印と本人プロフィールの直接観測を使う。別の取得元から転載された値で本人を決めない |
+| Hermesへの通知先 | `config.json` の `notify.slack` または `notify.discord` | 初期設定が配送先をHermesにも反映する。ワーカーは接続したアプリと配送先を照合し、操作権限は別に確認する |
+| リリース元のリポジトリ所有者 | `deployment/release-publisher/policy.json` の `repository_owner_id` | 公開要求の所有者IDは、その要求を作ったときの記録として保持する |
+
+台帳のスナップショットは公開時点の表示に、配送記録は再送の可否の判断に使います。施設設定を変えるときは設定画面かCLIを使い、スナップショット・配送記録・バックアップを設定の入力には使いません。
 
 ## 実行コードの所有先
 
@@ -35,7 +45,7 @@
 | `mcs/semantic/semantic_assembly.py` | fact・根拠・依頼属性・進捗の組立て | 入力のコピーと返値を所有し、DB・推論・時刻・保存状態を持たない。`semantic_extraction`がlive/cache/repairの実行と借用connectionの読取を所有 |
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope、`notify_spool`が保存先と公開、`notify_sender`がDBを持たないCLI送信を所有。`notify_actions`と`notify_transport`が同一transactionの適用/配送事実を確定し、公開はcommit後に行う |
 | `mcs/stamps/` | `stamp_contract`は種別・設定・集計検証、`stamp_read`は押下者の読取、`stamp_format`は表示、`stamp_write`は人承認操作 | 読取は同一connectionを借用する。承認と待ち行列はreceiptと同一TX、送信はcommit後のrun lock内。`MCSAdapter`が通信を所有し、DB復元で巻き戻さない試行記録で二重送信を防ぐ |
-| `mcs/homecare/` | 在宅ケアの記録（旧 zaitaku-calender の移行先）。`core/` は職種に共通の機能（`homecare_store` の専用DB `homecare.db`・モジュール別の番号付き前進専用migration・監査・transaction、`homecare_modules` のモジュール宣言と登録、`homecare_records` の職員と資格・患者台帳、`homecare_team` のケアチーム、`homecare_links` のMCS患者との人が確定する1対1の対応付け、`homecare_api` のJSON経路）。`pharmacy/` などの職種別モジュールは資格・役割・表・画面を宣言し、`homecare_catalog` が出荷するモジュールの固定一覧を持つ | モジュールはコアだけをimportし、モジュール同士・コアからモジュールへのimportはしない（`homecare_catalog`だけが両者をつなぐ）。表と種類のコードはモジュール名で始める。ledgerと別のDBで、MCSの原本・スナップショットへ書き込まない。更新は版の一致が必要で、対応付けと監査は追記のみ。画面の配信と書込みの検証は`mcs_local_chat`が所有 |
+| `mcs/homecare/` | MCS 訪問薬剤管理。現時点では利用を推奨していない。`core/` は職種に共通の機能（`homecare_store` の専用DB `homecare.db`・モジュール別の番号付き前進専用migration・監査・transaction、`homecare_modules` のモジュール宣言と登録、`homecare_records` の職員と資格・患者台帳、`homecare_team` のケアチーム、`homecare_links` のMCS患者との人が確定する1対1の対応付け、`homecare_api` のJSON経路）。`pharmacy/` などの職種別モジュールは資格・役割・表・画面を宣言し、`homecare_catalog` が出荷するモジュールの固定一覧を持つ | モジュールはコアだけをimportし、モジュール同士・コアからモジュールへのimportはしない（`homecare_catalog`だけが両者をつなぐ）。表と種類のコードはモジュール名で始める。ledgerと別のDBで、MCSの原本・スナップショットへ書き込まない。更新は版の一致が必要で、対応付けと監査は追記のみ。画面の配信と書込みの検証は`mcs_local_chat`が所有 |
 | `mcs/views/` | snapshot読取・scope/projection・統計/詳細/CLI | `registered_data`は登録情報、`clinical_display`は臨床値、`stats_contract`は集計範囲/結果形式、`message_metadata`はメンション・固定表示。保存済み観測の検証は`core/ledger/message_observations`。呼出元のDBを再openしない |
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
@@ -138,5 +148,3 @@ SDKチェックは`scripts/development/`、オフライン評価の実行コー�
 テストは[開発リファレンス](DEVELOPMENT.md)の隔離runnerで行い、完全合成データ、一時DB、通信スタブのみを使います。評価専用資産は`evaluation/`と各領域の`eval/`に置き、定期処理から読み込みません。
 
 責務移動でもsource digestとcandidate fingerprintは変わります。新しい定義moduleを変更検知から外さず、古い候補/保留receiptの再判定と原文根拠の保持を合成テストで確認します。これを抽出世代・モデル・臨床判断の変更とは扱いません。
-
-全体の本文調査、統合テスト、独立レビューが未完の段階では、この文書だけを受入証跡や本番適用の許可として使用しないでください。確定した過去の受入票、変更archive、公式master原本は現在の候補に合わせて書き換えません。今回明示された端末固有値の除去は例外として一般化し、版・事故識別子・当時の判断と検証の意味を保持します。Git履歴や外部のRelease本文は変更していません。

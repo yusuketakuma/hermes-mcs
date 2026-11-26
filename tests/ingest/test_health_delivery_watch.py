@@ -58,6 +58,25 @@ def test_stale_delivery_records_remain_past_and_current_observation_has_own_time
     assert "止まっています" not in text and "再起動待ち" not in text
 
 
+@pytest.mark.parametrize(("reason", "detail"), [
+    ("observation_timeout", "起動状態の照会が時間切れ"),
+    ("launchd_pid_mismatch", "プロセスの識別番号を起動記録と照合できません"),
+    ("birth_mismatch", "プロセスの開始時刻を起動記録と照合できません"),
+])
+def test_alert_explains_worker_observation_separately_from_delivery(tmp_path, monkeypatch, reason, detail):
+    _health(tmp_path, at=1000)
+    value = _snapshot(4000)
+    value["worker"] = {"state": "unknown", "reason": reason, "started_at": None}
+    value["delivery"] = dict.fromkeys(value["delivery"])
+    value["delivery"].update(state="unknown", reason="database_busy")
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: value)
+    report = health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    text = "\n".join(health_watch._alert_lines(report))
+    assert f"worker 未確認（{detail}）" in text
+    assert "配送記録を読めません（データベースが応答しません）" in text
+    assert reason not in text
+
+
 def test_new_recorded_reason_in_same_stale_episode_alerts_once_without_becoming_current(tmp_path):
     _health(tmp_path, at=1000, reasons=["worker_restart_required"])
     first = health_watch.evaluate(str(tmp_path), 4000, cfg={})

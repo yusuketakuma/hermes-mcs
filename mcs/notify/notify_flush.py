@@ -28,6 +28,7 @@ import time
 from contextvars import ContextVar
 
 import collection_diagnostics
+import initial_import_state
 import mcs_util
 import notify_sender
 import mcs_signals
@@ -37,7 +38,7 @@ import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, file_sha256, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import (SECTION_RULE, extraction_failed, project_display_name, project_identity, signal_evidence,
+from notify_render import (SECTION_RULE, extraction_failed, live_notification_rows, project_display_name, project_identity, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
@@ -245,6 +246,8 @@ def _followup_files(ledger, payload: dict, project_id):
         (aid, project_id, project_id)).fetchone()
     if not a or a["state"] != "downloaded" or not a["local_path"]:
         raise semantic_send_gate.StaleSend("attachment_not_ready")
+    if initial_import_state.quiet_notification_ids(ledger.db, a["project_id"], [a["message_id"]]):
+        raise semantic_send_gate.StaleSend("initial_history")
     # a card's part journal already owns this file (planned, sent or
     # uncertain) — a second send would duplicate it. Held parts never
     # send; their thread failure re-queues this followup instead.
@@ -469,6 +472,7 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
             (mid, project_id, project_id)).fetchone()
         if r:
             rows.append(r)
+    rows = live_notification_rows(ledger.db, project_id, rows)
     if not rows:
         raise semantic_send_gate.StaleSend("messages_unavailable")
     return rows
@@ -826,11 +830,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     text_mode = (not notify_scope.interactive_enabled(cfg)
                  or (ev["kind"] == "attachment_followup"
                      and not notify_parts.late_attachment_thread(cfg)))
-    if ev["kind"] == "patient_history" and text_mode:
-        ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
-        res["parked"] += 1
-        return True
-    if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
+    if not sealed and ev["kind"] not in ("urgent_notice", "signal", "patient_history") and text_mode:
         if not _send_never_began(ev):
             reason = "thread_route_after_partial" if ev["kind"] == "attachment_followup" else "send_outcome_unknown"
             if _hold_if_snapshot(ledger, ev, cfg, reason, rescue=False):

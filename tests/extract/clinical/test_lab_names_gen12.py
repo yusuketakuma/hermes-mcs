@@ -705,6 +705,9 @@ _PANELS = [
     ("ナトリウム：137　カリウム：4.3", ("ナトリウム", "137"), ("カリウム", "4.3")),
     ("ナトリウム 140 カリウム 4.2 クロール 104", ("ナトリウム", "140")),
     ("ナトリウム 140 カリウム 4.2、クロール 104", ("ナトリウム", "140"), ("カリウム", "4.2")),
+    ("採血 カリウム 4.5、血清ナトリウム 140", ("カリウム", "4.5"), ("ナトリウム", "140")),
+    ("採血 カリウム 4.5，補正カルシウム 9.1", ("カリウム", "4.5"), ("カルシウム", "9.1")),
+    ("採血 カリウム 4.5、血清アルブミン 3.9 g/dL", ("カリウム", "4.5"), ("アルブミン", "3.9")),
     ("Na 140 カリウム 4.2", ("カリウム", "4.2")),
     ("ナトリウム 142，カリウム 4.1，カルシウム 9.3", ("ナトリウム", "142"), ("カリウム", "4.1"), ("カルシウム", "9.3")),
     ("ナトリウム 138 mEq/L カリウム 4.0", ("カリウム", "4.0")),
@@ -728,6 +731,72 @@ _PANELS = [
 ])
 def test_every_reading_of_a_panel_is_read(body, name, value):
     assert _confirmation(name, value, body) == "quote_supported"
+
+
+@pytest.mark.parametrize("tail", ["血清ナトリウム", "血清ナトリウム 1包", "補正ドライシロップは1mL"])
+def test_a_lab_qualifier_requires_a_named_result_after_the_comma(tail):
+    assert _confirmation("カリウム", "4.5", f"採血 カリウム 4.5、{tail}") == "unverified"
+
+
+@pytest.mark.parametrize("tail,expected", [
+    ("補正カルシウム 8.5未満なら連絡", "unverified"),
+    ("カルシウム 8.5以下で連絡", "unverified"),
+    ("血清ナトリウム 140、補正カルシウム 8.5未満なら連絡", "unverified"),
+    ("補正カルシウム 8.5なら連絡", "unverified"),
+    ("補正カルシウム 8.5、異常なし", "quote_supported"),
+    ("補正カルシウム 8.5、結果を主治医に共有しました", "quote_supported"),
+    ("補正カルシウム 8.5未満なら、結果を主治医に共有しました", "unverified"),
+    ("補正カルシウム 8.5でした、血清ナトリウム 130未満なら連絡", "quote_supported"),
+    ("血清ナトリウム 140、補正カルシウム 8.5", "quote_supported"),
+    ("補正カルシウム 8.5。次回8.0未満なら連絡", "quote_supported"),
+    ("補正カルシウム 8.5\n次回8.0未満なら連絡", "quote_supported"),
+])
+@pytest.mark.parametrize("unit", ["", "mEq/L"])
+def test_lab_panel_checks_the_last_result_before_accepting_an_earlier_one(tail, expected, unit):
+    body = f"カリウム 4.5{unit}、{tail}"
+    lab = _validated("カリウム", "4.5", unit or None, body)
+    assert lab["value"] == "4.5"
+    assert lab["normalized"]["confirmation"] == expected
+
+
+def test_short_quote_with_a_unit_cannot_hide_its_own_conditional():
+    raw = {"name": "カリウム", "value": "4.5", "unit": "mEq/L", "evidence": "カリウム 4.5mEq/L"}
+    lab, = extract_validation.validate({"labs": [raw]}, raw["evidence"] + "未満なら連絡")["labs"]
+    assert lab["unverified"] and lab["value"] == "4.5"
+
+
+@pytest.mark.parametrize("suffix", ["、分2", "未満なら連絡", "、ドライシロップは1mL",
+                                    "です、分2でお願いします。", "でした、朝夕食後", "です、ドライシロップ1包"])
+@pytest.mark.parametrize("short_quote", [False, True])
+def test_unitless_quote_cannot_hide_its_own_dose_or_threshold(suffix, short_quote):
+    reading = "カリウム 4.5"
+    body = reading + suffix
+    raw = {"name": "カリウム", "value": "4.5", "evidence": reading if short_quote else body}
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert lab["unverified"] and lab["value"] == "4.5"
+
+
+@pytest.mark.parametrize("unit", ["", "mEq/L"])
+@pytest.mark.parametrize("quoted_tail", ["", "、補正カルシウム 8.5"])
+@pytest.mark.parametrize("suffix,expected", [
+    ("未満なら連絡", "unverified"), ("、結果を主治医に共有しました", "quote_supported"),
+    ("。次回8.0未満なら連絡", "quote_supported"),
+    ("\n次回8.0未満なら連絡", "quote_supported"), ("でした", "quote_supported")])
+def test_short_quote_keeps_the_source_panels_condition(unit, quoted_tail, suffix, expected):
+    reading = f"カリウム 4.5{unit}"
+    body = reading + "、補正カルシウム 8.5" + suffix
+    evidence = reading + quoted_tail
+    raw = {"name": "カリウム", "value": "4.5", "unit": unit or None, "evidence": evidence}
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert lab["evidence"] == evidence
+    assert lab["normalized"]["confirmation"] == expected
+
+
+@pytest.mark.parametrize("unit", ["", "mEq/L"])
+def test_asserted_result_before_an_independent_conditional_clause(unit):
+    body = f"カリウム 4.5{unit}でした、補正カルシウム 8.5未満なら連絡"
+    assert _validated("カリウム", "4.5", unit or None, body)["normalized"]["confirmation"] == "quote_supported"
+    assert _confirmation("カルシウム", "8.5", body) == "unverified"
 
 
 # A reading with its own unit is never made a candidate by its neighbours.

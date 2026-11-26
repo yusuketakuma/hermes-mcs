@@ -449,17 +449,27 @@ def _common_policy_digest(common):
         sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
 
 
-def _check_common(raw, policy_hash):
-    """Hold unless config.json is the common policy the authority committed.
-
-    = provider_settings._read for verified provider files: the digest must match
-    and config.json must not also carry provider-owned values.
-    """
+def _check_common(raw, marker):
+    """Verify the common policy and, in format v3, the embedded provider documents."""
     common = _strict_json(raw)
-    if not isinstance(common, dict) or _common_policy_digest(common) != policy_hash:
+    if not isinstance(common, dict):
+        raise ValueError("provider_config_invalid")
+    if marker["version"] == 3:
+        providers = common.pop("provider_settings", None)
+        if not isinstance(providers, dict) or set(providers) != set(_PROVIDERS):
+            raise ValueError("provider_config_invalid")
+        for name, value in providers.items():
+            if not isinstance(value, dict):
+                raise ValueError("provider_config_invalid")
+            raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode("utf-8")
+            if hashlib.sha256(raw).hexdigest() != marker["files"][name]:
+                raise ValueError("provider_authority_invalid")
+    elif "provider_settings" in common:
+        raise ValueError("provider_config_ambiguous")
+    if _common_policy_digest(common) != marker["common_policy_sha256"]:
         raise ValueError("provider_authority_invalid")
     cloud, semantic = common.get("cloud_llm"), common.get("semantic")
-    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
+    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud or "provider_profiles" in cloud
             or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
             or isinstance(semantic, dict) and bool(semantic.keys() & {
                 "model", "daily_request_budget", "until", "attempt_timeout_seconds",
@@ -467,7 +477,7 @@ def _check_common(raw, policy_hash):
         raise ValueError("provider_config_ambiguous")
 
 
-def _authority_hashes(raw):
+def _authority_marker(raw):
     """Check the committed authority shape that provider_settings._read accepts."""
     authority = _strict_json(raw)
     required = {"version", "state", "files", "common_policy_sha256"}
@@ -475,7 +485,7 @@ def _authority_hashes(raw):
     if (not isinstance(authority, dict)
             or set(authority) not in (required, required | {"configuration_state"})
             or authority.get("configuration_state", "bootstrap") != "bootstrap"
-            or type(authority["version"]) is not int or authority["version"] != 2
+            or type(authority["version"]) is not int or authority["version"] not in (2, 3)
             or authority["state"] != "committed"
             or not isinstance(authority["common_policy_sha256"], str)
             or digest.fullmatch(authority["common_policy_sha256"]) is None
@@ -483,7 +493,19 @@ def _authority_hashes(raw):
             or any(not isinstance(value, str) or digest.fullmatch(value) is None
                    for value in authority["files"].values())):
         raise ValueError("provider_authority_invalid")
-    return authority["files"], authority["common_policy_sha256"]
+    return authority
+
+
+def _without_authority(root_fd):
+    """An embedded provider document requires its committed authority marker."""
+    try:
+        raw, _ = _private_bytes(root_fd, "config.json", private=False)
+        common = _strict_json(raw)
+    except FileNotFoundError:
+        return "legacy"
+    except (OSError, ValueError, TypeError, RecursionError):
+        return "provider_settings_unverified"
+    return "provider_settings_unverified" if isinstance(common, dict) and "provider_settings" in common else "legacy"
 
 
 def _provider_snapshot(root_fd, data_fd):
@@ -514,13 +536,17 @@ def _provider_snapshot(root_fd, data_fd):
             if entry.name in _PROVIDER_FIXED or entry.name.startswith(_PROVIDER_REMNANTS):
                 names.add(entry.name)
     if not names:
-        return "legacy"
+        return _without_authority(root_fd)
     if '.provider-settings-pending.json' in names or '.provider-settings-authority.json' not in names:
         raise ValueError("provider_authority_missing")
     raw, authority = _private_bytes(data_fd, '.provider-settings-authority.json')
-    hashes, policy_hash = _authority_hashes(raw)
-    raw, common = _private_bytes(root_fd, "config.json", private=False)   # missing -> OSError -> hold
-    _check_common(raw, policy_hash)
+    marker = _authority_marker(raw)
+    raw, common = _private_bytes(root_fd, "config.json", private=False)
+    _check_common(raw, marker)
+    single = marker["version"] == 3
+    snapshot = ("single" if single else "split", frozenset(names), authority, common)
+    if single and "provider_settings" not in names:
+        return snapshot
     settings_fd = os.open('provider_settings', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                           dir_fd=data_fd)
     try:
@@ -529,8 +555,14 @@ def _provider_snapshot(root_fd, data_fd):
             raise ValueError("provider_directory_invalid")
         files = []
         for name in _PROVIDERS:
+            if single:
+                try:
+                    os.stat(name + ".json", dir_fd=settings_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise ValueError("provider_config_ambiguous")
             raw, identity = _private_bytes(settings_fd, name + ".json")
-            if hashlib.sha256(raw).hexdigest() != hashes[name]:
+            if hashlib.sha256(raw).hexdigest() != marker["files"][name]:
                 raise ValueError("provider_authority_invalid")
             files.append(identity)
         named = os.stat('provider_settings', dir_fd=data_fd, follow_symlinks=False)
@@ -538,11 +570,11 @@ def _provider_snapshot(root_fd, data_fd):
             raise ValueError("provider_settings_changed")
     finally:
         os.close(settings_fd)
-    return (frozenset(names), authority, common, _file_identity(held), tuple(files))
+    return (*snapshot, _file_identity(held), tuple(files))
 
 
 def _provider_settings_state():
-    """'legacy', 'split' (settled and verified), or the reason to hold recovery.
+    """'legacy', verified 'split' or 'single', or the reason to hold recovery.
 
     Pending, bootstrap, incomplete, unprovable and changed-during-scan states
     hold. 'provider_directory_unverified' means the report path is untrusted.
@@ -566,7 +598,7 @@ def _provider_settings_state():
         try:
             data_fd = os.open(os.path.basename(mcs_recovery_core.DATA), flags, dir_fd=root_fd)
         except FileNotFoundError:
-            return unverified if os.path.lexists(mcs_recovery_core.DATA) else "legacy"
+            return unverified if os.path.lexists(mcs_recovery_core.DATA) else _without_authority(root_fd)
         try:
             before = os.fstat(data_fd)
             current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
@@ -592,7 +624,7 @@ def _provider_settings_state():
             if (anchor(before) != anchor(after) or anchor(after) != anchor(current)
                     or anchor(root_info) != anchor(root_after) or anchor(root_after) != anchor(root_current)):
                 return unverified
-            return first if isinstance(first, str) else "split"
+            return first if isinstance(first, str) else first[0]
         finally:
             os.close(data_fd)
     except OSError:
@@ -610,7 +642,7 @@ def _rendered_wrapper(head, path):
     return found is not None and found.returncode == 0
 
 
-def _split_checkout_hold(applying):
+def _split_checkout_hold(applying, *, single=False, head=None):
     """Why a settled split install must not take a watchdog route, or None.
 
     Like update_recovery under split settings: run only the current HEAD with
@@ -619,7 +651,7 @@ def _split_checkout_hold(applying):
     """
     if isinstance(applying, dict) and applying.get("rollback"):
         return "provider_rollback_hold"
-    head = mcs_recovery_core._head()
+    head = mcs_recovery_core._head() if head is None else head
     if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head) is None:
         return "provider_checkout_hold"
     for name in _SPLIT_READERS:
@@ -637,6 +669,16 @@ def _split_checkout_hold(applying):
             and not _rendered_wrapper(head, path)
             for path in extras.stdout.split("\0")):
         return "provider_checkout_hold"
+    forward = isinstance(applying, dict) and applying.get("sha") == head
+    if single or forward:
+        capability = mcs_recovery_core._git(["grep", "-q", "-E", "-e", "^SINGLE_FILE_AUTHORITY_VERSION = 3$",
+                                             head, "--", "mcs/core/provider_settings.py"])
+        if (capability is None or capability.returncode not in (0, 1)
+                or single and capability.returncode != 0):
+            return "provider_checkout_hold"
+        if forward and not single and capability.returncode == 0:
+            # A v2 parent omits the migration flag. Only the target updater can complete the v3 write.
+            return "provider_migration_pending" if mcs_recovery_core._head() == head else "provider_checkout_hold"
     return None if mcs_recovery_core._head() == head else "provider_checkout_hold"
 
 
@@ -656,7 +698,7 @@ _HOLD_TEXT = {
                                "split settings need an unmodified checkout with settings readers at HEAD"),
     "provider_rollback_hold": ("提供元別設定の導入先では、独立監視は巻戻しを続けません。mcs_update.py recover で復旧してください。",
                                "split settings rollback is left to the target updater"),
-    "provider_migration_pending": ("提供元設定の初回分離を確認できないため復旧を保留します。移行先の版の mcs_update.py recover で復旧してください。",
+    "provider_migration_pending": ("提供元設定の移行完了を確認できないため復旧を保留します。移行先の版の mcs_update.py recover で復旧してください。",
                                    "provider migration requires target updater recovery; writer status unverified"),
     "release_entry_hold": ("リリース管理の記録があるか、その管理フォルダーを確認できないため、独立復旧監視は復旧を保留します。"
                            "記録を削除せず、mcs_update.py status で確認してください。",
@@ -792,7 +834,7 @@ def _recover_legacy(if_stale=False):
         _clear_hold()
         return 0                            # nothing to recover in any provider settings state
     provider_state = _provider_settings_state()
-    if provider_state not in ("legacy", "split"):
+    if provider_state not in ("legacy", "split", "single"):
         return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
     upd_fd = mcs_recovery_core._try_lock(mcs_recovery_core.UPDATE_LOCK)
     if upd_fd is None:
@@ -817,7 +859,7 @@ def _recover_legacy(if_stale=False):
         state = mcs_recovery_core._load_state()               # fresh view under the locks
         record = not (if_stale and _journal_fresh(state))
         provider_state = _provider_settings_state()
-        if provider_state not in ("legacy", "split"):
+        if provider_state not in ("legacy", "split", "single"):
             return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
         if _settings_migration_pending():
             return _hold("settings_migration_hold", 2, record=record)
@@ -862,8 +904,10 @@ def _recover_legacy(if_stale=False):
                           "常駐処理の状態は未確認です。移行先の版の更新ツール"
                           "（mcs_update.py recover）で復旧してください")
             return 1
-        if provider_state == "split":
-            reason = _split_checkout_hold(applying)
+        provider_head = None
+        if provider_state in ("split", "single"):
+            provider_head = mcs_recovery_core._head()
+            reason = _split_checkout_hold(applying, single=provider_state == "single", head=provider_head)
             if reason == "provider_checkout_hold":
                 # Keep an existing marker but never create one: an apply that
                 # died before quiesce left writers running, and no tool would
@@ -1027,6 +1071,8 @@ def _recover_legacy(if_stale=False):
             return _finish(state, "interrupted_pre_merge", removed)
 
         head = mcs_recovery_core._head()
+        if provider_head is not None and head != provider_head:
+            return _hold("provider_checkout_hold", 1)
         if ("provider_settings_migration_required" in applying
                 and applying.get("rollback") is not True
                 and (not head or head != prev or head == target)):

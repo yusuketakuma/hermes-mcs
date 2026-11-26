@@ -455,6 +455,11 @@ def test_denied_or_cancelled_lab_plan_is_not_projected(suffix, short_quote):
     ("、中止するのは例の処置のみ。", "planned", "unknown"),
     ("、中止するのは点滴、クレアチニンも。", "planned", "unknown"),
     ("なら、中止するのは点滴のみ。", "conditional", "plan"),
+    ("なら、中止するのはこの検査のみ。", "conditional", "unknown"),
+    ("なら、中止するのは例の処置のみ。", "conditional", "unknown"),
+    ("なら、実施するか確認中。", "conditional", "unknown"),
+    ("なら、中止するのは点滴のみで、この検査は実施する？", "conditional", "unknown"),
+    ("なら、中止するのは点滴のみ。", "current", "unknown"),
 ])
 @pytest.mark.parametrize("short_quote", [False, True])
 def test_lab_plan_checks_its_own_affirmative_predicate(suffix, status, expected, short_quote):
