@@ -69,7 +69,8 @@ def acquire_run_lock(path: str | None = None) -> int | None:
 
     Returns the open fd — the lock lives as long as the fd stays open
     (hold it in main() scope; process exit releases it). Returns None
-    when another writer holds it. Every entry point that writes the
+    when another writer holds it; any other error from opening or locking
+    the file closes the fd and propagates. Every entry point that writes the
     ledger must hold this lock so a manual CLI can never interleave
     writes with a scheduled tick. The one documented exception is the
     resident extract_llm drainer, which takes it per result write and
