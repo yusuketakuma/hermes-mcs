@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "電解質の服薬量を検査値と誤認する問題を修正",
+  "summary": "単位のない電解質の数値に読点を挟んで服薬の回数や飲み方だけが続くときは、検査値として確定せず、元の値を未確認の候補として残します。",
+  "upgrade": "設定変更は不要です。",
+  "details": [
+    "読点の後ろが別の検査項目や薬名を明記した処方の場合は、手前の検査値を従来どおり判定します。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/clinical_values.py",
+    "tests/extract/clinical/test_electrolyte_prescription_lines.py"
+  ]
+}
