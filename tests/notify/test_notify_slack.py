@@ -496,3 +496,81 @@ def test_sealed_discord_intent_under_slack_config_holds_instead_of_hourly_foreve
             assert attempts == attempt + 1 and next_try is not None
     assert next_try is None  # held: out of outbox_due, surfaced by health
     assert notify_flush.flush(led)["failed"] == 0
+
+
+def _legacy_mixed_thread(led, prior_result=None, second_event=False):
+    import initial_import_state
+    from notify_testkit import _msg, _patient
+
+    _patient(led)
+    _msg(led, 100, body="合成の日時不明親")
+    _msg(led, 101, parent=100, body="合成の新着返信")
+    with led.db:
+        led.db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=100")
+    event = _intent(led)
+    assert _dispatch(led, event, SLACK)["cards"] == 2
+    if second_event:
+        _msg(led, 102, parent=100, body="合成の別返信")
+        other = _intent(led, payload={"message_ids": [102]})
+        assert _dispatch(led, other, SLACK)["cards"] == 2
+    if prior_result:
+        root = _latest_render(led)
+        assert _drain(led, _command(root))["granted"]
+        if prior_result != "granted":
+            remote = "1790000000.000123" if prior_result == "delivered" else None
+            assert _drain(led, _command(root, "transport_receipt",
+                                       result=prior_result, message_id=remote))["applied"]
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+    return event, _latest_render(led)
+
+
+@pytest.mark.parametrize("deny_first", [False, True])
+def test_queued_slack_reply_to_legacy_undated_root_delivers_once(led, deny_first):
+    import asyncio
+    from slack_testkit import _granted_card, _mkworld
+
+    event, old_root = _legacy_mixed_thread(led)
+    if deny_first:
+        assert _drain(led, _command(old_root))["error"] == "denied_history_notification_disabled"
+    _dispatch(led, event, SLACK)
+    _dispatch(led, event, SLACK)
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    cards.sweep(led, SLACK, now=NOW + 10)
+    _dispatch(led, event, SLACK)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    posts = [kwargs for kind, kwargs in world.client.calls if kind == "create"]
+    assert len([post for post in posts if "thread_ts" not in post]) == 1
+    assert sum("合成の新着返信" in post.get("text", "") for post in posts) == 1
+    assert "合成の日時不明親" not in json.dumps(world.client.calls, ensure_ascii=False)
+    assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
+                          (event["event_id"],)).fetchone()[0] == "accepted"
+
+
+@pytest.mark.parametrize("prior_result", ["granted", "unknown", "delivered"])
+def test_legacy_thread_with_send_evidence_keeps_original_route(led, prior_result):
+    event, root = _legacy_mixed_thread(led, prior_result)
+    for _ in range(2):
+        _dispatch(led, event, SLACK)
+        cards.sweep(led, SLACK, now=NOW + 10)
+    assert _latest_render(led)["delivery_id"] == root["delivery_id"]
+    assert _latest_render(led)["state"] == root["state"]
+    assert led.db.execute("SELECT state FROM notification_delivery_attempts WHERE delivery_id=?",
+                          (root["delivery_id"],)).fetchone()[0] == prior_result
+    assert not led.db.execute("SELECT 1 FROM notification_cards WHERE root_message_id=101").fetchone()
+
+
+def test_upgrading_one_event_preserves_another_reply_waiting_on_the_same_root(led):
+    first, _ = _legacy_mixed_thread(led, second_event=True)
+    second = led.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages' AND event_id!=?",
+                            (first["event_id"],)).fetchone()
+    _dispatch(led, first, SLACK)
+    assert led.db.execute("SELECT state FROM notification_intent_cards WHERE event_id=? AND card_id=1",
+                          (second["event_id"],)).fetchone()[0] == "pending"
+    _dispatch(led, second, SLACK)
+    for event, reply in [(first, 101), (second, 102)]:
+        live = led.db.execute(
+            "SELECT c.root_message_id FROM notification_cards c JOIN notification_intent_cards i USING(card_id) "
+            "WHERE i.event_id=? AND i.state='pending'", (event["event_id"],)).fetchall()
+        assert [row[0] for row in live] == [reply]
