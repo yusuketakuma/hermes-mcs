@@ -328,6 +328,37 @@ def context_workers(limit, backlog_open):
     return min(CONTEXT_WORKERS_MAX, limit - 1 if backlog_open and limit > 1 else limit)
 
 
+def _backlog_admission(root, cfg, settings, ledger, route):
+    """Return an optional message restriction and the reason work must wait."""
+    import cloud_policy
+    selection, errors = cloud_policy.resolve_profile(
+        cfg, route=route, purpose="backlog", root=root, ledger=ledger, ordered=True)
+    if selection is not None and not errors:
+        return None, None
+    reason = errors[0] if errors else "cloud_profile_unavailable"
+    if (ledger is None or selection is None or cloud_policy.cloud_config(cfg)[0]["provider"] != "auto"
+            or not cloud_policy.reextract_planned(settings)
+            or not any(name != selection["provider"] and cloud_policy.provider_key(name, root)
+                       for name in settings["provider_order"])):
+        return None, reason
+
+    # New requests wait for the primary. An open QC attempt already owns its provider.
+    from extract_llm_qc import _open_attempt_contracts
+    from extract_llm_store import _open_cloud_attempts
+    allowed = set()
+    for row in _open_cloud_attempts(ledger.db):
+        if not cloud_policy.in_scope(settings, "reextract", row["project_id"]):
+            continue
+        pins = _open_attempt_contracts(ledger.db, row)
+        if not pins or not pins[0] or any(pin != pins[0] for pin in pins):
+            continue
+        state = cloud_policy.resolve_contract(cfg, pins[0], route="reextract", purpose="backlog",
+                                              root=root, ledger=ledger, wait=False)
+        if state.state == "usable" and cloud_policy.in_scope(state.settings, "reextract", row["project_id"]):
+            allowed.add(row["message_id"])
+    return (allowed, None) if allowed else (None, reason)
+
+
 def backlog_admits(root, cfg, settings, ledger):
     """Whether a reopened stored-message window, its key and its profile let backlog workers run."""
     import cloud_policy
@@ -339,10 +370,9 @@ def backlog_admits(root, cfg, settings, ledger):
     if not (extract_open or semantic_open) or not cloud_policy.selected_key(root):
         # Existing workers settle paid carry before retiring.
         return False
-    selection, errors = cloud_policy.resolve_profile(
-        cfg, route="reextract" if extract_open else "semantic_backlog",
-        purpose="backlog", root=root, ledger=ledger, ordered=True)
-    return not errors and selection is not None
+    _, reason = _backlog_admission(root, cfg, settings, ledger,
+                                   "reextract" if extract_open else "semantic_backlog")
+    return reason is None
 
 
 def _backlog_open(root, cfg, settings, ledger):
@@ -770,22 +800,22 @@ def worker(parent, *, index=None, context_only=False):
                         return
                 if routes_open and not (semantic_open if phase % 2 else extract_open):
                     phase += 1
-                selection, errors = cloud_policy.resolve_profile(
-                    cfg, route="semantic_backlog" if phase % 2 else "reextract",
-                    purpose="backlog", ledger=ledger, ordered=True)
                 if settings["mode"] != "on":
                     wait("cloud_mode_off")
                     continue
                 if not routes_open:
                     wait("cloud_route_closed")
                     continue
-                if errors or selection is None:
-                    blocked = errors[0] if errors else None
-                    if not blocked or str(blocked).startswith("config:"):
+                resume_ids, blocked = _backlog_admission(
+                    HOME, cfg, settings, ledger, "semantic_backlog" if phase % 2 else "reextract")
+                if blocked:
+                    if blocked.startswith("config:") or blocked == "cloud_profile_unavailable":
                         wait("cloud_profile_unavailable")
                     else:
                         wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
                     continue
+                if resume_ids is not None and phase % 2:
+                    phase += 1
                 started = time.monotonic()
                 try:
                     if phase % 2 == 0:
@@ -794,7 +824,7 @@ def worker(parent, *, index=None, context_only=False):
                             result = None
                             try_ocr, ocr_turn = ocr_turn, not ocr_turn
                             # attachment pages never reopen with the stored-message backlog
-                            if (try_ocr and not carry and cloud_policy.send_route("reextract")
+                            if (try_ocr and resume_ids is None and not carry and cloud_policy.send_route("reextract")
                                     and isinstance(cfg.get('attachment_ocr'), dict)
                                     and cfg['attachment_ocr'].get('enabled') is True):
                                 import attachment_inference
@@ -803,10 +833,13 @@ def worker(parent, *, index=None, context_only=False):
                                 if ocr['done'] or ocr['deferred']:
                                     result = {**ocr, 'attachment_pages': True}
                             if result is None:
+                                admitted = extract_llm.cloud_backlog_admissions(ledger, cfg)
+                                if resume_ids is not None:
+                                    admitted = resume_ids if admitted is None else admitted & resume_ids
                                 result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
                                     per_write_lock=True, workers=1, background=True,
                                     cloud_only=True, prioritize_patients=True,
-                                    admitted_ids=extract_llm.cloud_backlog_admissions(ledger, cfg), carry=carry)
+                                    admitted_ids=admitted, carry=carry)
                         carry = result.get("carry", carry)
                         if result.get("updated"):
                             allow_exit_settle = False

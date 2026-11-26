@@ -436,14 +436,9 @@ def select_settings(cfg, key_present, transfer_status, *, pinned=None):
 def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=False):
     """Resolve one explicit use to a bounded, immutable provider selection.
 
-    With ``ordered`` the selection is always the configured provider's own:
-    the installation's key belongs to that provider alone, so a unit can only
-    ever send through it — a fallback entry could never leave the wire even
-    when its budget is clean. When that provider's model is globally stopped
-    or over budget the selection is still returned beside the block reason:
-    a unit keeps the ordered contract it was reserved under, history matching
-    uses it, and send-time admission reports the same reason again. The
-    reason never authorizes a new reservation or send."""
+    Ordered selection keeps an unpinned request on its selected provider.
+    Its selection remains available for history matching while sends are
+    blocked. Already pinned QC requests use resolve_contract independently."""
     settings, errors = resolve_settings(cfg, root)
     if errors:
         return None, errors
