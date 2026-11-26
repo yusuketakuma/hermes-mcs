@@ -2,8 +2,9 @@
 """Auto-metrics benchmark for the semantic pipeline (Phase J tooling).
 
 Runs the local extract -> summarize -> audit_code path on a FROZEN
-corpus of fully synthetic fixtures and reports finding-code rates, so prompt or
-model changes can be A/B compared without human labeling. A `detect`
+corpus of fully synthetic fixtures with the currently configured models and
+reports finding-code rates, so runs before and after a prompt or configured-model
+change can be A/B compared without human labeling (`--tag` only labels a run). A `detect`
 subcommand sends synthetic bad-claim probes through audit_claims with
 the real Jev client to measure detection capability.
 
