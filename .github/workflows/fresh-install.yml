@@ -68,6 +68,8 @@ jobs:
             if [ -e "$path" ]; then echo "unexpected: $path"; exit 1; fi
           done
           ls ~/Library/LaunchAgents 2>/dev/null || true
+      - name: preflight
+        run: ./install.sh --mode "$MODE" --no-llm --preflight 2>&1 | tee "$LOG/preflight.txt"
       - name: existing registration blocks install before any config write
         run: |
           # 既存の MCS 登録がある環境では、初回導入は設定を作る前に止まらなければならない。
@@ -84,8 +86,6 @@ jobs:
           grep -q '既存の MCS の処理または登録を検出しました' "$LOG/conflict-install.txt" \
             || { echo "conflict wording missing"; exit 1; }
           rm -f ~/Library/LaunchAgents/ai.mcs.synthetic-conflict.plist
-      - name: preflight
-        run: ./install.sh --mode "$MODE" --no-llm --preflight 2>&1 | tee "$LOG/preflight.txt"
       - name: install
         run: |
           # ローカル AI（約5.7 GBのモデル）は取得しない。それ以外は既定どおり。

@@ -233,7 +233,7 @@ def test_recommended_wizard_preserves_unasked_values_and_asks_changed_defaults(m
     }
     asked = []
 
-    def answer(key, kind, default, desc, cur, present=False):
+    def answer(key, kind, default, desc, cur, present=False, *, allow_back=False):
         asked.append(key)
         if key == "setup_detail":
             return "recommended"
@@ -267,7 +267,7 @@ def test_recommended_wizard_keeps_explicit_notification_choices(monkeypatch):
            "notify": {"interactive": "slack", "card_thread": False, "slack": {
                "profile": "synthetic", "application_id": "A1", "team_id": "T1",
                "channel_id": "C12345678"}}}
-    monkeypatch.setattr(setup_wizard, "ask", lambda key, kind, default, desc, cur, present=False:
+    monkeypatch.setattr(setup_wizard, "ask", lambda key, kind, default, desc, cur, present=False, *, allow_back=False:
                         "recommended" if key == "setup_detail" else
                         cur if present else default if default is not None else setup_wizard.UNSET)
     setup_wizard.wizard(cfg)
