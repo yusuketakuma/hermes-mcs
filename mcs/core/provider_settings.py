@@ -18,7 +18,6 @@ import uuid
 
 from mcs_util import CONFIG_MAX_BYTES, _provider_artifact_present, _weak_warned, canonical, strict_json, until_epoch
 from safe_io import create_exclusive, fdopen_owned
-from llm_retry import CLOUD_MAX_ATTEMPTS
 
 
 PROVIDERS = ("anthropic", "openai", "jev")

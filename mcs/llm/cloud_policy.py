@@ -2356,10 +2356,10 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
                 "FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
                 "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
-                "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding') IS NOT NULL AND "
+                "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding')=? AND "
                 "json_extract(meta,'$.logical_request_fp')=? AND json_extract(meta,'$.model')=? AND "
                 "json_extract(meta,'$.effort') IS ? END ORDER BY artifact_id",
-                (KINDS[0], project_id, message_id, route, unit_key,
+                (KINDS[0], project_id, message_id, route, unit_key, input_binding,
                  logical_request_fp, model, effort)).fetchall()
         if route == 'reextract' and message_id is None and owner is not None and valid_hash(scope):
             from attachment_cloud_identity import recovery_rows
