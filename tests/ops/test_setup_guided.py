@@ -47,7 +47,7 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     assert 'cloud_llm' not in cfg
     cloud, errors = cloud_policy.cloud_config(cfg, key_present=True)
     assert errors == [] and cloud['mode'] == 'on'
-    assert (cloud['daily_cost_limit_usd'], cloud['monthly_cost_limit_usd']) == (40, 200)
+    assert (cloud['daily_cost_limit_usd'], cloud['monthly_cost_limit_usd']) == (80, 350)
     assert cloud_policy.cloud_config(cfg, key_present=False)[0]['mode'] == 'off'
     assert cfg['notify']['slack']['allowed_user_ids'] == ['U1234567890']
     assert cfg['notify']['slack']['project_ids'] == [101]

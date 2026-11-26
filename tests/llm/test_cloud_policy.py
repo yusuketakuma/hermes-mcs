@@ -618,7 +618,7 @@ def test_key_based_auto_mode_preserves_explicit_scope_budget_and_off():
     assert not errors and normalized["project_ids"] == [] and normalized["daily_request_budget"] == 0
 
 
-@pytest.mark.parametrize("daily,monthly", [(None, None), (0, 0), (1.5, 30)])
+@pytest.mark.parametrize("daily,monthly", [(None, None), (0, 0), (1.5, 30), (25, 75)])
 def test_explicit_cost_caps_survive_normalization_and_keep_scope(daily, monthly):
     cfg = _cfg(mode="off", daily_cost_limit_usd=daily, monthly_cost_limit_usd=monthly,
                exclude_project_ids=[2], daily_request_budget=0)
@@ -636,8 +636,8 @@ def test_missing_cost_caps_follow_defaults_without_pinning_config(block):
     cfg = {"cloud_llm": dict(block)}
     normalized, errors = c.cloud_config(cfg, key_present=True)
     assert errors == [] and normalized["mode"] == "on"
-    assert normalized["daily_cost_limit_usd"] == block.get("daily_cost_limit_usd", 40)
-    assert normalized["monthly_cost_limit_usd"] == block.get("monthly_cost_limit_usd", 200)
+    assert normalized["daily_cost_limit_usd"] == block.get("daily_cost_limit_usd", 80)
+    assert normalized["monthly_cost_limit_usd"] == block.get("monthly_cost_limit_usd", 350)
     assert cfg == {"cloud_llm": block}
     assert c.cloud_config(cfg, key_present=False)[0]["mode"] == "off"
 

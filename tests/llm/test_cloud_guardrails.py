@@ -26,7 +26,8 @@ def now(monkeypatch):
 def test_key_only_sending_requires_a_cost_cap():
     on, errors = c.cloud_config({}, key_present=True)
     assert errors == [] and on["mode"] == "on" and on["project_ids"] is None
-    assert (on["daily_cost_limit_usd"], on["monthly_cost_limit_usd"]) == (40, 200)
+    assert (on["daily_cost_limit_usd"], on["monthly_cost_limit_usd"]) == (80, 350)
+    assert on["provider_budgets"] == {}
     uncapped = {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}
     off, errors = c.cloud_config({"cloud_llm": uncapped}, key_present=True)
     assert errors == [c.COST_LIMIT_REQUIRED] and off["mode"] == "off"
@@ -242,7 +243,7 @@ def test_doctor_shows_the_run_window_and_planning_assumes_a_cap(tmp_path, now):
     # Planning estimates what a capped auto mode would do; sending now is a separate decision.
     planning = c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True, require_cost_limit=False)
     assert planning == c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True)
-    assert (planning[0]["daily_cost_limit_usd"], planning[0]["monthly_cost_limit_usd"]) == (40, 200)
+    assert (planning[0]["daily_cost_limit_usd"], planning[0]["monthly_cost_limit_usd"]) == (80, 350)
 
 
 def test_jev_window_uses_the_target_roots_config_at_reservation_and_before_each_attempt(tmp_path, monkeypatch, now):

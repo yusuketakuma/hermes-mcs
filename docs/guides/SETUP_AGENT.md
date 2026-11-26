@@ -96,7 +96,7 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は
   保持し、キーがない場合は送信しません。
 
-OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復、およびownerが開いた`semantic_backlog` window内の意味解析backlog送信に限ります。意味解析ではrealtime laneと、対象threadのいずれかのmemberが新着・通知・編集から10分以内のものはcloudへ送らず、facts抽出は専用backlog worker、summary生成はwindow内のbacklog処理が送ります。添付OCRへの新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。AnthropicとOpenAIを合わせた費用上限の既定値は1日40ドル・1か月200ドルです。
+OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復、およびownerが開いた`semantic_backlog` window内の意味解析backlog送信に限ります。意味解析ではrealtime laneと、対象threadのいずれかのmemberが新着・通知・編集から10分以内のものはcloudへ送らず、facts抽出は専用backlog worker、summary生成はwindow内のbacklog処理が送ります。添付OCRへの新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。AnthropicとOpenAIを合わせた費用上限の既定値は1日80ドル・1か月350ドルです。
 
 質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
 コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
