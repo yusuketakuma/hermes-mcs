@@ -475,7 +475,6 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize('interruption,long_answer', [('budget', False), ('not_sent', False), ('budget', True)])
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption, long_answer):
     """The repair answer stays provable up to its reservation's read bound (over 256KiB too)."""
     import bounded_http
@@ -500,13 +499,21 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
             if long_answer:
                 value += ' ' * bounded_http.MAX_RESPONSE_BYTES
             rid = 'a' * 32
-            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
-                                         meta={'reservation_id': rid})
             mids = db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
                                  'AND (message_id=1 OR parent_id=1) ORDER BY message_id').fetchall()
             occurrences = [(row[0], inference_dependency_loss.source_binding(db.db, 1, row[0])) for row in mids]
+            # The verification matches production rows: the owner carries the execution
+            # generation of this configuration, the reservation names its route, and a
+            # settled result row proves the send.
+            generation = semantic_runtime.execution_generation(
+                semantic_policy.runtime_config(cfg)[0])
             owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
-                     'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
+                     'semantic_generation': generation, 'semantic_source': mcs_util.payload_hash(occurrences)}
+            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                         meta={'reservation_id': rid, 'route': 'semantic_backlog',
+                                               'owner': owner})
+            db.artifact_add('cloud_usage_result', '{}', project_id=1, message_id=1,
+                            meta={'reservation_id': rid})
             state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
                          receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
                                   'max_tokens': 32768})
@@ -557,7 +564,9 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         audit_row = semantic_store.current_artifact(db.db, 'semantic_audit', 1, fp, policy)
         assert pending['content']['audit_status'] == 'PENDING'
         assert audit_row['meta']['repair_count'] == 1 and audit_row['meta']['claim_input_binding']
-        pending_producer = semantic_drain._summary_producer(pending, fp, policy, revision, db=db.db, bundle=bundle)
+        generation = semantic_runtime.execution_generation(semantic_policy.runtime_config(cfg)[0])
+        pending_producer = semantic_drain._summary_producer(pending, fp, policy, revision, db=db.db, bundle=bundle,
+                                                            project_id=1, message_id=1, generation=generation)
         assert pending_producer['complete'] is True and pending_producer['repair_render_phase'] == 'pending'
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
@@ -565,7 +574,11 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
                                        jev_client=client, llm_fn=llm)
         assert second['done'] == 1 and state['repairs'] == 1
         final = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
-        producer = semantic_drain._summary_producer(final, fp, policy, revision, db=db.db, bundle=bundle)
+        # Verify with the full identity the production passes use: the settled
+        # reservation rows written at repair time must match the cloud verification.
+        generation = semantic_runtime.execution_generation(semantic_policy.runtime_config(cfg)[0])
+        producer = semantic_drain._summary_producer(final, fp, policy, revision, db=db.db, bundle=bundle,
+                                                    project_id=1, message_id=1, generation=generation)
         assert producer['complete'] is True and producer['repair_render_phase'] == 'rendered'
         assert final['meta']['provider_provenance']['jev'] == 'done'
         assert final['content']['mandatory_facts'] and state['requests'] == ['a' * 32]
