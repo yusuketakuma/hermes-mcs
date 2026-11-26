@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "クラウドのordered解決がフォールバックproviderを選んで誤ったunitが保留される構造を修正",
-  "summary": "クラウド推論のordered解決は、primary providerが課金上限などで停止するとprovider_orderの次のproviderに落ちる設計でした。しかし送信に使う鍵は常にprimaryのものであり、フォールバックproviderが選ばれても実際には送信できません。選ばれたunitは送信不能なまま誤ったproviderで予約・保留され、最長6時間保持される構造でした。ordered解決は常にprimary自身のselectionを返すようになり、primaryが停止中ならそのselectionとprimary固有の停止理由を返します。返されるselectionは履歴照合のためのもので、新規予約や送信の許可には使われません。",
+  "summary": "クラウド推論のordered解決は、primary providerが課金上限などで停止するとprovider_orderの次のproviderに落ちる設計でした。しかし送信鍵は常にprimaryのもので、選ばれたunitは送信不能なまま誤ったproviderで予約・保留され、最長6時間保持される構造でした。ordered解決は常にprimary自身のselectionを返し、primary停止中はそのselectionとprimary固有の停止理由を返します。返されるselectionは履歴照合専用で、新規予約や送信の許可には使われません。",
   "upgrade": "追加操作は不要です。通常送信とproviderの選択時点は従来どおりです。変わるのはprimaryの課金停止中の扱いで、primary固有の停止理由が報告され、送信不能なまま誤って予約・保留されることがなくなります。",
   "details": [
     "primaryが停止していない場合の動作は変わりません。",
