@@ -99,6 +99,24 @@ def test_retries_reserve_each_http_and_preserve_unknown_attempt(home):
     assert len(sent) == 2 and _used(home) == 2
 
 
+def test_lost_response_retries_within_budget_and_keeps_its_reservations(home):
+    # An uncertain failure — the response may be lost after the server counted the
+    # request — is retried within the deadline like any transport failure, every
+    # attempt billed: the budget, not the error kind, bounds the resends.
+    (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": 2}}))
+    sent = []
+
+    def lost(*args):
+        sent.append(1)
+        raise OSError("synthetic lost response")
+
+    with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=lost) as client:
+        with pytest.raises(jev.JevError, match="budget_exceeded") as raised:
+            _evaluate(client)
+    assert raised.value.retryable is False
+    assert len(sent) == 2 and _used(home) == 2
+
+
 def test_lost_response_retry_stops_at_the_bounded_ceiling(home):
     (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": CLOUD_MAX_ATTEMPTS}}))
     sent = []
