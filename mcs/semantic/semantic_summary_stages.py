@@ -104,7 +104,7 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                       "semantic_generation": generation, "semantic_phase": "summary"}
     try:
         rows = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve' "
-                          "AND project_id=? AND message_id=?", (pid, mid)).fetchall()
+                          "AND project_id=? AND message_id=? ORDER BY artifact_id", (pid, mid)).fetchall()
     except sqlite3.Error:
         return False
     for row in rows:
@@ -119,8 +119,10 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
         try:
             import cloud_policy
             cloud_policy.reservation_evidence(db, row["artifact_id"])
-        except (sqlite3.Error, ValueError):
+        except sqlite3.Error:
             return False
+        except ValueError:
+            continue
         return True
     return False
 

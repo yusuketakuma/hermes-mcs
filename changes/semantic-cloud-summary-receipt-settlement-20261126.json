@@ -5,6 +5,7 @@
   "upgrade": "追加操作は不要です。不完全または重複したcloud receiptしか残っていないsummaryはcloud由来とみなされず、必要な場合は再生成されます。",
   "details": [
     "summaryのprovider provenance検証で、reservation idの一致だけでなくcloud accountingのsettled receipt検証を通ることを必須にしました。",
+    "失敗したattemptのreceiptが先に残っていても、同じinference requests内の後続のsettled receiptを検証します。",
     "修復済みsummaryは、従来どおり修復時のprompt・回答・owner・contractに結び付いたreceipt検証でcloud由来を証明します。"
   ],
   "refs": [

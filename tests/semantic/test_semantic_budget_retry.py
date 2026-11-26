@@ -560,7 +560,8 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         audit_row = semantic_store.current_artifact(db.db, 'semantic_audit', 1, fp, policy)
         assert pending['content']['audit_status'] == 'PENDING'
         assert audit_row['meta']['repair_count'] == 1 and audit_row['meta']['claim_input_binding']
-        pending_producer = semantic_drain._summary_producer(pending, fp, policy, revision, db=db.db, bundle=bundle)
+        pending_producer = semantic_drain._summary_producer(pending, fp, policy, revision, db=db.db, bundle=bundle,
+                                                                project_id=1, message_id=1, generation=generation)
         assert pending_producer['complete'] is True and pending_producer['repair_render_phase'] == 'pending'
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
@@ -568,7 +569,8 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
                                        jev_client=client, llm_fn=llm)
         assert second['done'] == 1 and state['repairs'] == 1
         final = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
-        producer = semantic_drain._summary_producer(final, fp, policy, revision, db=db.db, bundle=bundle)
+        producer = semantic_drain._summary_producer(final, fp, policy, revision, db=db.db, bundle=bundle,
+                                                        project_id=1, message_id=1, generation=generation)
         assert producer['complete'] is True and producer['repair_render_phase'] == 'rendered'
         assert final['meta']['provider_provenance']['jev'] == 'done'
         assert final['content']['mandatory_facts'] and state['requests'] == ['a' * 32]
