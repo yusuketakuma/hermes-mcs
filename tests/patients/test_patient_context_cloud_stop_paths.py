@@ -22,6 +22,7 @@ import patient_context_refresh as refresh
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_state as state
 from inference_version import CURRENT_VERSION, VERSION_KEY
+from llm_retry import CLOUD_MAX_ATTEMPTS
 from test_cloud_entry_recovery import unrelated_reservation
 from test_context_cloud_update_identity import cloud, finish, real_cloud, runtime
 from test_patient_context_refresh import seed, step
@@ -91,7 +92,7 @@ def _scan_done(ledger):
 
 def _drain(runtime, cfg, *, limit=40, until=None, **kw):
     """Step until the context is complete (or ``until`` holds); the outcomes of every pass."""
-    ledger, _, _ = runtime
+    ledger, clock, _ = runtime
     outcomes = []
     clock = runtime[1]
     for _ in range(limit):
@@ -236,15 +237,15 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     model = state._route(cfg, 1)['provider']['model']
 
     def script(index, payload, limit):
-        if failure in ('transport', 'timeout'):
-            # An uncertain failure permits bounded in-pass retries, each billed: the
-            # fallback path is exercised only when every bounded attempt fails.
-            if index < 6:
-                return OSError('synthetic uncertain transport') if failure == 'transport' \
-                    else TimeoutError('synthetic timeout')
+        persistent = failure in ('transport', 'timeout')
+        # An uncertain failure permits bounded in-pass retries, each billed: the
+        # fallback path is exercised only when every bounded attempt fails.
+        if index >= (CLOUD_MAX_ATTEMPTS if persistent else 1):
             return None
-        if index:
-            return None
+        if failure == 'transport':
+            return OSError('synthetic uncertain transport')
+        if failure == 'timeout':
+            return TimeoutError('synthetic timeout')
         if failure == 'too_large':
             return 200, {}, b'x' * (limit + 1)
         return 200, {}, json.dumps({'model': model, 'stop_reason': 'end_turn',
@@ -253,7 +254,8 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     first = step(runtime, cfg=cfg)
     assert first['status'] == 'progressed', first
     assert first['cloud_refusal'] == {'too_large': 'response_too_large', 'no_usage': 'usage_unknown'}.get(failure, failure)
-    assert len(sent) == (6 if failure in ('transport', 'timeout') else 1) and len(_local_sources(local_calls)) == 1
+    attempts = CLOUD_MAX_ATTEMPTS if failure in ('transport', 'timeout') else 1
+    assert len(sent) == attempts and len(_local_sources(local_calls)) == 1
     assert _local_sources(local_calls)[0] == sent[0]
     lost = _reservations(ledger, 'scan:1')
     assert len(lost) == len(sent)   # every send holds its own reservation
@@ -265,7 +267,7 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
         paid = _usage(ledger)
     _drain(runtime, cfg)
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
-    assert len([payload for payload in sent if 'source' in payload]) == (6 if failure in ('transport', 'timeout') else 1)
+    assert len([payload for payload in sent if 'source' in payload]) == attempts
     assert sorted(_dispositions(ledger)) == sorted((rid, 'superseded_local') for rid in lost)
     assert _usage(ledger)[:len(paid)] == paid
 
@@ -1205,7 +1207,7 @@ def test_local_result_is_not_saved_unless_every_replaced_request_is_recorded(run
         assert [tuple(row) for row in ledger.db.execute(_KEPT, kept)] == before
         assert _usage(ledger)[:len(paid)] == paid and _reservations(ledger, 'scan:other') == []
     assert len(recorded) == (3 if fault == 'another_unit_key' else 0) and not _dispositions(ledger)
-    assert len(sent) == 7   # the adopted chunk plus the rejected one's bounded attempts (1 initial + 5 retries); nothing was asked again
+    assert len(sent) == 1 + CLOUD_MAX_ATTEMPTS   # adopted chunk plus the bounded rejected sends; nothing was asked again
 
 
 def _facility_review(monkeypatch, review):

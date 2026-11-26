@@ -107,7 +107,7 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                       "semantic_generation": generation, "semantic_phase": "summary"}
     try:
         rows = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve' "
-                          "AND project_id=? AND message_id=?", (pid, mid)).fetchall()
+                          "AND project_id=? AND message_id=? ORDER BY artifact_id", (pid, mid)).fetchall()
     except sqlite3.Error:
         return False
     for row in rows:
@@ -120,14 +120,13 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                 or reservation.get("owner") != expected_owner):
             continue
         try:
-            results = db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_result' "
-                                 "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) "
-                                 "THEN json_extract(meta,'$.reservation_id')=? END",
-                                 (pid, mid, reservation["reservation_id"])).fetchall()
+            import cloud_policy
+            cloud_policy.reservation_evidence(db, row["artifact_id"])
         except sqlite3.Error:
             return False
-        if len(results) == 1:
-            return True
+        except ValueError:
+            continue
+        return True
     return False
 
 
@@ -149,7 +148,7 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None,
         return unknown
     import extraction_provenance
     if (db is not None and bundle is not None and project_id is not None and message_id is not None
-            and extraction_provenance.cloud_produced(proof)
+            and extraction_provenance.cloud_produced(proof) and 'repair_evidence' not in proof
             and not _summary_cloud_producer_verified(db, bundle, project_id, message_id,
                                                      generation, artifact["meta"])):
         return unknown
