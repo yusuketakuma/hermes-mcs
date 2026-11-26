@@ -3,7 +3,7 @@
   "document_version": "3.0",
   "created_date": "2026-11-10",
   "status": "specification_not_production_authority",
-  "bundle_digest": "532a390d80332fce95319d70d6c46fa41a0c35b032c0d0f0f4d60c5ea3d019d5",
+  "bundle_digest": "1c64ad32d448bf015d68ce02be4d3fcd679bfc28162bd4a346de1542eeb54443",
   "entries": [
     {
       "path": "03_CONTRACTS.md",
@@ -22,8 +22,8 @@
     },
     {
       "path": "contracts/FIELD_CATALOG.md",
-      "sha256": "59308bf5b11546e554b4989080c237d58a0d38a2939b5b244befad30b65b843d",
-      "size": 55133
+      "sha256": "ffb310e8a85b7f88f2c7493c8c1dd608e24fc32ce792aa608caa991a7b5fccdb",
+      "size": 55134
     },
     {
       "path": "contracts/README.md",
@@ -37,8 +37,8 @@
     },
     {
       "path": "contracts/contracts-v3.schema.json",
-      "sha256": "609e7e74ac8c61efd8e88f87c2bd96ced174347ff8ce1e9ea7ab252ab6d9a23a",
-      "size": 122651
+      "sha256": "51b59a79d5f5ccb493fa173ddda1684c6b8a324d6352a6358899698093331910",
+      "size": 122816
     },
     {
       "path": "examples/README.md",

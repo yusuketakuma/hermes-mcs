@@ -1347,6 +1347,7 @@
           "$ref": "#/$defs/Sha256"
         },
         "window": {
+          "description": "端末の自己申告。StandingConsent.windowsの保守窓との整合は端末側のconsent実施が担い、中央はWindowClosed検証のみ行う。",
           "$ref": "#/$defs/TimeWindow"
         },
         "rollout": {
@@ -2609,10 +2610,7 @@
           "$ref": "#/$defs/RolloutBinding"
         },
         "contract_digests": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": "object",
           "additionalProperties": false,
           "required": [
             "config_contract_sha256",
@@ -2644,7 +2642,8 @@
         "runtime_proof",
         "reserved_owner_bytes",
         "error_code",
-        "rollout"
+        "rollout",
+        "contract_digests"
       ]
     },
     "TerminalRecord": {
