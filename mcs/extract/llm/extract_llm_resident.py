@@ -632,10 +632,19 @@ def _main() -> int:
                     if jev_drain:
                         # Jev-only semantic/QC work takes no local-model turn or
                         # slot, so neither the extraction nor a carry waits on it.
-                        sem, ran_semantic = semantic_pass()
-                        if sem.get("run_lock_lost") in ("held", "updated"):
-                            _settle_carry(led, carry, write=False)
-                            return 0
+                        # A carried claim's lease still ticks through a long
+                        # drain, and the drain's worst span exceeds the lease the
+                        # renewal grants — so the pass may only start once the
+                        # carry is empty. Settle first: a taken lock commits the
+                        # result at once and frees the pass. When the lock stays
+                        # busy the carry keeps its claim and the loop moves on to
+                        # the carry processing below instead of starting the pass.
+                        _settle_carry(led, carry, final=False, fence=context_state)
+                        if not carry:
+                            sem, ran_semantic = semantic_pass()
+                            if sem.get("run_lock_lost") in ("held", "updated"):
+                                _settle_carry(led, carry, write=False)
+                                return 0
                     if args.lane == 1:
                         import llm_slot_schedule
                         if not llm_slot_schedule.night():
