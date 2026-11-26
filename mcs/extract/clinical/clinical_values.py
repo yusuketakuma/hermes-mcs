@@ -647,10 +647,11 @@ _LAB_HEADER = "|".join((
 # a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
 # every split of a run of readings that ends in an unknown word. Alternatives that
 # start alike are therefore listed longest first (低下 before 低).
+_LAB_QUALIFIER = r"(?:補正|血清)"
 _LAB_PREFIX = re.compile(fold_surface(
     r"(?>[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*+"
     rf"(?>[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
-    rf"|{_READING}|補正|血清|[、,/:|・\-~=])*+"))
+    rf"|{_READING}|{_LAB_QUALIFIER}|[、,/:|・\-~=])*+"))
 _LAB_TAIL = re.compile(fold_surface(
     rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
     r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
@@ -719,7 +720,8 @@ _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 # A dose direction or dosage form alone has no such label (カリウム 4、分2).
 _NAMED_PRESCRIPTION = rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))"
 _LAB_TAIL_END = re.compile(fold_surface(
-    rf"[。;]|の?ため|により|[、,](?!(?:ドライシロップ|{MED_FORMS}))(?=(?:{_READING}|{_NAMED_PRESCRIPTION}))"))
+    rf"[。;]|の?ため|により|[、,](?!(?:ドライシロップ|{MED_FORMS}))"
+    rf"(?=(?:{_LAB_QUALIFIER}{_LAB_RESULT.pattern}|{_READING}|{_NAMED_PRESCRIPTION}))"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
