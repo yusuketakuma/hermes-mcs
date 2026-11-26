@@ -104,9 +104,10 @@ class MedicationSurface(TypedDict):
 
 # dosage forms written right after a medicine name (shared with signal matching)
 MED_FORMS = r"od錠|錠|カプセル|顆粒|細粒|散|シロップ|テープ|パップ|軟膏|点眼液|注射液|坐剤"
+_MED_STRENGTH = r"[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%)"
 _MED_SUFFIX = re.compile(
     rf"(?P<form>{MED_FORMS})?"
-    r"(?P<strength>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%))?$")
+    rf"(?P<strength>{_MED_STRENGTH})?$")
 
 
 def medication_surface(name: str) -> MedicationSurface:
@@ -460,10 +461,13 @@ def _in_a_lab_layout(quote: str, at: int, value_end: int, lines: list[int]) -> b
     end_before = start - 1 if start > first else first
     if end_before and _SALT_STEM.search(quote, max(0, end_before - _LAYOUT_REACH), end_before):
         return False
-    stop = _LAB_TAIL_END.search(quote, value_end, min(last, value_end + _LAYOUT_REACH))
-    stop = stop.start() if stop else last
-    return (stop - value_end <= _LAYOUT_REACH and bool(_LAB_PREFIX.fullmatch(quote, start, at))
-            and bool(_LAB_TAIL.fullmatch(quote, value_end, stop)))
+    return bool(_LAB_PREFIX.fullmatch(quote, start, at)) and _closed_lab_tail(quote, value_end, last)
+
+
+def _closed_lab_tail(quote: str, start: int, line_end: int) -> bool:
+    stop = _LAB_TAIL_END.search(quote, start, min(line_end, start + _LAYOUT_REACH))
+    end = stop.start() if stop else line_end
+    return end - start <= _LAYOUT_REACH and _LAB_TAIL.fullmatch(quote, start, end) is not None
 
 
 def _glued_to_a_word(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
@@ -652,12 +656,6 @@ _LAB_PREFIX = re.compile(fold_surface(
     r"(?>[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*+"
     rf"(?>[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
     rf"|{_READING}|{_LAB_QUALIFIER}|[、,/:|・\-~=])*+"))
-_LAB_TAIL = re.compile(fold_surface(
-    rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
-    r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
-    r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
-    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
-    r"|でした|です|だった|である)*+"))
 # A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
 # that item only (尿TP, 尿中Ca). With a closed suffix (検査, 検査の結果, 定性, 一般, 生化学,
 # 穿刺, 所見, の性状, データ, 検体 ...) or a bracket it is a heading wherever it starts, even
@@ -718,10 +716,20 @@ _SECTION_RESULT = re.compile(fold_surface(
 _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 # A comma can separate another labelled reading or a separate prescription (アスパラK 分3).
 # A dose direction or dosage form alone has no such label (カリウム 4、分2).
-_NAMED_PRESCRIPTION = rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))"
+_NAMED_PRESCRIPTION = (rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:{_MED_STRENGTH})?"
+                       rf"(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))")
+_AFTER_COMMA = rf"[、,](?!(?:ドライシロップ|{MED_FORMS}))"
+_PANEL_ITEM = re.compile(fold_surface(
+    rf"{_AFTER_COMMA}(?:{_LAB_QUALIFIER}{_LAB_RESULT.pattern}(?:{_READING_UNIT})?|{_READING})"))
+_LAB_COPULA = r"(?:でした|です|だった|である)"
+_LAB_TAIL = re.compile(fold_surface(
+    rf"(?>{_PANEL_ITEM.pattern}|[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
+    r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
+    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
+    rf"|{_LAB_COPULA})*+"))
 _LAB_TAIL_END = re.compile(fold_surface(
-    rf"[。;]|の?ため|により|[、,](?!(?:ドライシロップ|{MED_FORMS}))"
-    rf"(?=(?:{_LAB_QUALIFIER}{_LAB_RESULT.pattern}|{_READING}|{_NAMED_PRESCRIPTION}))"))
+    rf"[。;]|の?ため|により|{_LAB_COPULA}(?=[、,])|{_AFTER_COMMA}(?={_NAMED_PRESCRIPTION})"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
@@ -888,6 +896,9 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                 if result.end() > row_end:
                     tail_end = _LAB_RESULT_END.search(quote, result.end(), line_end)
                     row_end = tail_end.start() if tail_end else line_end
+                # A comma before another labelled result continues the panel's predicate.
+                if _PANEL_ITEM.match(quote, row_end, line_end) and not _closed_lab_tail(quote, result.end(), line_end):
+                    continue
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.fullmatch(quote, result.end(), row_end):
                     readings.append((match, row_end))
                 elif unit_matches:
