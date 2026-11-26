@@ -89,3 +89,45 @@ def test_hint_needs_checkout_and_succeeds_from_synthetic_workspace(tmp_path):
     hint = json.loads((tmp_path / "publication-request.json").read_text())
     assert hint["tag_oid"] == ENV["SHA"]
     assert hint["repository_id"] == int(ENV["REPOSITORY_ID"])
+
+
+def test_identify_requires_each_upstream_artifact_and_registered_dispatch_source(tmp_path):
+    import textwrap
+
+    workflow = (ROOT / ".github/workflows/release-publish.yml").read_text()
+    step = workflow.split("      - name: fetch upstream hint and acceptance artifacts\n", 1)[1]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
+    gh = tmp_path / "gh"
+    gh.write_text("""#!/bin/sh
+set -eu
+[ "$1 $2 $3 $4 $6 $8 $9" = "run download 42 -n -D --repo synthetic/repo" ]
+[ "$5" != "$FAIL_DOWNLOAD" ] || exit 7
+mkdir -p "$7"
+case "$5" in
+    publication-request) file=publication-request.json ;;
+    release-acceptance) file=acceptance.json ;;
+    *) exit 8 ;;
+esac
+[ "$5" = "$EMPTY_DOWNLOAD" ] || echo '{}' > "$7/$file"
+""")
+    gh.chmod(0o700)
+    cases = [
+        ("workflow_run", "publication-request", "", "publication-request"),
+        ("workflow_run", "release-acceptance", "", "release-acceptance"),
+        ("workflow_run", "", "release-acceptance", "acceptance/acceptance.json"),
+        ("workflow_dispatch", "", "", "acceptance_id"),
+        ("workflow_run", "", "", ""),
+    ]
+    for index, (event, fail, empty, diagnostic) in enumerate(cases):
+        work = tmp_path / str(index)
+        work.mkdir()
+        result = subprocess.run(["bash", "-c", script], cwd=work, timeout=10, capture_output=True, text=True,
+                                env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.defpath,
+                                     "GITHUB_EVENT_NAME": event, "REPO": "synthetic/repo", "UPSTREAM_RUN_ID": "42",
+                                     "FAIL_DOWNLOAD": fail, "EMPTY_DOWNLOAD": empty})
+        assert (result.returncode == 0) == (not diagnostic), result
+        if diagnostic:
+            assert "::error::" in result.stdout
+            assert diagnostic in result.stdout
+        if event == "workflow_dispatch":
+            assert not list(work.iterdir())

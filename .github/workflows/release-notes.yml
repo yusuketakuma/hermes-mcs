@@ -183,6 +183,7 @@ jobs:
           if [ "$action" = sync ]; then
             python3 scripts/development/sync_release_notes.py --repo "$GH_REPO" --tag "$RELEASE_TAG" --apply
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft \
+            commit=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+            gh release create "$RELEASE_TAG" --verify-tag --draft --target "$commit" \
               --title "$(cat release-title.txt)" --notes-file release-notes.md
           fi
