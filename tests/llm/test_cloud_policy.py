@@ -636,8 +636,8 @@ def test_missing_cost_caps_follow_defaults_without_pinning_config(block):
     cfg = {"cloud_llm": dict(block)}
     normalized, errors = c.cloud_config(cfg, key_present=True)
     assert errors == [] and normalized["mode"] == "on"
-    assert normalized["daily_cost_limit_usd"] == block.get("daily_cost_limit_usd", 25)
-    assert normalized["monthly_cost_limit_usd"] == block.get("monthly_cost_limit_usd", 75)
+    assert normalized["daily_cost_limit_usd"] == block.get("daily_cost_limit_usd", 40)
+    assert normalized["monthly_cost_limit_usd"] == block.get("monthly_cost_limit_usd", 200)
     assert cfg == {"cloud_llm": block}
     assert c.cloud_config(cfg, key_present=False)[0]["mode"] == "off"
 

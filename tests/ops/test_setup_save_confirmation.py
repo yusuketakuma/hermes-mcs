@@ -90,7 +90,7 @@ def test_jev_display_stays_disabled_when_semantic_mode_is_off(monkeypatch, capsy
 
 
 @pytest.mark.parametrize("block,daily,monthly", [
-    ({}, "25 USD", "75 USD"),
+    ({}, "40 USD", "200 USD"),
     ({"mode": "off", "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 2}, "0 USD", "2 USD"),
     ({"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}, "上限なし", "上限なし"),
 ])

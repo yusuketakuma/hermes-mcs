@@ -699,7 +699,7 @@ def test_priority_uses_only_mcs_private_key_and_validates_split(tmp_path, monkey
     assert policy.resolve_settings(cfg, tmp_path)[0]["provider"] == "anthropic"
     cfg["cloud_llm"]["provider_order"] = ["openai", "anthropic"]
     assert policy.resolve_settings(cfg, tmp_path)[0]["provider"] == "openai"
-    cfg["cloud_llm"]["provider_budgets"] = {"openai": {"daily_cost_limit_usd": 26, "monthly_cost_limit_usd": 15}}
+    cfg["cloud_llm"]["provider_budgets"] = {"openai": {"daily_cost_limit_usd": 41, "monthly_cost_limit_usd": 15}}
     settings, errors = policy.resolve_settings(cfg, tmp_path)
     assert errors and settings["mode"] == "off"
 

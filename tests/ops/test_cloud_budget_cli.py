@@ -35,7 +35,7 @@ def test_provider_selection_and_split_preserve_total_and_existing_settings(conf,
     assert cfg["notify"] == {"synthetic": True}
     assert cfg["cloud_llm"]["provider_budgets"]["openai"] == {"daily_cost_limit_usd": 5, "monthly_cost_limit_usd": 15}
     shown = json.loads(capsys.readouterr().out.splitlines()[-1])
-    assert shown["daily_cost_limit_usd"] == 25 and shown["monthly_cost_limit_usd"] == 75
+    assert shown["daily_cost_limit_usd"] == 40 and shown["monthly_cost_limit_usd"] == 200
     args.provider = "openai"
     assert cli.providers_command(args) == 0
     shown = json.loads(capsys.readouterr().out.splitlines()[-1])
@@ -44,7 +44,7 @@ def test_provider_selection_and_split_preserve_total_and_existing_settings(conf,
 
 def test_provider_split_over_total_or_partial_caps_never_saves(conf):
     before = conf.read_bytes()
-    assert cli.providers_command(SimpleNamespace(provider="auto", openai_daily_usd="26", openai_monthly_usd="15")) == 1
+    assert cli.providers_command(SimpleNamespace(provider="auto", openai_daily_usd="41", openai_monthly_usd="15")) == 1
     assert conf.read_bytes() == before
     assert cli.providers_command(SimpleNamespace(provider="openai", openai_daily_usd="5")) == 1
     assert conf.read_bytes() == before
@@ -97,7 +97,7 @@ def test_show_only_does_not_write_and_reports_effective_defaults(conf, capsys):
     before = conf.stat().st_mtime_ns
     assert _run() == 0 and conf.stat().st_mtime_ns == before
     shown = json.loads(capsys.readouterr().out)
-    assert (shown["daily_cost_limit_usd"], shown["monthly_cost_limit_usd"]) == (25, 75)
+    assert (shown["daily_cost_limit_usd"], shown["monthly_cost_limit_usd"]) == (40, 200)
     assert json.loads(conf.read_text())["cloud_llm"] == {"mode": "on", "project_ids": [1]}
 
 
