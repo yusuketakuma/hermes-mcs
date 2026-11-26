@@ -316,3 +316,28 @@ def test_owned_unknown_unit_holds_while_independent_local_proceeds(routed, monke
     assert again['deferred'] == 1 and len(local) == 1
     assert again['defer_reasons'].get('cloud_unit_unresolved') == 1
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('retired', [
+    'c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65',
+    '2f3277d2e2c7e81393ea9de2001809b73de6f4787cd8ce17355a7f4386d3c040',
+    '5659ec26c1dbf34d07cbd876c04ae77ea67826aa9b38e862b9a1184ef38c6e46',
+    'unknown-contract',
+])
+def test_retired_contract_proves_only_prior_occurrence(frame_store, retired):
+    from test_drug_context_frame import OPTIONS
+
+    ledger, row, hints = frame_store
+    old_frame = frames.prepare(ledger, row, **{**OPTIONS, 'contract': retired},
+                               base_context='old context', version=11, medication_hints=hints)
+    ledger.save_messages([replace(_message(body=row['body_text']), sender_name='合成の別の投稿者')])
+    current = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
+    current['_source_binding'] = source_binding(ledger.db, 1, 1)
+    if retired == 'unknown-contract':
+        with pytest.raises(ValueError, match='context_snapshot_invalid'):
+            prepare(ledger, current, medication_hints=hints)
+    else:
+        new = prepare(ledger, current, medication_hints=hints)
+        assert new['artifact_id'] != old_frame['artifact_id']
+        assert new['text'] is None and new['binding'] != old_frame['binding']
+    assert frames.load(ledger.db, old_frame['artifact_id'], current) is None

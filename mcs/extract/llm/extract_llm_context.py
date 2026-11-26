@@ -207,9 +207,13 @@ _PRIOR_CONTEXT_SOURCE = "3140265acfed995e8f65528714af0365f302a33a10870621e00fdd7
 _PREPARE_CONTEXT_SOURCE = "08a818e1843d577cca760be8db70ccb385803c3624bc6d92b70dc56672595088"
 
 
+# Before retired-source recognition; the frame payload and current-request contract are identical.
+_PRE_RETIREMENT_CONTEXT_SOURCE = "a955b8fee2701834d7ddccd3f2db991088fdb9cef4216379eadfc5d305cb7820"
+
+
 def _context_contracts():
     return {_context_contract(), *(_context_contract(source_digest=source) for source in
-            (_PRIOR_CONTEXT_SOURCE, _PREPARE_CONTEXT_SOURCE))}
+            (_PRIOR_CONTEXT_SOURCE, _PREPARE_CONTEXT_SOURCE, _PRE_RETIREMENT_CONTEXT_SOURCE))}
 
 
 def _match_pending_record(db, r, record, witness, content_hash, plain_plan, frames, context_hash):
