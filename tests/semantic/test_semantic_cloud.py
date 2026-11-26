@@ -98,6 +98,7 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     import semantic_runtime
     import semantic_store
     import semantic_summary_stages
+    from semantic_cloud_testkit import summary_receipt
     led, cfg, _job, _calls = cloud
     bundle = semantic_store.thread_bundle(led.db, 1, 1)
     member = bundle["members"][0]
@@ -106,11 +107,8 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
              "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),
              "semantic_generation": generation, "semantic_phase": "summary"}
-    reservation_id = "synthetic-summary-reservation"
-    led.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=member["message_id"],
-                     meta={"reservation_id": reservation_id, "route": "semantic_backlog", "owner": owner})
-    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
-                     meta={"reservation_id": reservation_id})
+    failed_id = summary_receipt(led, owner, "synthetic summary", failed=True)
+    reservation_id = summary_receipt(led, owner, "synthetic summary")
     content = {"claims": []}
     provenance = {"version": 1, "stage": "summary", "providers": ["anthropic"], "complete": True,
                   "result_hash": mcs_util.payload_hash(content), "source_fingerprint": bundle["source_fingerprint"],
@@ -120,14 +118,21 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
         return {"content": content,
                 "meta": {"provider_provenance": provenance, "inference_requests": requests}}
 
-    verified = semantic_summary_stages._summary_producer(
-        artifact([reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
-        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
-    assert verified == {"providers": ["anthropic"], "complete": True}
-    forged = semantic_summary_stages._summary_producer(
-        artifact([]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
-        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
-    assert forged == {"providers": [], "complete": False}
+    def producer(requests):
+        return semantic_summary_stages._summary_producer(
+            artifact(requests), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+            db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+
+    unknown = {"providers": [], "complete": False}
+    assert producer([]) == producer([failed_id]) == unknown
+    assert producer([failed_id, reservation_id]) == {"providers": ["anthropic"], "complete": True}
+    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id})
+    assert producer([reservation_id]) == unknown
+
+    with led.db:
+        led.db.execute("UPDATE artifacts SET meta='[]' WHERE kind='cloud_usage_reserve'")
+    assert producer([failed_id, reservation_id]) == unknown
 
 
 def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch):
