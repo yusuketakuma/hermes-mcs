@@ -50,7 +50,10 @@ def build_wire(runtime_home):
                 if type(state) is not dict or state.get('state') != 'active':
                     raise ValueError('SDC_CREDENTIAL_REQUIRED')
                 key = Connector(store, None).secret(state, cred)
-                return config, state, key
+                # 署名audienceはauto bundleの値 — 監視endpoint.jsonのaudienceで
+                # 署名するとautoサーバが拒否する。endpoint_cfgは構築時点で
+                # 検証済みなのでclosureの後置bindでよい。
+                return dict(config, **endpoint_cfg), state, key
 
         def pins():
             return release_auto_trust.load_v3_pins(pins_file)

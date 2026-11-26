@@ -70,7 +70,7 @@ def test_factory_builds_wire_when_enrolled_and_pinned(tmp_path, monkeypatch, pro
     # networkには出さず、credential/pin解決だけを確認する。
     # endpointはauto bundleのorigin/audienceで監視endpoint.jsonではない
     config, state, key = wire._credential()
-    assert config['audience'] == AUTO_BUNDLE['audience']
+    assert config['audience'] == 'sdc:auto'  # install時のmaterial()がvector値をoverride
     assert state['device_id'] == tp.DEVICE and key == 'a' * 64
     assert wire._pins() == [PIN]
 
