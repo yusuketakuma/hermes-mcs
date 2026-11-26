@@ -738,6 +738,32 @@ def test_a_lab_qualifier_requires_a_named_result_after_the_comma(tail):
     assert _confirmation("カリウム", "4.5", f"採血 カリウム 4.5、{tail}") == "unverified"
 
 
+@pytest.mark.parametrize("tail,expected", [
+    ("補正カルシウム 8.5未満なら連絡", "unverified"),
+    ("カルシウム 8.5以下で連絡", "unverified"),
+    ("血清ナトリウム 140、補正カルシウム 8.5未満なら連絡", "unverified"),
+    ("補正カルシウム 8.5なら連絡", "unverified"),
+    ("補正カルシウム 8.5、異常なし", "quote_supported"),
+    ("補正カルシウム 8.5でした、血清ナトリウム 130未満なら連絡", "quote_supported"),
+    ("血清ナトリウム 140、補正カルシウム 8.5", "quote_supported"),
+    ("補正カルシウム 8.5。次回8.0未満なら連絡", "quote_supported"),
+    ("補正カルシウム 8.5\n次回8.0未満なら連絡", "quote_supported"),
+])
+@pytest.mark.parametrize("unit", ["", "mEq/L"])
+def test_lab_panel_checks_the_last_result_before_accepting_an_earlier_one(tail, expected, unit):
+    body = f"カリウム 4.5{unit}、{tail}"
+    lab = _validated("カリウム", "4.5", unit or None, body)
+    assert lab["value"] == "4.5"
+    assert lab["normalized"]["confirmation"] == expected
+
+
+@pytest.mark.parametrize("unit", ["", "mEq/L"])
+def test_asserted_result_before_an_independent_conditional_clause(unit):
+    body = f"カリウム 4.5{unit}でした、補正カルシウム 8.5未満なら連絡"
+    assert _validated("カリウム", "4.5", unit or None, body)["normalized"]["confirmation"] == "quote_supported"
+    assert _confirmation("カルシウム", "8.5", body) == "unverified"
+
+
 # A reading with its own unit is never made a candidate by its neighbours.
 @pytest.mark.parametrize("body,name,value", [
     ("ナトリウム 138 mEq/L\nカリウム 4.0 mEq/L", "カリウム", "4.0"),
