@@ -106,11 +106,30 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
              "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),
              "semantic_generation": generation, "semantic_phase": "summary"}
-    reservation_id = "synthetic-summary-reservation"
-    led.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=member["message_id"],
-                     meta={"reservation_id": reservation_id, "route": "semantic_backlog", "owner": owner})
-    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
-                     meta={"reservation_id": reservation_id})
+    cloud_cfg = {"cloud_llm": {
+        "mode": "on", "project_ids": [1], "provider": "anthropic",
+        "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 25, "monthly_cost_limit_usd": 75}},
+        "semantic_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    def receipt(label, *, failed=False):
+        body = {"model": anthropic_client.MODEL, "max_tokens": 100, "system": "synthetic system",
+                "messages": [{"role": "user", "content": f"synthetic summary producer receipt {label}"}]}
+        reserve = cloud_policy.usage_reserver(
+            led, cloud_cfg, route="semantic_backlog", project_id=1,
+            unit_key=f"semantic:synthetic-summary-producer:{label}", message_id=member["message_id"], owner=owner)
+        reservation = reserve(body, 2)
+        if failed:
+            metadata = {"model": anthropic_client.MODEL, "request_fp": reservation["request_fp"],
+                        "usage": None, "http_class": "transport", "request_id": None,
+                        "error_kind": "transport"}
+        else:
+            metadata = {"model": anthropic_client.MODEL, "request_fp": reservation["request_fp"],
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                        "http_class": "http_200", "request_id": "req_synthetic", "error_kind": None}
+        cloud_policy.record_result(led, reservation, metadata)
+        return reservation["reservation_id"]
+
+    failed_id = receipt("failed-attempt", failed=True)
+    reservation_id = receipt("settled-retry")
     content = {"claims": []}
     provenance = {"version": 1, "stage": "summary", "providers": ["anthropic"], "complete": True,
                   "result_hash": mcs_util.payload_hash(content), "source_fingerprint": bundle["source_fingerprint"],
@@ -121,13 +140,19 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
                 "meta": {"provider_provenance": provenance, "inference_requests": requests}}
 
     verified = semantic_summary_stages._summary_producer(
-        artifact([reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        artifact([failed_id, reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
         db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
     assert verified == {"providers": ["anthropic"], "complete": True}
     forged = semantic_summary_stages._summary_producer(
         artifact([]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
         db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
     assert forged == {"providers": [], "complete": False}
+    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id})
+    duplicated = semantic_summary_stages._summary_producer(
+        artifact([reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+    assert duplicated == {"providers": [], "complete": False}
 
 
 def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch):
