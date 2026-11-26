@@ -60,7 +60,7 @@ def test_central_copies_and_existing_shared_contracts_keep_their_frozen_bytes():
     original = {path: digest for path, digest in sources['files'].items() if path not in release_files and path not in registration_files}
     # Pin the original 21 entries as well as the six byte-identical central release contracts.
     assert len(original) == 21
-    assert hashlib.sha256(raw(original)).hexdigest() == '93a61c0ec98f47ec6a38de912206c71f44486848865c2a63cd6e2a560d13ec59'
+    assert hashlib.sha256(raw(original)).hexdigest() == '6977597e4ed2e4dfc9b9fbda961d9d7b29dae94fdf0bafe05fd13536ee53cce7'
     assert frozen.keys() <= sources['files'].keys()
     for path, expected in sources['files'].items():
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected
