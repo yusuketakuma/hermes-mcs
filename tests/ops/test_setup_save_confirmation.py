@@ -47,7 +47,7 @@ def test_disabled_features_and_stamp_conditions_are_not_invented(monkeypatch, ca
     output = capsys.readouterr().out
     # 意味解析の summary/loop は未設定でも assist が既定（e407e2eac）。Jev の表示は
     # 無効ではなく、許可条件がそろった場合の条件付き送信として示される
-    for value in ("朝のまとめ通知: 無効", "外部Jev追加解析: 対象プロジェクト", "定期的な薬情報更新確認: 無効",
+    for value in ("朝のまとめ通知: 無効", "外部Jev追加解析: 対象プロジェクト", "機能ごとの許可条件がそろった場合にJev APIへ送ります", "定期的な薬情報更新確認: 無効",
                   "MCSスタンプ送信: 現在の設定では無効", "独立接続"):
         assert value in output
     assert "Hermesへの接続設定" not in output
