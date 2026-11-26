@@ -197,7 +197,10 @@ def test_unknown_parts_reach_producer_and_monitor_without_zero(stored, tmp_path,
     _assert_unknown(report["notify"]["incomplete_parts"], "observation_limit")
     assert report["overall"] == ("failed" if run_status == "failed" else "degraded")
     assert report["notify"]["state"] == "incomplete"
-    assert "notification_parts_incomplete" in report["state_reasons"]
+    # an unmeasurable read is not measured unfinished work: it alerts under
+    # its own code and never as an incomplete-parts count
+    assert "notification_parts_unavailable" in report["state_reasons"]
+    assert "notification_parts_incomplete" not in report["state_reasons"]
     assert result["errors"] == ["code_changed"]
     path = tmp_path / "health.json"
     path.write_text(json.dumps(report))

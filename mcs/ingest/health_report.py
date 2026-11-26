@@ -1218,9 +1218,12 @@ def build_health(db, result: dict, status: str,
         incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
                                 active_rows=active_part_rows),
         previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
-    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
+    # an unmeasurable read is not unfinished work: it is reported under its
+    # own reason, never as a measured count of incomplete parts
+    parts_unmeasured = incomplete_parts['status'] == 'unknown'
+    parts_incomplete = not parts_unmeasured and (bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
-        incomplete_parts.get('unknown_parts_total', 0))
+        incomplete_parts.get('unknown_parts_total', 0)))
     part_holds = part_holds_health(db, now, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     outbox = pending_health(db, now, seconds=remaining())
     # an unmeasurable pending count can never read as delivered work
@@ -1350,7 +1353,7 @@ def build_health(db, result: dict, status: str,
     if unstored_state != 'none_observed':
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
-    if parts_incomplete or cards_unknown:
+    if parts_incomplete or parts_unmeasured or cards_unknown:
         notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
     # an aggregate status alone cannot identify which saved work needs review.
@@ -1527,6 +1530,7 @@ def build_health(db, result: dict, status: str,
             ("notification_pending", bool(outbox["pending"])),
             ("notification_pending_unavailable", pending_unknown),
             ("notification_parts_incomplete", parts_incomplete),
+            ("notification_parts_unavailable", parts_unmeasured),
             ("notification_cards_unavailable", cards_unknown),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),

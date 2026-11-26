@@ -52,6 +52,7 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
                                "notification_pending_unavailable",
+                               "notification_parts_unavailable",
                                "notification_delivery_unverified",
                                "provider_settings_unreadable"})
 STREAK_ALERT = 3
@@ -85,7 +86,8 @@ _RECORDED_DELIVERY_JA = {
     "notification_parked": "通知の待機",
     "notification_held": "通知の保留",
     "notification_pending": "通知の送信待ち",
-    "notification_parts_incomplete": "通知の本文・添付の送信完了が未確認",
+    "notification_parts_incomplete": "通知の本文・添付の送信が未完了",
+    "notification_parts_unavailable": "通知の本文・添付の送信完了の件数が未確認",
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
 }
@@ -279,7 +281,19 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             reasons.append("unread_collection_unknown")
     if reasons is not None and parts_active and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
-        if 'notification_parts_incomplete' not in reasons:
+        # an unmeasurable read and a measured unfinished count are different
+        # findings: they alert under separate codes, never merged. A legacy
+        # producer's incomplete code for an unmeasurable read is kept as its
+        # own record — the measurement state already marks it unmeasured.
+        if parts_unknown:
+            # positive counts an expired carry still shows are the old
+            # measurement's record, not current evidence: the current alert
+            # is the unmeasurable read. The record itself keeps its codes,
+            # so the measured-incomplete one stays visible in history.
+            reasons = [r for r in reasons if r != 'notification_parts_incomplete']
+            if 'notification_parts_unavailable' not in reasons:
+                reasons.append('notification_parts_unavailable')
+        elif 'notification_parts_incomplete' not in reasons:
             reasons.append('notification_parts_incomplete')
     if reasons is not None and cards_unknown and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
@@ -351,6 +365,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         if measurement is None:
             measurement = 'unknown'
     report['notify_parts_measurement'] = measurement
+    # write-time evidence for history wording: a measured block stays measured
+    # after its carry expires; only a never-measured block is unverified
+    report['notify_parts_measured'] = (
+        measurement in ('recorded', 'stale')
+        or isinstance(parts, dict) and parts.get('status') in ('recorded', 'stale_measurement'))
     if report['notify_parts_measurement'] == 'stale':
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
@@ -1210,6 +1229,8 @@ _REASON_JA = {
         "通知先と配送記録、監視の状態を確認してください"),
     "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
+    "notification_parts_unavailable": ("本文・添付などの送信完了の件数を測定できていません",
+                                       "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
                                        "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_pending_unavailable": ("通知の送信待ち件数を確認できません",
@@ -1452,7 +1473,7 @@ def _unverified_reason(report: dict, reason: str) -> bool:
     if base == "notification_parts_incomplete":
         return report.get('notify_parts_measurement') != 'recorded'
     return base in (_DELIVERY_UNVERIFIED, "notification_cards_unavailable",
-                    "notification_pending_unavailable")
+                    "notification_pending_unavailable", "notification_parts_unavailable")
 
 
 def _impact(report: dict, reasons) -> str:
@@ -1640,16 +1661,26 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 action = "次回の収集で再確認します。続く場合は収集ログを確認"
             else:
                 extra = f" {n}件" if _count(n) else ""
+                if n == 0:
+                    # a bare zero reads as 'nothing anywhere': the scope is the
+                    # tracked population, with any further records named below
+                    extra = " 追跡対象0件"
                 detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
                 if detail is not None:
                     states, plans = detail['by_state'], detail['by_plan']
                     labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
                               ('処理待ち', states['pending']), ('保留', states['held'])]
-                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                    breakdown = '・'.join(f'{label}{count}' for label, count in labels if count)
+                    if breakdown:
+                        extra += f"（現行{plans['current']}・過去{plans['superseded']}／{breakdown}）"
                 unknown = report.get('notify_unknown_part_outcomes')
-                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                    extra += f"／結果不明の全記録 {unknown}件"
+                active_unknown = detail['by_state']['unknown'] if detail else 0
+                if _count(unknown) and unknown > active_unknown:
+                    # the global count already contains the unknown rows the
+                    # breakdown shows: name the inclusion, never add them.
+                    # Rows beyond the active scope are separate records.
+                    extra += (f"／結果不明の全記録 {unknown}件（上記の結果不明を含む）" if active_unknown
+                              else f"／別に結果不明の記録 {unknown}件")
                 closed = report.get('notify_tracking_closed_parts')
                 if _count(closed) and closed:
                     extra += f"／別に運用終了・未回収 {closed}件"
@@ -1657,6 +1688,11 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     observed = report.get('notify_parts_observed_at')
                     extra += (f"（記録時点の観測値: {_jst(observed)}）"
                               if finite_number(observed) else "（記録時点の観測値）")
+        elif base == "notification_parts_unavailable":
+            why = {'observation_limit': '観測が制限時間で打ち切られました',
+                   'observation_unavailable': '観測に失敗しました'}.get(
+                       report.get('notify_parts_reason'), '観測できませんでした')
+            extra = f"（件数は未測定: {why}）"
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""
@@ -1816,8 +1852,15 @@ def _alert_lines(report: dict) -> list[str]:
         lines.extend(_delivery_observation_lines(report))
         recorded = report.get("recorded_delivery_reasons")
         if status == "stale" and isinstance(recorded, list):
-            past = list(dict.fromkeys(_RECORDED_DELIVERY_JA[code] for code in recorded
-                                      if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
+            # a recorded incomplete code asserts measured unfinished work only
+            # when the record's own measurement evidence is a real measurement;
+            # writers before the separation used it for unmeasurable reads too
+            unmeasured = not report.get('notify_parts_measured')
+            past = list(dict.fromkeys(
+                _RECORDED_DELIVERY_JA['notification_parts_unavailable']
+                if code == 'notification_parts_incomplete' and unmeasured
+                else _RECORDED_DELIVERY_JA[code]
+                for code in recorded if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
             if past:
                 lines.append(f"過去の通知記録（{_jst(report.get('health_at'), with_year=True)} JST）: " + "、".join(past))
         interrupt = report.get("last_interrupt")

@@ -68,7 +68,9 @@ def test_explicit_unknown_parts_never_become_zero_or_healthy(tmp_path, overall):
     report = _tick(tmp_path, 400, [], overall=overall, parts=parts)
     assert report["status"] == ("failed" if overall == "failed" else "degraded")
     assert report["notify_incomplete_parts"] is None
-    assert "notification_parts_incomplete" in report["state_reasons"]
+    # an unmeasurable read alerts under its own code, never as measured work
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert "notification_parts_incomplete" not in report["state_reasons"]
     text = "\n".join(health_watch._reason_rows(report, report["state_reasons"]))
     assert "0件" not in text
 
@@ -115,14 +117,86 @@ def _rows(report):
 
 
 def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
-    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+    report = _tick(tmp_path, 400, ["notification_parts_unavailable"],
                    parts=_unmeasured_parts())
     assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
     rows = _rows(report)
     assert "件数は未測定: 観測が制限時間で打ち切られました" in rows
     assert "次回の収集で再確認" in rows and "0件" not in rows and "5件" not in rows
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
     assert "件数は未測定" in lines
+    assert "送信が未完了" not in lines
+
+
+def test_legacy_unmeasured_input_with_the_old_code_stays_unmeasured(tmp_path):
+    # pre-separation producers wrote notification_parts_incomplete for an
+    # unmeasurable read; the current observation is the unmeasurable read, so
+    # the current alert normalizes to the dedicated code — the record itself
+    # keeps the old code for history
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_unmeasured_parts())
+    assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    rows = _rows(report)
+    assert "件数は未測定" in rows and "0件" not in rows and "5件" not in rows
+    assert rows.count("件数は未測定") == 1
+
+
+def test_expired_carry_with_positive_counts_alerts_unavailable_not_incomplete(tmp_path):
+    # a carried measurement past its stall age is no longer evidence: the
+    # record keeps its measured counts, but the current observation is the
+    # unmeasurable read and alerts under the dedicated code only
+    stale = _parts_block(status='stale_measurement', observed_at=100)
+    stale['reason'] = 'observation_limit'
+    report = _tick(tmp_path, 100 + health_watch.CARD_STALL_S + 60,
+                   ["notification_parts_incomplete"], parts=stale)
+    assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert "notification_parts_incomplete" not in report["state_reasons"]
+    rows = _rows(report)
+    assert "件数は未測定" in rows and rows.count("件数は未測定") == 1
+
+
+def test_zero_scope_with_unknown_records_has_no_empty_breakdown_or_dangling_note(tmp_path):
+    # active unfinished scope is zero, all of it already operationally closed;
+    # the unknown-outcome records exist only outside that scope
+    parts = {'active_total': 0, 'active_cards': 0,
+             'acknowledged_unresolved_total': 3, 'unknown_parts_total': 3,
+             'active_by_state': {'pending': 0, 'unknown': 0, 'not_sent': 0, 'held': 0},
+             'active_by_plan': {'current': 0, 'superseded': 0},
+             'active_oldest_age_s': None,
+             'total': 3, 'cards': 1,
+             'by_state': {'pending': 0, 'unknown': 0, 'not_sent': 3, 'held': 0},
+             'by_plan': {'current': 0, 'superseded': 3},
+             'oldest_age_s': None, 'observed_at': 399, 'status': 'recorded'}
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=parts)
+    rows = _rows(report)
+    # no empty breakdown after the scope, no inclusion note without a referent;
+    # unknown records outside the active scope are separate records
+    assert "（現行0・過去0／）" not in rows and "／）" not in rows
+    assert "上記の結果不明を含む" not in rows
+    assert "別に結果不明の記録 3件" in rows
+
+
+def test_stale_file_history_wording_follows_write_time_measurement_evidence(tmp_path):
+    # never-measured legacy record: the history line cannot assert unfinished work
+    _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=_unmeasured_parts())
+    report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
+    assert report["status"] == "stale"
+    lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "送信完了の件数が未確認" in lines and "送信が未完了" not in lines
+
+
+def test_stale_file_history_keeps_measured_wording_for_a_genuine_measurement(tmp_path):
+    # a genuine measurement stays measured in history even after its carry
+    # would have expired: the record's own write-time evidence governs
+    stale = _parts_block(status='stale_measurement', observed_at=399)
+    _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=stale)
+    report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
+    assert report["status"] == "stale"
+    lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "送信が未完了" in lines and "送信完了の件数が未確認" not in lines
 
 
 def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
@@ -131,7 +205,7 @@ def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
     assert report["notify_parts_measurement"] == "recorded"
     rows = _rows(report)
     assert ("5件（現行3・過去2／結果不明3・未送信2）"
-            "／結果不明の全記録 4件／別に運用終了・未回収 4件") in rows
+            "／結果不明の全記録 4件（上記の結果不明を含む）／別に運用終了・未回収 4件") in rows
     assert "記録時点の観測値" not in rows and "件数は未測定" not in rows
 
 
@@ -216,18 +290,23 @@ def test_expired_carried_parts_read_as_unmeasured(tmp_path):
 
 
 def test_measurement_states_keep_reason_and_breakdown_order(tmp_path):
-    # recorded -> carried -> unmeasured -> recorded: the reason stays put
+    # recorded -> carried -> unmeasured -> recorded: measured states keep the
+    # measured code, the unmeasured state moves to its own code and back,
     # and the breakdown keeps its fixed label order in every measurable state
-    for now, parts in ((400, _parts_block(observed_at=399)),
+    for now, parts, reason in ((400, _parts_block(observed_at=399),
+                                "notification_parts_incomplete"),
                        (700, {**_parts_block(status='stale_measurement',
                                              observed_at=400, unknown=4,
                                              not_sent=3),
-                              'reason': 'observation_limit', 'age_s': 300.0}),
-                       (1000, _unmeasured_parts()),
-                       (1300, _parts_block(observed_at=1299))):
+                              'reason': 'observation_limit', 'age_s': 300.0},
+                        "notification_parts_incomplete"),
+                       (1000, _unmeasured_parts(),
+                        "notification_parts_unavailable"),
+                       (1300, _parts_block(observed_at=1299),
+                        "notification_parts_incomplete")):
         parts.setdefault('observed_at', now - 1)
-        report = _tick(tmp_path, now, ["notification_parts_incomplete"], parts=parts)
-        assert report["state_reasons"] == ["notification_parts_incomplete"]
+        report = _tick(tmp_path, now, [reason], parts=parts)
+        assert report["state_reasons"] == [reason]
         rows = _rows(report)
         if report["notify_parts_measurement"] == "unknown":
             assert "件数は未測定" in rows
