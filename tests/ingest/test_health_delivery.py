@@ -82,7 +82,8 @@ def test_other_scope_progress_never_hides_own_queued_render(world, change):
     _render(world.db, "queued")
     _render(world.db, "other", state="delivered", updated=NOW - 10, **change)
     result = _observe(world)["delivery"]
-    assert result == {"state": "waiting_without_progress", "issues": ["waiting_without_progress"],
+    assert result == {"state": "waiting_without_progress", "reason": None,
+                      "issues": ["waiting_without_progress"],
                       "queued": 1, "sending": 0,
                       "unknown": 0, "oldest_created_at": NOW - 3600, "last_progress_at": None}
     with sqlite3.connect(world.db) as db:
@@ -384,7 +385,7 @@ def test_real_child_observes_synthetic_queue_and_private_receipt(world, monkeypa
     result = delivery.observe(world.home, CFG, NOW)
     assert result["worker"]["state"] == "unknown"
     assert result["restart_request"] == {"state": "requested", "at": NOW - 1}
-    assert result["delivery"] == {"state": "waiting_without_progress",
+    assert result["delivery"] == {"state": "waiting_without_progress", "reason": None,
                                   "issues": ["waiting_without_progress", "outcome_unconfirmed"],
                                   "queued": 1, "sending": 1, "unknown": 0,
                                   "oldest_created_at": NOW - 3600, "last_progress_at": None}
@@ -399,14 +400,14 @@ def test_real_child_observes_synthetic_queue_and_private_receipt(world, monkeypa
                                     ["unexpected"]])
 def test_child_result_rejects_invalid_issue_lists(issues):
     result = delivery._empty(NOW)
-    result["delivery"].update(state="waiting_without_progress", issues=issues, queued=1,
-                              sending=1, unknown=0, oldest_created_at=NOW - 3600)
+    result["delivery"].update(state="waiting_without_progress", reason=None, issues=issues,
+                              queued=1, sending=1, unknown=0, oldest_created_at=NOW - 3600)
     assert not delivery._valid_result(result, NOW)
 
 
 def test_child_result_requires_issue_and_primary_state_to_agree():
     result = delivery._empty(NOW)
-    result["delivery"].update(state="waiting_without_progress",
+    result["delivery"].update(state="waiting_without_progress", reason=None,
                               issues=["waiting_without_progress", "outcome_unconfirmed"],
                               queued=1, sending=1, unknown=0, oldest_created_at=NOW - 3600)
     assert delivery._valid_result(result, NOW)
@@ -528,7 +529,7 @@ def test_incomplete_part_settlement_without_new_delivery_is_not_progress(world):
                    (NOW - 7200,))
     before = _observe(world)["delivery"]
     assert before["state"] == "waiting_without_progress"
-    assert before["last_progress_at"] == NOW - 7200
+    assert before["last_progress_at"] is None
 
     with sqlite3.connect(world.db) as db:
         db.row_factory = sqlite3.Row
@@ -542,7 +543,7 @@ def test_incomplete_part_settlement_without_new_delivery_is_not_progress(world):
     after = _observe(world)["delivery"]
     assert after["state"] == "waiting_without_progress"
     assert after["issues"] == ["waiting_without_progress"]
-    assert after["last_progress_at"] == NOW - 7200
+    assert after["last_progress_at"] is None
 
     # A render row bumped without any delivered attempt or part is not progress either.
     _render(world.db, "unbacked", state="delivered", created=NOW - 7200,

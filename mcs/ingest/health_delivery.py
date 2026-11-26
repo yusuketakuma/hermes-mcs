@@ -26,13 +26,21 @@ import safe_io
 OBSERVATION_S = 3.0
 _CLEANUP_S = 0.5
 _STATUS_S = 1.0
+WORKER_RESERVE_S = 1.0
 MAX_INPUT_BYTES = 16384
 MAX_OUTPUT_BYTES = 8192
 _RESTART_STATES = frozenset({"requested", "unknown", "failed", "supervisor_restart_verified"})
 _DELIVERY_ISSUES = ("waiting_without_progress", "outcome_unconfirmed")
 _DELIVERY_STATES = frozenset({"waiting_without_progress", "progressing", "pending",
                               "outcome_unconfirmed", "idle", "unknown"})
-_WORKER_REASONS = frozenset({"worker_started", "worker_start_failed", "worker_start_unverified"})
+_WORKER_REASONS = frozenset({"worker_started", "worker_start_failed", "worker_start_unverified",
+                              "witness_missing", "witness_version", "witness_reason",
+                              "witness_started_unknown", "launchd_pid_mismatch", "birth_mismatch"})
+DELIVERY_REASONS = frozenset({"marker_present", "database_identity", "database_busy", "schema_mismatch",
+                              "observation_timeout", "queue_unverified"})
+_WORKER_DETAIL_REASONS = frozenset({"observation_timeout", "witness_missing", "witness_version",
+                                    "witness_reason", "witness_started_unknown",
+                                    "launchd_pid_mismatch", "birth_mismatch"})
 
 
 def _stamp(value, now):
@@ -42,7 +50,8 @@ def _stamp(value, now):
 def _empty(now):
     return {"observed_at": now,
             "worker": {"state": "unknown", "reason": "worker_start_unverified", "started_at": None},
-            "delivery": {"state": "unknown", "issues": [], "queued": None, "sending": None, "unknown": None,
+            "delivery": {"state": "unknown", "reason": "observation_timeout", "issues": [],
+                         "queued": None, "sending": None, "unknown": None,
                          "oldest_created_at": None, "last_progress_at": None},
             "restart_request": {"state": "unverified", "at": None}}
 
@@ -103,13 +112,16 @@ def _worker(home, cfg, now, deadline=None):
         deadline = time.monotonic() + OBSERVATION_S if deadline is None else deadline
         witness_deadline = deadline - _STATUS_S
         if time.monotonic() >= witness_deadline:
-            raise ValueError("observation_timeout")
+            return {"state": "unknown", "reason": "observation_timeout", "started_at": None}
         result = health_recovery._gateway_observation(str(home), cfg, now, deadline=witness_deadline)
         if result["healthy"] is True and result["reasons"] == []:
             return {"state": "started", "reason": "worker_started", "started_at": result["started_at"]}
         if result["healthy"] is False and result["reasons"] == ["worker_start_failed"]:
             return {"state": "disabled", "reason": "worker_start_failed", "started_at": result["started_at"]}
-    except (OSError, ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+    except ValueError as error:
+        if error.args and error.args[0] in _WORKER_DETAIL_REASONS:
+            return {"state": "unknown", "reason": error.args[0], "started_at": None}
+    except (OSError, TypeError, KeyError, RecursionError, UnicodeError):
         pass
     return {"state": "unknown", "reason": "worker_start_unverified", "started_at": None}
 
@@ -144,21 +156,27 @@ def _progress(db, source, where, params, now):
     tables = ("notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id"
               if source == "parts" else
               "notification_delivery_attempts a JOIN notification_renders r ON r.delivery_id=a.delivery_id")
+    # Rows older than the stall window cannot prove recent progress, so the
+    # window sits on the progress column itself: lossless for the MAX, unlike
+    # r.updated_at which rollup bookkeeping leaves unchanged on some deliveries.
     state = ("p.state='delivered'" if source == "parts"
              else "r.state='delivered' AND a.state='delivered'")
     invalid = f"typeof({column}) NOT IN ('integer','real') OR {column}<0 OR {column}>?"
     sql = (f"SELECT MAX(CASE WHEN NOT ({invalid}) THEN {column} END), "
            f"COALESCE(SUM(CASE WHEN {invalid} THEN 1 ELSE 0 END),0) FROM {tables} "
-           f"WHERE {where} AND {state}")
-    return db.execute(sql, [now, now, *params]).fetchone()
+           f"WHERE {where} AND {state} AND ({invalid} OR {column}>=?)")
+    return db.execute(sql, [now, now, *params, now, now - CARD_STALL_S]).fetchone()
 
 
 def _delivery(data, cfg, now, deadline):
     path = data / "ledger.db"
     markers = (data / "update_in_progress.marker", data / "restore_pending.json")
     if any(os.path.lexists(marker) for marker in markers):
-        raise ValueError("database_unverified")
-    identity = _identity(path)
+        raise ValueError("marker_present")
+    try:
+        identity = _identity(path)
+    except (OSError, ValueError):
+        raise ValueError("database_identity") from None
     where, params = _scope_sql(cfg)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -197,9 +215,15 @@ def _delivery(data, cfg, now, deadline):
             f"WHERE {where} AND r.state IN ('sending','unknown') AND NOT EXISTS "
             "(SELECT 1 FROM notification_delivery_attempts a WHERE a.delivery_id=r.delivery_id "
             "AND a.state IN ('granted','unknown'))", params).fetchone()[0]
-        if (time.monotonic() >= deadline or _identity(path) != identity
-                or any(os.path.lexists(marker) for marker in markers)):
-            raise ValueError("database_unverified")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("observation_timeout")
+        if any(os.path.lexists(marker) for marker in markers):
+            raise ValueError("marker_present")
+        try:
+            if _identity(path) != identity:
+                raise ValueError("database_identity")
+        except OSError:
+            raise ValueError("database_identity") from None
         recent_progress = last is not None and now - last <= CARD_STALL_S
         issues = []
         if old_queued and not recent_progress and not any(x[1] for x in recent):
@@ -218,22 +242,42 @@ def _delivery(data, cfg, now, deadline):
             state = "unknown"
         else:
             state = "pending"
-        return {"state": state, "issues": issues, "queued": queued, "sending": sending, "unknown": unknown,
-                "oldest_created_at": oldest, "last_progress_at": last}
+        return {"state": state, "reason": None, "issues": issues, "queued": queued, "sending": sending,
+                "unknown": unknown, "oldest_created_at": oldest, "last_progress_at": last}
     finally:
         db.close()
+
+
+def _delivery_error_reason(error):
+    if isinstance(error, TimeoutError):
+        return "observation_timeout"
+    if isinstance(error, sqlite3.OperationalError) and "locked" in str(error).lower():
+        return "database_busy"
+    if isinstance(error, sqlite3.Error):
+        text = str(error).lower()
+        if "no such table" in text or "no such column" in text:
+            return "schema_mismatch"
+        return "database_busy" if "busy" in text else "schema_mismatch"
+    if isinstance(error, ValueError) and error.args and error.args[0] in DELIVERY_REASONS:
+        return error.args[0]
+    return "observation_timeout"
 
 
 def _observe(home, cfg, now, deadline):
     result = _empty(now)
     data = Path(home) / "data"
     result["restart_request"] = _restart(data, now)
+    # The delivery scan must never starve the worker check: its budget ends
+    # early enough for the worker pass to run on every observation.
+    delivery_deadline = deadline - WORKER_RESERVE_S
     try:
-        result["delivery"] = _delivery(data, cfg, now, deadline)
-    except (OSError, ValueError, TypeError, sqlite3.Error, TimeoutError, RecursionError):
-        pass
-    if time.monotonic() < deadline:
-        result["worker"] = _worker(home, cfg, now, deadline)
+        if time.monotonic() < delivery_deadline:
+            result["delivery"] = _delivery(data, cfg, now, delivery_deadline)
+        else:
+            result["delivery"]["reason"] = "observation_timeout"
+    except (OSError, ValueError, TypeError, sqlite3.Error, TimeoutError, RecursionError) as error:
+        result["delivery"]["reason"] = _delivery_error_reason(error)
+    result["worker"] = _worker(home, cfg, now, deadline)
     return result
 
 
@@ -244,15 +288,21 @@ def _valid_result(value, now):
     worker, delivery, restart = value["worker"], value["delivery"], value["restart_request"]
     if (type(worker) is not dict or set(worker) != {"state", "reason", "started_at"}
             or worker["state"] not in ("started", "disabled", "unknown")
-            or worker["reason"] not in _WORKER_REASONS or worker["reason"] != {
-                "started": "worker_started", "disabled": "worker_start_failed",
-                "unknown": "worker_start_unverified"}[worker["state"]]
+            or worker["reason"] not in _WORKER_REASONS | {"observation_timeout"}
+            or (worker["state"] == "started" and worker["reason"] != "worker_started")
+            or (worker["state"] == "disabled" and worker["reason"] != "worker_start_failed")
+            or (worker["state"] == "unknown" and worker["reason"] not in
+                {"worker_start_unverified"} | _WORKER_DETAIL_REASONS)
             or (worker["state"] == "unknown") != (worker["started_at"] is None)
             or worker["started_at"] is not None and not (0 < worker["started_at"] and
                                                            _stamp(worker["started_at"], now))):
         return False
-    if (type(delivery) is not dict or set(delivery) != {"state", "issues", "queued", "sending", "unknown",
-            "oldest_created_at", "last_progress_at"} or delivery["state"] not in _DELIVERY_STATES
+    if (type(delivery) is not dict or set(delivery) != {"state", "reason", "issues", "queued", "sending",
+            "unknown", "oldest_created_at", "last_progress_at"} or delivery["state"] not in _DELIVERY_STATES
+            or (delivery["reason"] is not None) != (delivery["state"] == "unknown"
+                                                    and not delivery["issues"]
+                                                    and delivery["queued"] is None)
+            or delivery["reason"] is not None and delivery["reason"] not in DELIVERY_REASONS
             or any(delivery[key] is not None and (type(delivery[key]) is not int or delivery[key] < 0)
                    for key in ("queued", "sending", "unknown"))
             or any(delivery[key] is not None and not _stamp(delivery[key], now)

@@ -91,7 +91,10 @@ _RECORDED_DELIVERY_JA = {
 }
 _WORKER_REASONS = frozenset({"worker_started", "worker_start_unverified", "worker_start_failed",
     "worker_restart_required", "route_flags_unready", "profile_mismatch", "owner_unverified",
-    "application_mismatch", "standalone_owned"})
+    "application_mismatch", "standalone_owned", "witness_missing", "witness_version", "witness_reason",
+    "witness_started_unknown", "launchd_pid_mismatch", "birth_mismatch", "observation_timeout"})
+_DELIVERY_REASONS = frozenset({"marker_present", "database_identity", "database_busy", "schema_mismatch",
+                               "observation_timeout", "queue_unverified"})
 
 # runtime_mode=standalone: the host's own status file (mcs_standalone)
 STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
@@ -525,6 +528,7 @@ def _delivery_snapshot(value, now: float):
     if (worker.get("state") not in ("started", "disabled", "unknown")
             or not isinstance(worker.get("reason"), str) or worker["reason"] not in _WORKER_REASONS
             or delivery.get("state") not in (*_DELIVERY_CURRENT, "progressing", "pending", "idle", "unknown")
+            or delivery.get("reason") is not None and delivery["reason"] not in _DELIVERY_REASONS
             or restart.get("state") not in ("requested", "unknown", "failed",
                                              "supervisor_restart_verified", "unverified")):
         return None
@@ -544,7 +548,9 @@ def _delivery_snapshot(value, now: float):
     if any(stamp is not None and (not finite_number(stamp) or not 0 <= stamp <= now)
            for stamp in stamps):
         return None
-    if (issues and None in (queued, sending, unknown)
+    if ((delivery.get("reason") is not None) != (
+                delivery["state"] == "unknown" and not issues and queued is None)
+            or issues and None in (queued, sending, unknown)
             or "waiting_without_progress" in issues and (
             not queued or stamps[1] is None or now - stamps[1] <= CARD_STALL_S
             or stamps[2] is not None and now - stamps[2] <= CARD_STALL_S)
@@ -562,7 +568,7 @@ def _delivery_snapshot(value, now: float):
         "observed_at": now,
         "worker": {key: worker.get(key) for key in ("state", "reason", "started_at")},
         "delivery": {**{key: delivery.get(key) for key in (
-            "state", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
+            "state", "reason", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
             "issues": list(issues)},
         "restart_request": {key: restart.get(key) for key in ("state", "at")},
     }
@@ -637,6 +643,16 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
     if snapshot is not None:
         obs["delivery_observation"] = snapshot
     current = snapshot["delivery"]["state"] if snapshot is not None else "unknown"
+    if current == "unknown" and snapshot is not None:
+        probe = snapshot["delivery"]
+        # A4: an unknown evaluation with a healthy read, no unknown renders and
+        # progress inside the stall window is delivery making progress, not an
+        # unverifiable scope; the reason closes while integrity counts stay as is.
+        if (probe.get("reason") is None and probe.get("unknown") == 0
+                and (probe.get("queued") or probe.get("sending"))
+                and probe.get("last_progress_at") is not None
+                and now - probe["last_progress_at"] <= CARD_STALL_S):
+            current = "progressing"
     if current in ("unknown", "pending"):
         reasons = ([_DELIVERY_UNVERIFIED] if current == "unknown" or previous in _DELIVERY_UNRESOLVED
                    else [])
@@ -1722,7 +1738,20 @@ def _delivery_observation_lines(report: dict) -> list[str]:
     queued = str(delivery["queued"]) + "件" if delivery["queued"] is not None else "不明"
     sending = str(delivery["sending"]) + "件" if delivery["sending"] is not None else "不明"
     unknown = str(delivery["unknown"]) + "件" if delivery["unknown"] is not None else "不明"
-    return [
+    reason = delivery.get("reason")
+    if reason == "marker_present":
+        note = "更新・復元中のため配送記録を読んでいません"
+    elif reason is not None:
+        note = "配送記録を読めません（" + {
+            "database_identity": "データベースを特定できません",
+            "database_busy": "データベースが応答しません",
+            "schema_mismatch": "データベースの形が合いません",
+            "observation_timeout": "観測が時間内に終わりません",
+            "queue_unverified": "待機の記録を確認できません",
+        }.get(reason, reason) + "）"
+    else:
+        note = None
+    lines = [
         f"通知の現在の観測（{_jst(snapshot['observed_at'])} JST）: "
         f"worker {worker_label}（起動 {_jst(worker['started_at'], with_year=True)}）、待機 {queued}、"
         f"送信中 {sending}、結果不明 {unknown}",
@@ -1730,6 +1759,9 @@ def _delivery_observation_lines(report: dict) -> list[str]:
         f"直近の進捗 {_jst(delivery['last_progress_at'], with_year=True)}（JST）",
         f"再起動の記録（{_jst(restart['at'], with_year=True)} JST）: {restart_label}",
     ]
+    if note is not None:
+        lines.insert(1, note)
+    return lines
 
 
 def _alert_lines(report: dict) -> list[str]:
