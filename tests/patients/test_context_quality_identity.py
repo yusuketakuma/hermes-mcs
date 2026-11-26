@@ -262,6 +262,27 @@ def test_pass_receipts_and_state_agree_on_the_code(world):
             db.db.rollback()
 
 
+def test_pass_reconstruction_with_extra_propositions(world):
+    """A valid pass with optional extra propositions reconstructs through the public path."""
+    _, path, config = world
+    config = {**config, 'semantic': {**config.get('semantic', {}), 'extra_propositions': ['E01']}}
+    with closing(Ledger(str(path))) as db:
+        _complete_context(db, config)
+        route, policy = _route(config), semantic_policy.semantic_config(config, key_present=True)[0]
+        assessment = state._quality_assessment(policy)
+        _, captured, _ = _captured(db, config, route, assessment)
+        identity = captured['identity']
+        descriptor = semantic_runtime.patient_source_assessment_descriptor(assessment, policy)
+        assert descriptor['policy'].get('extra_propositions') == ['E01']
+        db.db.execute('BEGIN')
+        try:
+            content = semantic_runtime.patient_source_pass_content(db.db, 1, identity, descriptor)
+            assert content is not None and content['descriptor']['assessment']['code'] == assessment['code']
+            assert content['descriptor']['policy'].get('extra_propositions') == ['E01']
+        finally:
+            db.db.rollback()
+
+
 def test_same_content_reextraction_keeps_overview_and_source_pass(world, monkeypatch):
     _, path, config = world
     item = {'category': 'living', 'text': 'synthetic private body', 'evidence': 'synthetic private body',
