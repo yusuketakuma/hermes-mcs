@@ -757,6 +757,31 @@ def test_lab_panel_checks_the_last_result_before_accepting_an_earlier_one(tail, 
     assert lab["normalized"]["confirmation"] == expected
 
 
+def test_short_quote_with_a_unit_cannot_hide_its_own_conditional():
+    raw = {"name": "カリウム", "value": "4.5", "unit": "mEq/L", "evidence": "カリウム 4.5mEq/L"}
+    lab, = extract_validation.validate({"labs": [raw]}, raw["evidence"] + "未満なら連絡")["labs"]
+    assert lab["unverified"] and lab["value"] == "4.5"
+
+
+@pytest.mark.parametrize("suffix", ["、分2", "未満なら連絡", "、ドライシロップは1mL"])
+def test_short_unitless_quote_cannot_hide_its_own_dose_or_threshold(suffix):
+    raw = {"name": "カリウム", "value": "4.5", "evidence": "カリウム 4.5"}
+    lab, = extract_validation.validate({"labs": [raw]}, raw["evidence"] + suffix)["labs"]
+    assert lab["unverified"] and lab["value"] == "4.5"
+
+
+@pytest.mark.parametrize("evidence", ["カリウム 4.5", "カリウム 4.5、補正カルシウム 8.5"])
+@pytest.mark.parametrize("suffix,expected", [
+    ("未満なら連絡", "unverified"), ("。次回8.0未満なら連絡", "quote_supported"),
+    ("\n次回8.0未満なら連絡", "quote_supported"), ("でした", "quote_supported")])
+def test_short_quote_keeps_the_source_panels_condition(evidence, suffix, expected):
+    body = "カリウム 4.5、補正カルシウム 8.5" + suffix
+    raw = {"name": "カリウム", "value": "4.5", "evidence": evidence}
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert lab["evidence"] == evidence
+    assert lab["normalized"]["confirmation"] == expected
+
+
 @pytest.mark.parametrize("unit", ["", "mEq/L"])
 def test_asserted_result_before_an_independent_conditional_clause(unit):
     body = f"カリウム 4.5{unit}でした、補正カルシウム 8.5未満なら連絡"

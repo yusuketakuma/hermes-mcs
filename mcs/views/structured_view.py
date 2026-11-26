@@ -294,7 +294,7 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
             evidence if located else None,
             unverified=item_unverified(lb) or contextual,
             flag=lb.get("flag") if lb.get("flag") in ("high", "low") else None,
-            patient_name=patient_name)
+            patient_name=patient_name, source_body=body)
         d = f"{lb['name']} {lb.get('value')}"
         if isinstance(lb.get("unit"), str) and lb["unit"]:
             d += lb["unit"]

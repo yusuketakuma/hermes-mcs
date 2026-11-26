@@ -231,7 +231,7 @@ def _candidate(record):
         if (record.get("kind") == "lab" and isinstance(name, str)
                 and (lab_analyte(name) or fold_surface(name)) == record.get("key")):
             lab = lab_candidate(name, value, unit, validation_quote, measured_on=measured, condition=condition,
-                                patient_name=record.get("patient_name"))
+                                patient_name=record.get("patient_name"), source_body=body)
             comparison = (lab["value"], lab["unit"])
             verified_source = (lab["confirmation"] == "quote_supported" and lab["measured_on"] == measured
                                and patient_item_scope(record, body, patient_name=record.get("patient_name"),

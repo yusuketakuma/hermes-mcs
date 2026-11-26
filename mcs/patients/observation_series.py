@@ -206,7 +206,7 @@ def _supported_item(item, values, date_kind):
         if not re.search(date_first + "|" + value_first, clause, re.I):
             return False
     candidate = lab_candidate(wanted["observation_name"], wanted["value"], wanted["unit"], clause,
-                              subject="patient", measured_on=wanted[date_kind], condition=condition)
+                              subject="patient", measured_on=wanted[date_kind], condition=condition, source_body=quote)
     if candidate["confirmation"] == "quote_supported" and candidate["measured_on"] == wanted[date_kind]:
         return True
     unit, value = wanted["unit"], wanted["value"]

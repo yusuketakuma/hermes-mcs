@@ -400,6 +400,7 @@ _LAB_NEXT_NUMBER = re.compile(
     r"(" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
     + r")(?:値|ハ|:|=)*[+-]?[0-9]")
 _LAB_RESULT_END = re.compile(r"[。、,;；]")
+_LAB_SOURCE_REST = re.compile(r"[^。!?！？;；\r\n\v\f\x1c-\x1e\x85\u2028\u2029]*")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -836,7 +837,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                   evidence: str | None, *, unverified: bool = False,
                   flag: str | None = None, subject: str | None = None,
                   status: str | None = None, measured_on: str | None = None,
-                  condition: str | None = None, patient_name: str | None = None) -> LabCandidate:
+                  condition: str | None = None, patient_name: str | None = None,
+                  source_body: str | None = None) -> LabCandidate:
     """Keep unknown/mismatched values separate; quote support is not human approval."""
     label = fold_surface(name)
     analyte = lab_analyte(name)
@@ -852,6 +854,16 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     unit_key = fold_surface(unit).replace("µ", "μ") if unit else None
     normalized_unit = _LAB_UNITS.get(unit_key, unit_key) if unit_key else None
     quote = fold_surface(evidence or "").replace("µ", "μ")
+    # A cropped quote can establish a value, but cannot hide the panel's predicate in its source.
+    panel_quote = quote
+    source_tail = ""
+    if number is not None and isinstance(source_body, str) and evidence and source_body != evidence:
+        span = locate_quote_span(source_body, evidence)
+        if span is None:
+            unverified = True
+        elif not re.search(r"[\r\n]\s*$", source_body[slice(*span)]):
+            source_tail = _LAB_SOURCE_REST.match(source_body, span[1])[0]
+            panel_quote += fold_surface(source_tail).replace("µ", "μ")
     names = _LAB_NAMES[analyte] if analyte else (label,)
     pattern = (r"(?P<name>" + _lab_name_pattern(names)
                + r")(?![a-z])(?:値|ハ|:|=)*")
@@ -889,15 +901,22 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                     continue
                 # A lone slash separates readings (ナトリウム 141 / カリウム 4.4); it is no unit.
                 quoted = "" if result[2] == "/" else result[2]
-                if not quoted and not _unit_less_reading(analyte, number, quote, match, result.end(1), lines):
-                    continue
+                if not quoted:
+                    # Each unitless reading needs a lab layout in both the quote and its source line.
+                    layouts = (quote,) if panel_quote == quote else (quote, panel_quote)
+                    if not all(_unit_less_reading(analyte, number, layout, match, result.end(1), lines)
+                               for layout in layouts):
+                        continue
                 unit_matches = ((_LAB_UNITS.get(quoted, quoted) == normalized_unit) if unit_key
                                 else not quoted or quoted in allowed_units)
                 if result.end() > row_end:
                     tail_end = _LAB_RESULT_END.search(quote, result.end(), line_end)
                     row_end = tail_end.start() if tail_end else line_end
                 # A comma before another labelled result continues the panel's predicate.
-                if _PANEL_ITEM.match(quote, row_end, line_end) and not _closed_lab_tail(quote, result.end(), line_end):
+                panel_end = len(panel_quote) if line_end == len(quote) else line_end
+                panel_break = _LAB_RESULT_END.search(panel_quote, result.end(), panel_end)
+                if (panel_break and _PANEL_ITEM.match(panel_quote, panel_break.start(), panel_end)
+                        and not _closed_lab_tail(panel_quote, result.end(), panel_end)):
                     continue
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.fullmatch(quote, result.end(), row_end):
                     readings.append((match, row_end))
@@ -934,9 +953,10 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         supported = False
     if readings and isinstance(evidence, str):
         reading, _ = readings[0]
-        if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
-                                        patient_name=patient_name) \
-                not in ("patient", "past"):
+        begin, end = starts[reading.start()], ends[reading.end() - 1]
+        if (clinical_scope.patient_source_scope(evidence, begin, end, patient_name=patient_name)
+                not in ("patient", "past") or source_tail and clinical_scope.patient_source_scope(
+                    evidence + source_tail, begin, end, patient_name=patient_name) == "conditional"):
             supported = False
     if flag:
         cues = r"高|↑|high" if flag == "high" else r"低|↓|low"
