@@ -292,7 +292,7 @@ def recover(ledger, cfg, result) -> dict:
             "SELECT last_run_at FROM notify_recovery_state WHERE singleton=1").fetchone()
     except sqlite3.Error:
         last = None
-    if last is not None and last[0] is not None and now - last[0] < RECOVER_INTERVAL_S:
+    if last is not None and isinstance(last[0], (int, float)) and 0 <= now - last[0] < RECOVER_INTERVAL_S:
         fixed["deferred"] = "interval"
         return fixed
     # Read and publish outside any write transaction (stat + fsync per

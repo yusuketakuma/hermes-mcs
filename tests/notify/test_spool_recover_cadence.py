@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 import notify_spool
 from notify_testkit import CFG, led as led  # noqa: F401  (fixture)
 
@@ -46,11 +48,12 @@ def test_cadence_state_survives_a_restart(led):
         reopened.close()
 
 
-def test_backdated_run_executes_again(led):
+@pytest.mark.parametrize("offset", [-1, 1])
+def test_timestamp_outside_cadence_window_executes_again(led, offset):
     notify_spool.recover(led, CFG, {})
     with led.db:
         led.db.execute(
             "UPDATE notify_recovery_state SET last_run_at=? WHERE singleton=1",
-            (time.time() - notify_spool.RECOVER_INTERVAL_S - 1,))
+            (time.time() + offset * (notify_spool.RECOVER_INTERVAL_S + 1),))
     fixed = notify_spool.recover(led, CFG, {})
     assert "deferred" not in fixed
