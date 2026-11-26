@@ -231,6 +231,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | カード配送クラッシュ | claim 残存 | `notify_transport` の claim 回収・`ops.card_resolve` | ✅/人手 |
 | apply 中断 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → 追跡済みファイルのreset（未追跡ファイルの追加削除なし） / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
 | apply 不合格・検証不能 | 事後差分 check / `unverifiable` | rollback（追跡済みファイルのreset+（schema_bump 時）束縛された人承認後のDB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
+| 提供元設定を `config.json` に集約した後の巻戻し | 巻戻し先が集約形式を読めると確認できない（`provider_rollback_target_unverified`） | コードの切替前に停止する。設定と更新記録を保持し、集約形式に対応した版の `mcs_update.py recover` で状態を確認する。[更新ガイド §3-A](../guides/UPGRADE_AGENT.md#3-a-提供元設定の保存形式が変わるときの復旧監視)に従う | 人手 |
 | DB 破損 | `valid_mcs_db` 失敗 | backups/ から人が復元（原本上書き禁止・別配置で検証後） | 人手のみ |
 | 端末喪失・暗号化 offsite からの回復 | 独立 SHA receipt・MAC・schema/件数・鮮度の検証 | 外部 escrow 鍵を明示 FD で入力→`drill`→`restore`。新規私有配置限定、DBより先に `awaiting_consent` を保持 | 人手。配置後も稼働再開しない |
 | schema_bump 更新 | 事前互換判定 | auto 中止。notify 承認時のみ適用し、rollback は DB 復元（消失を明示） | 人手 |
