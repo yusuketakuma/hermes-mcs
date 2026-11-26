@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "cloud生成したsemantic summaryのreceipt照合でroot投稿を正しく識別",
+  "summary": "thread内の返信だけでなくroot投稿自体を対象にしたsemantic summaryでも、支払い済みcloud receiptとの照合が正しく行われます。照合できない場合に同じ内容を証明なしで再publishすることがなくなります。",
+  "upgrade": "追加操作は不要です。cloud生成summaryの再利用判定が正しく行われ、不要な再publishを避けられます。",
+  "details": [
+    "semantic threadのroot判定を、対象指定でroleがtargetへ変わっても変わらないparent_idベースへ修正しました。",
+    "合成テストではcloud生成を示すsummary/candidateに対応する支払い済みreceiptを用意し、実際のreceipt検証経路を通るようにしました。"
+  ],
+  "refs": ["mcs/semantic/semantic_summary_stages.py", "tests/semantic/test_summary_fact_rebinding.py"]
+}

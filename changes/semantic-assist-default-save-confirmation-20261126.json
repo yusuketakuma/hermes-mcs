@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "保存前確認の外部Jev追加解析表示を実効条件へ修正",
+  "summary": "semantic.modeが明示offの設定では外部Jev追加解析を無効と表示し、mode未設定でsummary/loopの既定がassistの場合は、Jev key登録時に送信され得る条件付き表示のままにしました。",
+  "upgrade": "追加操作は不要です。保存前確認の表示が実際の有効条件へ合わせられます。",
+  "details": [
+    "外部Jev追加解析は、summary/loop/extract_qcのいずれかが有効で日次要求上限がある場合に条件付きで表示します。",
+    "semantic.modeを明示offにした場合は無効と表示します。mode未設定でkey不在のために現在offでも、key登録でassist既定が有効になり得る場合は送信可能性を隠しません。"
+  ],
+  "refs": [
+    "mcs/ops/setup/setup_wizard.py",
+    "tests/ops/test_setup_save_confirmation.py"
+  ]
+}
