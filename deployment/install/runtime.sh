@@ -999,6 +999,8 @@ printf 'アカウント情報は、ご自身の端末で入力してください
 printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
 printf '初期設定だけでは MCS に接続できません。専用 Chrome の起動・MCS へのログイン、通知先の接続確認まで行ってください。\n'
 printf '手順書: docs/guides/EASY_SETUP.md\n'
+printf 'AIエージェントに導入させる場合は、リポジトリURL（https://github.com/yusuketakuma/hermes-mcs）を読み込ませ、正常動作を確認するまで同じセッションを維持してください。\n'
+printf '初期設定後の継続確認:\n    %s setup postinstall\n' "$(shell_quote "$MCS_SHIM")"
 printf '後で続ける場合のコマンド:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
 printf '    # 同じ初期設定を開く別のコマンド:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"

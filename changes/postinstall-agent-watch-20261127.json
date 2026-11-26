@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "初期設定後の継続確認とAIエージェント向け修正依頼を追加",
+  "summary": "初期設定と専用Chromeログインの後に、mcs setup postinstall で動作確認を最長10分繰り返せるようになりました。連続して正常なら終了し、問題があればAIエージェントへ渡せる修正依頼をローカルに保存します。導入手順では、Codex・Claude Code・DevinなどにリポジトリURLを読み込ませ、正常動作を確認するまで同じセッションを維持することを推奨します。",
+  "upgrade": "追加操作は不要です。新規導入後は ~/.local/bin/mcs setup postinstall を実行すると継続確認できます。失敗時は ~/.mcs/data/postinstall-watch/agent-repair-brief.md をAIエージェントへ渡し、修正後に同じコマンドを再実行してください。",
+  "details": [
+    "確認は読取り専用の check と doctor --probe services --probe data を使います。確認コマンド自体は設定・患者データ・外部サービスを変更しません。",
+    "修正依頼ファイルは本人だけが読める権限で保存します。確認出力にはパスや件数が含まれることがあるため、外部へ送る前に内容を確認してください。",
+    "この機能はAIエージェントを自動起動しません。導入を実行しているエージェントのセッション内で修正と再確認を続ける運用を案内します。"
+  ],
+  "refs": [
+    "mcs/ops/setup/postinstall_watch.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_cli.py",
+    "docs/guides/SETUP_AGENT.md"
+  ]
+}

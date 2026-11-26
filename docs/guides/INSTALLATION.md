@@ -28,7 +28,9 @@ Hermes連携では、[Hermes v0.22.2](https://github.com/NousResearch/hermes-age
 > **AI エージェントにセットアップさせる場合:** 対話実行用の手順書は
 > [SETUP_AGENT.md](SETUP_AGENT.md) にあります — その文書を
 > エージェントに読み込ませれば、前提確認→形態選択→設定投入→検証
-> までを対話的に実行します。
+> までを対話的に実行します。Codex・Claude Code・Devinなどには
+> リポジトリURL（https://github.com/yusuketakuma/hermes-mcs）を読み込ませ、
+> 正常動作の継続確認が終わるまで同じセッションを維持してください。
 
 **LINE WORKS を使う場合:** 独自接続アダプターの
 [導入・接続手順](LINEWORKS.md)へ進んでください。本体の依存導入後に

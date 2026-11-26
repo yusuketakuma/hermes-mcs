@@ -48,6 +48,11 @@ plist/unit を検証します。サービス配置・起動は既存承認の範
    原因を報告してユーザー判断を待つ。自己判断でスキップしない。
 6. **完了時。** §7 の完了報告フォーマットで結果を出力する。
 
+導入を AI エージェントへ依頼するときは、`https://github.com/yusuketakuma/hermes-mcs`
+を読み込ませた Codex・Claude Code・Devin などのセッションで行うことを推奨する。
+ソフト導入が終わってもセッションを閉じず、初期設定・専用Chromeログイン・
+Phase 7 の継続確認が正常終了するまで同じセッションで修正と再確認を続ける。
+
 作業ディレクトリはこの checkout のリポジトリルートに揃える。開いている
 cwd に `./install.sh` があれば、その checkout をそのまま使う。無い場合だけ
 既存の clone 先を探すか、許可済みの clone を行ってそのルートへ移動する。
@@ -471,7 +476,21 @@ LINE WORKSのカード・操作では独立host内でアダプターが起動す
 実MCS取得・通知・カード操作の検証は許可された対象だけで行い、未実施なら明記します。
 Linuxのsystemd候補は実機適用・検証済みとは報告しません。
 
-## Phase 7 — 完了報告
+## Phase 7 — 導入後の継続確認と完了報告
+
+### 7-1. 正常動作の継続確認
+
+専用Chromeでの本人ログインと必要な接続確認まで終えたら、AIエージェントのセッションを閉じずに次を実行する。Path A/Bのどちらでも同じコマンドでよい。
+
+```bash
+~/.local/bin/mcs setup postinstall
+```
+
+このコマンドは `check` と `doctor --probe services --probe data` を最長10分、60秒間隔で繰り返し、連続2回正常なら exit 0 で終わる。失敗時は `~/.mcs/data/postinstall-watch/agent-repair-brief.md` に、秘密値を貼らずに修正へ戻るためのAIエージェント向け依頼を保存する。失敗が出た場合はセッションを閉じず、briefの失敗内容と `mcs setup check` の対処行に従って修正し、`mcs setup postinstall` を再実行する。修正が実データ・稼働サービス・外部送信へ及ぶ場合は、既存の明示承認の範囲だけで行う。
+
+短く確認するときは `--once`、待つ時間や間隔は `--duration`・`--interval`・`--stable` で変えられる。exit 0 になるまでセットアップ完了とは報告しない。
+
+### 7-2. 完了報告
 
 セットアップ完了時に次の形式で報告する:
 
@@ -485,6 +504,7 @@ Linuxのsystemd候補は実機適用・検証済みとは報告しません。
 - LINE WORKS利用時: 認証ファイル=権限確認済み、独立プロセス=稼働/不要/未起動
 - スケジュール: hermes cron=N件 / launchd=N件 / standalone host=稼働・未起動
 - 検証: mcs_setup check = exit 0 / 警告N件（内容: …）
+- 導入後の継続確認: mcs setup postinstall = exit 0（連続正常N回）/ 未完了（原因: …）
 - 初回 run: 成功（messages=N, patients=N）/ 失敗（原因: …）
 - 通知先: discord:… / slack:… / lineworks:… / なし
 - 次の注意: Slack/Discord plugin更新はgateway、LINE WORKS更新は独立プロセスへ反映

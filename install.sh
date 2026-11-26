@@ -66,6 +66,7 @@ usage() {
     awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
     printf '\n通常はオプションなしで実行し、画面の番号を選んでください。\n'
     printf 'ソフトの準備後は、初期設定へ続けて進むか後で設定するか選べます。\n'
+    printf 'AIエージェントに導入させる場合は、リポジトリURLを読み込ませたセッションを正常動作確認まで維持してください。\n'
 }
 
 # EOF is cancellation, never acceptance of a recommended action.
@@ -172,7 +173,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="a1551e2d3ed9c1036b2ff0b9da2da2cfcd59ee9cba3fd3905c79efd767384dd1"
+INSTALL_RUNTIME_SHA256="067f8f58a6f47fe13895a6d98d4259592fcc5b6f97e600dadfa6898fe6181288"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
