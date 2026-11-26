@@ -432,10 +432,9 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
     assert extract_llm._SLOT_OVERRIDE is None
 
 
-def test_resident_settles_carry_before_a_jev_only_semantic_pass(monkeypatch, capsys):
-    """A carried claim's lease ticks through a long Jev-only drain: the resident
-    settles the carry — commit or renewal — before the pass, never after it."""
-    now = [0.0]
+def _resident_jev_harness(monkeypatch, events, now, settle):
+    """Shared harness: lane 2 resident with a semantic pass that spans 1300s —
+    longer than the 1230s carry lease — and one carry row per run_pending."""
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
@@ -457,7 +456,6 @@ def test_resident_settles_carry_before_a_jev_only_semantic_pass(monkeypatch, cap
     monkeypatch.setattr(extract_llm_resident, '_jev_only_semantic', lambda cfg: True)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(extract_llm.local_llm.TURN_LOCK_ENV, raising=False)
-    events = []
 
     def semantic(led, stop=None):
         events.append(("semantic",))
@@ -474,22 +472,51 @@ def test_resident_settles_carry_before_a_jev_only_semantic_pass(monkeypatch, cap
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
     monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
-
-    def settle(led, carry, **kw):
-        events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
-
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
     monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+
+
+def test_resident_never_starts_a_jev_pass_while_a_carry_remains(monkeypatch, capsys):
+    """A carried claim's lease ticks through a long Jev-only drain whose worst
+    span exceeds the lease a renewal grants: when the pre-pass settle cannot
+    empty the carry, the pass must not start at all — the loop proceeds to the
+    carry processing instead. The drain span here (1300s) crosses the 1230s
+    lease, so any pass that did start would strand the row."""
+    now = [0.0]
+    events = []
+
+    def settle(led, carry, **kw):
+        events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
+        # the write lock stays busy: the renewal does not empty the carry
+
+    _resident_jev_harness(monkeypatch, events, now, settle)
     assert extract_llm.main() == 0
     kinds = [event[0] for event in events]
+    assert "run_pending" in kinds            # carry processing still proceeds
+    # the pass may run in the opening iteration while the carry is still empty,
+    # but once the first run_pending produces a carried row it must never run
+    # again: the drain span here crosses the lease the renewal grants
+    first_run = kinds.index("run_pending")
+    assert "semantic" not in kinds[first_run:]
+
+
+def test_resident_runs_the_jev_pass_once_the_settle_empties_the_carry(monkeypatch, capsys):
+    """When the pre-pass settle commits the carry, no lease is at risk and the
+    pass may run — the settle still precedes it, never the other way round."""
+    now = [0.0]
+    events = []
+
+    def settle(led, carry, **kw):
+        events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
+        carry.clear()   # a taken write lock commits the result at once
+
+    _resident_jev_harness(monkeypatch, events, now, settle)
+    assert extract_llm.main() == 0
+    kinds = [event[0] for event in events]
+    assert "semantic" in kinds
     first_pass = kinds.index("semantic")
     assert kinds[first_pass - 1] == "settle"
-    second_pass = kinds.index("semantic", first_pass + 1)
-    # the second pass carries the row the first run_pending returned, and the
-    # settle right before it is the non-final fence-checked renewal attempt
-    prior = events[second_pass - 1]
-    assert prior[0] == "settle" and prior[1] == [("row", 0.0, "commit")] and prior[2] is False
 
 
 @pytest.mark.parametrize("lane", ["0", "4"])
