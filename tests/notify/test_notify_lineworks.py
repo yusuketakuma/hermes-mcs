@@ -1,6 +1,7 @@
 """Synthetic LINE WORKS render, grant, receipt, action and restore isolation."""
 import notify_recovery
 import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 import notify_journal
@@ -229,3 +230,80 @@ def test_lineworks_revoke_invalidates_tokens_without_remote_delete(led):
                                  {**SCOPE, "message_id": MID})
     assert _apply(led, req)["outcome"] == "rejected"
     assert _card(led)["delivery_state"] == "revoked"
+
+
+@pytest.mark.parametrize("notify_all_replies", [False, True])
+def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, notify_all_replies):
+    from ingest_testkit import _message
+    from notify_testkit import _attach
+
+    _seed_thread(led, mids=(100,))
+    led.notify_all_replies = notify_all_replies
+    day = 86400
+
+    def reply(mid, body, age):
+        posted = datetime.fromtimestamp(NOW - age, timezone.utc).isoformat()
+        return _message(mid=mid, parent_id=100, body=body, posted_at=posted)
+
+    led.save_thread_replies([reply(101, "SYNTHETIC-OLD", 2 * day),
+                             reply(102, "SYNTHETIC-NEW", 3600)], 1,
+                            notify={"source": "reply_job"}, notify_max_age_s=day)
+    old_file = _attach(led, 101, name="old-synthetic.txt")
+    new_file = _attach(led, 102, name="new-synthetic.txt")
+    event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+    assert json.loads(event["payload"])["message_ids"] == [102]
+    # Dispatch later, after both posts have aged out, with the setting removed.
+    assert _dispatch(led, event, LINEWORKS, now=NOW + 3 * day)["dispatched"]
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    shown = json.loads(led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                                     (render["manifest_id"],)).fetchone()[0])
+    assert 101 not in shown and 102 in shown
+    assert "SYNTHETIC-OLD" not in render["spec_json"] and "SYNTHETIC-NEW" in render["spec_json"]
+    files = {p["attachment_id"] for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part"}
+    assert new_file in files and old_file not in files
+    assert led.db.execute("SELECT body_text FROM messages WHERE message_id=101").fetchone()[0] == "SYNTHETIC-OLD"
+
+
+def test_lineworks_legacy_window_preserves_a_delivered_reply_without_an_intent(led):
+    from notify_testkit import _msg
+
+    _seed_thread(led)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    _deliver(led, _latest_render(led))
+    _msg(led, 102, parent=100)
+    _msg(led, 103, parent=100)
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=?,posted_at_ts=? WHERE message_id IN (101,102,103)",
+                       (NOW - 300, NOW - 2 * 86400))
+        led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
+    # 101 has a face receipt, 102 has no delivery proof, 103 has a frozen intent.
+    cfg = {**LINEWORKS, "notify_max_age_h": 24}
+    _dispatch(led, _intent(led, payload={"message_ids": [103]}), cfg)
+    render = _latest_render(led)
+    assert render["op"] == "update"
+    shown = led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                           (render["manifest_id"],)).fetchone()[0]
+    assert json.loads(shown) == [100, 101, 103]
+    assert "返信未取得" not in render["spec_json"]
+
+
+def test_lineworks_rechecks_a_legacy_queued_face_before_grant(led):
+    from notify_testkit import _msg
+
+    _seed_thread(led)
+    _msg(led, 102, parent=100, body="SYNTHETIC-LEGACY-OLD", ts=int(NOW - 2 * 86400))
+    led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=102", (NOW - 300,))
+    led.db.commit()
+    _dispatch(led, _intent(led), LINEWORKS)
+    legacy = _latest_render(led)
+    assert "SYNTHETIC-LEGACY-OLD" in legacy["spec_json"]
+
+    cfg = {**LINEWORKS, "notify_max_age_h": 24}
+    result = _apply(led, envelopes.transport_begin(_claim(legacy)), cfg)
+    assert not result["granted"] and result["error"] == "denied_source_changed"
+    updated = _latest_render(led)
+    assert updated["delivery_id"] != legacy["delivery_id"]
+    assert "SYNTHETIC-LEGACY-OLD" not in updated["spec_json"]
+    begin = envelopes.transport_begin(_claim(updated, attempt="d" * 16))
+    assert _apply(led, begin, cfg)["granted"]

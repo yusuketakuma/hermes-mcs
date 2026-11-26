@@ -13,7 +13,7 @@ from mcs_util import loads_dict
 from notify_render import (
     ACTION_FIRST_LAYOUT,
     anchor_keys, card_content, content_fingerprint, masked_name, preview_privacy,
-    UNKNOWN_DATE, live_notification_rows, mmdd, project_display_name, own_post, presenter, quiet_thread_card, reply_source)
+    UNKNOWN_DATE, thread_notification_rows, mmdd, project_display_name, own_post, presenter, quiet_thread_card, reply_source)
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
@@ -854,10 +854,10 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
     if (card["transport"] == "lineworks" and card["kind"] == "thread"
             and not content.get("urgent")):
         from notify_render import structured_block, extraction_failed, progress_state
-        pending = db.execute("SELECT message_id,first_seen FROM messages WHERE project_id=? "
+        pending = db.execute("SELECT message_id,first_seen,posted_at_ts,notify_age_excluded FROM messages WHERE project_id=? "
                              "AND (message_id=? OR parent_id=?)",
                              (card["project_id"], card["root_message_id"], card["root_message_id"])).fetchall()
-        pending = live_notification_rows(db, card["project_id"], pending)
+        pending = thread_notification_rows(db, card, pending, cfg)
         delivered = notify_parts.delivered_members(db, card, legacy=True) | notify_parts.delivered_members(db, card, legacy=False)
         for name in notify_parts.prior_body_posts(db, card):
             match = notify_parts.BODY_POST_KEY.fullmatch(name)

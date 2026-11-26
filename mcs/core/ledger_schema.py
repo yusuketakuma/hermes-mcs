@@ -1081,6 +1081,8 @@ def _migrate_body(db, cols, old_version: int):
             adds.append(ddl)
     if adds:
         _script(db, ";".join(adds) + ";")
+    if "notify_age_excluded" not in cols("messages"):
+        db.execute("ALTER TABLE messages ADD COLUMN notify_age_excluded INTEGER")
     if "notified_at" not in cols("messages"):
         db.execute(
             "ALTER TABLE messages ADD COLUMN notified_at REAL")

@@ -294,6 +294,12 @@ class LedgerCaptureMixin:
         transaction for unread, backfill and reply arrivals alike.
         late_only keeps the candidates to notify_ids (save_messages'
         notify_late rows): no recent-read or all-replies widening."""
+        if new_ids and notify_max_age_s is not None:
+            # Read replies outside the window can be stored without ever becoming intent candidates.
+            self.db.execute(
+                "UPDATE messages SET notify_age_excluded=1 WHERE message_id IN (SELECT value FROM json_each(?)) "
+                "AND posted_at_ts!=0 AND posted_at_ts<?",
+                (json.dumps(new_ids), now - notify_max_age_s))
         history = initial_import_state.classify_tx(
             self, project_id, [*new_ids, *changed_ids, *notify_ids], now)
         history_updates = sorted(history & (set(new_ids) | set(changed_ids)
@@ -378,7 +384,7 @@ class LedgerCaptureMixin:
         keep = {r["message_id"] for r in self.db.execute(
             q, (*ids, now - max_age_s))}
         stale = [i for i in ids if i not in keep]
-        self._mark_notified(stale, now)
+        self._mark_notified(stale, now, age_excluded=True)
         return [i for i in ids if i in keep]
 
     def _posted_after(self, ids: list, ts: float) -> list:
@@ -396,13 +402,14 @@ class LedgerCaptureMixin:
              "AND message_id IN (" + ",".join("?" * len(ids)) + ")")
         return [r["message_id"] for r in self.db.execute(q, ids)]
 
-    def _mark_notified(self, ids: list, now: float):
+    def _mark_notified(self, ids: list, now: float, *, age_excluded=False):
         """Caller holds `with self.db` — same commit as the outbox intent,
         so a crash cannot produce a notified-but-unqueued message."""
         if not ids:
             return
+        age_flag = ",notify_age_excluded=1" if age_excluded else ""
         self.db.execute(
-            "UPDATE messages SET notified_at=? WHERE message_id IN ("
+            f"UPDATE messages SET notified_at=?{age_flag} WHERE message_id IN ("
             + ",".join("?" * len(ids)) + ")", [now, *ids])
 
     def save_messages(self, msgs, project_id: int | None = None,
@@ -630,8 +637,8 @@ class LedgerCaptureMixin:
           INSERT INTO messages(message_id,project_id,parent_id,sender_id,
             sender_name,sender_type,profession,organization,posted_at,
             posted_at_ts,is_unread,body_html,body_text,body_state,
-            content_hash,reply_count,first_seen,updated_seen)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            content_hash,reply_count,first_seen,updated_seen,notify_age_excluded)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
           ON CONFLICT(message_id) DO UPDATE SET
             -- history/snippet responses may omit metadata; keep the
             -- authoritative values already hydrated in the ledger.

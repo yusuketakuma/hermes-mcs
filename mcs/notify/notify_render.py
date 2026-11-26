@@ -42,6 +42,7 @@ from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
 from mcs_contract import project_url, valid_group_name, valid_id
+from mcs_config import positive_number_problem
 from mcs_util import valid_hash
 from message_observations import get_message_metadata
 from message_metadata import is_self_sender, mentions_self
@@ -368,14 +369,14 @@ def _signal_tier(sig) -> str | None:
     return mcs_signals.SIGNAL_TIERS.get(sig.get("type"))
 
 
-def _thread_context(db, card, msgs, waiting=frozenset(), *, legacy_scope=False) -> str:
+def _thread_context(db, card, msgs, stored, *, legacy_scope=False) -> str:
     """② 投稿数 · 未取得の返信 · 添付件数 · 自分宛て — only facts that
     are present; '' when there is nothing to say beyond the posts."""
     live = [m for m in msgs if m["body_state"] != "deleted"]
     parts = [f"{len(msgs)}投稿"] if msgs else []
     own = own_post(card, legacy_scope=legacy_scope)
     replies = (msgs[0].get("reply_count") or 0) if msgs else 0
-    if waiting or own == card["root_message_id"]:
+    if stored != len(msgs) or own == card["root_message_id"]:
         root = db.execute("SELECT reply_count FROM messages WHERE message_id=? AND project_id=?",
                           (card["root_message_id"], card["project_id"])).fetchone()
         replies = (root[0] or 0) if root else 0
@@ -390,7 +391,7 @@ def _thread_context(db, card, msgs, waiting=frozenset(), *, legacy_scope=False) 
     elif own is not None:
         missing = 0       # thread-wide fetch gaps belong to the root card
     else:
-        missing = replies - (len(msgs) + len(waiting) - 1)
+        missing = replies - (stored - 1)
     if missing > 0:
         parts.append(f"返信未取得 {missing}件")
     ids = [m["message_id"] for m in live]
@@ -683,6 +684,37 @@ def live_notification_rows(db, project_id, rows):
     for pid, mids in by_project.items():
         quiet.update(initial_import_state.quiet_notification_ids(db, pid, mids))
     return [row for row in rows if row["message_id"] not in quiet]
+
+
+def thread_notification_rows(db, card, rows, cfg):
+    """Retain capture eligibility and this card's already delivered posts."""
+    rows = live_notification_rows(db, card["project_id"], rows)
+    if "transport" not in card.keys() or card["transport"] != "lineworks":
+        return rows
+    # Older ledgers only know the post and discovery times. Keep any positive
+    # intent or delivered face even when today's setting would exclude it.
+    hours = cfg.get("notify_max_age_h") if isinstance(cfg, dict) else None
+    age = hours * 3600 if positive_number_problem(hours) is None else None
+    excluded = {r["message_id"] for r in rows if r["notify_age_excluded"] or (
+        r["notify_age_excluded"] is None and age is not None and r["first_seen"]
+        and r["posted_at_ts"] and r["posted_at_ts"] < r["first_seen"] - age)}
+    if not excluded:
+        return rows
+    for row in db.execute(
+            """SELECT i.coverage FROM notification_intent_cards i JOIN notify_outbox o USING(event_id)
+               WHERE i.card_id=? AND o.kind='new_messages' AND i.state IN ('pending','delivered')
+               UNION ALL SELECT m.shown FROM notification_view_manifests m
+               JOIN notification_renders r ON r.manifest_id=m.manifest_id
+               JOIN notification_render_parts p ON p.delivery_id=r.delivery_id
+               WHERE m.card_id=? AND p.part_id='card' AND p.state='delivered'""",
+            (card["card_id"], card["card_id"])):
+        try:
+            ids = json.loads(row[0])
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if isinstance(ids, list) and all(positive(mid) for mid in ids):
+            excluded.difference_update(ids)
+    return [row for row in rows if row["message_id"] not in excluded]
 
 
 def source_fingerprint(db, card, *, legacy_scope=False) -> str:
@@ -999,14 +1031,15 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         only = own_post(card, legacy_scope=legacy_scope)
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
-                      posted_at,body_state,first_seen,
+                      posted_at,posted_at_ts,body_state,first_seen,notify_age_excluded,
                       reply_count FROM messages
                WHERE (message_id=? OR parent_id=?) AND project_id=?
                  AND (? IS NULL OR message_id=?)
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], only, only, card["root_message_id"]))]
-        msgs = [m for m in live_notification_rows(db, card["project_id"], msgs) if m["message_id"] not in waiting]
+        stored = len(msgs)
+        msgs = [m for m in thread_notification_rows(db, card, msgs, cfg) if m["message_id"] not in waiting]
         if isinstance(cfg, dict):
             progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
@@ -1021,7 +1054,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                 preview_urgencies[m["message_id"]] = verdict
         tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
-        context = _thread_context(db, card, msgs, waiting, legacy_scope=legacy_scope)
+        context = _thread_context(db, card, msgs, stored, legacy_scope=legacy_scope)
         if layout >= 2:
             # the title is the patient alone (never cut on a phone); the
             # urgency leads the line under it, then start date and counts

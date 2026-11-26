@@ -16,7 +16,7 @@ import notify_cards as cards
 import notify_scope
 import notify_spool
 import notify_parts
-from notify_render import quiet_thread_card, source_fingerprint
+from notify_render import quiet_thread_card, source_fingerprint, thread_notification_rows
 from notify_scope import card_row, render_row, scope_matches, stored_scope
 
 # receipt error_codes proving the bound Discord message no longer
@@ -615,6 +615,16 @@ def _begin_check(db, req, cfg) -> str | None:
             if cards.unsettled_attempt(db, card["card_id"]):
                 return "in_flight"
             return "history_notification_disabled"
+        if card["transport"] == "lineworks" and card["kind"] == "thread" and render["op"] != "revoke":
+            # A pre-upgrade queued face may still name a reply excluded at capture.
+            shown = db.execute(
+                """SELECT m.message_id,m.first_seen,m.posted_at_ts,m.notify_age_excluded
+                   FROM notification_view_manifests v JOIN json_each(v.shown) j
+                   JOIN messages m ON m.message_id=j.value AND m.project_id=?
+                   WHERE v.manifest_id=? AND v.card_id=?""",
+                (card["project_id"], render["manifest_id"], card["card_id"])).fetchall()
+            if len(thread_notification_rows(db, card, shown, cfg)) != len(shown):
+                return "source_changed"
         if card["transport"] == "slack" and card["kind"] == "thread" and render["op"] != "revoke":
             try:
                 parts = json.loads(render["spec_json"])["parts"]
