@@ -120,19 +120,33 @@ def _prove_cloud_summaries(db):
     for row in (_kind_rows(db, semantic_policy.KIND_SUMMARY)
                  + _kind_rows(db, semantic_policy.KIND_CANDIDATE)):
         meta = json.loads(row["meta"])
-        reservation_id = f"synthetic-summary-receipt-{row['artifact_id']}"
         owner = {"semantic_target_id": row["message_id"], "semantic_thread_root": roots[0],
                  "semantic_source": source, "semantic_generation": generation,
                  "semantic_phase": "summary"}
-        db.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=row["message_id"],
-                        meta={"reservation_id": reservation_id, "route": "semantic_backlog",
-                              "owner": owner})
-        db.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=row["message_id"],
-                        meta={"reservation_id": reservation_id})
+        import anthropic_client
+        import cloud_policy
+        cloud_cfg = {"cloud_llm": {
+            "mode": "on", "project_ids": [1], "provider": "anthropic",
+            "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 25, "monthly_cost_limit_usd": 75}},
+            "semantic_backlog_until": "2999-01-01T00:00:00+09:00"}}
+        body = {"model": anthropic_client.MODEL, "max_tokens": 100,
+                "system": "synthetic system",
+                "messages": [{"role": "user", "content": f"synthetic summary receipt {row['artifact_id']}"}]}
+        reserve = cloud_policy.usage_reserver(
+            db, cloud_cfg, route="semantic_backlog", project_id=1,
+            unit_key=f"semantic:synthetic-summary-receipt:{row['artifact_id']}",
+            message_id=row["message_id"], owner=owner)
+        reservation = reserve(body, 2)
+        reservation_id = reservation["reservation_id"]
+        cloud_policy.record_result(db, reservation, {
+            "model": anthropic_client.MODEL, "request_fp": reservation["request_fp"],
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+            "http_class": "http_200", "request_id": "req_synthetic", "error_kind": None})
         meta["inference_requests"] = [reservation_id]
         db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
                       (json.dumps(meta, ensure_ascii=False), row["artifact_id"]))
-    db.db.commit()
+        # usage_reserver owns its accounting transaction, so no fixture update may remain open.
+        db.db.commit()
 
 
 @pytest.fixture
