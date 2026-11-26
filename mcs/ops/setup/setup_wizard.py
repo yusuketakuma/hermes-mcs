@@ -624,11 +624,15 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     endpoint, _model = local_llm.resolve(cfg)
     print("  通常の要約・抽出: このMacのAIで処理します。接続先: "
           + shown(endpoint))
-    project_scope = "全対象" if semantic["project_ids"] is None else shown(semantic["project_ids"])
+    scope_policy, _ = semantic_policy.jev_scope_policy(cfg)
+    project_scope = "全対象" if scope_policy["project_ids"] is None else shown(scope_policy["project_ids"])
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if jev_held:
         print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", transfer_status()))
-    elif any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
+    elif ((semantic["mode"] != "off" or "mode" not in (cfg.get("semantic") or {}))
+          and (semantic["summary_mode"] != "off" or semantic["loop_mode"] != "off"
+               or semantic["extract_qc"] != "off")
+          and semantic["daily_request_budget"] > 0):
         print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
               "機能ごとの許可条件がそろった場合にJev APIへ送ります。患者名を含む本文は匿名化しません。")
     else:
