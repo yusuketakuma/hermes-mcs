@@ -140,7 +140,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
     if "mode" in block and mode != "off" and "project_ids" not in block:
         errors.append("config: semantic_project_scope_required")
     for feature in ("summary_mode", "loop_mode"):
-        value = block.get(feature, "off")
+        value = block.get(feature, "assist")
         if value not in MODES:
             errors.append(f"config: semantic_{feature}_invalid")
         else:

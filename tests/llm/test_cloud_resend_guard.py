@@ -407,7 +407,7 @@ def test_legacy_success_without_prompt_proof_cannot_authorize_model_change(tmp_p
                               "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         selected = _medium_selection('semantic_backlog')
         with pytest.raises(anthropic_client.AnthropicError):
-            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner('new-generation'),
+            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner(),
                      max_tokens=selected['max_tokens'], selection=selected)
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
@@ -439,7 +439,7 @@ def test_unproved_legacy_low_cannot_authorize_effort_change(tmp_path, monkeypatc
                               "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", ('0' * 64,))
         selected = _medium_selection('semantic_backlog')
         with pytest.raises(anthropic_client.AnthropicError):
-            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner('new-generation'),
+            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner(),
                      max_tokens=selected['max_tokens'], selection=selected)
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
@@ -484,7 +484,7 @@ def test_discarded_settled_result_cannot_authorize_effort_change(tmp_path, monke
             cloud_policy.record_disposition_tx(ledger, old, 'discarded_scope')
         selected = _medium_selection('semantic_backlog')
         with pytest.raises(anthropic_client.AnthropicError):
-            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner('new-generation'),
+            _reserve(ledger, 'synthetic prompt', 'openai', unit='new', owner=_owner(),
                      selection=selected, max_tokens=selected['max_tokens'])
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
@@ -497,7 +497,7 @@ def test_semantic_owner_without_matching_unit_fingerprint_cannot_bypass_unknown(
             ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.owner.semantic_source',?) "
                               "WHERE kind='cloud_usage_reserve'", ('b' * 64,))
         with pytest.raises(anthropic_client.AnthropicError):
-            _reserve(ledger, 'synthetic prompt', unit='new', owner=_owner('new-generation'))
+            _reserve(ledger, 'synthetic prompt', unit='new', owner=_owner())
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
@@ -1151,3 +1151,83 @@ def test_c1_completed_semantic_quality_repair_is_rebuilt_once_under_sonnet(tmp_p
         assert caught.value.detail == 'cloud_unit_unresolved'
         assert caught.value.history_refusal == 'repeat_success'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def _semantic_owner(generation, *, phase='facts', source=None):
+    return {'semantic_target_id': 1, 'semantic_thread_root': 1,
+            'semantic_source': source or 'a' * 64,
+            'semantic_generation': generation, 'semantic_phase': phase}
+
+
+def _settled_success(ledger, reservation):
+    cloud_policy.record_result(ledger, reservation, {
+        **_result(reservation, 'http_200', None),
+        'usage': {'input_tokens': 10, 'output_tokens': 2}})
+
+
+def test_semantic_previous_generation_success_does_not_block_reprocess_send(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:old',
+                            owner=_semantic_owner('old-generation'))
+        _settled_success(ledger, previous)
+        current = _reserve(ledger, 'synthetic prompt', unit='semantic:2:new',
+                           owner=_semantic_owner('new-generation'))
+        assert current['owner']['semantic_generation'] == 'new-generation'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def test_semantic_same_generation_success_still_blocks_duplicate_send(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:old',
+                            owner=_semantic_owner('same-generation'))
+        _settled_success(ledger, previous)
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', unit='semantic:2:new',
+                     owner=_semantic_owner('same-generation'))
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def _make_prebinding_legacy(ledger, reservation):
+    with ledger.db:
+        for kind in ('cloud_usage_reserve', 'cloud_usage_result'):
+            ledger.db.execute(
+                "UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp','$.input_binding') "
+                "WHERE kind=? AND json_extract(meta,'$.reservation_id')=?",
+                (kind, reservation['reservation_id']))
+        ledger.db.execute(
+            "UPDATE artifacts SET created_at=? WHERE kind='cloud_usage_reserve' "
+            "AND json_extract(meta,'$.reservation_id')=?",
+            (cloud_policy.SEMANTIC_MEMBER_BINDING_START_EPOCH - 1, reservation['reservation_id']))
+
+
+def test_prebinding_semantic_success_is_migration_evidence_not_duplicate_proof(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:abc123', owner={})
+        _settled_success(ledger, previous)
+        _make_prebinding_legacy(ledger, previous)
+        current = _reserve(ledger, 'synthetic prompt', unit='semantic:2:current',
+                           owner=_semantic_owner('new-generation'))
+        assert current['owner']['semantic_generation'] == 'new-generation'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def test_postbinding_unbound_semantic_success_still_blocks_duplicate_send(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:abc123', owner={})
+        _settled_success(ledger, previous)
+        with ledger.db:
+            for kind in ('cloud_usage_reserve', 'cloud_usage_result'):
+                ledger.db.execute(
+                    "UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp','$.input_binding') "
+                    "WHERE kind=? AND json_extract(meta,'$.reservation_id')=?",
+                    (kind, previous['reservation_id']))
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', unit='semantic:2:current',
+                     owner=_semantic_owner('new-generation'))
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1

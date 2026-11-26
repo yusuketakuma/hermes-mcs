@@ -121,6 +121,26 @@ def history_target_ready(db, project_id, message_id):
         (project_id, message_id, cutoff, cutoff, cutoff)).fetchone() is not None
 
 
+def history_thread_ready(db, project_id, message_id):
+    """Keep a thread with any newly arrived or edited member in the realtime lane."""
+    cutoff = time.time() - 600
+    target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
+                        "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
+    if target is None:
+        return False
+    row = db.execute("""
+      SELECT NOT EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.project_id=? AND (m.message_id=? OR m.parent_id=?)
+          AND (m.first_seen IS NULL OR m.first_seen>?
+               OR (m.notified_at IS NOT NULL AND m.notified_at>?)
+               OR EXISTS (SELECT 1 FROM message_revisions r
+                          WHERE r.message_id=m.message_id AND r.observed_at>?))
+      )
+    """, (project_id, target[0], target[0], cutoff, cutoff, cutoff)).fetchone()
+    return bool(row and row[0])
+
+
 def history_thread_allowed(db, project_id, message_id):
     """Require every prompt member to match the receipted history snapshot occurrence."""
     scope = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_history_scope' "

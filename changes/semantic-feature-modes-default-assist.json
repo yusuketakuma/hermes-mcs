@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "意味解析の要約・loopの既定をassistに変更",
+  "summary": "semantic ブロックで summary_mode・loop_mode を設定していない環境でも、既定で assist モード（補助表示）として要約・loop の意味解析が動くようになります。これまで既定は off で、結果を読む機能がないため意味解析 job は実行されず pending に残るだけでした。この変更により未設定の環境でも job が実行され、要約・loop の補助結果が蓄積されます。ローカルLLMの処理量と Jev の要求数が増えます。従来どおり明示的に off を設定すれば無効にできます。extract_qc の既定は off のままです。",
+  "upgrade": "設定の変更は不要です。summary_mode・loop_mode を明示設定している環境には影響ありません。",
+  "details": "semantic_policy の summary_mode・loop_mode の未設定時の既定を off から assist に変更。assist は結果を補助表示に載せるが強制はしないモードで、enforce に必要なキャリブレーション証跡の要件は変わらない。mode が off の環境では従来どおり意味解析は動かない。",
+  "refs": []
+}

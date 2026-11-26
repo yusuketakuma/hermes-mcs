@@ -309,7 +309,7 @@ class CloudInferenceUnit:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
                                    or cloud_send_admission.tightened(reserved_caps, cloud_send_admission.caps(now)) or cloud_policy.setting_block_reason(now)
-                                   or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model))
+                                   or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model, owner=self.owner))
                     except Exception:
                         raise CloudObservationIncomplete("cloud_admission_unverified") from None
                     if waiting:

@@ -269,14 +269,18 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
     producer = {"providers": [], "complete": False}
     if existing is not None:
         summary = existing["content"]
-        producer = _summary_producer(existing, fp, policy, revision, db=ledger.db, bundle=bundle)
+        producer = _summary_producer(existing, fp, policy, revision, db=ledger.db, bundle=bundle,
+                                     project_id=pid, message_id=mid,
+                                     generation=runtime.execution_generation(scfg))
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
         candidate = _bound_candidate(ledger.db, scfg, pid, mid, fp, policy, revision, facts)
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
-            producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle)
+            producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle,
+                                         project_id=pid, message_id=mid,
+                                         generation=runtime.execution_generation(scfg))
         else:
             format_repair_id = None
             try:

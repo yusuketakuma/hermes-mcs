@@ -93,6 +93,84 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
+    import mcs_util
+    import semantic_runtime
+    import semantic_store
+    import semantic_summary_stages
+    led, cfg, _job, _calls = cloud
+    bundle = semantic_store.thread_bundle(led.db, 1, 1)
+    member = bundle["members"][0]
+    generation = semantic_runtime.execution_generation(semantic_drain.runtime_config(cfg)[0])
+    binding = inference_dependency_loss.source_binding(led.db, 1, member["message_id"])
+    owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
+             "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),
+             "semantic_generation": generation, "semantic_phase": "summary"}
+    reservation_id = "synthetic-summary-reservation"
+    led.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id, "route": "semantic_backlog", "owner": owner})
+    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id})
+    content = {"claims": []}
+    provenance = {"version": 1, "stage": "summary", "providers": ["anthropic"], "complete": True,
+                  "result_hash": mcs_util.payload_hash(content), "source_fingerprint": bundle["source_fingerprint"],
+                  "policy_fingerprint": "synthetic-policy", "target_revision": member["revision"]}
+
+    def artifact(requests):
+        return {"content": content,
+                "meta": {"provider_provenance": provenance, "inference_requests": requests}}
+
+    verified = semantic_summary_stages._summary_producer(
+        artifact([reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+    assert verified == {"providers": ["anthropic"], "complete": True}
+    forged = semantic_summary_stages._summary_producer(
+        artifact([]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+    assert forged == {"providers": [], "complete": False}
+
+
+def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch):
+    import semantic_store
+    from candidate_testkit import approved_config
+    from semantic_testkit import _canonical_cfg, _llm_v2, _PassJev
+    led, cfg, _, calls = cloud
+
+    def request(self, method, body, timeout, **kw):
+        calls.append(body)
+        return 200, {}, json.dumps({
+            "model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": _llm_v2(body["messages"][0]["content"])}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    monkeypatch.setattr(transport, "llm_chat", lambda *a, **kw: pytest.fail("local GPU used"))
+    with legacy_cloud_routes():
+        cfg.clear()
+        cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
+        led.save_messages([_message(body="アムロジピン5mgを継続します。")])
+        led.semantic_seed(1, [1], {"source": "history_import"})
+        snapshot(led)
+        result = {"errors": []}
+        out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
+                                    jev_client=_PassJev(), lane="backlog", max_jobs=1,
+                                    cloud_only=True)
+        assert out["done"] == 1 and not result["errors"], (out, result)
+        bundle = semantic_store.thread_bundle(led.db, 1, 1)
+        fp = bundle["source_fingerprint"]
+        existing = semantic_store.current_artifact(led.db, "semantic_summary", 1, fp)
+        assert existing is not None
+        before = len(calls)
+        scfg = semantic_drain.runtime_config(cfg)[0]
+        summary, reason, error, sent_error, producer = semantic_drain._obtain_summary(
+            led, scfg, bundle, lambda *a, **kw: pytest.fail("summary model repeated"),
+            lambda *args: None, 1, 1, fp, existing["meta"]["policy_fingerprint"],
+            [], {}, existing, time.monotonic() + 120, diagnostics={})
+        assert summary == existing["content"] and reason is None and not error and sent_error is None
+        assert producer == {"providers": ["anthropic"], "complete": True}
+        assert len(calls) == before
+
+
 @pytest.mark.parametrize("kind", ["thinking", "redacted_thinking"])
 def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend(cloud, monkeypatch, kind):
     import semantic_runtime
