@@ -236,7 +236,7 @@ def test_live_source_change_invalidates_even_fresh_ack_status(case):
     _status(case.data, **observed(case))
     case.ledger.save_messages([_message(1, body='完全合成の改訂本文。')])
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
-    assert report['state'] == 'unknown' and report['reason'] == 'attachment_ocr_ack_unverified'
+    assert report['state'] == 'unknown' and report['reason'] == 'attachment_ocr_ack_reconfirm_required'
     assert report.get('alert_required') is not False
 
 
@@ -503,7 +503,7 @@ def test_deferred_work_rechecks_ack_receipt_before_ignoring_historical_failures(
         case.db.execute("DELETE FROM command_receipts WHERE command_id=?", (receipt["command_id"],))
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
     assert report["state"] == "unknown"
-    assert report["reason"] == "attachment_ocr_ack_unverified"
+    assert report["reason"] == "attachment_ocr_ack_reconfirm_required"
     assert report.get("alert_required") is not False
 
 
@@ -559,6 +559,6 @@ def test_reboot_renumbering_the_device_keeps_the_ack_but_a_new_inode_voids_it(ca
     _restat(monkeypatch, database, lambda info: {'st_dev': info.st_dev + 1, 'st_ino': info.st_ino + 1})
     assert observed(case)['acknowledged_exhausted'] == 0
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
-    assert report['reason'] == 'attachment_ocr_ack_unverified'
+    assert report['reason'] == 'attachment_ocr_ack_reconfirm_required'
     operator.apply(case.root, request(case))       # an old acknowledgement is redone, never revived
     assert observed(case)['acknowledged_exhausted'] == 1

@@ -1127,6 +1127,11 @@ _REASON_JA = {
         '原本内容は未評価です。元の投稿から確認してください。初期の再試行は継続し、上限到達後は入力・方針・版の変更か明示操作で再評価します'),
     'attachment_ocr_ack_unverified': ('OCR警報の受付記録を現在の原資料と照合できません',
         '次回の処理後も続く場合は診断結果と照会コードを開発元へ連絡してください'),
+    'attachment_ocr_ack_reconfirm_required': ('OCR警報の受付記録が現在の原資料と一致しません。受付のやり直しが必要です',
+        'python3 -m ocr_failure_ack list で対象を確認し、python3 -m ocr_failure_ack plan のあと '
+        'python3 -m ocr_failure_ack apply --confirm-human --reason <理由> で受付をやり直してください'),
+    'attachment_ocr_ack_recheck_incomplete': ('OCR警報の受付記録の照合が完了しませんでした',
+        '次回確認します。続く場合は診断結果と照会コードを開発元へ連絡してください'),
 
     "attachment_ocr_config_unavailable": ("添付の文字起こし設定を確認できません", "設定の読込み状態を確認してください"),
     "attachment_ocr_config_invalid": ("添付の文字起こし設定に不備があります", "attachment_ocrの設定を確認してください"),
