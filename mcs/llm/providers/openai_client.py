@@ -318,7 +318,16 @@ class OpenAIClient(CloudClient):
         if status == "incomplete" and isinstance(details, dict) and details.get("reason") == "content_filter":
             raise AnthropicError("contract_error", "refusal")
         output = obj.get("output")
-        if not isinstance(output, list) or any(not isinstance(b, dict) for b in output):
+        if not isinstance(output, list):
+            raise AnthropicError("protocol_error", "content_invalid")
+        # A verified assistant refusal stops resend regardless of sibling order.
+        for item in output:
+            if (isinstance(item, dict) and item.get("type") == "message"
+                    and item.get("role") == "assistant" and isinstance(item.get("content"), list)
+                    and any(isinstance(part, dict) and part.get("type") == "refusal"
+                            and isinstance(part.get("refusal"), str) for part in item["content"])):
+                raise AnthropicError("contract_error", "refusal")
+        if any(not isinstance(item, dict) for item in output):
             raise AnthropicError("protocol_error", "content_invalid")
         texts = []
         for item in output:
@@ -330,14 +339,6 @@ class OpenAIClient(CloudClient):
             if not isinstance(content, list):
                 raise AnthropicError("protocol_error", "content_invalid")
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "refusal":
-                    # A provider-proven refusal may be billed: never resent or counted.
-                    # The official shape carries its refusal string; without it the
-                    # part proves nothing and stays resendable-unknown output. The
-                    # string itself is never read or stored.
-                    if not isinstance(part.get("refusal"), str):
-                        raise AnthropicError("contract_error", "unexpected_output")
-                    raise AnthropicError("contract_error", "refusal")
                 if not isinstance(part, dict) or part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                     raise AnthropicError("contract_error", "unexpected_output")
                 texts.append(part["text"])

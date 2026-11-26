@@ -745,6 +745,17 @@ def test_refusal_content_part_is_a_provider_proven_refusal():
     assert caught.value.detail in cloud_client.CONTRACT_ERROR_DETAILS
 
 
+@pytest.mark.parametrize("before", [True, False])
+def test_refusal_with_malformed_sibling_stops_resend(before):
+    instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
+    response = _refusal_part_response()
+    parts = response["output"][0]["content"]
+    parts.insert(0 if before else len(parts), {"type": "output_text"})
+    with pytest.raises(AnthropicError) as caught:
+        instance.answer(response, {})
+    assert (caught.value.kind, caught.value.detail) == ("contract_error", "refusal")
+
+
 def test_incomplete_content_filter_is_a_provider_proven_refusal():
     instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
     filtered = response(status="incomplete", incomplete_details={"reason": "content_filter"})
