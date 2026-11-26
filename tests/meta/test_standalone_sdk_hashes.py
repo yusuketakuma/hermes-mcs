@@ -28,7 +28,7 @@ def test_install_refuses_a_download_that_is_not_in_the_hashed_list():
     installs = [line.strip() for line in script.splitlines() if "pip install" in line and "REQUIREMENTS" in line]
     assert installs == ['uv pip install --python "$VENV_PY" -r "$REQUIREMENTS_LOCK" --require-hashes',
                         '"$VENV_PY" -m pip install -r "$REQUIREMENTS_LOCK" --require-hashes']
-    preflight = (ROOT / "mcs/ops/update_preflight.py").read_text()
+    preflight = (ROOT / "mcs/ops/update/update_preflight.py").read_text()
     # a tag that changes either file is never applied without install.sh; a rollback looks at the pins alone
     assert ('_STANDALONE_SDK_FILES = ("deployment/requirements-standalone.txt", '
             '"deployment/requirements-standalone.lock")') in preflight

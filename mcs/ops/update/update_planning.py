@@ -54,7 +54,7 @@ INSTALLED_STANDALONE_UPDATE_VERSION = 2
 
 
 def _installed_standalone_contract(cfg):
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     updater = root / "mcs/ops/mcs_update.py"
     if ("MCS_UPDATE_REPO" in os.environ or not mcs_runtime.standalone(cfg)
             or root != Path(mcs_util.REPO).resolve()
@@ -213,7 +213,7 @@ def _release_migration_probe(deadline):
               "'required' if update_migrations.plan(sys.argv[2], sys.argv[3])[0] else 'none')")
     try:
         result = owned_process.run_owned(
-            [sys.executable, '-I', '-B', '-c', source, str(Path(__file__).resolve().parent.parent),
+            [sys.executable, '-I', '-B', '-c', source, str(Path(__file__).resolve().parent.parent.parent),
              mcs_util.CONF_PATH, os.path.join(DATA, 'install_options.json'), DATA],
             _bounded_timeout(5, deadline),
             {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), 'LC_ALL': 'C'},

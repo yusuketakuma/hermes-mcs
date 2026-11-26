@@ -973,7 +973,7 @@ P0完了条件: 現行経路対応表、実lock DAG、bridge対象、backend int
 |W06|`update_services.py`、service_management、standalone、Hermes/LINE WORKS入口|profile別drain/退役/起動観測、独立owner起動|R外drain、強制kill非流用、自己deadlockなし|
 |W07|新`adapters/sdc/release_auto_transport.py`|固定JSON v2 path＋別artifact stream|16KiB既存上限維持、256MiB stream/hash/timeout/no-redirect|
 |W08|新`mcs/ops/release_auto_owner.py`＋既存owner private dispatch|stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|正常経路が最後まで前進、未知時は証拠保持|
-|W09|`mcs/ops/update_apply.py`、既存repository/journal primitives|private `apply_code_only_v2(capability)`、既存v1bailとは異なるforward-onlypolicy|post-merge失敗でreset/DBrestoreゼロ、v1回帰維持|
+|W09|`mcs/ops/update/update_apply.py`、既存repository/journal primitives|private `apply_code_only_v2(capability)`、既存v1bailとは異なるforward-onlypolicy|post-merge失敗でreset/DBrestoreゼロ、v1回帰維持|
 |W10|新`mcs/ops/release_runtime_proof.py`、独立recovery generation|quarantine/activation/proof/観測的終結|HEAD/PIDだけ不可、boot/loadedsource/heartbeatの束縛|
 |W11|新`scripts/development/release_publish.py`、`release-publish.yml`|01のidentify/package/authorize/publish/verify-register、正式受入票|publisher fork拒否、samebytesretry、公開後証拠、OIDC/ID検証|
 |W12|`ci.yml`、`release-notes.yml`、既存release generators|request/evidence出力、日本語ノート維持、draft責任移管、event tag限定sync|新旧workflow競合なし、全suite強制方針変更なし|
@@ -1260,7 +1260,7 @@ GitHub公式の保証と、この製品が独自に定めた同意・予算・�
 |SRC02|mcs/ops/mcs_update.py / update_apply.py|facade分割、borrowed実適用接続、共通bailoutはrollbackを持つ|
 |SRC03|mcs/ops/release_apply_owner.py|TTY、live factory、G/U/R下の通信、successor pending、readiness unknown|
 |SRC04|adapters/sdc/release_state.py / release_apply_contract.py|v1 unknownとself/individual制限、SPENT/署名契約|
-|SRC05|mcs/ops/update_cli.py / mcs/ops/update/update_discovery.py|git tag最大値→delay→auto。公開済み判定とは別|
+|SRC05|mcs/ops/update/update_cli.py / mcs/ops/update/update_discovery.py|git tag最大値→delay→auto。公開済み判定とは別|
 |SRC06|mcs/ops/release_owner_source.py / adapters/sdc/release_artifact.py|広い完全性manifest、全pack検査、target内の実依存lock必須|
 |SRC07|deployment/一覧 / sdc-release-lock.schema.json / sdc-release-owner.json|実依存lockは基準treeにない。source manifestで代替不可|
 |SRC08|deployment/recovery/mcs_recover.pyとSUPPORT_FILES|hash固定4support、generation directory、旧.prev。配備単位は一式|

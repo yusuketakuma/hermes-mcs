@@ -1361,7 +1361,7 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     # The launcher starts fresh Python; mirror that ownership for the two
     # modules whose import freezes the candidate's restart implementation.
     for name in ('update_lifecycle_context', 'update_services'):
-        owner_spec = importlib.util.spec_from_file_location(name, staged / f'mcs/ops/{name}.py')
+        owner_spec = importlib.util.spec_from_file_location(name, staged / f'mcs/ops/update/{name}.py')
         owner = importlib.util.module_from_spec(owner_spec)
         monkeypatch.setitem(sys.modules, name, owner)
         owner_spec.loader.exec_module(owner)

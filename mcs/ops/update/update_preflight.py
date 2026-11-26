@@ -200,7 +200,7 @@ def _python314(*, deadline=None) -> str | None:
 def _checkout_admits_python314(checkout: str, *, deadline=None) -> bool:
     """[project].requires-python checked by that interpreter, same script as install.sh."""
     python = _python314(**({} if deadline is None else {"deadline": deadline}))
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requires_python_admits.py")
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "requires_python_admits.py")
     if python is None:
         return False
     try:
