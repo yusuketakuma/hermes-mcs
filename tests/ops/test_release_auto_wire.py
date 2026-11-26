@@ -357,7 +357,9 @@ def test_release_metadata_requires_providers_and_offer():
 
 def test_release_metadata_full_flow(monkeypatch):
     attestation = {'release_id': TARGET['release_id'], 'core': {}}
-    compat_payload = {'scope': SCOPE, 'target': TARGET, 'profile': PROFILE}
+    compat_payload = {'scope': SCOPE, 'target': TARGET, 'profile': PROFILE,
+                      'config_contract_sha256': '4' * 64,
+                      'data_contract_sha256': '5' * 64}
     calls = []
 
     def responder(path, raw, headers):
@@ -411,7 +413,7 @@ def test_release_metadata_full_flow(monkeypatch):
         wire.release_metadata(TARGET, PROFILE)
     assert calls == []
 
-    # 正常系: attestation+compatibility両検証で4fieldを返す
+    # 正常系: attestation+compatibility両検証でdigest含む6fieldを返す
     offer = _offer_payload()
     offer['selected']['manifest_digest'] = manifest
     offer['selected']['compatibility_sha256'] = compat_sha
@@ -420,7 +422,9 @@ def test_release_metadata_full_flow(monkeypatch):
     assert result == {'publication_id': offer['selected']['publication_id'],
                       'manifest_digest': manifest,
                       'compatibility_sha256': compat_sha,
-                      'rollout_epoch': 7}
+                      'rollout_epoch': 7,
+                      'config_contract_sha256': '4' * 64,
+                      'data_contract_sha256': '5' * 64}
     assert calls == ['attestation', 'compatibility']
 
     # metadata requestはkind別に決定論的(同一bytes)
