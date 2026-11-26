@@ -104,9 +104,9 @@ def test_notification_part_breakdown_is_explicit_or_unconfirmed(tmp_path, damage
     path.write_text(json.dumps({'at': 3700, 'overall': 'degraded',
         'state_reasons': ['notification_parts_incomplete'], 'notify': {'incomplete_parts': parts}}))
     report = health_watch.classify_health(str(path), 3710, 600)
-    if damage == 'unknown':
-        # the current observation is the unmeasurable read: the alert
-        # normalizes to the dedicated code, the record keeps its own
+    if damage in ('unknown', 'negative'):
+        # A negative state count cannot establish a measured total.
+        assert report['notify_incomplete_parts'] is None
         assert report['state_reasons'] == ['notification_parts_unavailable']
     else:
         assert report['state_reasons'] == ['notification_parts_incomplete']
