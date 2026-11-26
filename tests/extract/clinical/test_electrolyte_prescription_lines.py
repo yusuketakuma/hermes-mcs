@@ -43,7 +43,7 @@ def test_blood_test_comments_and_dosage_forms_after_a_comma():
                 ("異常なし", "quote_supported"), ("経過観察", "quote_supported"),
                 ("次回再検", "quote_supported"), ("異常なし、分2", "unverified"),
                 ("ドライシロップは1mL", "unverified"), ("ドライシロップ1包", "unverified"),
-                ("アスパラK 分3", "quote_supported")):
+                ("アスパラK 分3", "quote_supported"), ("炭酸水素ナトリウム 1錠", "quote_supported")):
             body = f"採血 カリウム 4.5{separator}{tail}"
             raw = {"name": "カリウム", "value": "4.5", "evidence": body}
             lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]

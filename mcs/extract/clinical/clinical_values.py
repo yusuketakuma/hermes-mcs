@@ -373,7 +373,8 @@ _COMPLETE_RESULT = re.compile(r"(?:デス|デシタ)?(?:[。、,;；]|$)")
 # of a drug name. Any acid glued to the item names its salt; a lab word ending in 酸
 # (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
 # so words that merely end in them (悪化, 尿素窒素) are no stems.
-_SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)$")
+_SALT_ENDING = r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化|フッ化|臭化|ブロム化|硫化|シアン化)"
+_SALT_STEM = re.compile(_SALT_ENDING + "$")
 # Items also reported for urine, CSF, effusions, stool or sputum (尿中Ca, 尿TP, 尿沈渣WBC
 # 10-19/HPF): those specimens and qualitative or ranged results (1+, 10-19) are not the
 # blood item. The previous items (尿Cr) keep their earlier reading.
@@ -717,7 +718,7 @@ _SECTION_RESULT = re.compile(fold_surface(
 _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 # A comma can separate another labelled reading or a separate prescription (アスパラK 分3).
 # A dose direction or dosage form alone has no such label (カリウム 4、分2).
-_NAMED_PRESCRIPTION = (rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:{_MED_STRENGTH})?"
+_NAMED_PRESCRIPTION = (rf"(?:(?:[一-龥]*{_SALT_ENDING})?[ァ-ヺー]++|[一-龥]+薬)[a-z]*(?:{_MED_STRENGTH})?"
                        rf"(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))")
 _AFTER_COMMA = rf"[、,](?!(?:ドライシロップ|{MED_FORMS}))"
 _PANEL_ITEM = re.compile(fold_surface(
@@ -728,9 +729,10 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
+    r"|[、,](?:検査)?結果を(?:(?:主治医|医師|担当医)に)?(?:共有|報告)(?:しました|済み)$"
     rf"|{_LAB_COPULA})*+"))
 _LAB_TAIL_END = re.compile(fold_surface(
-    rf"[。;]|の?ため|により|{_LAB_COPULA}(?=[、,])|{_AFTER_COMMA}(?={_NAMED_PRESCRIPTION})"))
+    rf"[。;]|の?ため|により|{_LAB_COPULA}(?={_PANEL_ITEM.pattern})|{_AFTER_COMMA}(?={_NAMED_PRESCRIPTION})"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
