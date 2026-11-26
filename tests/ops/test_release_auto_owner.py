@@ -280,7 +280,7 @@ class FakeDeps:
     def backup_evidence(self):
         return '54d00d86-7758-4ef8-96bc-4685f58e327b'
 
-    def contract_digests(self):
+    def contract_digests(self, target=None, profile=None):
         return {'config_contract_sha256': '7' * 64, 'data_contract_sha256': '8' * 64}
 
     def installed_schema(self):
