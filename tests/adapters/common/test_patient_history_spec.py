@@ -4,8 +4,8 @@ import copy
 import pytest
 
 from adapters.common.spec import validate
-from notify_testkit import CFG, _dispatch, _latest_render, led, pinned_clock
-from test_patient_history_cards import ready, seed
+from notify_testkit import CFG, _latest_render, led, pinned_clock
+from test_patient_history_cards import legacy_render, ready, seed
 import json
 
 __all__ = ["led", "pinned_clock"]
@@ -15,7 +15,7 @@ pytestmark = pytest.mark.usefixtures("pinned_clock")
 def test_patient_history_is_an_explicit_supported_kind(led, monkeypatch):
     event = seed(led)
     ready(monkeypatch)
-    _dispatch(led, event, CFG)
+    legacy_render(led, event, CFG)
     spec = json.loads(_latest_render(led)["spec_json"])
     assert validate(spec) is spec
     assert spec["kind"] == "patient_history"
@@ -26,7 +26,7 @@ def test_patient_history_is_an_explicit_supported_kind(led, monkeypatch):
 def test_history_forbids_source_post_and_companion_thread_keys(led, monkeypatch, field, value):
     event = seed(led)
     ready(monkeypatch)
-    _dispatch(led, event, CFG)
+    legacy_render(led, event, CFG)
     spec = copy.deepcopy(json.loads(_latest_render(led)["spec_json"]))
     spec["parts"][field] = value
     with pytest.raises(ValueError):

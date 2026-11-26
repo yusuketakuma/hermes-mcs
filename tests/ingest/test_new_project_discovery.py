@@ -43,7 +43,7 @@ def _events(db):
     return db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchall()
 
 
-def test_failed_first_registration_retry_starts_exactly_one_initial_history_and_progress_card(db, monkeypatch):
+def test_failed_first_registration_retry_starts_exactly_one_silent_initial_history(db, monkeypatch):
     boundary = int(time.time())
     post = _posted(10, 3 * 86400)
     marked = []
@@ -86,13 +86,8 @@ def test_failed_first_registration_retry_starts_exactly_one_initial_history_and_
     assert initial_import_state.load(db.db, 1)['cohort_id'] == cohort['cohort_id']
     assert db.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 1
     history = db.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id").fetchall()
-    assert history and {mid for event in history for mid in json.loads(event['payload'])['message_ids']} == {10}
-    notify_cards.dispatch_intent(db, dict(history[-1]), SLACK, now=time.time() + 300)
-    assert db.db.execute("SELECT count(*) FROM notification_cards WHERE kind='patient_history'").fetchone()[0] == 1
-    specs = db.db.execute('SELECT spec_json FROM notification_renders').fetchall()
-    assert specs
-    for spec in specs:
-        assert validate_slack(json.loads(spec[0]))
+    assert history == []
+    assert not db.db.execute('SELECT 1 FROM notification_renders').fetchone()
 
 
 @pytest.mark.parametrize('has_cohort', [False, True])
@@ -140,14 +135,8 @@ def test_read_new_room_aggregates_initial_history_and_later_posts_reach_chat_spe
     assert _events(db) == []
     assert initial_import_state.progress(db.db, 1)["saved_count"] == 4
     history = db.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id").fetchall()
-    assert {mid for event in history for mid in json.loads(event["payload"])["message_ids"]} == {10, 11, 20, 21}
-    notify_cards.dispatch_intent(db, dict(history[-1]), config, now=time.time() + 300)
-    renders = db.db.execute("SELECT spec_json FROM notification_renders").fetchall()
-    assert renders
-    for row in renders:
-        spec = json.loads(row[0])
-        assert validate(spec) is spec
-        assert spec["delivery"].get("transport", "discord") == transport
+    assert history == []
+    assert not db.db.execute("SELECT 1 FROM notification_renders").fetchone()
     _capture(db, [_unread_patient(1)])
     assert db.job_state("history", 1) == "done"
     assert _events(db) == []
@@ -157,6 +146,13 @@ def test_read_new_room_aggregates_initial_history_and_later_posts_reach_chat_spe
     db.save_thread_replies([live], 1, notify={"source": "unread"}, notify_max_age_s=86400)
     [event] = _events(db)
     assert json.loads(event["payload"])["message_ids"] == [30]
+    notify_cards.dispatch_intent(db, dict(event), config, now=time.time() + 300)
+    renders = db.db.execute("SELECT spec_json FROM notification_renders").fetchall()
+    assert renders
+    for row in renders:
+        spec = json.loads(row[0])
+        assert validate(spec) is spec
+        assert spec["delivery"].get("transport", "discord") == transport
 
 
 def test_patient_and_initial_walk_roll_back_together(db, monkeypatch):

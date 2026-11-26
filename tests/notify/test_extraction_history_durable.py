@@ -18,9 +18,9 @@ import extract_llm
 import cloud_inference
 import extraction_refresh
 import notify_cards
-from notify_testkit import (CFG, NOW, _begin, _card, _deliver, _dispatch, _extract, _intent,
+from notify_testkit import (CFG, NOW, _card, _deliver, _dispatch, _extract, _intent,
                             _latest_render, _msg, _receipt, _seed_thread, led, pinned_clock)
-from test_patient_history_cards import captured, ready, seed
+from test_patient_history_cards import captured, legacy_grant, legacy_render, ready, seed
 
 
 __all__ = ['led', 'pinned_clock']
@@ -31,9 +31,9 @@ def _completed_card(led, monkeypatch):
     event = seed(led, 1)
     captured(led)
     ready(monkeypatch)
-    _dispatch(led, event)
+    legacy_render(led, event)
     render = _latest_render(led)
-    assert _begin(led, render)['granted']
+    legacy_grant(led, render)
     assert _receipt(led, render, '0000000000000001', message_id='stable')['applied']
     assert json.loads(_card(led)['ui_state'])['history_latest']['phase'] == 'complete'
     return render
@@ -76,7 +76,7 @@ def test_failed_real_refresh_keeps_dirty_history_and_sweep_recovers(led, monkeyp
     ui = json.loads(_card(led)['ui_state'])
     assert ui['history_latest']['phase'] == 'analyzing'
     assert not ui.get('history_source_dirty')
-    assert _latest_render(led)['render_rev'] > before['render_rev']
+    assert _latest_render(led)['delivery_id'] == before['delivery_id']
 
 
 def test_dirty_marker_tampering_rolls_back_extraction(led, monkeypatch):

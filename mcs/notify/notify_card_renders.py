@@ -13,13 +13,13 @@ from mcs_util import loads_dict
 from notify_render import (
     ACTION_FIRST_LAYOUT,
     anchor_keys, card_content, content_fingerprint, masked_name, preview_privacy,
-    UNKNOWN_DATE, mmdd, project_display_name, own_post, presenter, reply_source)
+    UNKNOWN_DATE, live_notification_rows, mmdd, project_display_name, own_post, presenter, quiet_thread_card, reply_source)
 import notify_parts
 import notify_action_context as action_context
 import notify_action_tokens as action_tokens
 from notify_views import drug_search_available
 from notify_card_state import (
-    LIVE_RENDER, _cancel_open_renders, _cancel_render, _card_parts_in_flight, _parts_in_flight, _restore_hold_active, complete_intent, resend_exhausted, unsettled_attempt
+    LIVE_RENDER, _cancel_open_renders, _cancel_render, _card_parts_in_flight, _parts_in_flight, _restore_hold_active, resend_exhausted, unsettled_attempt
 )
 from notify_card_threads import (
     _bind_reply_thread, _bind_signal_thread, _clear_thread_hold, reply_thread_matches, signal_thread_target
@@ -789,6 +789,14 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
     card = _render_gates(db, card_id, cfg)
     if card is None:
         return None
+    if card["delivery_state"] != "revoked" and quiet_thread_card(db, card):
+        # Previously issued cards keep their delivery evidence; a sweep must not repost them.
+        _cancel_open_renders(db, card_id, now)
+        return None
+    if card["kind"] == "patient_history" and card["delivery_state"] != "revoked":
+        _cancel_open_renders(db, card_id, now)
+        notify_history.refresh(db, card, cfg, now)
+        return None
     if card["kind"] in ("signal", "digest") and not notify_scope.signals_notify(cfg):
         # begin denies these anyway (signal_notify_off, not final), so a
         # queued render would sit live forever and block re-issue once
@@ -838,17 +846,6 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
         return None      # delete already landed — _render_needed would
                          # say no regardless of drift, so skip content
     waiting = frozenset()
-    if card["kind"] == "patient_history":
-        card = notify_history.refresh(db, card, cfg, now)
-        if card["transport"] == "lineworks" and card["message_id"] is not None:
-            # Later count updates owe no third room post. Only unresolved
-            # intents with no delivery binding may be suppressed here.
-            for pending in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
-                    "AND state='pending' AND delivery_id IS NULL", (card_id,)).fetchall():
-                db.execute("UPDATE notification_intent_cards SET state='suppressed' WHERE event_id=? AND card_id=?",
-                           (pending[0], card_id))
-                complete_intent(db, pending[0], now)
-            return None
     content_options = {}
     if card["kind"] == "thread":
         import processing_route
@@ -860,6 +857,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
         pending = db.execute("SELECT message_id,first_seen FROM messages WHERE project_id=? "
                              "AND (message_id=? OR parent_id=?)",
                              (card["project_id"], card["root_message_id"], card["root_message_id"])).fetchall()
+        pending = live_notification_rows(db, card["project_id"], pending)
         delivered = notify_parts.delivered_members(db, card, legacy=True) | notify_parts.delivered_members(db, card, legacy=False)
         for name in notify_parts.prior_body_posts(db, card):
             match = notify_parts.BODY_POST_KEY.fullmatch(name)

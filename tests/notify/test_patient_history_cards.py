@@ -9,9 +9,10 @@ import history_walk
 import notify_cards
 import notify_history
 import notify_render
+import notify_scope
 from notify_testkit import (CFG, NOW, _begin, _card, _dispatch, _latest_render,
-                            _intent, _patient, _receipt, _seed_thread, led, pinned_clock)
-from notify_lineworks_testkit import LINEWORKS, _apply, _claim, _deliver
+                            _intent, _patient, _receipt, led, pinned_clock)
+from notify_lineworks_testkit import LINEWORKS, _apply, _claim
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -27,7 +28,46 @@ def seed(led, count=3):
     with led.db:
         initial_import_state.start_tx(led, 1, int(NOW), NOW - 20, boundary_source="server")
         initial_import_state.classify_tx(led, 1, list(range(1, count + 1)), NOW)
-    return led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id LIMIT 1").fetchone()
+    return initial_import_state.load(led.db, 1)
+
+
+def legacy_render(led, state, cfg=CFG, *, pid=1):
+    """Build a synthetic pre-upgrade sealed card for receipt and viewer compatibility."""
+    payload = {"source": "initial_history", "cohort_id": state["cohort_id"], "message_ids": []}
+    event = _intent(led, kind="patient_history", pid=pid, payload=payload)
+    scope = notify_scope.delivery_scope(cfg)
+    transport = notify_scope.active_transport(cfg)
+    phase = "start" if transport == "lineworks" else "progress"
+    cohort = state["cohort_id"]
+    target = {"card_key": f"v1|patient_history|{pid}|{cohort}|{phase}",
+              "kind": "patient_history", "project_id": pid, "coverage": [cohort],
+              "anchor": {"source": "initial_history", "cohort_id": cohort, "phase": phase}}
+    with led.db:
+        cid = notify_cards._card_for(led.db, target, scope, NOW)
+        led.db.execute("INSERT INTO notification_intent_batches(event_id,frozen_payload,payload_hash,"
+                       "route_epoch,sealed_at,transport,scope_json) VALUES(?,?,?,?,?,?,?)",
+                       (event["event_id"], event["payload"], notify_cards.payload_hash(payload), 1, NOW,
+                        transport, notify_cards.canonical(scope).decode() if transport != "discord" else None))
+        led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage) VALUES(?,?,?)",
+                       (event["event_id"], cid, json.dumps(target["coverage"])))
+        card = notify_history.refresh(led.db, _card(led, cid), cfg, NOW)
+        content = notify_render.card_content(led.db, card, cfg=cfg)
+        card.update(notify_cards._generation_drift(card, content, cfg))
+        plan, hold = notify_cards._build_spec(led.db, card, content, "create", 1, cfg, NOW)
+        assert hold is None
+        notify_cards._persist_render(led.db, card, plan, "create", 1, NOW)
+    return event
+
+
+def legacy_grant(led, render, n=1):
+    """Model a send already granted by the previous runner."""
+    aid = f"{n:016x}"
+    with led.db:
+        led.db.execute("INSERT INTO notification_delivery_attempts(attempt_id,delivery_id,"
+                       "begin_command_id,state,worker_id,created_at) VALUES(?,?,?,'granted',?,?)",
+                       (aid, render["delivery_id"], f"{n:08x}-0000-4000-8000-{n:012x}", "bb" * 8, NOW))
+        led.db.execute("UPDATE notification_renders SET state='sending' WHERE delivery_id=?", (render["delivery_id"],))
+    return aid
 
 
 def captured(led):
@@ -51,7 +91,7 @@ def spec(led, card_id=1):
 def test_history_has_one_card_part_only_and_link_without_source_actions(led, monkeypatch, cfg):
     event = seed(led)
     ready(monkeypatch, False)
-    assert _dispatch(led, event, cfg)["cards"] == 1
+    legacy_render(led, event, cfg)
     rendered = spec(led)
     assert rendered["kind"] == "patient_history"
     parts = rendered["parts"]
@@ -76,7 +116,7 @@ def test_5000_history_members_are_not_a_display_analysis_limit(led, monkeypatch)
     monkeypatch.setattr(notify_history.extraction_progress, "message_progress", lambda db, row, **kw:
         counted.append(row["message_id"]) or {"state": "complete", "completed": 1, "total": 1})
     captured(led)
-    _dispatch(led, event)
+    legacy_render(led, event)
     ui = json.loads(_card(led)["ui_state"])
     assert ui["history_snapshot"]["saved"] == ui["history_snapshot"]["analyzed"] == 5000
     assert set(counted) == set(range(1, 5001))
@@ -84,61 +124,15 @@ def test_5000_history_members_are_not_a_display_analysis_limit(led, monkeypatch)
     assert len(json.dumps(ui)) < 3000
 
 
-def test_progress_during_queued_render_keeps_sealed_generation_and_source(led, monkeypatch):
-    event = seed(led)
-    ready(monkeypatch, False)
-    _dispatch(led, event)
-    before = _latest_render(led)
-    source = _card(led)["source_fp"]
-    captured(led)
-    ready(monkeypatch)
-    notify_cards.sweep(led, CFG, now=NOW + 301)
-    after = _latest_render(led)
-    assert after["delivery_id"] == before["delivery_id"]
-    assert _card(led)["source_fp"] == source
-    assert json.loads(_card(led)["ui_state"])["history_latest"]["phase"] == "complete"
-    assert _begin(led, after)["granted"]
-
-
 def test_source_edit_invalidates_queued_snapshot(led, monkeypatch):
     event = seed(led)
     ready(monkeypatch)
-    _dispatch(led, event)
+    legacy_render(led, event)
     before = _latest_render(led)
     led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=1", ("e" * 64,))
     led.db.commit()
     assert notify_render.source_fingerprint(led.db, _card(led)) != _card(led)["source_fp"]
     assert not _begin(led, before)["granted"]
-
-
-def test_slack_discord_update_one_remote_identity_after_phase_change(led, monkeypatch):
-    event = seed(led)
-    ready(monkeypatch, False)
-    _dispatch(led, event)
-    render = _latest_render(led)
-    assert _begin(led, render)["granted"]
-    assert _receipt(led, render, "0000000000000001", message_id="stable")["applied"]
-    captured(led)
-    ready(monkeypatch)
-    notify_cards.sweep(led, CFG, now=NOW + 1)
-    rendered = spec(led)
-    assert rendered["op"] == "update" and rendered["delivery"]["message_id"] == "stable"
-    assert [part["kind"] for part in rendered["parts"]["manifest"]] == ["card"]
-
-
-def test_due_progress_intents_coalesce_without_faking_individual_delivery(led, monkeypatch):
-    event = seed(led)
-    state = initial_import_state.load(led.db, 1)
-    with led.db:
-        for _ in range(8):
-            initial_import_state.emit_tx(led, 1, state, [1, 2])
-    ready(monkeypatch)
-    _dispatch(led, event)
-    assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
-    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 1
-    assert led.db.execute("SELECT COUNT(*) FROM notification_intent_cards").fetchone()[0] == 9
-    assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE state='accepted'").fetchone()
-    assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind='new_messages'").fetchone()
 
 
 def test_history_in_a_new_messages_payload_cannot_create_individual_card(led):
@@ -147,76 +141,12 @@ def test_history_in_a_new_messages_payload_cannot_create_individual_card(led):
                                          {"message_ids": [1, 2]}) == []
 
 
-@pytest.mark.parametrize("cfg", [CFG, SLACK])
-def test_new_history_page_waits_for_progress_interval_without_fake_receipt(led, monkeypatch, cfg):
-    event = seed(led)
-    ready(monkeypatch, False)
-    _dispatch(led, event, cfg)
-    first = _latest_render(led)
-    claim = _claim(first)
-    assert _apply(led, envelopes.transport_begin(claim), cfg)["granted"]
-    assert _apply(led, envelopes.transport_receipt(
-        claim, "delivered", message_id="1234.000001"), cfg)["applied"]
-    with led.db:
-        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,"
-            "content_hash,body_state,first_seen) VALUES(4,1,?,'合成の追加履歴',?,'full',?)",
-            (int(NOW) - 50, "4" * 64, NOW + 1))
-        initial_import_state.classify_tx(led, 1, [4], NOW + 1)
-        initial_import_state.emit_tx(led, 1, initial_import_state.load(led.db, 1), [4])
-    event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id DESC LIMIT 1").fetchone()
-    _dispatch(led, event, cfg, now=NOW + 1)
-    assert _latest_render(led)["delivery_id"] == first["delivery_id"]
-    pending = led.db.execute("SELECT state,delivery_id FROM notification_intent_cards WHERE event_id=?", (event["event_id"],)).fetchone()
-    assert tuple(pending) == ("pending", None)
-    assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (event["event_id"],)).fetchone()[0] != "accepted"
-    notify_cards.sweep(led, cfg, now=NOW + 299)
-    assert _latest_render(led)["delivery_id"] == first["delivery_id"]
-    notify_cards.sweep(led, cfg, now=NOW + 300)
-    assert _latest_render(led)["render_rev"] == first["render_rev"] + 1
-    assert json.loads(_card(led)["ui_state"])["history_snapshot"]["saved"] == 4
-    pending = led.db.execute("SELECT state,delivery_id FROM notification_intent_cards WHERE event_id=?", (event["event_id"],)).fetchone()
-    assert pending["state"] == "pending" and pending["delivery_id"] == _latest_render(led)["delivery_id"]
-
-
-def test_unknown_lineworks_start_never_creates_completion(led, monkeypatch):
-    event = seed(led)
-    ready(monkeypatch, False)
-    _dispatch(led, event, LINEWORKS)
-    render = _latest_render(led)
-    claim = _claim(render)
-    assert _apply(led, envelopes.transport_begin(claim))["granted"]
-    assert _apply(led, envelopes.transport_receipt(claim, "unknown"))["applied"]
-    captured(led)
-    ready(monkeypatch)
-    notify_cards.sweep(led, LINEWORKS, now=NOW + 301)
-    assert led.db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0] == 1
-    assert _card(led)["delivery_state"] == "delivery_unknown"
-
-
-def test_lineworks_start_and_complete_have_distinct_intents_and_remote_posts(led, monkeypatch):
-    event = seed(led)
-    ready(monkeypatch, False)
-    _dispatch(led, event, LINEWORKS)
-    _deliver(led, _latest_render(led))
-    captured(led)
-    ready(monkeypatch)
-    notify_cards.sweep(led, LINEWORKS, now=NOW + 301)
-    next_event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' "
-                                "AND state='pending' ORDER BY event_id DESC LIMIT 1").fetchone()
-    assert next_event is not None and next_event["event_id"] != event["event_id"]
-    _dispatch(led, next_event, LINEWORKS, now=NOW + 301)
-    cards = led.db.execute("SELECT * FROM notification_cards ORDER BY card_id").fetchall()
-    assert len(cards) == 2
-    assert [json.loads(card["anchor_key"])["phase"] for card in cards] == ["start", "complete"]
-    assert _latest_render(led, cards[1]["card_id"])["op"] == "create"
-
-
 def test_held_or_unknown_analysis_is_never_complete(led, monkeypatch):
     event = seed(led)
     captured(led)
     monkeypatch.setattr(notify_history.extraction_progress, "message_progress", lambda db, row, **kw:
         {"state": "attention", "completed": 0, "total": 1} if row["message_id"] == 1 else None)
-    _dispatch(led, event)
+    legacy_render(led, event)
     snap = json.loads(_card(led)["ui_state"])["history_snapshot"]
     assert snap["phase"] == "analyzing" and snap["analyzed"] == 0 and snap["held"] == 1 and snap["unknown"] == 2
 
@@ -224,7 +154,7 @@ def test_held_or_unknown_analysis_is_never_complete(led, monkeypatch):
 def test_render_reads_adopted_snapshot_without_rescanning_members(led, monkeypatch):
     event = seed(led)
     ready(monkeypatch)
-    _dispatch(led, event)
+    legacy_render(led, event)
     monkeypatch.setattr(notify_history, "_members", lambda *a, **kw: pytest.fail("render rescanned history"))
     assert notify_render.card_content(led.db, _card(led), cfg=CFG)["shown_kind"] == "cohort_ids"
 
@@ -240,7 +170,7 @@ def test_existing_urgency_contract_rejects_duplicates_stale_family_and_rule_over
     _extract(led, 2, {"urgency": "high"}, stale=True)
     _extract(led, 3, {"urgency": "high"})
     ready(monkeypatch)
-    _dispatch(led, event)
+    legacy_render(led, event)
     assert json.loads(_card(led)["ui_state"])["history_snapshot"]["high"] == 1
     _llm_extract(led, 1, {"urgency": "routine"})
     assert notify_render.source_fingerprint(led.db, _card(led)) != json.loads(_card(led)["ui_state"])["history_source_fp"]
@@ -248,55 +178,87 @@ def test_existing_urgency_contract_rejects_duplicates_stale_family_and_rule_over
     assert json.loads(_card(led)["ui_state"])["history_snapshot"]["high"] == 0
 
 
-def test_live_reply_to_history_root_creates_canonical_root_only_when_needed(led):
-    from notify_testkit import _intent, _msg
+@pytest.mark.parametrize("cfg", [CFG, SLACK, LINEWORKS])
+def test_live_reply_to_history_root_only_publishes_the_live_reply(led, cfg):
+    from notify_testkit import _attach, _msg
+    from notify_views import patient_search_view
+
     seed(led, 1)
-    assert not led.db.execute("SELECT 1 FROM notification_cards").fetchone()
-    _msg(led, 10, parent=1, ts=int(NOW) + 1)
+    _msg(led, 2, parent=1, ts=int(NOW) - 1, body="合成の過去返信")
+    _msg(led, 10, parent=1, ts=int(NOW) + 1, body="合成の新着返信")
     with led.db:
-        initial_import_state.classify_tx(led, 1, [10], NOW)
+        initial_import_state.classify_tx(led, 1, [2, 10], NOW)
+    for mid in (1, 2, 10):
+        _attach(led, mid, name=f"synthetic-{mid}.txt")
     event = _intent(led, payload={"message_ids": [10]})
-    _dispatch(led, event, {**CFG, "notify": {**CFG["notify"], "reply_cards": True}})
-    cards = led.db.execute("SELECT kind,root_message_id,anchor_key FROM notification_cards ORDER BY card_id").fetchall()
-    assert len(cards) == 2 and all(card["kind"] == "thread" for card in cards)
-    assert {card["root_message_id"] for card in cards} == {1}
-    assert json.loads(cards[1]["anchor_key"])["source"] == 10
+    assert _dispatch(led, event, cfg)["cards"] == 1
+    assert _card(led)["root_message_id"] == 10
+    rendered = json.dumps(spec(led), ensure_ascii=False)
+    assert "合成の新着返信" in rendered and "synthetic-10.txt" in rendered
+    for old in ("完全合成の履歴", "合成の過去返信", "synthetic-1.txt", "synthetic-2.txt"):
+        assert old not in rendered
+    original = patient_search_view(led.db, 1, "合成の過去返信", keep_message_id=True)
+    assert [item["message_id"] for item in original["items"]] == [2]
 
 
-def test_extraction_callbacks_only_mark_dirty_until_one_bounded_adoption(led, monkeypatch):
-    event = seed(led, 100)
-    ready(monkeypatch, False)
-    _dispatch(led, event)
-    before = _latest_render(led)
-    with monkeypatch.context() as patch:
-        patch.setattr(notify_history, '_members', lambda *a, **kw: pytest.fail('callback rescanned cohort'))
-        patch.setattr(notify_history, 'fingerprint', lambda *a, **kw: pytest.fail('callback fingerprinted cohort'))
-        for mid in range(1, 101):
-            notify_cards.rerender_message_cards(led, CFG, 1, mid, now=NOW + 1)
-        notify_cards.sweep(led, CFG, now=NOW + 299)
-    assert _latest_render(led)['delivery_id'] == before['delivery_id']
-    captured(led)
-    ready(monkeypatch)
-    notify_cards.sweep(led, CFG, now=NOW + 300)
-    assert json.loads(_card(led)['ui_state'])['history_latest']['phase'] == 'complete'
+@pytest.mark.parametrize("cfg", [CFG, SLACK, LINEWORKS])
+def test_pending_legacy_undated_reply_stays_out_of_mixed_live_notification(led, cfg):
+    from notify_testkit import _attach, _msg
+    import notify_flush
+
+    seed(led, 1)
+    _msg(led, 10, body="合成の新着親")
+    _msg(led, 11, parent=10, body="合成の日時不明返信")
+    with led.db:
+        initial_import_state.classify_tx(led, 1, [10, 11], NOW)
+        # Simulate a 'live' role written by the earlier version.
+        led.db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=11")
+    aid = _attach(led, 11, name="synthetic-undated.txt")
+    event = _intent(led, payload={"message_ids": [10, 11]})
+    assert _dispatch(led, event, cfg)["cards"] == 1
+    rendered = json.dumps(spec(led), ensure_ascii=False)
+    assert "合成の新着親" in rendered
+    assert "合成の日時不明返信" not in rendered and "synthetic-undated.txt" not in rendered
+    assert [row["message_id"] for row in notify_flush._msg_rows(led, {"message_ids": [10, 11]}, 1)] == [10]
+    followup = {"message_id": 11, "attachment_id": aid}
+    with pytest.raises(notify_flush.semantic_send_gate.StaleSend, match="initial_history"):
+        notify_flush._followup_files(led, followup, 1)
+    event = _intent(led, kind="attachment_followup", payload=followup)
+    with led.db:
+        led.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (event["event_id"],))
+    assert _dispatch(led, event, cfg)["suppressed"]
 
 
-def test_completed_delivered_cohort_skips_scans_but_real_source_edit_invalidates(led, monkeypatch):
-    from ingest_testkit import _message
-    event = seed(led, 1)
-    captured(led)
-    ready(monkeypatch)
-    _dispatch(led, event)
+
+def test_queued_pre_join_thread_receives_no_send_grant_after_upgrade(led):
+    from notify_testkit import _msg
+
+    _patient(led)
+    _msg(led, 1, ts=int(NOW) - 1)
+    assert _dispatch(led, _intent(led, payload={"message_ids": [1]}))["cards"] == 1
     render = _latest_render(led)
-    _begin(led, render)
-    _receipt(led, render, '0000000000000001', message_id='stable')
-    with monkeypatch.context() as patch:
-        patch.setattr(notify_history, '_members', lambda *a, **kw: pytest.fail('stable completed cohort rescanned'))
-        notify_cards.sweep(led, CFG, now=NOW + 10000)
-    led.save_messages([_message(mid=1, body='合成の訂正本文', posted_at='2026-09-24T09:00:00+09:00')], project_id=1)
-    assert json.loads(_card(led)['ui_state'])['history_source_dirty'] is True
-    notify_cards.sweep(led, CFG, now=NOW + 10001)
-    assert _latest_render(led)['render_rev'] > render['render_rev']
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+    result = _begin(led, render)
+    assert not result["granted"] and result["error"] == "denied_history_notification_disabled"
+    assert _latest_render(led)["state"] == "cancelled"
+
+
+def test_delivered_pre_join_thread_is_not_updated_by_sweep(led):
+    from notify_lineworks_testkit import _deliver
+    from notify_testkit import _msg
+
+    _patient(led)
+    _msg(led, 1, ts=int(NOW) - 1)
+    assert _dispatch(led, _intent(led, payload={"message_ids": [1]}), LINEWORKS)["cards"] == 1
+    render = _latest_render(led)
+    _deliver(led, render)
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+        initial_import_state.classify_tx(led, 1, [1], NOW)
+    notify_cards.sweep(led, LINEWORKS, now=NOW + 301)
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+    assert _card(led)["delivery_state"] == "delivered"
 
 
 def test_initial_history_high_has_counts_but_no_individual_urgent_delivery_proof(led, monkeypatch):
@@ -307,55 +269,12 @@ def test_initial_history_high_has_counts_but_no_individual_urgent_delivery_proof
         led.db.execute("UPDATE messages SET body_text='本人が急変し至急確認が必要です。' WHERE message_id=1")
     _llm_extract(led, 1, {'urgency': 'high', 'urgency_evidence': ['本人が急変し至急確認が必要です。']})
     ready(monkeypatch)
-    _dispatch(led, event)
+    legacy_render(led, event)
     cfg = {**CFG, 'urgency_escalation': {'mode': 'on', 'source': 'llm', 'room_cooldown_min': 1}}
     candidate, reason = notify_urgent._eligible(led, cfg, notify_urgent.settings(cfg), 1, NOW)
     assert candidate is None and reason == 'initial_delivery_unproven'
     assert json.loads(_card(led)['ui_state'])['history_snapshot']['high'] == 1
     assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind IN ('new_messages','urgent_notice')").fetchone()
-
-
-def test_late_history_member_reopens_completed_summary_without_reopening_capture(led, monkeypatch):
-    from semantic_testkit import _message
-    event = seed(led, 1)
-    captured(led)
-    ready(monkeypatch)
-    _dispatch(led, event)
-    render = _latest_render(led)
-    assert _begin(led, render)["granted"]
-    _receipt(led, render, f"{1:016x}")
-    led.save_messages([_message(2, posted_at='2026-09-19T00:00:00+09:00')], project_id=1)
-    assert initial_import_state.load(led.db, 1)["capture_phase"] == "complete"
-    assert json.loads(_card(led)["ui_state"])["history_source_dirty"]
-    notify_cards.sweep(led, CFG, now=NOW + 1)
-    assert json.loads(_card(led)["ui_state"])["history_snapshot"]["saved"] == 2
-
-
-def test_sweep_reserves_live_due_capacity_and_rotates_history_updates(led, monkeypatch):
-    ready(monkeypatch, False)
-    for pid in range(1, 4):
-        _patient(led, pid=pid)
-        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) "
-                       "VALUES(?,?,?,'合成履歴',?,'full',?)", (pid, pid, int(NOW)-1, f"{pid:064x}", NOW-10))
-        with led.db:
-            initial_import_state.start_tx(led, pid, int(NOW), NOW-20, boundary_source="server")
-            initial_import_state.classify_tx(led, pid, [pid], NOW)
-        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
-        _dispatch(led, event)
-        render = _latest_render(led, pid)
-        assert _begin(led, render, n=pid)["granted"]
-        _receipt(led, render, f"{pid:016x}", n=pid+10, message_id=f"m-{pid}")
-        state = initial_import_state.load(led.db, pid)
-        state["capture_phase"] = "complete"
-        state["capture_proof"] = {"v":1,"scope":history_walk.scope(pid,state["cohort_id"]),"digest":"a"*64}
-        led.db.execute("UPDATE patients SET initial_import=? WHERE project_id=?", (json.dumps(state), pid))
-        led.db.commit()
-    led.outbox_add("new_messages", 99, {"message_ids": [99]})
-    ready(monkeypatch)
-    notify_cards.sweep(led, CFG, now=NOW+301)
-    assert led.db.execute("SELECT COUNT(*) FROM notification_renders WHERE render_rev=2").fetchone()[0] == 2
-    notify_cards.sweep(led, CFG, now=NOW+302)
-    assert led.db.execute("SELECT COUNT(*) FROM notification_renders WHERE render_rev=2").fetchone()[0] == 3
 
 
 @pytest.mark.parametrize("wait", [None, "intent_cards_issued", "intent_cards_unsettled", "stale"])
@@ -364,9 +283,9 @@ def test_delivered_history_analysis_wait_is_processing_but_unknown_is_attention(
     event = seed(led, 1)
     captured(led)
     ready(monkeypatch, False)
-    _dispatch(led, event)
+    legacy_render(led, event)
     render = _latest_render(led)
-    assert _begin(led, render)["granted"]
+    legacy_grant(led, render)
     _receipt(led, render, f"{1:016x}")
     # A new progress intent binds to the already-delivered cohort identity.
     eid = led.outbox_add("patient_history", 1, {"source": "initial_history"})
@@ -392,7 +311,7 @@ def test_unprovided_root_body_is_explicitly_not_analyzed_but_can_finish(led,monk
     led.db.commit()
     captured(led)
     monkeypatch.setattr(notify_history.extraction_progress,'message_progress',lambda *a,**kw: pytest.fail('unprovided root was sent to analysis progress'))
-    _dispatch(led,event,cfg)
+    legacy_render(led,event,cfg)
     snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
     assert snapshot['no_body'] == 1 and snapshot['analyzed'] == 0 and snapshot['unknown'] == 0
     assert snapshot['phase'] == 'complete'
@@ -409,138 +328,10 @@ def test_unknown_reply_and_snippet_are_never_no_body_or_analyzed(led,monkeypatch
     captured(led)
     seen = []
     monkeypatch.setattr(notify_history.extraction_progress,'message_progress',lambda db,row,**kw: seen.append(row['message_id']) or None)
-    _dispatch(led,event)
+    legacy_render(led,event)
     snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
     assert snapshot['no_body'] == 0 and snapshot['analyzed'] == 0 and snapshot['unknown'] == 3
     assert snapshot['phase'] == 'analyzing' and seen == [1,2,3]
-
-
-def test_later_full_body_reopens_no_body_summary_and_invalidates_queued_completion(led,monkeypatch):
-    from ingest_testkit import _message
-    event = seed(led,1)
-    with led.db:
-        led.db.execute("UPDATE messages SET body_state='unknown',body_text='',content_hash=? WHERE message_id=1", ('a'*64,))
-    captured(led)
-    ready(monkeypatch,False)
-    _dispatch(led,event)
-    original = _latest_render(led)
-    assert json.loads(_card(led)['ui_state'])['history_snapshot']['phase'] == 'complete'
-    led.save_messages([_message(mid=1,body='合成の後着本文',posted_at='2026-09-24T09:00:00+09:00')],project_id=1)
-    assert json.loads(_card(led)['ui_state'])['history_source_dirty']
-    assert not _begin(led,original)['granted']
-    current = json.loads(_card(led)['ui_state'])['history_snapshot']
-    assert current['no_body'] == 0 and current['analyzed'] == 0 and current['phase'] == 'analyzing'
-    ready(monkeypatch)
-    notify_cards.sweep(led,CFG,now=NOW+301)
-    assert json.loads(_card(led)['ui_state'])['history_latest']['phase'] == 'complete'
-
-
-def test_lineworks_no_body_completion_remains_two_posts_after_later_full_body(led,monkeypatch):
-    from ingest_testkit import _message
-    event = seed(led,1)
-    with led.db:
-        led.db.execute("UPDATE messages SET body_state='unknown',body_text='',content_hash=? WHERE message_id=1", ('a'*64,))
-    captured(led)
-    ready(monkeypatch,False)
-    _dispatch(led,event,LINEWORKS)
-    _deliver(led,_latest_render(led))
-    notify_cards.sweep(led,LINEWORKS,now=NOW+301)
-    complete = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND state='pending' ORDER BY event_id DESC LIMIT 1").fetchone()
-    assert complete is not None
-    _dispatch(led,complete,LINEWORKS,now=NOW+301)
-    final_render = _latest_render(led,2)
-    claim = _claim(final_render,attempt='c'*16)
-    assert _apply(led,envelopes.transport_begin(claim))['granted']
-    assert _apply(led,envelopes.transport_receipt(claim,'delivered',message_id='lw:'+'d'*32))['applied']
-    final_snapshot = json.loads(_card(led,2)['ui_state'])['history_snapshot']
-    assert final_snapshot['no_body'] == 1 and final_snapshot['analyzed'] == 0
-    led.save_messages([_message(mid=1,body='合成の後着本文',posted_at='2026-09-24T09:00:00+09:00')],project_id=1)
-    notify_cards.sweep(led,LINEWORKS,now=NOW+302)
-    assert json.loads(_card(led,2)['ui_state'])['history_latest']['phase'] == 'analyzing'
-    ready(monkeypatch)
-    notify_cards.rerender_message_cards(led,LINEWORKS,1,1,now=NOW+303)
-    notify_cards.sweep(led,LINEWORKS,now=NOW+603)
-    for card in led.db.execute("SELECT * FROM notification_cards WHERE kind='patient_history'"):
-        ui = json.loads(card['ui_state'])
-        assert ui['history_latest']['no_body'] == 0 and ui['history_latest']['phase'] == 'complete'
-        assert not notify_history.refresh_needed(led.db,card,NOW+604)
-    assert led.db.execute("SELECT COUNT(*) FROM notification_cards WHERE kind='patient_history'").fetchone()[0] == 2
-    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 2
-    assert json.loads(_card(led,2)['ui_state'])['history_snapshot'] == final_snapshot
-
-
-@pytest.mark.parametrize('normal_due',[False,True])
-@pytest.mark.parametrize('held',[False,True])
-def test_sweep_limits_heavy_refresh_attempts_even_when_no_spec_is_issued_and_rotates_due_cards(led,monkeypatch,normal_due,held):
-    ready(monkeypatch,False)
-    for pid in range(1,6):
-        _patient(led,pid=pid)
-        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
-                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
-        with led.db:
-            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
-            initial_import_state.classify_tx(led,pid,[pid],NOW)
-        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
-        _dispatch(led,event)
-        render = _latest_render(led,pid)
-        if held:
-            led.db.execute("UPDATE notification_renders SET state='held' WHERE delivery_id=?", (render['delivery_id'],))
-            led.db.commit()
-        else:
-            assert _begin(led,render,n=pid)['granted']
-            assert _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')['applied']
-    if normal_due:
-        led.outbox_add('new_messages',99,{'message_ids':[99]})
-    observed = []
-    original = notify_history.snapshot
-    def counted(db,card,cfg,now):
-        observed.append(card['card_id'])
-        return original(db,card,cfg,now)
-    monkeypatch.setattr(notify_history,'snapshot',counted)
-    notify_cards.sweep(led,CFG,now=NOW+301)
-    assert observed == [1,2]
-    assert _card(led,3)['updated_at'] < _card(led,1)['updated_at']
-    notify_cards.sweep(led,CFG,now=NOW+602)
-    assert observed == [1,2,3,4]
-    notify_cards.sweep(led,CFG,now=NOW+903)
-    assert observed == [1,2,3,4,5,1]
-    assert led.db.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 5
-
-
-def test_sweep_expired_normal_defer_is_not_starved_by_four_due_history_cards(led,monkeypatch):
-    ready(monkeypatch,False)
-    for pid in range(1,5):
-        _patient(led,pid=pid)
-        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
-                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
-        with led.db:
-            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
-            initial_import_state.classify_tx(led,pid,[pid],NOW)
-        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
-        _dispatch(led,event)
-        led.db.execute("UPDATE notification_renders SET state='held' WHERE card_id=?", (pid,))
-        led.db.commit()
-    _seed_thread(led,pid=99,root=99,mids=(99,))
-    _dispatch(led,_intent(led,pid=99,payload={'message_ids':[99]}))
-    normal = led.db.execute("SELECT card_id FROM notification_cards WHERE project_id=99 AND kind!='patient_history'").fetchone()[0]
-    with led.db:
-        led.db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?", (NOW+100,normal))
-        led.db.execute("INSERT INTO notification_triage(card_id,state,defer_until,updated_at) VALUES(?,'deferred',?,?)", (normal,NOW+1,NOW))
-    observed = []
-    original = notify_history.snapshot
-    def counted(db,card,cfg,now):
-        observed.append(card['card_id'])
-        return original(db,card,cfg,now)
-    monkeypatch.setattr(notify_history,'snapshot',counted)
-    monkeypatch.setattr(notify_history,'refresh_needed',lambda *args:True)
-    first = notify_cards.sweep(led,CFG,limit=3,now=NOW+301)
-    assert first['scanned'] == 4  # One ordinary card plus three cheap history checks.
-    assert observed == [1,2]
-    triage = led.db.execute('SELECT state,revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()
-    assert tuple(triage) == ('open',1)
-    second = notify_cards.sweep(led,CFG,limit=3,now=NOW+602)
-    assert second['scanned'] == 4 and observed == [1,2,3,4]
-    assert led.db.execute('SELECT revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize('cfg',[CFG,SLACK,LINEWORKS])
@@ -563,7 +354,7 @@ def test_history_counts_multiple_root_and_reply_attachments_without_delivering_f
                       (2,'shared-file','synthetic-reply-report.txt','pending')]
     captured(led)
     ready(monkeypatch)
-    _dispatch(led,event,cfg)
+    legacy_render(led,event,cfg)
     snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
     assert snapshot['saved'] == snapshot['analyzed'] == 2
     assert snapshot['attachments'] == 3  # The same file ID in two source posts is two associations.
@@ -601,13 +392,143 @@ def test_history_high_count_excludes_deleted_foreign_and_unreadable_artifacts(le
     assert clinical_urgency.message_urgency(led.db,2) is None
     captured(led)
     ready(monkeypatch)
-    _dispatch(led,event)
+    legacy_render(led,event)
     snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
     assert snapshot['saved'] == 2 and snapshot['high'] == 1
     assert snapshot['deleted'] == int(invalid == 'deleted')
     rendered = json.dumps(spec(led),ensure_ascii=False)
     assert '現行抽出で緊急度が高い投稿 1件（MCSで確認）' in rendered
     assert '現行抽出で緊急度が高い投稿 2件' not in rendered
+
+@pytest.mark.parametrize("cfg", [CFG, SLACK, LINEWORKS])
+def test_initial_history_is_captured_silently_and_old_unsealed_intents_are_suppressed(led, cfg):
+    state = seed(led)
+    assert state["saved_count"] == 3
+    assert not led.db.execute("SELECT 1 FROM notify_outbox").fetchone()
+    event = _intent(led, "patient_history", payload={"source": "initial_history", "cohort_id": state["cohort_id"]})
+    assert _dispatch(led, event, cfg)["suppressed"]
+    assert led.db.execute("SELECT state FROM notify_outbox").fetchone()[0] == "suppressed"
+    assert not led.db.execute("SELECT 1 FROM notification_renders").fetchone()
+
+
+@pytest.mark.parametrize("cfg", [CFG, SLACK, LINEWORKS])
+def test_published_history_plan_cannot_gain_a_new_send_grant(led, cfg):
+    state = seed(led)
+    event = legacy_render(led, state, cfg)
+    render = _latest_render(led)
+    denied = _apply(led, envelopes.transport_begin(_claim(render)), cfg)
+    assert not denied["granted"]
+    assert denied["error"] == "denied_history_notification_disabled"
+    assert _dispatch(led, event, cfg)["suppressed"]
+    assert _latest_render(led)["state"] == "cancelled"
+    notify_cards.sweep(led, cfg, now=NOW + 301)
+    assert not led.db.execute("SELECT 1 FROM notification_renders WHERE state='queued'").fetchone()
+
+
+@pytest.mark.parametrize("result", ["delivered", "unknown"])
+def test_inflight_history_is_settled_by_real_receipt_and_never_sends_a_successor(led, result):
+    state = seed(led)
+    event = legacy_render(led, state)
+    render = _latest_render(led)
+    aid = legacy_grant(led, render)
+    assert _dispatch(led, event)["skipped"]
+    assert _latest_render(led)["state"] == "sending"
+    assert _receipt(led, render, aid, result=result)["applied"]
+    assert _latest_render(led)["state"] == result
+    captured(led)
+    notify_cards.sweep(led, CFG, now=NOW + 301)
+    assert led.db.execute("SELECT count(*) FROM notification_renders").fetchone()[0] == 1
+    assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 1
+
+
+def test_late_history_member_reopens_completed_summary_without_reopening_capture(led, monkeypatch):
+    from semantic_testkit import _message
+    event = seed(led, 1)
+    captured(led)
+    ready(monkeypatch)
+    legacy_render(led, event)
+    render = _latest_render(led)
+    legacy_grant(led, render)
+    _receipt(led, render, f"{1:016x}")
+    led.save_messages([_message(2, posted_at='2026-09-19T00:00:00+09:00')], project_id=1)
+    assert initial_import_state.load(led.db, 1)["capture_phase"] == "complete"
+    assert json.loads(_card(led)["ui_state"])["history_source_dirty"]
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert json.loads(_card(led)["ui_state"])["history_snapshot"]["saved"] == 2
+
+
+@pytest.mark.parametrize('normal_due',[False,True])
+@pytest.mark.parametrize('held',[False,True])
+def test_sweep_limits_heavy_refresh_attempts_even_when_no_spec_is_issued_and_rotates_due_cards(led,monkeypatch,normal_due,held):
+    ready(monkeypatch,False)
+    for pid in range(1,6):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+        legacy_render(led, initial_import_state.load(led.db, pid), pid=pid)
+        render = _latest_render(led,pid)
+        if held:
+            led.db.execute("UPDATE notification_renders SET state='held' WHERE delivery_id=?", (render['delivery_id'],))
+            led.db.commit()
+        else:
+            legacy_grant(led,render,n=pid)
+            assert _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')['applied']
+    if normal_due:
+        led.outbox_add('new_messages',99,{'message_ids':[99]})
+    observed = []
+    original = notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    notify_cards.sweep(led,CFG,now=NOW+301)
+    assert observed == [1,2]
+    assert _card(led,3)['updated_at'] < _card(led,1)['updated_at']
+    notify_cards.sweep(led,CFG,now=NOW+602)
+    assert observed == [1,2,3,4]
+    notify_cards.sweep(led,CFG,now=NOW+903)
+    assert observed == [1,2,3,4,5,1]
+    assert led.db.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 5
+
+
+def test_sweep_expired_normal_defer_is_not_starved_by_four_due_history_cards(led,monkeypatch):
+    from notify_testkit import _seed_thread
+
+    ready(monkeypatch,False)
+    for pid in range(1,5):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+        legacy_render(led, initial_import_state.load(led.db, pid), pid=pid)
+        led.db.execute("UPDATE notification_renders SET state='held' WHERE card_id=?", (pid,))
+        led.db.commit()
+    _seed_thread(led,pid=99,root=99,mids=(99,))
+    _dispatch(led,_intent(led,pid=99,payload={'message_ids':[99]}))
+    normal = led.db.execute("SELECT card_id FROM notification_cards WHERE project_id=99 AND kind!='patient_history'").fetchone()[0]
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?", (NOW+100,normal))
+        led.db.execute("INSERT INTO notification_triage(card_id,state,defer_until,updated_at) VALUES(?,'deferred',?,?)", (normal,NOW+1,NOW))
+    observed = []
+    original = notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    monkeypatch.setattr(notify_history,'refresh_needed',lambda *args:True)
+    first = notify_cards.sweep(led,CFG,limit=3,now=NOW+301)
+    assert first['scanned'] == 4  # One ordinary card plus three cheap history checks.
+    assert observed == [1,2]
+    triage = led.db.execute('SELECT state,revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()
+    assert tuple(triage) == ('open',1)
+    second = notify_cards.sweep(led,CFG,limit=3,now=NOW+602)
+    assert second['scanned'] == 4 and observed == [1,2,3,4]
+    assert led.db.execute('SELECT revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()[0] == 1
 
 
 def test_completed_history_checks_do_not_consume_the_two_render_slots(led, monkeypatch):
@@ -623,10 +544,9 @@ def test_completed_history_checks_do_not_consume_the_two_render_slots(led, monke
             state.update(capture_phase='complete',capture_proof={
                 'v':1,'scope':history_walk.scope(pid,state['cohort_id']),'digest':'a'*64})
             led.db.execute('UPDATE patients SET initial_import=? WHERE project_id=?',(json.dumps(state),pid))
-        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1",(pid,)).fetchone()
-        _dispatch(led,event)
+        legacy_render(led, initial_import_state.load(led.db, pid), pid=pid)
         render = _latest_render(led,pid)
-        assert _begin(led,render,n=pid)['granted']
+        legacy_grant(led,render,n=pid)
         _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')
     # The first three have complete, settled history and truly need no refresh.
     for pid in range(1,4):

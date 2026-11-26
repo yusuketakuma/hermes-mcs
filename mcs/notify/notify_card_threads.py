@@ -1,5 +1,6 @@
 """Proven source and reply thread routing for notification cards."""
 from __future__ import annotations
+import initial_import_state
 import notify_scope
 import json
 from mcs_util import loads_dict
@@ -12,7 +13,8 @@ from notify_card_state import (
 )
 
 def _thread_root(db, mid, project_id):
-    cur, seen = mid, set()
+    """Resolve the notification thread without promoting a pre-join parent."""
+    cur, child, seen = mid, mid, set()
     for _ in range(32):
         if cur is None or cur in seen:
             return mid
@@ -21,9 +23,13 @@ def _thread_root(db, mid, project_id):
                        "WHERE message_id=?", (cur,)).fetchone()
         if r is not None and r["project_id"] != project_id:
             return mid
-        if r is None or r["parent_id"] is None:
+        if r is None:
+            return child if initial_import_state.load(db, project_id) else cur
+        if cur != mid and initial_import_state.quiet_notification_ids(db, project_id, [cur]):
+            return child
+        if r["parent_id"] is None:
             return cur
-        cur = r["parent_id"]
+        child, cur = cur, r["parent_id"]
     return cur or mid
 
 

@@ -140,7 +140,7 @@ WIZARD = [
         ("notify_max_age_h", "num", None,
          "何時間前までの投稿を通知しますか？（空欄=制限なし。期間内に新しく取り込んだ投稿は既読でも通知）", None),
         ("notify_all_replies", "bool", False,
-         "リアルタイムで新規取得した返信は既読・投稿時刻によらず全件通知（履歴一括取込みは対象外）", None),
+         "新着の返信を既読でも通知しますか？（上の通知期間を適用。初回の履歴は対象外）", None),
         ("hermes_bin", "opt", None,
          "hermes コマンドのパス（空欄=自動検出）", lambda cfg: cfg.get("runtime_mode") != "standalone"),
     ]),

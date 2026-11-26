@@ -299,8 +299,6 @@ class LedgerCaptureMixin:
         history_updates = sorted(history & (set(new_ids) | set(changed_ids)
                                             | set(self._unnotified(notify_ids))))
         if history_updates:
-            initial_import_state.emit_tx(
-                self, project_id, initial_import_state.load(self.db, project_id), history_updates)
             self._mark_notified(history_updates, now)
         initial_import_state.refresh_capture_tx(self, project_id, now)
         notify_ids = [mid for mid in notify_ids if mid not in history]
@@ -327,8 +325,7 @@ class LedgerCaptureMixin:
                     [*new_ids, now - notify_max_age_s]).fetchall()
                 notify_ids = list(dict.fromkeys(
                     notify_ids + self._unnotified([r[0] for r in recent if r[0] not in history])))
-            # Opted-in realtime notification paths cover every new
-            # reply. Discovery still age-filters old replies on the first import.
+            # Opted-in realtime paths also consider read replies within the age bound.
             reply_ids = []
             if (not late_only and self.notify_all_replies and new_ids
                     and notify.get("source") != "discovery"):
@@ -338,11 +335,8 @@ class LedgerCaptureMixin:
                     + ") AND parent_id IS NOT NULL AND parent_id != 0",
                     new_ids).fetchall()
                 reply_ids = self._unnotified([r[0] for r in replies if r[0] not in history])
-            unbounded = set(reply_ids)
             notify_ids = self._filter_notify_age(
-                [mid for mid in notify_ids if mid not in unbounded],
-                now, notify_max_age_s)
-            notify_ids = list(dict.fromkeys(notify_ids + reply_ids))
+                list(dict.fromkeys(notify_ids + reply_ids)), now, notify_max_age_s)
             if notify_ids:
                 payload = dict(notify, message_ids=notify_ids)
                 origin["event_id"] = self._outbox_insert(
@@ -429,8 +423,7 @@ class LedgerCaptureMixin:
         never contain (own posts are is_unread=0 by definition).
         With notify_max_age_s, newly stored read posts with a known
         recent timestamp also qualify through the shared save gate.
-        notify_all_replies on the ledger exempts new replies from the age
-        and unread gates only when this call supplies a notify template.
+        notify_all_replies on the ledger includes read replies within the age bound only when this call supplies a notify template.
         notify_new_after_ts widens eligibility like notify_all_new, but
         only to new rows posted strictly after it (a page-limited
         self-post probe's cutoff; older history stays quiet).
@@ -519,7 +512,7 @@ class LedgerCaptureMixin:
         drained for a bulk-added patient can carry months-old unread
         replies that must not announce. New read replies with a known
         timestamp inside the bound also qualify for notification;
-        notify_all_replies exempts new replies from that bound."""
+        notify_all_replies also respects that bound."""
         if not isinstance(replies, (list, tuple)):
             replies = list(replies)
         new_ids = []

@@ -99,6 +99,7 @@ from notify_card_renders import (
     _thread_name as _thread_name,
     issue_render as issue_render
 )
+import initial_import_state
 import notify_scope
 import notify_spool
 import notify_history
@@ -118,7 +119,7 @@ from safe_io import read_private_bytes
 from notify_render import (
     card_content as card_content, content_fingerprint as content_fingerprint,
     anchor_keys, preview_header, preview_line, preview_privacy, fit_parts,
-    plain_notice, presenter, reply_layout, reply_source, own_post as own_post)
+    live_notification_rows, plain_notice, presenter, reply_layout, reply_source, own_post as own_post)
 import notify_parts
 import notify_action_tokens as action_tokens
 
@@ -286,8 +287,6 @@ def _split_reply_targets(db, targets, scope, cfg):
 def _resolve_targets(db, ev, payload, *, cfg=None) -> list:
     """Frozen intent -> [(card_key, coverage, anchor)] fan-out."""
     kind = ev["kind"]
-    if kind == "patient_history":
-        return notify_history.targets(db, ev["project_id"], payload, notify_scope.active_transport(cfg), scope=notify_scope.delivery_scope(cfg))
     if kind == "attachment_followup":
         aid, mid = payload.get("attachment_id"), payload.get("message_id")
         if not positive(aid) or not positive(mid) or not positive(ev["project_id"]):
@@ -336,20 +335,15 @@ def _resolve_targets(db, ev, payload, *, cfg=None) -> list:
     if kind == "new_messages":
         ids = sorted({m for m in (payload.get("message_ids") or [])
                       if positive(m)})
+        pid = ev["project_id"]
+        rows = db.execute("SELECT message_id,project_id FROM messages WHERE message_id IN "
+                          "(SELECT value FROM json_each(?)) AND (? IS NULL OR project_id=?) "
+                          "ORDER BY message_id", (json.dumps(ids), pid, pid))
         roots = {}
-        for mid in ids:
-            row = db.execute("SELECT project_id FROM messages WHERE message_id=?",
-                             (mid,)).fetchone()
-            if row is None or not positive(row["project_id"]) \
-                    or (ev["project_id"] is not None
-                        and row["project_id"] != ev["project_id"]):
-                continue
-            membership = db.execute("SELECT content FROM message_metadata WHERE message_id=? AND source='capture'", (mid,)).fetchone()
-            role = ((loads_dict(membership[0]) or {}).get("_initial_import") or {}) if membership else {}
-            if role.get("role") == "history":
-                continue
-            pid = row["project_id"]
-            roots.setdefault((pid, _thread_root(db, mid, pid)), []).append(mid)
+        for row in live_notification_rows(db, pid, rows):
+            mid, project_id = row["message_id"], row["project_id"]
+            if positive(project_id):
+                roots.setdefault((project_id, _thread_root(db, mid, project_id)), []).append(mid)
         out = []
         for (pid, root_mid), mids in roots.items():
             out.append({"card_key": f"v1|thread|{pid}|{root_mid}",
@@ -753,6 +747,29 @@ def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
     batch = db.execute(
         "SELECT * FROM notification_intent_batches "
         "WHERE event_id=?", (event_id,)).fetchone()
+    if row["kind"] == "patient_history":
+        # Older versions queued these even after a summary had been delivered.
+        # A granted or unknown send stays bound until its factual receipt arrives.
+        pending = db.execute(
+            "SELECT i.card_id,i.delivery_id,r.state,r.op FROM notification_intent_cards i "
+            "LEFT JOIN notification_renders r USING(delivery_id) WHERE i.event_id=? AND i.state='pending'",
+            (event_id,)).fetchall()
+        for item in pending:
+            if (item["state"] in ("sending", "unknown", "delivered") or unsettled_attempt(db, item["card_id"])
+                    or _restore_hold_active(db, card_id=item["card_id"], delivery_id=item["delivery_id"])):
+                _reseat(db, event_id, now, "intent_cards_unsettled")
+                return {"skipped": True}
+        for item in pending:
+            if item["state"] in ("queued", "held") and item["op"] != "revoke":
+                _cancel_render(db, item["delivery_id"], now)
+        db.execute("UPDATE notification_intent_cards SET state='suppressed' "
+                   "WHERE event_id=? AND state='pending'", (event_id,))
+        settled = complete_intent(db, event_id, now)
+        if settled is None:
+            db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,updated_at=? WHERE event_id=?",
+                       (now, event_id))
+        mark_snapshot_dirty(db)
+        return {"suppressed": settled != "accepted"}
     if row["kind"] == "signal" and not notify_scope.signals_notify(cfg):
         if batch is None:
             db.execute(
@@ -781,7 +798,7 @@ def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
             return {"error": "scope_mismatch"}
         # A held signal resumes after its original source thread becomes
         # deliverable; no fresh event or new patient room is necessary.
-        if row["kind"] in ("signal", "patient_history"):
+        if row["kind"] == "signal":
             for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
                 issue_render(db, pending[0], cfg, now, specs)
             outcome["dispatched"] = len(specs) > spec_start
@@ -843,6 +860,11 @@ def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
         if row["kind"] == "new_messages":
             targets = _split_reply_targets(db, targets, scope, cfg)
         if row["kind"] == "attachment_followup":
+            if positive(frozen.get("message_id")) and initial_import_state.quiet_notification_ids(
+                    db, row["project_id"], [frozen["message_id"]]):
+                db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,updated_at=? WHERE event_id=?",
+                           (now, event_id))
+                return {"suppressed": True}
             if not notify_parts.late_attachment_thread(cfg):
                 return {"error": "attachment_thread_unavailable"}
             targets = [target for target in targets
@@ -881,8 +903,6 @@ def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
             card_ids.append(cid)
             covered.update(target["coverage"])
         if card_ids:
-            if row["kind"] == "patient_history":
-                notify_history.coalesce_tx(db, notify_scope.card_row(db, card_ids[0]), scope, epoch, now)
             for cid in card_ids:
                 issue_render(db, cid, cfg, now, specs,
                               force=row["kind"] == "attachment_followup")
@@ -1250,8 +1270,6 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                 if card["kind"] != "patient_history" or history_due and not history_deferred:
                     issue_render(db, card["card_id"], cfg, now, specs)
                     history_renders += card["kind"] == "patient_history"
-                if card["kind"] == "patient_history":
-                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
                 after = notify_scope.card_row(db, card["card_id"])
                 if (after["source_generation"], after["presentation_generation"],
                         after["desired_render_rev"]) != before:
