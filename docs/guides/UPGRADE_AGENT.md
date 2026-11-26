@@ -242,7 +242,7 @@ git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   #
 | `schema_bump` | DB の版変更。あれば事前バックアップからの復元が巻戻しに含まれる |
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
 | `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
-| `install_args` | 前回成功した install.sh の opt-out（`~/.mcs/config.json`。未記録時は旧 `data/install_options.json` を参照）。`null` は記録なし、読取不能、形式不正、または新旧の記録が不一致 |
+| `install_args` | 前回の導入で省略した項目。設定の集約後は `~/.mcs/config.json` から読み取る。移行前だけ旧 `data/install_options.json` と照合する。`null` は未記録、読取不能、形式不正、または移行前の記録の不一致 |
 | `notes` | 現在版より新しく移行先までの各版の「更新時の注意」（CHANGELOG） |
 
 1.0.13以降、macOS 標準 `/usr/bin/python3` の SQLite は WAL-reset 影響版のため、
