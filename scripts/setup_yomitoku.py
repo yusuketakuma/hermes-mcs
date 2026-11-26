@@ -20,13 +20,14 @@ def run(args, *, env):
     return subprocess.run(args, check=True, env=env, stdin=subprocess.DEVNULL)
 
 
-def setup(root: Path, repo: Path):
+def setup(root: Path, repo: Path, *, packages_only=False):
     root = root.absolute()
     venv = root / 'ocr-venv'
     if venv.is_symlink():
         raise ValueError('OCR environment must not be a symlink')
     requirements = repo / 'deployment' / 'requirements-ocr.txt'
-    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    lock = requirements.with_suffix('.lock')
+    digest = hashlib.sha256(requirements.read_bytes() + b'\0' + lock.read_bytes()).hexdigest()
     marker = venv / '.mcs-ocr-requirements'
     python = venv / 'bin' / 'python'
     env = os.environ.copy()
@@ -49,9 +50,15 @@ def setup(root: Path, repo: Path):
         uv = shutil.which('uv')
         if not uv:
             raise ValueError('uv is required to install the optional OCR dependencies')
-        run([uv, 'pip', 'install', '--python', str(python), '--reinstall', '-r', str(requirements)], env=env)
+        run([uv, 'pip', 'install', '--python', str(python), '--reinstall', '--no-deps',
+             '-r', str(requirements), '-r', str(lock)], env=env)
+        run([uv, 'pip', 'check', '--python', str(python)], env=env)
     run([str(python), '-I', '-c',
          f'from importlib.metadata import version; assert version("yomitoku") == {VERSION!r}'], env=env)
+    if not (venv / 'bin' / 'yomitoku').is_file():
+        raise ValueError('OCR executable was not installed')
+    if packages_only:
+        return
     # Local-only lookup needs each weight, since a snapshot directory alone can be incomplete.
     run([str(python), '-I', '-c',
          "from huggingface_hub import snapshot_download, hf_hub_download; from huggingface_hub.errors import LocalEntryNotFoundError; import sys, json\n"
@@ -61,8 +68,6 @@ def setup(root: Path, repo: Path):
          "    except LocalEntryNotFoundError:\n"
          "        snapshot_download(repo_id=repo, revision=revision)\n"
          "        hf_hub_download(repo_id=repo, filename='model.safetensors', revision=revision, local_files_only=True)\n", MODEL_JSON], env=env)
-    if not (venv / 'bin' / 'yomitoku').is_file():
-        raise ValueError('OCR executable was not installed')
     marker.write_bytes(expected)
     print(f'OCR runtime ready: {venv / "bin" / "yomitoku"}')
     print('OCR remains disabled until attachment_ocr is configured. Model licence: noncommercial use only.')
@@ -71,9 +76,10 @@ def setup(root: Path, repo: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--packages-only', action='store_true', help='Install and verify packages without downloading OCR weights')
     args = parser.parse_args()
     try:
-        setup(args.root, Path(__file__).resolve().parent.parent)
+        setup(args.root, Path(__file__).resolve().parent.parent, packages_only=args.packages_only)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f'OCR installation failed: {error}', file=sys.stderr)
         return 1
