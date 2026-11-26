@@ -440,7 +440,9 @@ def test_validated_partial_failure_snapshot_reaches_cause_specific_alert(tmp_pat
     lines = health_watch._reason_rows({'attachment_ocr': ocr}, ['attachment_ocr_processing_failed'])
     text = '\n'.join(lines)
     assert '表の行列対応を確定できず未採用' in text
-    assert '観測範囲' in text and '1件' in text and '自動再試行が上限' in text
+    assert '観測範囲' in text and '1件' in text and '自動再試行が上限' not in text
+    assert '再試行を続ける記録' not in text
+    assert '未解消の記録が2件' in text
     assert 'doctor --share' in text and '元の添付' in text
     assert 'OCRの設定・実行環境' not in text
     assert '全件' not in text and 'すべて' not in text
