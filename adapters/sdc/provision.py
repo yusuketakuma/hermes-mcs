@@ -260,10 +260,17 @@ def _read(store, *, optional=False):
 def _write(store, state):
     _certain(store)
     state = _validated(state)
+    # rollback互換: auto未使用のrecordはauto keyを落として保存する。auto導入前の
+    # 版はprofile keyのexact coverを要求するため、空のauto keyが残るとrollback後に
+    # recordを読めず監視が止まる。auto使用後のrollbackはそもそも対象外。
+    out = state
+    if state['profiles'].get('auto') is None:
+        out = dict(state)
+        out['profiles'] = {k: v for k, v in state['profiles'].items() if k != 'auto'}
     try:
-        _check(store.root_fingerprint() == state['root_fingerprint'], 'CONFLICT')
-        store._write_file(NAME, state)
-        _check(store.root_fingerprint() == state['root_fingerprint'] and store._read_file(NAME) == state, 'CONFLICT')
+        _check(store.root_fingerprint() == out['root_fingerprint'], 'CONFLICT')
+        store._write_file(NAME, out)
+        _check(store.root_fingerprint() == out['root_fingerprint'] and store._read_file(NAME) == out, 'CONFLICT')
         store._provision_seen = True
     except BaseException as error:
         store._provision_uncertain = True
