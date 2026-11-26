@@ -348,3 +348,31 @@ def test_confirm_requires_wire(store):
             store, None, preview=_preview(), clock=Clock(),
             confirmation_receipt_id=RECEIPT_ID)
     assert state.load(store)['consent'] is None
+
+
+def test_confirm_aborts_when_consent_revoked_during_send(store):
+    """confirm送信中にauto-disableで撤回されたら上書きせず失敗する。"""
+    preview = _preview()
+    base = consent_mod._consent_from_preview(preview, RECEIPT_ID)
+    revoked = dict(base)
+    revoked['enabled'] = False
+    revoked['local_consent_epoch'] = base['local_consent_epoch'] + 1
+    revoked = contract.parse_typed(
+        contract.canonical_typed(revoked, 'StandingConsent'), 'StandingConsent',
+        max_bytes=contract.AUTO_INPUT_BYTES)
+    seed(store, consent=base)
+
+    class RevokingWire(FakeWire):
+        def verify(self, path, response):
+            request = self.sent[-1][1]
+            # 応答検証のタイミングでlocal撤回が入った状況を再現する
+            seed(store, consent=revoked)
+            return _receipt_for(request)
+
+    import pytest as _pytest
+    with _pytest.raises(Exception) as exc:
+        consent_mod.confirm_standing_policy(
+            store, RevokingWire(), preview=preview, clock=Clock(),
+            confirmation_receipt_id=RECEIPT_ID)
+    assert getattr(exc.value, 'code', '') == 'CONSENT_CONCURRENT_CHANGE'
+    assert state.load(store)['consent'] == revoked
