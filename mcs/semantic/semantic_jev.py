@@ -54,6 +54,7 @@ import _mcs_path  # noqa: F401
 import bounded_http
 from bounded_http import MAX_RESPONSE_BYTES
 import provider_settings
+from llm_retry import CLOUD_MAX_ATTEMPTS
 
 # The worker execution mechanism (bounded_http_request, the loopback
 # check, the response cap) lives in core/bounded_http.py — this module
@@ -587,7 +588,7 @@ class JevClient:
     def __init__(self, api_key: str | None = None,
                  model: str = JEV_MODEL, endpoint: str = JEV_ENDPOINT,
                  attempt_timeout: float = 20.0, job_budget: float = 45.0,
-                 max_attempts: int = 3, post_fn=None, key_current=None):
+                 max_attempts: int = CLOUD_MAX_ATTEMPTS, post_fn=None, key_current=None):
         if key_current is not None and not callable(key_current):
             raise ValueError("key_guard_invalid")
         if model is None or resolve_model(model) != model:
@@ -719,11 +720,9 @@ class JevClient:
                 raise
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
-                # Only a refusal before dispatch proves the body never left; a
-                # sent request may already be billed and is never resent
-                # (the cloud client's rule, owner decision 2026-10-28).
-                last = JevError(kind, type(e).__name__, retryable=isinstance(
-                    e, (bounded_http.NotSentTimeout, ConnectionRefusedError)))
+                # A response may be lost after dispatch. The shared cloud policy permits
+                # bounded retries; per-request usage accounting keeps each send visible.
+                last = JevError(kind, type(e).__name__, retryable=True)
             else:
                 # A late answer is still settled: dropping it would lose a billed result.
                 if len(raw) > MAX_RESPONSE_BYTES:

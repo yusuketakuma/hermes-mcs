@@ -420,7 +420,7 @@ def test_a_busy_read_reports_its_sqlite_error_name(runtime, monkeypatch, tmp_pat
 
     monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     result = step(runtime)
-    assert result['scan_refusal'] == 'read_sqlite' and result['scan_sqlite_error'] == 'SQLITE_BUSY'
+    assert result['scan_refusal'] == 'scan_interrupted' and result['scan_sqlite_error'] == 'SQLITE_BUSY'
 
 
 def test_a_read_failure_without_an_sqlite_name_is_unclassified(runtime, monkeypatch):
@@ -445,6 +445,29 @@ def test_select_scan_refusal_classifies_bookmark_value_errors(runtime, monkeypat
     monkeypatch.setattr(refresh, '_advance_patient_scan', advance)
     result = step(runtime)
     assert result['scan_refusal'] == 'invalid_source'
+    assert result['scan_interrupts'] == 1
+
+
+@pytest.mark.parametrize('errorcode,refusal', [
+    (sqlite3.SQLITE_INTERRUPT, 'read_sqlite'),
+    (sqlite3.SQLITE_BUSY, 'scan_interrupted'),
+    (sqlite3.SQLITE_LOCKED, 'scan_interrupted'),
+    (sqlite3.SQLITE_CORRUPT, 'read_sqlite'),
+])
+def test_select_scan_refusal_separates_lock_waits_from_read_faults(runtime, monkeypatch, errorcode, refusal):
+    """Lock waits are interrupted scans; other SQLite failures keep the read-fault reason."""
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+
+    def plan(*args, **kwargs):
+        exc = sqlite3.OperationalError('synthetic')
+        exc.sqlite_errorcode = errorcode
+        raise exc
+
+    monkeypatch.setattr(schedule, 'plan', plan)
+    result = step(runtime)
+    assert result['scanned'] == 0
+    assert result['scan_refusal'] == refusal
     assert result['scan_interrupts'] == 1
 
 

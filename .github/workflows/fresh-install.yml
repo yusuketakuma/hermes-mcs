@@ -12,6 +12,7 @@ on:
       - deployment/launchagents/**
       - deployment/scripts/**
       - deployment/requirements-standalone.txt
+      - deployment/requirements-standalone.lock
       - scripts/mcs
       - scripts/install_local.py
       - mcs/ops/**

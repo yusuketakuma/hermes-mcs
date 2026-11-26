@@ -7,6 +7,7 @@ import time
 import writer_lock
 import inference_version as inference
 import bounded_http
+import cloud_policy
 from clinical_chunking import PLAN_VERSION
 import local_llm
 import mcs_util
@@ -71,6 +72,36 @@ def _llm_up(deadline: float | None = None) -> bool:
         return False
 
 
+def _failure_observation(value):
+    """Bounded fixed-shape failure metadata; no source text or provider response text."""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in ("failure_reason", "fallback_code", "refusal_stage", "refusal_code"):
+        item = value.get(key)
+        if type(item) is str and len(item) <= 64 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in item):
+            out[key] = item
+    chunk = value.get("failed_chunk")
+    if type(chunk) is str and len(chunk) <= 16 and chunk.isdigit():
+        out["failed_chunk"] = chunk
+    issues = value.get("repair_issues")
+    if isinstance(issues, dict) and len(issues) <= 32:
+        clean = {}
+        for key, count in issues.items():
+            if (type(key) is str and len(key) <= 64 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in key)
+                    and type(count) is int and 0 <= count <= 1000000):
+                clean[key] = count
+        if clean:
+            out["repair_issues"] = clean
+    receipts = value.get("cloud_receipt_ids")
+    if isinstance(receipts, list):
+        clean = [item for item in receipts[:8]
+                 if type(item) is str and len(item) == 32 and all(c in "0123456789abcdef" for c in item)]
+        if clean:
+            out["cloud_receipt_ids"] = clean
+    return out or None
+
+
 def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=False, result_witness=None):
     """In-transaction error artifact insert — caller holds `with
     ledger.db` AND has already cleared prior error rows in the same tx.
@@ -97,6 +128,9 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=Fa
     meta.update(_frame_meta(r))
     if auto_retry:
         meta["auto_retry"] = auto_retry
+    observation = _failure_observation(r.get("_failure_observation") if isinstance(r, dict) else None)
+    if observation is not None:
+        meta["failure_observation"] = observation
     content_json = json.dumps({"_model": actual_model, "_error": True}, ensure_ascii=False)
     meta_json = json.dumps(meta, ensure_ascii=False)
     created_at = time.time()
@@ -232,6 +266,15 @@ def _fail(ledger, r, attempts: int, *, lease=None):
         if not witness:
             raise RuntimeError("extract_insert_unverified")
         _verify_atomic_witness(ledger.db, r, witness)
+        observation = r.get("_failure_observation") if isinstance(r, dict) else None
+        fallback = observation.get("fallback_code") if isinstance(observation, dict) else None
+        if fallback in {"cloud_validation_failed", "cloud_invalid_response",
+                        "cloud_incomplete_response", "cloud_repair_invalid"}:
+            for reservation in r.get("_cloud_failure_reservations") or []:
+                cloud_policy.record_validation_failure_tx(
+                    ledger, reservation,
+                    failure_reason=observation.get("failure_reason") or fallback,
+                    repair_issues=observation.get("repair_issues"))
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:

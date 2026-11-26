@@ -172,7 +172,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="b82cf9c569f841055309d01d784e26e7e34aa5b6069b297f87603d9cce96b4ca"
+INSTALL_RUNTIME_SHA256="a9253fc9cea88ecf5b32be784e5bbfc13aa875ae6ca2a7bff46e471d97114b33"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -1092,7 +1092,7 @@ preflight() {
 
     if [ "$SKIP_BREW" -eq 1 ]; then pf_info "Homebrew の導入を省略します（--no-brew）"
     elif command -v brew >/dev/null 2>&1; then pf_ok "Homebrew: $(command -v brew)"
-    else pf_ng "Homebrew が未導入です" "$BREW_INSTALL"
+    else pf_ng "Homebrew が未導入です（導入済みならPATHに反映されていません）" "$BREW_INSTALL   （導入済みなら、インストーラの Next steps に表示された shellenv コマンドを実行してください）"
     fi
     _brew_fills=0
     if [ "$SKIP_BREW" -eq 0 ] && command -v brew >/dev/null 2>&1; then _brew_fills=1; fi

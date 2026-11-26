@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "旧形式のsemantic cloud receiptでbacklog再処理が止まる問題を修正",
+  "summary": "member binding導入前のsemantic cloud receiptが、現在のinterpretation generationで必要な再処理送信を永久に拒否しなくなります。旧receiptの会計記録は保持したまま、現在generationの送信は論理unitごとに通常どおり予約・記録されます。",
+  "upgrade": "追加操作は不要です。適用後はsemantic backlogの再処理がcloud送信へ進み、旧世代の回収不能なreceipt分はgenerationごとに再送信され得ます。事前見積ではmigration対象4815件・13患者に加え、input_binding導入前のowner付き旧世代receipt6776件も回収できません。対象unionは11591件・35患者・実支払済み14.80ドルで、過去最大予約額の単純合計は249.47ドルです。これは重複unitを含む保守的な上限目安で、必要なbacklog unitだけが順次送信されます。",
+  "details": [
+    "semanticの送信重複判定にtarget・source・phaseへ加えてinterpretation generationを含め、旧generationの結果が現generationの再処理を妨げないようにしました。",
+    "2026-10-30 00:46:08 +09以前の厳密な旧形式receiptだけを、現在generationの重複証拠から外します。receiptやfiscal tallyは削除・変更しません。",
+    "input_binding欠如のreceiptはscope bindingを再検証できないため再利用しません。ownerやgenerationが違う回答も再利用しません。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "tests/llm/test_cloud_resend_guard.py"
+  ]
+}

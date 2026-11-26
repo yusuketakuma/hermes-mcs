@@ -1,0 +1,36 @@
+{
+  "category": "changed",
+  "title": "cloud処理を初回送信と5回までの再試行に統一し、課金済み応答を安全に再利用",
+  "summary": "個別チャット抽出・意味解析・患者コンテキスト管理・Jevのcloud処理で、失敗時に初回送信へ最大5回の再試行を行う上限へ統一しました。入力束縛の一部だけが変わっても論理的に同じpromptの課金済み応答は、追加送信せず再利用します。HTTP状態・request id・固定の失敗区分に加え、課金済み応答がローカル検証で不合格になった場合は固定の失敗理由を会計artifactへ記録し、その応答を再利用せず上限内で再試行します。患者データ本文やprovider応答本文は失敗理由へ記録しません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。同一論理promptの課金済み応答は入力束縛が変わっていてもモデル・effortが一致すれば再利用されます。再試行は初回送信と5回までの再試行までで、同一論理requestの課金済み失敗がこの上限へ達すると送信を停止します。",
+  "details": [
+    "cloud provider client・semantic job・semantic backlog・患者コンテキスト・Jevの再試行上限を共通のcloud retry契約へ揃え、cloud circuitも同じ上限まで送信を止めません。",
+    "429・5xx・transport/timeoutを上限内で再試行します。各送信は独立したusage reservation/resultとして記録され、応答喪失の可能性がある送信はnot_sentへ分類しません。認証・支払い・providerが内容を拒否した失敗は同じ入力のまま自動再送しません。",
+    "課金済み応答の論理prompt fingerprintを会計へ保存し、output envelopeや入力束縛が変わっただけの同一promptは再送信せず再利用します。結合・改ざん・証拠不整合がある場合は従来どおりfail-closedです。",
+    "抽出・意味解析・患者コンテキストでHTTP 200かつ課金済みでもローカル検証を通らなかった応答をcloud_usage_validation_failure artifactで注記し、固定のvalidation failure理由だけを残します。この注記がある応答は成功応答として再利用せず、上限内の再送対象です。",
+    "抽出失敗artifactにはboundedなfailure_observationを追加し、fallback/refusal区分・validation failure理由・repair issue件数・receipt idだけを保持します。自由文・患者本文・provider応答本文は保存しません。",
+    "例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、週次tick側のbackoff再試行に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。"
+  ],
+  "refs": [
+    "mcs/llm/transport/llm_retry.py",
+    "mcs/llm/transport/cloud_client.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_errors.py",
+    "mcs/extract/llm/extract_llm_source_contract.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_llm.py",
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_runtime.py",
+    "tests/llm/test_cloud_response_recovery.py",
+    "tests/llm/test_cloud_resend_guard.py",
+    "tests/llm/test_anthropic_client.py",
+    "tests/semantic/test_semantic_cloud.py",
+    "tests/semantic/test_semantic_circuit.py",
+    "tests/extract/llm/test_extract_llm_storage.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "tests/llm/test_openai_client.py",
+    "tests/llm/test_cloud_response_limit.py"
+  ]
+}

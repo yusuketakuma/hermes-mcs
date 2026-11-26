@@ -18,6 +18,7 @@ import uuid
 from contextlib import suppress
 
 from mcs_util import loads_dict, payload_hash, strict_json, valid_hash
+from llm_retry import CLOUD_MAX_ATTEMPTS
 from semantic_usage_receipts import (
     MAX_SQL_INTEGER as MAX_SQL_INTEGER,
     JevReservation as JevReservation,
@@ -356,7 +357,7 @@ def transition(ledger, token: JobToken, action: str,
 
 
 _CIRCUIT_ARTIFACT_KIND = "semantic_circuit"
-_CIRCUIT_FAILURE_LIMIT = 3
+_CIRCUIT_FAILURE_LIMIT = CLOUD_MAX_ATTEMPTS
 _CIRCUIT_COOLDOWN_SECONDS = 300.0
 _CIRCUIT_RETRYABLE_KINDS = frozenset({"rate_limited", "transport", "timeout"})
 _CIRCUIT_FAILURE_CLASSES = _CIRCUIT_RETRYABLE_KINDS | {

@@ -629,7 +629,7 @@ def lane_metrics(db) -> dict:
             "WHERE a.kind IN (?,?) AND COALESCE(p.is_archived,0)=0 AND "
             + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
             + " AND (a.kind!=? OR " + latest_current_pred() + ") "
-            "GROUP BY 1,2", (patient_context_refresh_state.PROGRESS, patient_context_refresh_state.PROGRESS, patient_context_refresh_state.SCAN, patient_context_refresh_state.SCAN)):
+            "GROUP BY 1,2", (patient_context_refresh_state.PROGRESS, patient_context_refresh_state.PROGRESS, patient_context_refresh_state.SCAN, patient_context_refresh_state.SCAN, patient_context_refresh_state.SCAN)):
         invalid_rows += row[5]
         lane, failure = row[0], row[1]
         if failure:
@@ -649,7 +649,7 @@ def lane_metrics(db) -> dict:
             "SELECT json_extract(CASE WHEN " + valid + " THEN a.content END,'$.quality_state') AS qs, COUNT(*) "
             "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
             "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND " + latest_current_pred()
-            + " AND " + valid + " GROUP BY 1", (patient_context_refresh_state.SCAN,)):
+            + " AND " + valid + " GROUP BY 1", (patient_context_refresh_state.SCAN, patient_context_refresh_state.SCAN)):
         raw = row[0]
         state = raw.partition(":")[0] if type(raw) is str and raw else "none"
         quality[state if state in quality else "other"] += row[1]

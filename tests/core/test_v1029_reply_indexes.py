@@ -7,7 +7,8 @@ import pytest
 from common_testkit import make_ledger
 
 NEW_INDEXES = {"idx_messages_reply_first_seen", "idx_messages_reply_open",
-               "idx_nrenders_state_updated", "idx_nparts_pending"}
+               "idx_nrenders_state_updated", "idx_nparts_pending",
+               "idx_nrenders_spec_json_gc", "idx_nrenders_spec_file_gc"}
 
 
 def _indexes(db):

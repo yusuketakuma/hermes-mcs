@@ -1,0 +1,23 @@
+{
+  "category": "changed",
+  "title": "意味解析backlogの要約生成を非専用workerでもcloudへoffload",
+  "summary": "semantic backlogを非専用workerの常駐処理が拾った場合でも、要約生成stageはownerが開いたsemantic backlog window内でcloud推論を使うようになりました。facts抽出stageは従来どおり専用backlog workerだけがcloudへ送り、realtime laneと新着10分以内の対象はcloudへ送りません。loop候補生成はもともとfactsからの決定的変換で、関係評価はJev APIのため、今回のlocal LLM offload対象ではありません。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加操作は不要です。semantic_backlog_untilのwindowが開いている間だけ要約生成がcloudへ送られ、windowを閉じると新規送信は止まります。cloud送信量と費用は従来より増えます。",
+  "details": [
+    "backlog lane内の送信許可をsemantic phaseで区別し、summary stageだけ非専用workerのcloud送信を許可します。facts stageの専用worker制限は変更しません。",
+    "first_seen・notified_at・revisionが10分以内の対象はsummary stageでもcloudへ送りません。thread内のいずれかのmemberが10分以内に新着・通知・編集された場合も、そのthread全体をcloudへ送りません。",
+    "同一target・同一phaseのlocal/cloud混在は従来どおり禁止しつつ、factsがlocalで要約がcloudになるstage間の分離を許可します。同一論理requestはlaneを跨いでも再送信せず再利用します。",
+    "cloud生成を名乗るsummary artifactは、inference_requestsに記録されたsettled済みsemantic_backlog reservationのowner（target・thread・source・generation・phase）と一致する場合だけ再利用します。不一致はlocal扱いで再生成方向へ倒します。",
+    "loop生成にはlocal LLM経路がないためコード変更はありません。関係評価は従来どおりJev APIです。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_job_processor.py",
+    "mcs/semantic/semantic_summary_stages.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_inference.py",
+    "mcs/extract/llm/extract_llm_provider.py",
+    "tests/semantic/test_semantic_backlog_window.py",
+    "tests/semantic/test_semantic_cloud.py"
+  ]
+}

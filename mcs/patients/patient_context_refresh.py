@@ -151,6 +151,13 @@ from patient_context_quality_controller import (
 )
 
 
+_VALIDATION_FAILURES = frozenset({
+    'patient_context_length_stop',
+    'patient_context_invalid_response',
+    'patient_context_unsupported_summary',
+})
+
+
 def _completed_cloud_receipts(ledger, provider, *, answered_only=False):
     """Recheck the existing paid receipts before retaining or adopting a unit."""
     import cloud_policy
@@ -312,6 +319,12 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
                 return None
             ledger.db.commit()
             return content, patient_context_refresh_state._artifact_meta(patient_context_refresh_state.PROGRESS, meta, None)
+        except sqlite3.Error as exc:
+            ledger.db.rollback()
+            # An exhausted writer wait is lock contention, not a read failure.
+            if _locked_sqlite(exc):
+                return None
+            raise
         except BaseException:
             ledger.db.rollback()
             raise
@@ -419,6 +432,11 @@ def _note_generation_denial(observed_out, quota):
         observed_out['generation_reason'], observed_out['unverified_records'] = reason, records
     elif held == reason:
         observed_out['unverified_records'] = max(observed_out['unverified_records'], records)
+
+
+def _locked_sqlite(exc):
+    """Whether ``exc`` is an exhausted lock wait (busy/locked), not a stored-state fault."""
+    return getattr(exc, 'sqlite_errorcode', 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 
 def _raise_if_systemic(unreadable, scanned):
@@ -688,7 +706,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     except sqlite3.Error as exc:
         scan_interrupts += 1
         if observed_out is not None:
-            observed_out['scan_refusal'] = 'read_sqlite'
+            observed_out['scan_refusal'] = 'scan_interrupted' if _locked_sqlite(exc) else 'read_sqlite'
             observed_out['scan_sqlite_error'] = _sqlite_error_name(exc)
         best, selected, covered = {}, None, False
     except OSError:
@@ -1020,8 +1038,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 ledger.db.commit()
             # Our scheduling write participates in the same publisher fence as later work.
             frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
-        except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
+        except patient_context_refresh_sources._ScanInterrupted:
             ledger.db.rollback()
+            stats['scan_refusal'] = 'scan_interrupted'
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except sqlite3.Error as exc:
+            ledger.db.rollback()
+            # Lock waits and deadline aborts are interrupted scans, not read faults.
+            stats['scan_refusal'] = ('read_sqlite'
+                                     if not _locked_sqlite(exc)
+                                     and getattr(exc, 'sqlite_errorcode', 0) & 0xFF != sqlite3.SQLITE_INTERRUPT
+                                     else 'scan_interrupted')
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except OSError:
+            ledger.db.rollback()
+            stats['scan_refusal'] = 'read_io'
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         except BaseException:
             ledger.db.rollback()
@@ -1094,6 +1125,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     cloud_refusal = ["cloud_worker_unavailable" if takeover else None]
     # Paid requests this commit recorded as replaced by local work.
     replaced = []
+    # The latest paid answer of each validation-failed cloud generation step.
+    validation_failures = []
     selected_source = [None]
     selected_occurrence = [None]
     # What a paid answer may be taken up for. The overview and the audit read every source of
@@ -1527,6 +1560,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 generation_contacted = generation_contacted or paid
                 unresolved = getattr(provider, 'unresolved', paid)
                 generation_uncertain = generation_uncertain or bool(unresolved)
+                validation_failure = (str(error) if isinstance(error, ValueError)
+                                      and str(error) in _VALIDATION_FAILURES else None)
+                if validation_failure and getattr(provider, 'answered_reservations', None):
+                    item = (validation_failure, copy.deepcopy(provider.answered_reservations[-1]))
+                    if item not in validation_failures:
+                        validation_failures.append(item)
                 if changed:
                     provider.discard()
                     if paid:
@@ -2174,9 +2213,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     left = None
                 extract_llm._cloud_compare_tx(ledger, route="patient_context", project_id=pid,
                     left=left, right=None, rejected=None, held=None, repairs=None, unit=shadow_unit, pending=True)
+            for failure_reason, reservation in validation_failures:
+                cloud_policy.record_validation_failure_tx(
+                    ledger, reservation, failure_reason=failure_reason)
             if generation_claim is not None:
                 outcome = ('complete' if not failure and deferred_reason is None else
-                    'failed' if (failure in ('patient_context_length_stop', 'patient_context_invalid_response', 'patient_context_unsupported_summary')
+                    'failed' if (failure in _VALIDATION_FAILURES
                     or deferred_reason == 'summary_quality_failed') and not generation_uncertain else 'unknown')
                 if not context_quota.finish_tx(ledger.db, pid, generation_claim,
                         now=patient_context_refresh_state.time.time(), outcome=outcome):

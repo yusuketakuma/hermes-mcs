@@ -43,9 +43,13 @@ def test_unsent_receipt_is_not_an_attempt(routed):
     assert not provider.possibly_sent
 
 
-@pytest.mark.parametrize('max_attempts, expected', [(None, 1), (1, 1)])
-def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
+@pytest.mark.parametrize('max_attempts, expected', [(None, 6), (1, 1)])
+def test_transport_retry_is_bounded_by_the_cap_without_releasing_unknown_cost(
         routed, monkeypatch, max_attempts, expected):
+    """Bounded-retry contract: a transport failure retries up to the shared cap
+    (CLOUD_MAX_ATTEMPTS=6 by default) while every send is independently charged
+    and the unknown cost is never released; a unit may still opt out explicitly
+    with max_attempts=1."""
     led, cfg, *_ = routed
     sent = []
     monkeypatch.setattr(cloud_policy, 'usage_reserver', _REAL_RESERVE)

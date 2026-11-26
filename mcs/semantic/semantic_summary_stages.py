@@ -79,7 +79,57 @@ def _summary_provenance(producer, fp, policy, revision, summary, jev="unknown"):
     return proof
 
 
-def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
+def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> bool:
+    """Match a cloud-only summary producer to its settled semantic reservation."""
+    requests = meta.get("inference_requests")
+    members = bundle.get("members") if isinstance(bundle, dict) else None
+    if (not isinstance(requests, list) or not all(isinstance(item, str) for item in requests)
+            or not isinstance(members, list) or not members or not isinstance(generation, str)):
+        return False
+    roots = [m.get("message_id") for m in members if isinstance(m, dict) and m.get("role") == "root"]
+    if len(roots) != 1:
+        return False
+    from inference_dependency_loss import source_binding
+    occurrences = []
+    for member in sorted((m for m in members if isinstance(m, dict)), key=lambda m: m.get("message_id")):
+        member_id = member.get("message_id")
+        if type(member_id) is not int:
+            return False
+        binding = source_binding(db, pid, member_id)
+        if binding is None:
+            return False
+        occurrences.append((member_id, binding))
+    expected_owner = {"semantic_target_id": mid, "semantic_thread_root": roots[0],
+                      "semantic_source": mcs_util.payload_hash(occurrences),
+                      "semantic_generation": generation, "semantic_phase": "summary"}
+    try:
+        rows = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve' "
+                          "AND project_id=? AND message_id=?", (pid, mid)).fetchall()
+    except sqlite3.Error:
+        return False
+    for row in rows:
+        try:
+            reservation = json.loads(row["meta"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if (reservation.get("reservation_id") not in requests
+                or reservation.get("route") != "semantic_backlog"
+                or reservation.get("owner") != expected_owner):
+            continue
+        try:
+            results = db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_result' "
+                                 "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) "
+                                 "THEN json_extract(meta,'$.reservation_id')=? END",
+                                 (pid, mid, reservation["reservation_id"])).fetchall()
+        except sqlite3.Error:
+            return False
+        if len(results) == 1:
+            return True
+    return False
+
+
+def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None,
+                      project_id=None, message_id=None, generation=None):
     unknown = {"providers": [], "complete": False}
     if not artifact:
         return unknown
@@ -93,6 +143,12 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
                    for p in proof["providers"])
             or len(set(proof["providers"])) != len(proof["providers"])
             or (proof["complete"] and not proof["providers"])):
+        return unknown
+    import extraction_provenance
+    if (db is not None and bundle is not None and project_id is not None and message_id is not None
+            and extraction_provenance.cloud_produced(proof)
+            and not _summary_cloud_producer_verified(db, bundle, project_id, message_id,
+                                                     generation, artifact["meta"])):
         return unknown
     producer = {"providers": proof["providers"], "complete": proof["complete"]}
     if 'repair_evidence' in proof:
@@ -774,6 +830,17 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     # cannot verify is written again, never kept as a duplicate.
     prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
+    if (prev_sum is not None and prev_sum["content"] == summary
+            and isinstance(provenance, dict) and not provenance.get("providers")):
+        stored_proof = prev_sum["meta"].get("provider_provenance")
+        if (isinstance(stored_proof, dict) and stored_proof.get("providers")
+                and stored_proof.get("result_hash") == provenance.get("result_hash")):
+            # A byte-identical re-derivation whose own provenance chain could
+            # not be re-verified (a legacy receipt without its document hash)
+            # keeps the stored row's lineage: copying bytes does not change
+            # how they were produced, and the empty proof would otherwise
+            # rewrite the pair into a verification-exempt copy (FIX-SD1).
+            summary_meta["provider_provenance"] = stored_proof
     if (prev_sum is not None and prev_aud is not None
             and _current_pair_newest(ledger.db, pid, mid, fp, policy, prev_aud)
             and prev_sum["content"] == summary and prev_aud["content"] == audit_content

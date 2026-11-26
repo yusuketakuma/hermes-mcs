@@ -6,7 +6,7 @@
 
 ## 初めて導入する場合
 
-今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。正式対応や新しいMacでの受入完了を示すものではなく、既存のHermes設定は維持します。新規導入の推奨・既定はstandaloneです。
+新規導入の推奨・既定はmacOS・Apple silicon・Slackのstandaloneです。この組み合わせは最初の受入候補で、正式対応や新しいMacでの受入完了を示しません。既存のHermes設定は維持します。
 [能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
 
 [はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
@@ -52,6 +52,7 @@ PY="$HOME/.mcs/venv/bin/python3"
 MCSの収集前にはChromeのログインとCDPポート`:9333`も準備します。[導入ガイドの動作確認](INSTALLATION.md#a-5-動作確認)の冒頭を確認し、同節のHermes用Pythonを使う例では上の`$PY`に読み替えます。収集・通知・既読化の確認は、許可した範囲で行います。
 
 installerはHermesを取得・設定せず、独立venvへ[公式SDKの固定バージョン](../../deployment/requirements-standalone.txt)を導入します。
+導入は[SHA256付きの一覧](../../deployment/requirements-standalone.lock)と照合し、記録と中身が違う配布物は導入しません。
 ローカルLLM、独立host、repo外の復旧watchdogも登録します。
 ウィザードはMCSのログイン、配信先、操作・閲覧範囲と非表示の秘密入力を案内します。
 既存値は保持されます。認証情報不足のまま起動成功と扱いません。
@@ -147,6 +148,8 @@ Hermesで自動作成した患者情報用チャンネルとMCSLOGは、`data/sl
 
 ## 常駐・診断
 
+macOSの常駐処理は、導入したユーザーがログインしている間だけ動きます。停電・macOS更新・不意の再起動のあとは、そのユーザーがログインするまで収集・通知・ローカルAI・復旧監視は再開しません。施設で常時稼働させるMacでは、再起動後のログイン担当、スリープ停止、停電後の自動起動、FileVaultと自動ログインの関係を管理担当者と決めてください。自動ログインは物理アクセスと画面ロックの管理が必要です。
+
 macOSの`ai.mcs.standalone`が定期7ジョブ、抽出worker3本、cmd/cmd_int取込と接続を所有します。
 昼間（JST 08:00〜20:00）はバックグラウンド2枠、夜間は最大3枠で処理し、新着は次の空き枠を優先します。
 クラウドの患者コンテキスト処理は抽出workerが所有する別の子プロセスで進めます。
@@ -166,6 +169,7 @@ LLMとrepo外の復旧watchdogは別のnative supervisorが所有します。
 サービスを使わず端末で動かすなら`"$PY" -m mcs_standalone run`を使います。
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
 ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
+端末喪失に備える暗号化backupは、設定ファイルの編集だけでは定期実行されません。利用する場合は[バックアップと復元の手順](BACKUP.md)で保存先・鍵保管・登録・復元訓練を別途確認します。
 
 ### 自己回復と外部監視
 

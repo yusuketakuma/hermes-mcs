@@ -74,9 +74,15 @@ def test_disabled_scope_and_intentional_pause_do_not_raise_alarm(db, monkeypatch
 def test_repeated_failure_is_bounded_and_error_text_never_enters_reason(db, monkeypatch):
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-key")
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, **kw: True)
-    for _ in range(3):
+    # the unified cloud ceiling: the circuit opens only once consecutive
+    # failures reach CLOUD_MAX_ATTEMPTS, never below it
+    from llm_retry import CLOUD_MAX_ATTEMPTS
+    for _ in range(CLOUD_MAX_ATTEMPTS - 1):
         semantic_runtime.record_circuit_result(db, AnthropicError("timeout", "synthetic-private-detail", retryable=True),
                                               kind="cloud_circuit")
+    assert health_report.cloud_stop_reason(db.db, CFG) is None
+    semantic_runtime.record_circuit_result(db, AnthropicError("timeout", "synthetic-private-detail", retryable=True),
+                                          kind="cloud_circuit")
     assert health_report.cloud_stop_reason(db.db, CFG) == "circuit_open"
     db.artifact_add("cloud_circuit", json.dumps({"failure_class": "synthetic-private-detail"}))
     assert health_report.cloud_stop_reason(db.db, CFG) == "pricing_unverified"

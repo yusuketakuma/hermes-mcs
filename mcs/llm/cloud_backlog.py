@@ -626,9 +626,12 @@ def _note_provider(seen, settings):
 
 
 # Each semantic lock try polls at the shared RUN_LOCK_POLL_S for this long
-# (three tries before yielding to the extract turn), so a cloud semantic job
-# competes for released windows on equal terms with the local lanes' polls.
-_SEMANTIC_LOCK_TRY_S = 10.0
+# (three tries before yielding to the extract turn). Patient-context scans
+# win the same lock because they wait in one continuous window of up to 60s;
+# the cloud semantic turn gets a comparable contiguous window instead of
+# three short ones separated by minute-long extract work, during which every
+# released gap is taken by other contenders.
+_SEMANTIC_LOCK_TRY_S = 30.0
 
 
 def _poll_run_lock(writer_lock, seconds, fence):

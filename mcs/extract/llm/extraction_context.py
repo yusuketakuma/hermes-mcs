@@ -318,9 +318,17 @@ def _prior_source_attempt(doc, meta, target, *, model, contract, attempt, compat
         if not isinstance(value, dict) or reference_item({**value, "token": token}) is None:
             return False
     old_target = {**target, **doc["source"], "_source_binding": meta["source_binding"]}
+    attempts = [attempt]
+    retry = attempt.get("auto_retry") if isinstance(attempt, dict) else None
+    if type(retry) is int and retry > 0:
+        # A bounded retry is a new attempt, but frames of its earlier retries
+        # remain immutable source history. Recognizing only the current retry
+        # count turned the first failure into a permanent context_snapshot_invalid.
+        attempts.extend({**attempt, "auto_retry": earlier}
+                        for earlier in range(retry - 1, -1, -1))
     return any(matches_attempt(doc, old_target, model=model, contract=known,
-                              attempt=attempt, enabled=doc["enabled"])
-               for known in (contract, *compatible_contracts))
+                              attempt=candidate, enabled=doc["enabled"])
+               for candidate in attempts for known in (contract, *compatible_contracts))
 
 
 def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None,

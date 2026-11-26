@@ -21,6 +21,7 @@ from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client  # noqa: F401  existing callers read cloud_policy.openai_client
 import provider_registry
+from llm_retry import CLOUD_MAX_ATTEMPTS
 
 from cloud_usage_accounting import (
     PRICE_VERSION as PRICE_VERSION,
@@ -92,6 +93,7 @@ from cloud_history_scope import (
     _history_document as _history_document,
     _history_scope as _history_scope,
     history_target_ready as history_target_ready,
+    history_thread_ready as history_thread_ready,
     history_thread_allowed as history_thread_allowed,
     _history_thread_allowed as _history_thread_allowed,
     history_thread_snapshot as history_thread_snapshot,
@@ -789,6 +791,23 @@ def route_open(route, cfg):
                                and window(cfg))
 
 
+def semantic_summary_route_open(cfg):
+    """Whether the bounded semantic window permits a summary-stage send.
+
+    Unlike facts extraction, summary generation is phase-bound in the
+    reservation owner, so non-worker backlog passes may use the same window
+    without widening extraction or realtime traffic."""
+    return send_route("semantic_backlog") or semantic_backlog_window(cfg)
+
+
+def route_open_for_owner(route, cfg, owner=None):
+    """Route permission for one owner-bound request."""
+    return (route_open(route, cfg)
+            or (route == "semantic_backlog" and isinstance(owner, dict)
+                and owner.get("semantic_phase") == "summary"
+                and semantic_summary_route_open(cfg)))
+
+
 def eligible(cfg, route, project_id):
     """Allow new cloud inference only for an open route within its scope."""
     return route_open(route, cfg) and in_scope(cfg, route, project_id)
@@ -991,6 +1010,39 @@ def _semantic_financial_identity(meta):
     return target, source, phase
 
 
+def _semantic_generation_identity(meta):
+    """Verify a semantic unit including the interpretation generation it answered."""
+    identity = _semantic_financial_identity(meta)
+    if identity is None:
+        return None
+    generation = meta['owner'].get('semantic_generation')
+    return (*identity[:2], generation, identity[2])
+
+
+# Member-bound semantic reservations carry generation/source/phase from the
+# first target-aware semantic rollout (commit a4d590c74, 2026-10-30 00:46:08 +09).
+# Rows before that boundary cannot prove which member or interpretation they
+# answered; their shape is nevertheless a complete, valid legacy receipt.
+SEMANTIC_MEMBER_BINDING_START_EPOCH = 1793288768.0
+
+
+def _prebinding_semantic_reservation(meta, row):
+    """Whether a valid receipt is the pre-member-binding semantic format."""
+    owner = meta.get('owner')
+    return (meta.get('route') == 'semantic_backlog'
+            and isinstance(meta.get('unit_key'), str)
+            and re.fullmatch(r'semantic:[0-9]+:[0-9a-f]+', meta['unit_key']) is not None
+            and type(row['created_at']) in (int, float)
+            and row['created_at'] < SEMANTIC_MEMBER_BINDING_START_EPOCH
+            and isinstance(owner, dict)
+            and all(key not in owner for key in (
+                'semantic_target_id', 'semantic_source', 'semantic_generation', 'semantic_phase'))
+            and meta.get('logical_target_id') is None
+            and meta.get('logical_unit_fp') is None
+            and meta.get('logical_request_fp') is None
+            and meta.get('input_binding') is None)
+
+
 def _legacy_request_effort(previous, current_body):
     """The effort an older record without one was proven to have sent, else None.
     The prompt is not persisted; each provider knows its own old request shape."""
@@ -1095,10 +1147,10 @@ HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettl
 # The guard's final branch after the one validated result of the same request. Only
 # _classified sets verified_repeat, so a converted or foreign exception never carries it.
 REPEAT_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled"})
-# Owner decision 2026-11-21: the same logical request may be billed through settled
-# failures at most this many times, the first send included; the next verified repeat
-# refuses like any other. A constant, not a setting.
-SETTLED_FAILURE_BILLED_LIMIT = 3
+# Owner decision 2026-11-25: the same logical request may be billed for the first
+# send plus five failure retries; the next verified repeat refuses like any other.
+# A constant, not a setting.
+FAILED_SEND_BILLED_LIMIT = CLOUD_MAX_ATTEMPTS
 
 
 def _classified(error, refusal):
@@ -1157,6 +1209,10 @@ RESULT_STALE_MARGIN_S = 905
 SUPERSEDED_LOCAL = "superseded_local"
 _INLINE_DISPOSITIONS = frozenset({"discarded_scope", "discarded_workday"})
 _ENDED_DISPOSITIONS = _INLINE_DISPOSITIONS | {SUPERSEDED_LOCAL}
+# A provider answer can be financially successful yet unusable after local
+# schema/source validation. This receipt-bound annotation lets accounting treat
+# it as a settled failure without mutating the immutable paid result receipt.
+VALIDATION_FAILURE_KIND = "cloud_usage_validation_failure"
 
 
 def _result_stale(row, previous, now):
@@ -1176,6 +1232,54 @@ def _result_stale(row, previous, now):
         return False
 
 
+def _validation_failures(ledger, reservation_id, reservation=None):
+    rows = _matching_bound_rows(ledger, VALIDATION_FAILURE_KIND, reservation_id)
+    if reservation is None:
+        return rows
+    bound = _receipt_binding(reservation)
+    for row in rows:
+        meta = _receipt_meta(row["meta"])
+        if (any(meta.get(key) != bound[key] for key in bound)
+                or any(key in meta and key not in bound for key in _BINDING_KEYS)
+                or row["project_id"] != reservation["project_id"]
+                or row["message_id"] != reservation.get("message_id")
+                or row["model"] != reservation["model"]):
+            raise AnthropicError("pricing_unverified", "usage_invalid")
+    return rows
+
+
+def _fixed_failure_code(value):
+    return (value if type(value) is str and len(value) <= 64
+            and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in value) else None)
+
+
+def record_validation_failure_tx(ledger, reservation, *, failure_reason=None, repair_issues=None):
+    """Annotate a paid answer rejected by local validation; billing receipts stay immutable."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("cloud_validation_failure_transaction_required")
+    if not isinstance(reservation, dict) or type(reservation.get("reservation_id")) is not str:
+        raise ValueError("cloud_validation_failure_invalid")
+    existing = _validation_failures(ledger, reservation["reservation_id"], reservation)
+    if existing:
+        return existing[0]["artifact_id"]
+    meta = _receipt_binding(reservation)
+    meta["validation_failure"] = True
+    reason = _fixed_failure_code(failure_reason)
+    if reason is not None:
+        meta["failure_reason"] = reason
+    if isinstance(repair_issues, dict) and len(repair_issues) <= 32:
+        issues = {}
+        for key, count in repair_issues.items():
+            key = _fixed_failure_code(key)
+            if key is not None and type(count) is int and 0 <= count <= 1000000:
+                issues[key] = count
+        if issues:
+            meta["repair_issues"] = issues
+    return ledger.artifact_add_tx(VALIDATION_FAILURE_KIND, "{}",
+        project_id=reservation["project_id"], message_id=reservation.get("message_id"),
+        model=reservation["model"], meta=meta)
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False,
                             supersede=None, now=None):
     """Keep an unresolved or already answered logical request from being sent again.
@@ -1186,8 +1290,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     of this unit key (a settled repeat, or a result still missing past
     :data:`RESULT_STALE_MARGIN_S`) is appended to the list instead of refusing. On the
     send path (``local_fallback`` false) a proven same request whose verified results
-    are all settled failures may be sent again as a separate billed attempt, at most
-    :data:`SETTLED_FAILURE_BILLED_LIMIT` billed attempts in total; a provider-proven
+    are retryable cloud failures may be sent again as a separate billed attempt, at most
+    :data:`FAILED_SEND_BILLED_LIMIT` billed attempts in total; a provider-proven
     refusal (``contract_error_detail``) is never resent or counted; local fallback
     never passes a settled failure without a disposition. Everything else refuses exactly as
     without it. Without ``local_fallback`` the clock is never read."""
@@ -1200,7 +1304,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     result_map = None
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False
-    settled_failures = 0
+    failed_sends = 0
     for row in rows:
         refusal = None
         guard_match = None
@@ -1213,9 +1317,16 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 new_target = _semantic_financial_target(candidate)
                 if old_target is not None and new_target is not None and old_target != new_target:
                     continue
-                old_identity = _semantic_financial_identity(previous)
-                new_identity = _semantic_financial_identity(candidate)
+                old_identity = _semantic_generation_identity(previous)
+                new_identity = _semantic_generation_identity(candidate)
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
+                    continue
+                if new_identity is not None and _prebinding_semantic_reservation(previous, row):
+                    # The first target-aware rollout made interpretation generation part of
+                    # the semantic unit. Earlier receipts can neither be reused for a reprocess
+                    # nor prove that they answered this member's current generation; keeping them
+                    # as duplicate evidence wedged every later send in the project. They remain
+                    # fiscally valid, but a generation-bound candidate is allowed one fresh unit.
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
             if (local_fallback and candidate['route'] == 'patient_context'
@@ -1290,6 +1401,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                         continue
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
+            validation_failed = bool(_validation_failures(ledger, previous['reservation_id'], previous))
             if result.get('disposition'):
                 # record_result writes only a discarded value inline; anything else blocks
                 if supersede is not None and result['disposition'] in _INLINE_DISPOSITIONS:
@@ -1302,33 +1414,43 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     and result.get('error_kind') == http_error(int(http_class[5:]))[0]
                     and result.get('usage') is None):
                 continue  # The failed HTTP result stays charged; this grants no new cloud send.
-            if _confirmed_rejection(result, settled, previous['model']):
+            if (_never_sent(result, settled) or _confirmed_openai_quota(result, previous['model'])
+                    or _confirmed_anthropic_payment(result, previous['model'])):
+                # Never-sent attempts are free; provider-proven account/payment refusals
+                # reopen only through their explicit human-resume contract.
                 continue
             # A confirmed successful result may be deliberately reprocessed
             # with a different selection (model, output bound or effort).
             # An ambiguous send never grants that retry.
-            if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
+            if (not local_fallback and prompt_verified and settled and not validation_failed
+                    and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             # The one validated result of the same request: a proven success, a settled
             # failure, or an unsettled one. A verified settled failure permits a resend on
             # the send path only (the unit stayed unanswered and fully accounted; the new
-            # send is a separate billed attempt, capped at SETTLED_FAILURE_BILLED_LIMIT
+            # send is a separate billed attempt, capped at FAILED_SEND_BILLED_LIMIT
             # billed attempts). A provider-proven refusal detail is excluded: the provider
             # already declined this content, so it refuses and is never counted. Local
             # fallback never passes a settled failure without a disposition, and success,
             # unproven and unknown outcomes still refuse duplicates.
+            successful = (not validation_failed
+                          and result.get('usage') is not None and result.get('http_class') == 'http_200'
+                          and result.get('error_kind') is None)
             refusal = ('repeat_unsettled' if not settled else
-                       'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
-                                            and result.get('error_kind') is None) else 'repeat_failed')
+                       'repeat_success' if successful else 'repeat_failed')
             if supersede is not None and prompt_verified and own_unit:
                 supersede.append(_accounting_meta(row['meta']))
                 continue
-            if (refusal == 'repeat_failed' and not local_fallback
-                    and prompt_verified
-                    and result.get('contract_error_detail') not in cloud_client.CONTRACT_ERROR_DETAILS):
-                settled_failures += 1
-                if settled_failures < SETTLED_FAILURE_BILLED_LIMIT:
+            failed_send = (not successful and result.get('http_class') != 'not_sent'
+                           and result.get('contract_error_detail') not in cloud_client.CONTRACT_ERROR_DETAILS
+                           and (validation_failed
+                                or result.get('error_kind') in ('rate_limited', 'transport', 'timeout')
+                                or (settled and result.get('http_class') == 'http_200'
+                                    and result.get('error_kind') in ('contract_error', 'protocol_error'))))
+            if failed_send and not local_fallback and prompt_verified:
+                failed_sends += 1
+                if failed_sends < FAILED_SEND_BILLED_LIMIT:
                     continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
@@ -1638,8 +1760,8 @@ def _circuit_on_pricing_error(ledger, error, model, since):
         _circuit_result(ledger, error)
 
 
-def block_reason(ledger, cfg, route, project_id, *, model=None):
-    if not eligible(cfg, route, project_id):
+def block_reason(ledger, cfg, route, project_id, *, model=None, owner=None):
+    if not route_open_for_owner(route, cfg, owner) or not in_scope(cfg, route, project_id):
         return "scope"
     return global_block_reason(ledger, model=_cfg(cfg)["model"] if model is None else model)
 
@@ -2112,7 +2234,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
             if _tally(ledger).invalid:
                 raise _classified(AnthropicError("pricing_unverified", "cloud_unit_unresolved"),
                                   "receipt_inconsistent")
-            return (block_reason(ledger, c, route, project_id, model=candidate['model'])
+            return (block_reason(ledger, c, route, project_id, model=candidate['model'], owner=owner)
                     or setting_block_reason(c)
                     or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
                                            input_bound=input_bound(body), selection=selection))
@@ -2159,7 +2281,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
 
         def check():
             _guard_repeated_request(ledger, meta, current_body=body)
-            reason = block_reason(ledger, c, route, project_id, model=model)
+            reason = block_reason(ledger, c, route, project_id, model=model, owner=owner)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)
             reason = budget_block_reason(ledger, c, max_tokens=tokens, input_bound=bound, selection=selection)
@@ -2276,7 +2398,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             if not settled or result_meta.get('disposition'):
                 raise ValueError('cloud_result_unsettled')
             if (result_meta.get('http_class') != 'http_200'
-                    or result_meta.get('error_kind')):
+                    or result_meta.get('error_kind')
+                    or _validation_failures(ledger, reservation['reservation_id'], reservation)):
                 # A settled failure is fully accounted and answered nothing: like a
                 # confirmed rejection it holds no answer to reuse. The reservation
                 # guard alone decides whether a new billed attempt is allowed.

@@ -1209,9 +1209,9 @@ _REASON_JA = {
                               "data/access_log の所有者と権限（MCSを動かすユーザーだけ、フォルダ700・ファイル600）と空き容量を確認。"
                               "書き込めるようになると次の閲覧から自動で再開し、その閲覧の記録が書けた時点でこの警報も消えます"
                               f"（直しただけでは消えません。{_COMPLIANCE_GUIDE}）"),
-    "external_transfer_unreadable": ("施設の外部AI確認記録（external_transfer.json）を読み取れないため、"
+    "external_transfer_unreadable": ("施設の外部AI確認記録（external_transfer.json）を読み取れない、または見つからないため、"
                                      "外部AIとJevへの送信をすべて止めています",
-                                     "記録は削除しないでください（確認記録の無い環境と同じ扱いに戻ります）。"
+                                     "記録は削除しないでください。"
                                      "MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、確認待ちの内容にしてから"
                                      f"{_ACKNOWLEDGE} で確認を記録し直す（{_COMPLIANCE_GUIDE}）"),
     CONFIG_BLOCKED: ("設定を確認できず、自動復旧を止めています",

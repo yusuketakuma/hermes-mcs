@@ -153,6 +153,24 @@ def inference_receipt():
     return dict(provider.completed_reservations[-1])
 
 
+def record_cloud_validation_failure(error):
+    """Annotate the active paid cloud answer as rejected by local validation."""
+    provider = _job_model.get()
+    receipt = inference_receipt()
+    ledger = getattr(provider, 'ledger', None)
+    if provider is None or receipt is None or ledger is None:
+        return
+    import cloud_policy
+    def write():
+        cloud_policy.record_validation_failure_tx(ledger, receipt, failure_reason=error)
+    if ledger.db.in_transaction:
+        write()
+    else:
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            write()
+
+
 def repair_answer_record(prompt, value, previous_requests):
     """Return the replay record of one new cloud answer, or None.
 
@@ -229,6 +247,9 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     import cloud_policy
     import writer_lock
     pl = runtime.parse_payload(job)
+    cfg_dict = cfg if isinstance(cfg, dict) else {}
+    send_open = (cloud_policy.route_open("semantic_backlog", cfg_dict)
+                 or cloud_policy.semantic_summary_route_open(cfg_dict))
     targets = pl.get("targets") or [job["message_id"]]
     # Ownership is decided on the job's payload targets: reservations bind
     # the member target, never the thread root, so a root-only check misses
@@ -243,13 +264,14 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                                           project_id=job["project_id"], message_ids=targets) \
         and not cloud_policy.scope_revoked(cfg, "semantic_backlog", job["project_id"])
     if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
+            or not cloud_policy.history_thread_ready(ledger.db, job["project_id"], job["message_id"]) \
             or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
         if owned:
             raise runtime.LLMNotSent('cloud_source_unverified')
         yield None
         return
-    if extract_llm._cloud_mode(ledger, cfg, "semantic_backlog", job["project_id"]) != "on" \
-            and not owned:
+    if extract_llm._cloud_mode(ledger, cfg, "semantic_backlog", job["project_id"],
+                               send_open=send_open) != "on" and not owned:
         # A closed send route retires new sends, never the unit a prior
         # reservation created: owned targets still reach recovery/hold.
         yield None
@@ -299,9 +321,20 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         # key-read failures count like an unbuildable profile.
         provider = None
 
-    switched = False
+    switched = set()
     possibly_sent_targets = set()
-    send_capable = cloud_policy.route_open("semantic_backlog", cfg if isinstance(cfg, dict) else {})
+    worker_send_capable = cloud_policy.route_open("semantic_backlog", cfg_dict)
+    summary_send_capable = cloud_policy.semantic_summary_route_open(cfg_dict)
+
+    def send_capable():
+        if worker_send_capable:
+            return True
+        target = _inference_target.get()
+        return bool(summary_send_capable and target and target[1] == "summary")
+
+    def switch_key(mid):
+        target = _inference_target.get()
+        return mid, target[1] if target else "facts"
 
     def target_id():
         target = _inference_target.get()
@@ -358,7 +391,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             identity=current_unit_identity(mid))
 
     def member_dispatch(mid):
-        if not send_capable and member_unbound(mid):
+        if not send_capable() and member_unbound(mid):
             _job_model.set(None)
             return
         try:
@@ -380,23 +413,23 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         if not scoped_current():
             raise runtime.LLMNotSent('cloud_fallback_source_changed')
         if (local_fallback is None or mid in possibly_sent_targets or target_owned(mid)
-                or (not send_capable and not member_unbound(mid))
+                or (not send_capable() and not member_unbound(mid))
                 or fallback_current is not None and not fallback_current(mid)):
             raise runtime.LLMNotSent('cloud_fallback_unavailable')
-        switched = True
+        switched.add(switch_key(mid))
         _job_model.set(None)
         return call_local(prompt, timeout)
 
     def chat(prompt, timeout=None):
         mid = target_id()
-        if switched and not target_owned(mid):
+        if switch_key(mid) in switched and not target_owned(mid):
             if (mid in possibly_sent_targets
-                    or (not send_capable and not member_unbound(mid))
+                    or (not send_capable() and not member_unbound(mid))
                     or fallback_current is not None and not fallback_current(mid)):
                 raise runtime.LLMNotSent('cloud_fallback_unavailable')
             _job_model.set(None)
             return call_local(prompt, timeout)
-        if not send_capable and member_unbound(mid):
+        if not send_capable() and member_unbound(mid):
             # A member proven unbound on a closed route never builds a
             # CloudInferenceUnit: a missing key or unverifiable config cannot
             # hold its local path. local() re-checks the member binding,
@@ -474,6 +507,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)
         if error:
+            record_cloud_validation_failure(error)
             return _failed(error)
         _record_inference(provider.selection['provider'])
         return response["text"]

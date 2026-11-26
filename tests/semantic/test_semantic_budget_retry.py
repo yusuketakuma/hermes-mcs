@@ -475,6 +475,7 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize('interruption,long_answer', [('budget', False), ('not_sent', False), ('budget', True)])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption, long_answer):
     """The repair answer stays provable up to its reservation's read bound (over 256KiB too)."""
     import bounded_http

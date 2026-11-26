@@ -133,6 +133,77 @@ def test_fail_stamps_extract_version(tmp_path):
     db.close()
 
 
+def test_fail_persists_bounded_failure_observation_without_free_text(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_failure_observation"] = {
+        "failure_reason": "validation",
+        "failed_chunk": "0",
+        "fallback_code": "cloud_validation_failed",
+        "refusal_stage": "after_send",
+        "refusal_code": "transport",
+        "repair_issues": {"evidence": 2, "structure": 1},
+        "cloud_receipt_ids": ["a" * 32],
+    }
+    extract_llm._fail(db, row, 0)
+    meta = json.loads(db.artifacts("extract_llm", message_id=1)[0]["meta"])
+    assert meta["failure_observation"] == row["_failure_observation"]
+    db.close()
+
+
+def test_fail_records_validation_failure_receipt_annotation(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    reservation = {
+        "reservation_id": "a" * 32,
+        "request_fp": "b" * 64,
+        "route": "reextract",
+        "project_id": 1,
+        "message_id": 1,
+        "unit_key": "1",
+        "model": "synthetic-model",
+        "price_version": "synthetic-price",
+        "input_binding": "c" * 64,
+        "logical_request_fp": "d" * 64,
+    }
+    row["_cloud_failure_reservations"] = [reservation]
+    row["_failure_observation"] = {
+        "failure_reason": "validation",
+        "fallback_code": "cloud_validation_failed",
+        "repair_issues": {"evidence": 2},
+    }
+    extract_llm._fail(db, row, 0)
+    rows = db.artifacts("cloud_usage_validation_failure", message_id=1)
+    assert len(rows) == 1
+    meta = json.loads(rows[0]["meta"])
+    assert meta["reservation_id"] == reservation["reservation_id"]
+    assert meta["validation_failure"] is True
+    assert meta["failure_reason"] == "validation"
+    assert meta["repair_issues"] == {"evidence": 2}
+    db.close()
+
+
+def test_failure_observation_drops_free_text_and_unknown_shapes(tmp_path):
+    db = _ledger(tmp_path)
+    db.save_messages([_message()])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_failure_observation"] = {
+        "failure_reason": "患者本文を含む自由文",
+        "fallback_code": "cloud_validation_failed",
+        "repair_issues": {"evidence": "many", "notes": "free text"},
+        "cloud_receipt_ids": ["not-a-receipt", "b" * 32],
+    }
+    extract_llm._fail(db, row, 0)
+    meta = json.loads(db.artifacts("extract_llm", message_id=1)[0]["meta"])
+    assert meta["failure_observation"] == {
+        "fallback_code": "cloud_validation_failed",
+        "cloud_receipt_ids": ["b" * 32],
+    }
+    db.close()
+
+
 def test_v2_error_row_respects_backoff(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message()])

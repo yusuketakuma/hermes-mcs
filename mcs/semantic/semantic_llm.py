@@ -245,9 +245,14 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
     if error_out is not None:
         error_out.pop("code", None)
 
+    answered = [False]
+
     def result(value, reason: str | None = None, validation_code=None):
         if error_out is not None and validation_code is not None:
             error_out["code"] = validation_code
+        if validation_code is not None and answered[0]:
+            import semantic_transport
+            semantic_transport.record_cloud_validation_failure(validation_code)
         return (value, reason) if return_reason else value
 
     target = next((m for m in bundle["members"]
@@ -279,6 +284,7 @@ def summarize(llm_fn, bundle: dict, target_id: int, facts: list,
         # terminal oversize outcome as the local char gate, reached
         # without burning a retry on an input that can never pass
         return result(_oversize_stub(bundle, target_id))
+    answered[0] = isinstance(response, str)
     if deadline is not None and time.monotonic() > deadline:
         return result(None, "deadline")
     raw = json_object(response or "")

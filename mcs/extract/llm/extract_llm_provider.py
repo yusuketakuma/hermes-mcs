@@ -270,14 +270,16 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
     return provider.dispatch(read, result=True)
 
 
-def _cloud_route_state(cfg, route, project_id):
+def _cloud_route_state(cfg, route, project_id, *, send_open=None):
     """``(mode, stop)``: the mode a unit runs under and, when that is off, the check that decided it."""
-    if not cloud_policy.route_open(route, cfg if isinstance(cfg, dict) else {}):
+    if send_open is None:
+        send_open = cloud_policy.route_open(route, cfg if isinstance(cfg, dict) else {})
+    if not send_open:
         # A closed send route can never need provider settings — resolving
         # them here would read provider keys for work that cannot send.
         return "off", "route_closed"
     settings = cloud_inference.resolve_cloud_settings(cfg)
-    if not cloud_policy.eligible(settings, route, project_id):
+    if not cloud_policy.in_scope(settings, route, project_id):
         return "off", "scope"
     mode = settings["mode"]
     purpose = "patient_context" if route == "patient_context" else "backlog"
@@ -297,8 +299,8 @@ def _cloud_route_state(cfg, route, project_id):
     return mode, None
 
 
-def _cloud_mode(ledger, cfg, route, project_id):
-    return _cloud_route_state(cfg, route, project_id)[0]
+def _cloud_mode(ledger, cfg, route, project_id, *, send_open=None):
+    return _cloud_route_state(cfg, route, project_id, send_open=send_open)[0]
 
 
 def _off_code(cfg, stop, route, project_id):

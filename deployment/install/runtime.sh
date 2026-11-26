@@ -44,6 +44,7 @@ if [ "$SKIP_BREW" -eq 1 ]; then
 elif ! command -v brew >/dev/null 2>&1; then
     die "Homebrew が見つかりません。先に次のコマンドで導入してください:
   $BREW_INSTALL
+導入済みならPATHに反映されていません。インストーラの Next steps に表示された shellenv コマンドを実行してください。
 その後 install.sh を再実行してください（基本ソフトを別途管理する場合は --no-brew）"
 else
     _new=""
@@ -110,6 +111,9 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     fi
     REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
     [ -f "$REQUIREMENTS" ] || die "独立接続の依存一覧がありません。deployment/requirements-standalone.txt を確認してください"
+    # The same pins with the sha256 of every published file: a download with other bytes is refused.
+    REQUIREMENTS_LOCK="$REPO/deployment/requirements-standalone.lock"
+    [ -f "$REQUIREMENTS_LOCK" ] || die "独立接続の依存一覧（ハッシュ付き）がありません。deployment/requirements-standalone.lock を確認してください"
     standalone_sdk_ok() {
         "$VENV_PY" -I -B -c '
 # mcs-standalone-sdk-probe
@@ -125,9 +129,9 @@ raise SystemExit(1 if _sdk_problem() else 0)
     elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements" || ! standalone_sdk_ok; then
         : > "$PIP_MARK"
         if command -v uv >/dev/null 2>&1; then
-            uv pip install --python "$VENV_PY" -r "$REQUIREMENTS"
+            uv pip install --python "$VENV_PY" -r "$REQUIREMENTS_LOCK" --require-hashes
         else
-            "$VENV_PY" -m pip install -r "$REQUIREMENTS"
+            "$VENV_PY" -m pip install -r "$REQUIREMENTS_LOCK" --require-hashes
         fi
         standalone_sdk_ok || die "独立接続 SDK の固定版を確認できません。導入途中の記録を保持して停止しました"
         cp "$REQUIREMENTS" "$VENV/.mcs-connector-requirements.tmp"

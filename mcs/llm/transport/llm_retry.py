@@ -1,5 +1,11 @@
-"""Share bounded retry classification without changing provider attempt loops."""
+"""Share bounded retry classification and the common cloud retry ceiling."""
 import math
+
+
+# One shared cloud retry ceiling across provider chat, semantic analysis,
+# patient-context work and Jev: after the first attempt, up to five retries.
+CLOUD_MAX_RETRIES = 5
+CLOUD_MAX_ATTEMPTS = CLOUD_MAX_RETRIES + 1
 
 
 def retry_after(headers):

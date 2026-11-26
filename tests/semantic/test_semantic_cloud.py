@@ -93,6 +93,84 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
+    import mcs_util
+    import semantic_runtime
+    import semantic_store
+    import semantic_summary_stages
+    led, cfg, _job, _calls = cloud
+    bundle = semantic_store.thread_bundle(led.db, 1, 1)
+    member = bundle["members"][0]
+    generation = semantic_runtime.execution_generation(semantic_drain.runtime_config(cfg)[0])
+    binding = inference_dependency_loss.source_binding(led.db, 1, member["message_id"])
+    owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
+             "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),
+             "semantic_generation": generation, "semantic_phase": "summary"}
+    reservation_id = "synthetic-summary-reservation"
+    led.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id, "route": "semantic_backlog", "owner": owner})
+    led.artifact_add("cloud_usage_result", "{}", project_id=1, message_id=member["message_id"],
+                     meta={"reservation_id": reservation_id})
+    content = {"claims": []}
+    provenance = {"version": 1, "stage": "summary", "providers": ["anthropic"], "complete": True,
+                  "result_hash": mcs_util.payload_hash(content), "source_fingerprint": bundle["source_fingerprint"],
+                  "policy_fingerprint": "synthetic-policy", "target_revision": member["revision"]}
+
+    def artifact(requests):
+        return {"content": content,
+                "meta": {"provider_provenance": provenance, "inference_requests": requests}}
+
+    verified = semantic_summary_stages._summary_producer(
+        artifact([reservation_id]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+    assert verified == {"providers": ["anthropic"], "complete": True}
+    forged = semantic_summary_stages._summary_producer(
+        artifact([]), bundle["source_fingerprint"], "synthetic-policy", member["revision"],
+        db=led.db, bundle=bundle, project_id=1, message_id=member["message_id"], generation=generation)
+    assert forged == {"providers": [], "complete": False}
+
+
+def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch):
+    import semantic_store
+    from candidate_testkit import approved_config
+    from semantic_testkit import _canonical_cfg, _llm_v2, _PassJev
+    led, cfg, _, calls = cloud
+
+    def request(self, method, body, timeout, **kw):
+        calls.append(body)
+        return 200, {}, json.dumps({
+            "model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": _llm_v2(body["messages"][0]["content"])}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    monkeypatch.setattr(transport, "llm_chat", lambda *a, **kw: pytest.fail("local GPU used"))
+    with legacy_cloud_routes():
+        cfg.clear()
+        cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
+        led.save_messages([_message(body="アムロジピン5mgを継続します。")])
+        led.semantic_seed(1, [1], {"source": "history_import"})
+        snapshot(led)
+        result = {"errors": []}
+        out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
+                                    jev_client=_PassJev(), lane="backlog", max_jobs=1,
+                                    cloud_only=True)
+        assert out["done"] == 1 and not result["errors"], (out, result)
+        bundle = semantic_store.thread_bundle(led.db, 1, 1)
+        fp = bundle["source_fingerprint"]
+        existing = semantic_store.current_artifact(led.db, "semantic_summary", 1, fp)
+        assert existing is not None
+        before = len(calls)
+        scfg = semantic_drain.runtime_config(cfg)[0]
+        summary, reason, error, sent_error, producer = semantic_drain._obtain_summary(
+            led, scfg, bundle, lambda *a, **kw: pytest.fail("summary model repeated"),
+            lambda *args: None, 1, 1, fp, existing["meta"]["policy_fingerprint"],
+            [], {}, existing, time.monotonic() + 120, diagnostics={})
+        assert summary == existing["content"] and reason is None and not error and sent_error is None
+        assert producer == {"providers": ["anthropic"], "complete": True}
+        assert len(calls) == before
+
+
 @pytest.mark.parametrize("kind", ["thinking", "redacted_thinking"])
 def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend(cloud, monkeypatch, kind):
     import semantic_runtime
@@ -120,16 +198,51 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
             assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
             assert len(calls) == 1
             prompt = calls[0]["messages"][0]["content"]
-            # the same paid logical request stays fenced: the refusal is a definite
-            # not-sent that defers the unit instead of failing or falling back
-            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
-                chat(prompt)
+            # The paid length-stop answer is annotated as a validation failure,
+            # so the same logical request is not reused; the bounded retry sends again.
+            validation_failures = rows(led, "cloud_usage_validation_failure")
+            assert len(validation_failures) == 1
+            assert json.loads(validation_failures[0]["meta"])["failure_reason"] == "length_stop"
+            assert chat(prompt) is None and transport.last_llm_failure() == "length_stop"
     reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
-    assert len(calls) == len(reserves) == len(results) == 1
-    result = json.loads(results[0]["meta"])
-    assert result["error_kind"] is None and result["usage"]["output_tokens"] == 10
-    assert float(result["cost_usd"]) > 0 and "synthetic-hidden" not in json.dumps(result)
+    assert len(calls) == len(reserves) == len(results) == 2
+    assert len(rows(led, "cloud_usage_validation_failure")) == 2
+    for row in results:
+        result = json.loads(row["meta"])
+        assert result["error_kind"] is None and result["usage"]["output_tokens"] == 10
+        assert float(result["cost_usd"]) > 0 and "synthetic-hidden" not in json.dumps(result)
     assert semantic_runtime._circuit_state(led, kind="cloud_circuit")["consecutive_failures"] == 0
+
+
+def test_invalid_json_paid_answer_is_annotated_and_retried(cloud, monkeypatch):
+    import semantic_store
+    led, cfg, job, calls = cloud
+
+    def request(self, method, body, timeout, **kwargs):
+        calls.append(body)
+        return 200, {}, json.dumps({"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "not json"}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    bundle = semantic_store.thread_bundle(led.db, 1, 1)
+    scfg = semantic_drain.runtime_config(cfg)[0]
+    deadline = time.monotonic() + 120
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, deadline, lambda: True, direct,
+                                         local_fallback=lambda *a, **kw: pytest.fail("paid local fallback")) as chat:
+            summary, reason, error, sent_error, _ = semantic_drain._obtain_summary(
+                led, scfg, bundle, chat, lambda *args: None, 1, 1, bundle["source_fingerprint"],
+                "synthetic-policy", [], {}, None, deadline, diagnostics={})
+            assert summary is None and reason == "model" and sent_error is None
+            assert error["code"] == "json_object_invalid"
+            validation_failures = rows(led, "cloud_usage_validation_failure")
+            assert len(calls) == len(validation_failures) == 2
+            assert [json.loads(row["meta"])["failure_reason"] for row in validation_failures] == [
+                "json_object_invalid", "json_object_invalid"]
+            prompt = calls[0]["messages"][0]["content"]
+            assert chat(prompt) == "not json"
+    assert len(calls) == len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 3
 
 
 @pytest.mark.parametrize("detail,stage", [
@@ -1377,6 +1490,9 @@ def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monke
                 owner={'semantic_thread_root': 1},
                 unit_key=f"semantic:{job['job_id']}:{json.loads(job['payload']).get('generation', '')}",
                 reservation_id='d' * 32)
+    # Keep this cloned row on the legacy path so the test can first bind it to
+    # member 3's exact envelope; logical-fingerprint recovery is covered elsewhere.
+    meta.pop('logical_request_fp', None)
     with led.db:
         led.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
