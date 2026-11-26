@@ -89,7 +89,8 @@ def test_semantic_stall_needs_old_due_job_and_no_progress(db):
     _sem_job(db, 1, "pending", OLD)
     assert health_report.backlog_stalls(db.db, {}, time.time()) == []   # off
     # a job no feature reads is left unrun on purpose: not a stall
-    unread = {"semantic": {"mode": "shadow", "project_ids": []}}
+    # loop/summary must be off explicitly: unset they default to assist and read the jobs
+    unread = {"semantic": {"mode": "shadow", "loop_mode": "off", "summary_mode": "off", "project_ids": []}}
     assert health_report.backlog_stalls(db.db, unread, time.time()) == []
     assert health_report.backlog_stalls(db.db, on, time.time()) == [
         "semantic_backlog_stalled"]

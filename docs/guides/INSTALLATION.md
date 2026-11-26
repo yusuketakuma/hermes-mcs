@@ -10,7 +10,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 このガイドは現行のinstall/update/setup/doctorと復旧手順に対応します。1.0.25で日本語の対話入口を追加しました。各版の受入状態は版別の受入票で確認してください。
 1.0.25の受入結果は[1.0.25のリリース受入票](../releases/v1.0.25/ACCEPTANCE_1.0.25.md)、1.0.26の受入と公開前の残件は[1.0.26のリリース受入票](../releases/v1.0.26/ACCEPTANCE_1.0.26.md)、版ごとの記録一覧は[リリース記録](../releases/README.md)にあります。過去版の検証記録は[1.0.21のリリース受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)、実機受入の進め方は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)を参照してください。
 
-### 2026-10-04追記: 現在のローカル入口
+### 現在のローカル入口
 
 [共通CLI](../../mcs/ops/mcs_cli.py)は実装済みです。初回は
 `sh scripts/mcs install`、導入後は`mcs install / update / setup / doctor`を利用できます。
@@ -59,11 +59,11 @@ LINE WORKS 通知には Hermes の通知 plugin・gateway は不要です。
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
 
-./install.sh --preflight   # 1. 読取り専用の事前チェック（何も書き込まない）
-                           #    要対処の行の下の "対処:" を実行し、
-                           #    "事前確認: 導入を妨げる問題 0件" になるまで繰り返す
-./install.sh --dry-run     # 2. （任意）各ステージで何が作られるかを表示
-./install.sh               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
+./install.sh --mode hermes --preflight   # 1. 読取り専用の事前チェック（何も書き込まない）
+                                        #    要対処の行の下の "対処:" を実行し、
+                                        #    "事前確認: 導入を妨げる問題 0件" になるまで繰り返す
+./install.sh --mode hermes --dry-run     # 2. （任意）各ステージで何が作られるかを表示
+./install.sh --mode hermes               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
 ```
 
 LLM・復旧設定のファイル配置や一時ファイルの削除に失敗した場合も、`install.sh` は非0で停止する。
@@ -103,7 +103,7 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 hermes-mcs の新規導入手順。導入形態は次の2つ:
 
-- **Path A — hermes-agent アドオン**（installerの既定）: 収集→SQLite→
+- **Path A — hermes-agent アドオン**（Hermes連携を明示した場合）: 収集→SQLite→
   Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
 - **Path B — スタンドアローン**（Hermesなし）: 収集・保存・閲覧・
   抽出・Slack/Discord/LINE WORKS通知と操作・定期実行・監視・更新を独立して実行する。
@@ -116,23 +116,23 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 
 <a id="capabilities-acceptance"></a>
 
-### 1.1.0の能力と確認状況
+### 能力と確認状況
 
-外部利用は個別に書面契約した顧客が対象です。最初の受入候補はmacOS・Apple silicon・Slackのstandaloneで、installerの既定値変更や正式対応・実機受入済みを意味しません。正式なmacOS対応版・最小RAM・同時提供する構成は未確定です。問い合わせ窓口は当面空欄です。CSDC（状態監視・診断の自動送信・遠隔支援）は、1.1.0ではコードを同梱しますが、有効化・接続して提供しません（1.1.0の新規導入では`config.sdc.enabled`が未設定で専用ジョブは登録されませんでした。この変更を含む版から既定が有効で専用ジョブは既定登録され、`false`で停止できます。既存の有効設定は更新で自動停止しません）。接続は、中央側と実機の受入が整った後の版で行います（2026-10-25 の決定。以前の「1.1.0必須」という扱いを置き換えます）。
+外部利用は個別に書面契約した顧客が対象です。新規導入の推奨・既定はmacOS・Apple silicon・Slackのstandaloneです。この組み合わせは最初の受入候補で、正式対応・実機受入済みを意味しません。正式なmacOS対応版・最小RAM・同時提供する構成は未確定です。問い合わせ窓口は当面空欄です。CSDC（状態監視・診断の自動送信・遠隔支援）は、1.1.0ではコードを同梱しますが、有効化・接続して提供しません（1.1.0の新規導入では`config.sdc.enabled`が未設定で専用ジョブは登録されませんでした。この変更を含む版から既定が有効で専用ジョブは既定登録され、`false`で停止できます。既存の有効設定は更新で自動停止しません）。接続は、中央側と実機の受入が整った後の版で行います（2026-10-25 の決定。以前の「1.1.0必須」という扱いを置き換えます）。
 
 「実装済み」は機能の入口があるという意味です。合成確認・実接続・医学的品質・顧客提供の受入は分けます。今回の対象確認は初期設定・通知復旧等の12モジュール668件が合格し、固定候補のCodeRabbit確認は15/15ファイル・指摘0でした。前の検証件数との合算や、全体suite・全機能の合格を意味しません。各行の残条件と[1.1.0作業計画](../roadmap/v1.1.0-public-launch-plan.md)を併せて確認します。
 
 | 能力・方式 | 既定・有効条件 | 実装 | 今回確認した範囲 | 残る受入・根拠 |
 |---|---|---|---|---|
 | 1. OS・CPU・メモリ | 初回候補はmacOS・Apple silicon。資源条件は次節 | 導入条件の検査あり | installer条件と版境界の合成確認 | 正式対応版・最小RAM・新Macでの負荷は未確定。[前提条件](#1-共通の前提条件) |
-| 2. 実行方式と定期実行 | 未指定はHermes、既存設定を保持。standaloneは明示選択 | AはHermes cron＋launchd、Bは独立host。収集・保存・解析・通知・操作の共通機能を提供 | 初期設定・モード選択・再開の対象合成確認 | 専用端末の常駐・再起動後復帰は未受入。[独立実行](STANDALONE.md) |
+| 2. 実行方式と定期実行 | 新規導入の推奨・既定はstandalone。既存設定の方式は保持し、Hermes連携は明示選択 | AはHermes cron＋launchd、Bは独立host。収集・保存・解析・通知・操作の共通機能を提供 | 初期設定・モード選択・再開の対象合成確認 | 専用端末の常駐・再起動後復帰は未受入。[独立実行](STANDALONE.md) |
 | 3. Slack・Discord・LINE WORKS | 通知先・許可範囲・資格情報が必要。初回候補はSlack | AのSlack/DiscordはHermes接続、Bは独立SDK。両方式のLINE WORKSは専用接続・Callback・本人1:1操作 | 接続設定・所有者判定の対象合成確認 | 実SDK接続・実配信・全方式同等の受入は未完。[Slack準備](STANDALONE.md#slackとdiscordの接続準備)・[LINE WORKS](LINEWORKS.md) |
 | 4. 収集・保存・全履歴・検索 | 定期収集は10分間隔。Chrome/CDPとMCSセッションが必要。既読化は取得完了とsnapshot timestampの条件を維持 | SQLite保存・履歴取得・FTS5・`mcs_view`閲覧を両方式で提供 | 今回の設定・通知確認を、全MCS APIや全履歴の確認へ拡張しない | 新Macのログイン・取得・未読保持は別受入。[初回接続](#初回の専用chromeとセッション確認両モード共通)・[取得範囲](USER_GUIDE.md) |
 | 5. 通知・カード・タスク・シグナル | Slackは設定にかかわらず元投稿のスレッドに返信カードを配送。Discordは`card_thread=true`かつ`reply_cards`省略または`true`で有効（`card_thread`はinit既定ON、`reply_cards`は省略時ON、LINE WORKS対象外）。Discordの旧カードは形式を保持。シグナル通知は`signals.notify`既定OFF | 原文・返信・添付、確認・担当、本人向け検索、タスク入力・確定、再確認候補を両方式で提供。Slack/Discordの`/mcs`も両方式で対応 | カード・親待ち・配送結果不明・復旧の対象合成確認 | 実配信・通知到着・実アプリ操作は未受入。タスクは人の確定、配送unknownは自動再送しない。[表示・操作](USER_GUIDE.md) |
 | 6. MCSスタンプ | MCS本人ID・1人の操作者・対話通知が揃うと省略時ON。`stamps.enabled=false`で無効。押下者取得は既定OFF | 投稿を指定した本人操作と承認記録で送信・取消 | 今回のカード確認を実MCSへの送信確認としない | 実送信・取消・未読保持・本人照合は別受入。[スタンプ契約](../specs/stamp-management.md) |
 | 7. ローカルAIの抽出・要約 | ローカルLLMを使う。`--no-llm`では別途準備が必要。未解析・処理待ち・失敗を表示。共有brokerは別の明示opt-in（`config.json` の `local_llm.admission`、従来の `MCS_LLM_ADMISSION` も可）で既定OFF。この版は受付を再開する処理がないため、有効にすると`mcs_setup.py check`がエラーになる。有効にしない | ルール抽出とローカルLLM抽出・要約を両方式で提供 | モデルファイル整合と対象制御の合成確認 | 実モデルの速度・メモリ・生成品質は未測定。医療判断の確定ではない。[抽出の範囲](USER_GUIDE.md) |
 | 8. 患者コンテキスト・原記録の閲覧 | `patient_context`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で全投稿を解析済みの患者を対象に作成。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
-| 9. Jev追加解析・canonical | キーがありmode未指定ならassist・1日10000要求。明示modeで予算省略時は0。`summary_mode`・`loop_mode`・`extract_qc`は既定OFF。本文の外部送信には対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
+| 9. Jev追加解析・canonical | キーがありmode未指定ならassist・1日10000要求。明示modeで予算省略時は0。`summary_mode`・`loop_mode`は既定assist・`extract_qc`は既定OFF。本文の外部送信には対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
 | 10. 医薬品照合・公開薬情報 | 辞書は出所・SHA・承認へ束縛。公開マスターの薬品名・一般疾患だけをTinyFish経由で照会。トークンなしの場合は停止 | 辞書照合・照会と限定Web経路を提供。患者本文や私有辞書をWebへ送らない | TinyFish以外の照会経路はない。TinyFish経路の実接続は別途確認が必要 | 全品目・医学的品質・鮮度は未受入。強制再取得不可時の定期確認は未取得。[薬情報の条件](USER_GUIDE.md#公開医薬品情報の照会添付文書ガイドライン) |
 | 11. ローカル診断・共有表示 | `mcs doctor`の既定では追加probeなし。`--share`は固定項目の表示と手動コピー | 通常doctorを維持し、設定値・患者件数・生例外等を除く共有JSONを追加 | 共有射影・不正入力・未知状態・既存終了コードの対象合成確認 | 手動コピーは自動送信や遠隔grantではない。`check`も選択方式の必須条件検査で、実配送の証明ではない。[診断共有](COLLECTION_DIAGNOSTICS.md#サポートへ共有する診断) |
 | 12. CSDCの接続監視 | 1.1.0では有効化・接続しない（コード同梱、新規導入は無効）。未登録・未同意は無効。監視は専用同意と登録が必要 | MCSはR1自社監視とR2/R3顧客鍵保管・公開パッケージinventoryの候補実装。heartbeatは送信専用で命令受信なし | R3固定候補の合成416件と独立再現5件が合格。実顧客接続の確認とは別 | 初回自動接続・中央顧客分離の受入・専用実機受入は未完。[R1の境界](SDC_SELF_MONITORING.md) |
@@ -447,6 +447,7 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
 
 ### A-6. 運用上の注意
 
+- **macOSの常駐処理はユーザーログイン中だけ動く** — 停電・macOS更新・不意の再起動のあとは、導入したユーザーがログインするまで収集・通知・ローカルAI・復旧監視は再開しない。常時稼働させるMacでは、再起動後のログイン担当、スリープ停止、停電後の自動起動を管理担当者と決める。自動ログインはFileVaultと併用できず、物理アクセスと画面ロックの管理が必要
 - **`hermes_plugin/` のコードを変更・更新したら `hermes gateway
   restart` が必須** — gateway は plugin を起動時に読み込む長寿命
   プロセス。再起動しないと新形式 spec を旧 worker が処理し、カード
@@ -827,10 +828,12 @@ manifest --agent-view --write` で `~/.hermes/slack-manifest.json` を
 Bot Token Scopes に追加: `chat:write`, `app_mentions:read`,
 `channels:history`, `channels:read`, `groups:history`, `im:history`,
 `im:read`, `im:write`, `mpim:history`, `mpim:read`, `users:read`,
-`files:read`, `files:write`（channels:history/groups:history が無いと
-チャンネルメッセージを受け取れない）。
+`files:read`, `files:write`, `groups:read`, `groups:write`
+（channels:history/groups:history が無いとチャンネルメッセージを受け取れません。
+既定のSlackカード導入では非公開の`mcs`と`mcslog`を自動作成するため、
+`groups:read`と`groups:write`も必要です）。
 
-患者情報と運用情報を分けて自動作成する場合は、非公開チャンネルの作成・操作者の招待に`groups:write`、チャンネルと所属の確認に`groups:read`も必要です。権限を追加した既存アプリは、ワークスペースへ再インストールして反映します。新規作成する`mcs`と`mcslog`は非公開とし、既存の患者情報先は移動しません。作成結果が不明な場合は、別名の作成や公開チャンネルへの変更をせず保留します。
+自動作成では、非公開チャンネルの作成・操作者の招待に`groups:write`、チャンネルと所属の確認に`groups:read`を使います。権限を追加した既存アプリは、ワークスペースへ再インストールして反映します。新規作成する`mcs`と`mcslog`は非公開とし、既存の患者情報先は移動しません。作成結果が不明な場合は、別名の作成や公開チャンネルへの変更をせず保留します。分離済みの既存チャンネルIDをすべて明示し、自動作成しない設定では`groups:read`・`groups:write`は不要です。
 
 Slackカードを使う導入・更新（`notify.interactive=slack`）では、この準備を自動で行います。
 新規導入で患者情報先がなければ`mcs`と`mcslog`を作り、操作を許可したユーザーだけを招待します。

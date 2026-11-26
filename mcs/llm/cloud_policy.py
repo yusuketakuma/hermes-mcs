@@ -93,6 +93,7 @@ from cloud_history_scope import (
     _history_document as _history_document,
     _history_scope as _history_scope,
     history_target_ready as history_target_ready,
+    history_thread_ready as history_thread_ready,
     history_thread_allowed as history_thread_allowed,
     _history_thread_allowed as _history_thread_allowed,
     history_thread_snapshot as history_thread_snapshot,
@@ -790,6 +791,23 @@ def route_open(route, cfg):
                                and window(cfg))
 
 
+def semantic_summary_route_open(cfg):
+    """Whether the bounded semantic window permits a summary-stage send.
+
+    Unlike facts extraction, summary generation is phase-bound in the
+    reservation owner, so non-worker backlog passes may use the same window
+    without widening extraction or realtime traffic."""
+    return send_route("semantic_backlog") or semantic_backlog_window(cfg)
+
+
+def route_open_for_owner(route, cfg, owner=None):
+    """Route permission for one owner-bound request."""
+    return (route_open(route, cfg)
+            or (route == "semantic_backlog" and isinstance(owner, dict)
+                and owner.get("semantic_phase") == "summary"
+                and semantic_summary_route_open(cfg)))
+
+
 def eligible(cfg, route, project_id):
     """Allow new cloud inference only for an open route within its scope."""
     return route_open(route, cfg) and in_scope(cfg, route, project_id)
@@ -990,6 +1008,39 @@ def _semantic_financial_identity(meta):
     if meta.get('logical_unit_fp') != expected:
         return None
     return target, source, phase
+
+
+def _semantic_generation_identity(meta):
+    """Verify a semantic unit including the interpretation generation it answered."""
+    identity = _semantic_financial_identity(meta)
+    if identity is None:
+        return None
+    generation = meta['owner'].get('semantic_generation')
+    return (*identity[:2], generation, identity[2])
+
+
+# Member-bound semantic reservations carry generation/source/phase from the
+# first target-aware semantic rollout (commit a4d590c74, 2026-10-30 00:46:08 +09).
+# Rows before that boundary cannot prove which member or interpretation they
+# answered; their shape is nevertheless a complete, valid legacy receipt.
+SEMANTIC_MEMBER_BINDING_START_EPOCH = 1793288768.0
+
+
+def _prebinding_semantic_reservation(meta, row):
+    """Whether a valid receipt is the pre-member-binding semantic format."""
+    owner = meta.get('owner')
+    return (meta.get('route') == 'semantic_backlog'
+            and isinstance(meta.get('unit_key'), str)
+            and re.fullmatch(r'semantic:[0-9]+:[0-9a-f]+', meta['unit_key']) is not None
+            and type(row['created_at']) in (int, float)
+            and row['created_at'] < SEMANTIC_MEMBER_BINDING_START_EPOCH
+            and isinstance(owner, dict)
+            and all(key not in owner for key in (
+                'semantic_target_id', 'semantic_source', 'semantic_generation', 'semantic_phase'))
+            and meta.get('logical_target_id') is None
+            and meta.get('logical_unit_fp') is None
+            and meta.get('logical_request_fp') is None
+            and meta.get('input_binding') is None)
 
 
 def _legacy_request_effort(previous, current_body):
@@ -1266,9 +1317,16 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 new_target = _semantic_financial_target(candidate)
                 if old_target is not None and new_target is not None and old_target != new_target:
                     continue
-                old_identity = _semantic_financial_identity(previous)
-                new_identity = _semantic_financial_identity(candidate)
+                old_identity = _semantic_generation_identity(previous)
+                new_identity = _semantic_generation_identity(candidate)
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
+                    continue
+                if new_identity is not None and _prebinding_semantic_reservation(previous, row):
+                    # The first target-aware rollout made interpretation generation part of
+                    # the semantic unit. Earlier receipts can neither be reused for a reprocess
+                    # nor prove that they answered this member's current generation; keeping them
+                    # as duplicate evidence wedged every later send in the project. They remain
+                    # fiscally valid, but a generation-bound candidate is allowed one fresh unit.
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
             if (local_fallback and candidate['route'] == 'patient_context'
@@ -1702,8 +1760,8 @@ def _circuit_on_pricing_error(ledger, error, model, since):
         _circuit_result(ledger, error)
 
 
-def block_reason(ledger, cfg, route, project_id, *, model=None):
-    if not eligible(cfg, route, project_id):
+def block_reason(ledger, cfg, route, project_id, *, model=None, owner=None):
+    if not route_open_for_owner(route, cfg, owner) or not in_scope(cfg, route, project_id):
         return "scope"
     return global_block_reason(ledger, model=_cfg(cfg)["model"] if model is None else model)
 
@@ -2176,7 +2234,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
             if _tally(ledger).invalid:
                 raise _classified(AnthropicError("pricing_unverified", "cloud_unit_unresolved"),
                                   "receipt_inconsistent")
-            return (block_reason(ledger, c, route, project_id, model=candidate['model'])
+            return (block_reason(ledger, c, route, project_id, model=candidate['model'], owner=owner)
                     or setting_block_reason(c)
                     or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
                                            input_bound=input_bound(body), selection=selection))
@@ -2223,7 +2281,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
 
         def check():
             _guard_repeated_request(ledger, meta, current_body=body)
-            reason = block_reason(ledger, c, route, project_id, model=model)
+            reason = block_reason(ledger, c, route, project_id, model=model, owner=owner)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)
             reason = budget_block_reason(ledger, c, max_tokens=tokens, input_bound=bound, selection=selection)

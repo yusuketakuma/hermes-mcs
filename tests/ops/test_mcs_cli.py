@@ -261,8 +261,9 @@ def test_drug_subcommand_routes_literal_arguments_without_setup_or_db(pinned, mo
 
 @pytest.mark.parametrize("arguments", [
     ["drug", "search", "架空名;$(touch NEVER)", "--limit", "1", "--json"],
-    # The shell launcher forwards the diagnostics command literally; only the fake interpreter runs.
+    # The shell launcher forwards these commands literally; only the fake interpreter runs.
     ["diagnostics", "status", "--state-root", "/synthetic/private;$(touch NEVER)"],
+    ["telemetry", "status", "--state-root", "/synthetic/private;$(touch NEVER)"],
 ])
 def test_bootstrap_drug_route_uses_only_temporary_pinned_interpreter(tmp_path, arguments):
     root = tmp_path / "synthetic-mcs"

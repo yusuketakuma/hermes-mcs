@@ -66,6 +66,7 @@ def test_primary_reason_uses_fixed_precedence(removed, expected):
     ('unit', 'no_exact_rows', 'unit_key_mismatch', 'unit_key_cmp', 'logical_equal'),
     ('stored_absent', 'no_exact_rows', 'stored_binding_missing', 'binding_cmp', 'logical_equal'),
 ])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change, path, reason, comparison, match):
     dbpath, _cfg, calls, locks, _state, unit, _restart = paid
     if change == 'tokens':

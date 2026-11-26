@@ -11,7 +11,8 @@ import semantic_drain
 import semantic_due_selection
 import semantic_runtime
 import semantic_transport
-from semantic_cloud_testkit import cloud as cloud, direct, rows
+from semantic_cloud_testkit import cloud as cloud, continuous_snapshot, direct, rows
+from semantic_testkit import _message
 
 
 def _open_window(cfg):
@@ -127,3 +128,72 @@ def test_expired_window_recovers_paid_answer_without_resend_or_local_switch(clou
     assert ask() == {"facts": []}
     assert len(calls) == 1
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+def test_nonworker_summary_stage_uses_cloud_while_facts_stay_local(cloud, monkeypatch):
+    ledger, cfg, job, calls = cloud
+    _open_window(cfg)
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    local_prompts = []
+    summary_prompt = "Synthetic semantic window summary JSON:"
+
+    def fallback(prompt, **kwargs):
+        local_prompts.append(prompt)
+        return '{"facts": []}'
+
+    def ask(worker=False, include_facts=True):
+        if worker:
+            monkeypatch.setenv(cloud_policy.BACKLOG_WORKER_ENV, "1")
+        else:
+            monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+        with semantic_transport.inference_targets("synthetic-window-generation"):
+            with semantic_transport.backlog_inference(
+                    ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
+                    local_fallback=fallback) as chat:
+                assert chat is not None
+                if include_facts:
+                    semantic_transport.set_inference_target(job["message_id"])
+                    assert chat("Synthetic semantic window facts JSON:") == '{"facts": []}'
+                semantic_transport.set_inference_target(job["message_id"], "summary")
+                return chat(summary_prompt)
+
+    assert json.loads(ask()) == {"facts": []}
+    assert len(local_prompts) == len(calls) == len(rows(ledger, "cloud_usage_reserve")) == 1
+    reserve = rows(ledger, "cloud_usage_reserve")[0]
+    owner = json.loads(reserve["meta"])["owner"]
+    assert owner["semantic_target_id"] == job["message_id"]
+    assert owner["semantic_phase"] == "summary"
+
+    assert json.loads(ask(worker=True, include_facts=False)) == {"facts": []}
+    assert len(calls) == len(rows(ledger, "cloud_usage_reserve")) == 1
+
+
+def test_summary_stage_keeps_recent_targets_out_of_cloud(cloud, monkeypatch):
+    ledger, cfg, job, calls = cloud
+    _open_window(cfg)
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    with ledger.db:
+        ledger.db.execute("UPDATE messages SET first_seen=? WHERE message_id=?",
+                          (time.time(), job["message_id"]))
+
+    with semantic_transport.inference_targets("synthetic-window-generation"):
+        with semantic_transport.backlog_inference(
+                ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
+                local_fallback=lambda prompt, **kwargs: '{"facts": []}') as chat:
+            assert chat is None
+    assert calls == [] and not rows(ledger, "cloud_usage_reserve")
+
+
+def test_summary_stage_keeps_thread_with_recent_reply_out_of_cloud(cloud, monkeypatch):
+    ledger, cfg, job, calls = cloud
+    _open_window(cfg)
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    ledger.save_messages([_message(mid=2, parent=job["message_id"], body="recent synthetic reply")])
+    continuous_snapshot(ledger)
+
+    with semantic_transport.inference_targets("synthetic-window-generation"):
+        with semantic_transport.backlog_inference(
+                ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
+                local_fallback=lambda prompt, **kwargs: '{"facts": []}') as chat:
+            assert chat is None
+    assert calls == [] and not rows(ledger, "cloud_usage_reserve")

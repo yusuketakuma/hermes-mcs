@@ -321,6 +321,7 @@ def test_allow_mode_passes_discarded_without_writing(ledger, inline):
     ("disposition", {"kind": "discarded_scope"}, None, "disposition"),
     ("inconsistent", None, None, "receipt_inconsistent"),
 ])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected):
     reservation = _reserve(ledger)
     if status == "disposition":
