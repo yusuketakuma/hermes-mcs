@@ -112,35 +112,7 @@ _RESULT_SAVE_TRIES = 5
 # One fresh-snapshot retry of a transiently busy history read is a bounded
 # probe: its sqlite wait stays far under the connection's busy timeout, and
 # the retry is skipped unless the unit still has the probe's cost to spare.
-_TRANSIENT_READ_RETRY_S = 1.0
-
-
-def _independent_read_probe(ledger, deadline):
-    """A fresh read-only connection to the ledger's file for one transient-lock
-    re-observation: small bounded lock wait, hard interrupt at the deadline,
-    and no shared state with the owner connection. None when the owner has no
-    file a probe could open."""
-    from pathlib import Path
-    from types import SimpleNamespace
-
-    try:
-        rows = ledger.db.execute("PRAGMA database_list").fetchall()
-    except sqlite3.Error:
-        return None
-    files = [row[2] for row in rows
-             if len(row) >= 3 and isinstance(row[1], str) and row[1] == 'main']
-    if not files or not files[0] or not os.path.isfile(files[0]):
-        return None
-    uri = Path(files[0]).resolve().as_uri() + "?mode=ro"
-    db = sqlite3.connect(uri, uri=True, timeout=_TRANSIENT_READ_RETRY_S)
-    try:
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=%d" % int(_TRANSIENT_READ_RETRY_S * 1000))
-        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-    except BaseException:
-        db.close()
-        raise
-    return SimpleNamespace(db=db)
+_TRANSIENT_READ_RETRY_S = 1.0  # pre-check margin scale only; the lock wait itself is the connection's own busy timeout
 
 
 def _after_send_code(metadata):
@@ -573,24 +545,25 @@ class CloudInferenceUnit:
                         return read_once(self.ledger)
                     except sqlite3.OperationalError as first:
                         # Only a locked database may be gone one snapshot later; every
-                        # other failure classifies below. The probe re-reads on a fresh
-                        # independent read-only connection — never the owner's, whose
-                        # transaction state and lock wait stay untouched — with its own
-                        # small busy timeout and a hard interrupt at the deadline, so the
-                        # observation is a genuinely new snapshot, occupies no owner
-                        # resource, and cannot overrun the deadline regardless of how
-                        # many statements its scan involves.
+                        # other failure classifies below. The retry re-reads on the SAME
+                        # owner connection: file identity is intrinsic to the connection
+                        # (a path reopened elsewhere could be a replaced, divergent
+                        # database), and outside a transaction each statement is its own
+                        # fresh snapshot, so the retry genuinely observes a new snapshot.
+                        # Nothing about the connection is mutated. The lock wait can run
+                        # up to the connection's busy timeout regardless of the remaining
+                        # budget, so a result that arrives past the deadline is discarded
+                        # into the same hold as a failed read — correctness never depends
+                        # on how long the wait took.
                         if (getattr(first, "sqlite_errorcode", 0) & 0xff
                                 not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                                or self.ledger.db.in_transaction
                                 or time.monotonic() + 2 * _TRANSIENT_READ_RETRY_S >= http_deadline):
                             raise
-                        probe = _independent_read_probe(self.ledger, http_deadline)
-                        if probe is None:
-                            raise
-                        try:
-                            return read_once(probe)
-                        finally:
-                            probe.db.close()
+                        retried = read_once(self.ledger)
+                        if time.monotonic() >= http_deadline:
+                            raise first
+                        return retried
                 except cloud_client.CloudNotSent:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
