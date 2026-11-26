@@ -20,9 +20,12 @@ STATUS = '/v2/provisioning/status'
 # Per slot: three escaped <=16KiB raws, two <=16KiB responses and <=8KiB metadata.
 # Three slots plus <=8KiB root metadata; below Store's separate 1MiB read ceiling.
 STATE_MAX_BYTES = 3 * (3 * 2 * 16384 + 2 * 16384 + 8192) + 8192
-PROFILES = ('monitor', 'support', 'restart')
+PROFILES = ('monitor', 'support', 'restart', 'auto')
 _CONSUMERS = {'support': ('support-state.json',),
-              'restart': ('restart-state.json', 'restart-planning.json')}
+              'restart': ('restart-state.json', 'restart-planning.json'),
+              # autoはconsumer fileを持たない — wire factoryがsnapshotを直接読み、
+              # v3 pinの正本はauto-v3-pins.json独立配布でbundleは相互照合用。
+              'auto': ()}
 EXPECTED_FIELDS = frozenset(('console_origin', 'bundle_hash', 'tenant', 'installation',
                              'environment', 'enrollment_id', 'profile_id', 'origin', 'audience'))
 _LEGACY = ('endpoint.json', 'support-bootstrap.json', 'state.json', 'credential',
@@ -162,6 +165,10 @@ def _cohort(state, bundle):
 
 
 def _validated(state):
+    # auto profile追加前の3profile stateをread時に補完する — 書換えは次回saveまで遅延。
+    if type(state) is dict and type(state.get('profiles')) is dict             and set(state['profiles']) == {'monitor', 'support', 'restart'}:
+        state = dict(state)
+        state['profiles'] = dict(state['profiles'], auto=None)
     _fields(state, ('schema_version', 'root_id', 'root_fingerprint', 'prepared_at', 'reason', 'profiles', 'registration'))
     _check(state['schema_version'] == SCHEMA)
     _uuid(state['root_id'])

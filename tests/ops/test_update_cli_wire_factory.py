@@ -1,14 +1,36 @@
 """_v3_consent_wire factoryの合成検証。"""
 import json
 
+import pytest
+
 import update_cli
 import release_auto_trust as trust
+from test_sdc_provision import V, NOW, world  # noqa: F401
+import test_sdc_provision as tp
+from test_sdc_provision_profiles import install
 
-PIN = {'kid': 'b' * 64, 'purposes': ['mcs-auto-offer-v3'],
-       'spki': 'a2V5', 'not_before': 0, 'expires_at': 2**53 - 1}
+AUTO8 = ['mcs-auto-offer-v3', 'mcs-auto-compatibility-v3', 'mcs-auto-grant-v3',
+         'mcs-auto-ack-v3', 'mcs-auto-status-v3', 'mcs-auto-health-ack-v3',
+         'mcs-auto-consent-preview-v3', 'mcs-auto-consent-receipt-v3']
+AUTO_BUNDLE = next(v['value'] for v in V['positive']
+                   if v['definition'] == 'Bundle' and v['value']['profile_id'] == 'auto')
+PIN = dict(AUTO_BUNDLE['pins'][0])
 DEVICE = '12345678-1234-4234-8234-123456789abc'
 KEY = 'c' * 64
 ENDPOINT = {'origin': 'https://synthetic.example.com', 'audience': 'sdc:test', 'environment': 'test'}
+
+
+def _auto_provisioned(store):
+    """monitor登録済みのstoreへauto bundleをimportしinitializeする。"""
+    install(store, 'auto', ready=False)
+
+
+@pytest.fixture
+def provisioned(world):  # noqa: F811
+    from test_sdc_provision import active
+    active(world)
+    _auto_provisioned(world)
+    return world
 
 
 def _enrolled(root):
@@ -35,19 +57,36 @@ def _patch(monkeypatch, sdc_root, control):
                         lambda home: str(control))
 
 
-def test_factory_builds_wire_when_enrolled_and_pinned(tmp_path, monkeypatch):
-    sdc_root, control = tmp_path / 'sdc', tmp_path / 'control'
-    _enrolled(sdc_root)
+def test_factory_builds_wire_when_enrolled_and_pinned(tmp_path, monkeypatch, provisioned):
+    control = tmp_path / 'control'
     _pins(control)
-    _patch(monkeypatch, sdc_root, control)
+    _patch(monkeypatch, provisioned.root, control)
+    # provision vectorの時間窓(NOW基準)内で評価する
+    import time as time_mod
+    monkeypatch.setattr(time_mod, 'time', lambda: NOW / 1000)
     wire = update_cli._v3_consent_wire()
     assert wire is not None
     assert callable(wire.signed_send) and callable(wire.verify)
-    # networkには出さず、credential/pin解決だけを確認する
+    # networkには出さず、credential/pin解決だけを確認する。
+    # endpointはauto bundleのorigin/audienceで監視endpoint.jsonではない
     config, state, key = wire._credential()
-    assert config['origin'] == ENDPOINT['origin']
-    assert state['device_id'] == DEVICE and key == KEY
+    assert config['audience'] == AUTO_BUNDLE['audience']
+    assert state['device_id'] == tp.DEVICE and key == 'a' * 64
     assert wire._pins() == [PIN]
+
+
+def test_factory_fail_closed_when_bundle_pins_differ(tmp_path, monkeypatch, provisioned):
+    control = tmp_path / 'control'
+    control.mkdir(parents=True)
+    other = dict(PIN)
+    other['kid'] = 'e' * 64
+    (control / 'auto-v3-pins.json').write_text(
+        json.dumps({'schema_version': trust.SCHEMA_VERSION, 'pins': [other]},
+                   separators=(',', ':'), sort_keys=True))
+    _patch(monkeypatch, provisioned.root, control)
+    import time as time_mod
+    monkeypatch.setattr(time_mod, 'time', lambda: NOW / 1000)
+    assert update_cli._v3_consent_wire() is None
 
 
 def test_factory_fail_closed_without_pins(tmp_path, monkeypatch):

@@ -12,10 +12,13 @@ MAX_BODY = 16384
 MAX_GENERATION = 2147483647
 CHANNEL = 'authenticated-console-manual-v1'
 VALIDATOR = 'sdc.provision.validator.v1'
-_PROFILES = ('monitor', 'support', 'restart')
+_PROFILES = ('monitor', 'support', 'restart', 'auto')
 _PURPOSES = {
     'support': frozenset(('operation', 'execution-grant', 'consent-preview')),
     'restart': frozenset(('restart-operation', 'restart-execution-grant', 'restart-consent-preview')),
+    'auto': frozenset(('mcs-auto-offer-v3', 'mcs-auto-compatibility-v3', 'mcs-auto-grant-v3',
+                       'mcs-auto-ack-v3', 'mcs-auto-status-v3', 'mcs-auto-health-ack-v3',
+                       'mcs-auto-consent-preview-v3', 'mcs-auto-consent-receipt-v3')),
 }
 _PATTERNS = {
     'UUID': r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',
@@ -141,7 +144,7 @@ def _pin(value, profile, now):
     _fields(value, ('kid', 'purposes', 'spki', 'not_before', 'expires_at'))
     _match(value['kid'], r'[A-Za-z0-9_-]{1,64}')
     uses = value['purposes']
-    _check(type(uses) is list and 1 <= len(uses) <= 3)
+    _check(type(uses) is list and 1 <= len(uses) <= len(_PURPOSES[profile]))
     _check(all(type(use) is str and use in _PURPOSES[profile] for use in uses))
     _check(len(set(uses)) == len(uses))
     _match(value['spki'], r'[A-Za-z0-9_-]{1,2731}')
@@ -150,8 +153,9 @@ def _pin(value, profile, now):
     _check(value['not_before'] <= now < value['expires_at'])
     # These existing functions inspect canonical base64url and minimal RSA3072
     # e65537 SPKI in Python. They neither verify a signature nor invoke OpenSSL.
-    from sdc_support_signatures import validate_pins, validate_restart_pins
-    validate = validate_pins if profile == 'support' else validate_restart_pins
+    from sdc_support_signatures import validate_auto_pins, validate_pins, validate_restart_pins
+    validate = {'support': validate_pins, 'restart': validate_restart_pins,
+                'auto': validate_auto_pins}[profile]
     validate([value], purpose=uses[0], now_ms=now)
 
 
@@ -256,11 +260,11 @@ def _validate(definition, value, now):
         _check(value == CHANNEL)
     elif definition == 'ProfileID':
         _check(type(value) is str and value in _PROFILES)
-    elif definition in ('SupportPin', 'RestartPin'):
+    elif definition in ('SupportPin', 'RestartPin', 'AutoPin'):
         _pin(value, definition.removesuffix('Pin').lower(), now)
-    elif definition in ('SupportPins', 'RestartPins'):
+    elif definition in ('SupportPins', 'RestartPins', 'AutoPins'):
         _pins(value, definition.removesuffix('Pins').lower(), now)
-    elif definition in ('MonitorProfile', 'SupportProfile', 'RestartProfile'):
+    elif definition in ('MonitorProfile', 'SupportProfile', 'RestartProfile', 'AutoProfile'):
         profile = definition.removesuffix('Profile').lower()
         _fields(value, ('profile_id', 'origin', 'audience', 'pins'))
         _check(value['profile_id'] == profile)
@@ -271,7 +275,7 @@ def _validate(definition, value, now):
         _fields(value, ('schema_version', 'issuer_ref', 'policy_revision', 'channel_ref', 'profiles'))
         _check(value['schema_version'] == 'sdc.provision.policy.v1')
         _members(value, {'issuer_ref': 'IssuerRef', 'policy_revision': 'UUID', 'channel_ref': 'ChannelRef'}, now)
-        _check(type(value['profiles']) is list and 1 <= len(value['profiles']) <= 3)
+        _check(type(value['profiles']) is list and 1 <= len(value['profiles']) <= 4)
         seen = set()
         for profile in value['profiles']:
             _check(type(profile) is dict)
