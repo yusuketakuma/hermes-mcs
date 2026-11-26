@@ -22,7 +22,16 @@ from types import SimpleNamespace
 import pytest
 
 import cloud_backlog as backlog
+import cloud_policy
+import ledger as ledger_module
+import mcs_util
 import run_log_install
+
+# Captured at import time, before any test's monkeypatching: the carry_worker
+# fixture replaces module attributes, and the real budget accounting is needed
+# to prove the resolver-to-wait connection rather than a stubbed reason.
+_REAL_LEDGER = ledger_module.Ledger
+_REAL_BUDGET_BLOCK_REASON = cloud_policy.budget_block_reason
 # Individual cloud routes are closed; worker pass mechanics below are dormant-path.
 from test_cloud_response_recovery import legacy_cloud_routes
 
@@ -813,6 +822,47 @@ def test_worker_settles_paid_carry_before_no_new_send_gate(carry_worker, monkeyp
     assert state.events == ["extract", "settle", "blocked"]
     assert state.received == (fake_ledger, [])
     assert state.closed
+
+
+
+def test_blocked_primary_ordered_resolution_stops_worker_before_run_pending(carry_worker, monkeypatch, capsys, tmp_path):
+    """The connection point: a real ordered resolution drives the worker's wait.
+
+    Both providers configured, primary over its cap, secondary clean: the
+    worker's own resolve_profile(ordered=True) keeps the primary contract and
+    the primary-specific reason is what the wait reports — work never enters
+    run_pending, so no reservation and no POST can happen."""
+    import cloud_policy
+    import extract_llm
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+                         "provider_order": ["anthropic", "openai"],
+                         "daily_cost_limit_usd": 80, "monthly_cost_limit_usd": 80,
+                         "provider_budgets": {"anthropic": {
+                             "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}}}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, "DB", str(tmp_path / "real-ledger.db"))
+    monkeypatch.setattr(ledger_module, "Ledger", _REAL_LEDGER)
+    monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", _REAL_BUDGET_BLOCK_REASON)
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *a, **kw: True)
+    waits = []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            state.alive = False
+
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("blocked work ran"))
+    monkeypatch.setattr(extract_llm_resident, "run_pending", extract_llm.run_pending)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    # state.closed belongs to the fixture's fake ledger; the real one closes
+    # without touching it. The connection under test is the wait shape.
+    assert waits == [10, 10] and state.events == []
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    holds = [item for item in records if item["event"] == "cloud_backlog_deferred"]
+    assert len(holds) == 1 and holds[0]["reason"] == "provider_daily_cap"
 
 
 def test_worker_keeps_paid_carry_when_extract_return_omits_carry(carry_worker, monkeypatch):
