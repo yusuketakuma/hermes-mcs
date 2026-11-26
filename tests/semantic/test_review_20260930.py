@@ -114,7 +114,6 @@ def test_summary_button_reads_newest_summary_over_rollup(tmp_path):
         db.close()
 
 
-@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
     db = _ledger(tmp_path)
     now = time.time()
@@ -126,7 +125,7 @@ def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
                             meta={VERSION_KEY: CURRENT_VERSION, "error": True,
                                   "extract_version": extract_llm.EXTRACT_VERSION,
                                   "attempts": 5, "hash": source_hash,
-                                  "auto_retry": 3 if i < extract_llm.REVIVE_MAX * 4 else 0})
+                                  "auto_retry": extract_llm.REVIVE_PER_INPUT if i < extract_llm.REVIVE_MAX * 4 else 0})
         old = db.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=1,
                               meta={VERSION_KEY: LEGACY_VERSION, "error": True,
                                     "extract_version": extract_llm.EXTRACT_VERSION,
