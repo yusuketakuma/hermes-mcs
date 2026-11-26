@@ -628,7 +628,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if jev_held:
         print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", transfer_status()))
-    elif (semantic["mode"] != "off"
+    elif ((semantic["mode"] != "off" or "mode" not in (cfg.get("semantic") or {}))
           and (semantic["summary_mode"] != "off" or semantic["loop_mode"] != "off"
                or semantic["extract_qc"] != "off")
           and semantic["daily_request_budget"] > 0):
