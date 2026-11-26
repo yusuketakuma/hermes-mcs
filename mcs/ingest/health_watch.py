@@ -89,10 +89,18 @@ _RECORDED_DELIVERY_JA = {
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
 }
+_WORKER_OBSERVATION_JA = {
+    "witness_missing": "起動記録を読み取れません",
+    "witness_version": "起動記録の形式に対応していません",
+    "witness_reason": "起動記録の状態を確認できません",
+    "witness_started_unknown": "起動記録の識別情報または時刻を確認できません",
+    "launchd_pid_mismatch": "プロセスの識別番号を起動記録と照合できません",
+    "birth_mismatch": "プロセスの開始時刻を起動記録と照合できません",
+    "observation_timeout": "起動状態の照会が時間切れ",
+}
 _WORKER_REASONS = frozenset({"worker_started", "worker_start_unverified", "worker_start_failed",
     "worker_restart_required", "route_flags_unready", "profile_mismatch", "owner_unverified",
-    "application_mismatch", "standalone_owned", "witness_missing", "witness_version", "witness_reason",
-    "witness_started_unknown", "launchd_pid_mismatch", "birth_mismatch", "observation_timeout"})
+    "application_mismatch", "standalone_owned", *_WORKER_OBSERVATION_JA})
 _DELIVERY_REASONS = frozenset({"marker_present", "database_identity", "database_busy", "schema_mismatch",
                                "observation_timeout", "queue_unverified"})
 
@@ -1750,6 +1758,9 @@ def _delivery_observation_lines(report: dict) -> list[str]:
         return []
     worker, delivery, restart = (snapshot[key] for key in ("worker", "delivery", "restart_request"))
     worker_label = {"started": "起動済み", "disabled": "起動していない", "unknown": "未確認"}[worker["state"]]
+    worker_detail = f"起動 {_jst(worker['started_at'], with_year=True)}"
+    if worker["state"] == "unknown":
+        worker_detail = _WORKER_OBSERVATION_JA.get(worker["reason"], worker_detail)
     restart_label = {"requested": "要求の記録", "unknown": "結果不明", "failed": "失敗の記録",
                      "supervisor_restart_verified": "gatewayプロセス確認の記録", "unverified": "未確認"}[restart["state"]]
     queued = str(delivery["queued"]) + "件" if delivery["queued"] is not None else "不明"
@@ -1770,7 +1781,7 @@ def _delivery_observation_lines(report: dict) -> list[str]:
         note = None
     lines = [
         f"通知の現在の観測（{_jst(snapshot['observed_at'])} JST）: "
-        f"worker {worker_label}（起動 {_jst(worker['started_at'], with_year=True)}）、待機 {queued}、"
+        f"worker {worker_label}（{worker_detail}）、待機 {queued}、"
         f"送信中 {sending}、結果不明 {unknown}",
         f"配送の時刻: 待機中通知の最古の作成 {_jst(delivery['oldest_created_at'], with_year=True)} / "
         f"直近の進捗 {_jst(delivery['last_progress_at'], with_year=True)}（JST）",
