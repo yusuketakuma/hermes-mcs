@@ -628,8 +628,10 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if jev_held:
         print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", transfer_status()))
-    elif (((semantic["mode"] != "off" and (semantic["summary_mode"] != "off" or semantic["loop_mode"] != "off"))
-            or semantic["extract_qc"] != "off") and semantic["daily_request_budget"] > 0):
+    elif (semantic["mode"] != "off"
+          and (semantic["summary_mode"] != "off" or semantic["loop_mode"] != "off"
+               or semantic["extract_qc"] != "off")
+          and semantic["daily_request_budget"] > 0):
         print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
               "機能ごとの許可条件がそろった場合にJev APIへ送ります。患者名を含む本文は匿名化しません。")
     else:

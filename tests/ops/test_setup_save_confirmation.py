@@ -73,10 +73,18 @@ def test_lineworks_credentials_are_initialized_like_other_connectors(monkeypatch
 @pytest.mark.parametrize("budget,expected", [(0, "外部Jev追加解析: 無効"), (1, "機能ごとの許可条件がそろった場合")])
 def test_jev_display_includes_qc_only_mode_and_budget(monkeypatch, capsys, budget, expected):
     cfg = {"notify_target": "slack:C123", "semantic": {
-        "extract_qc": "annotate", "daily_request_budget": budget, "project_ids": [101]}}
+        "mode": "assist", "extract_qc": "annotate", "daily_request_budget": budget, "project_ids": [101]}}
     monkeypatch.setattr("builtins.input", lambda prompt: "2")
     setup_wizard.confirm_save(cfg, plugin_profile=None)
     assert expected in capsys.readouterr().out
+
+
+def test_jev_display_stays_disabled_when_semantic_mode_is_off(monkeypatch, capsys):
+    cfg = {"notify_target": "slack:C123", "semantic": {
+        "mode": "off", "extract_qc": "annotate", "daily_request_budget": 1, "project_ids": [101]}}
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    setup_wizard.confirm_save(cfg, plugin_profile=None)
+    assert "外部Jev追加解析: 無効" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("block,daily,monthly", [
