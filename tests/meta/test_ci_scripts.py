@@ -562,7 +562,7 @@ def test_writer_gate_does_not_treat_an_unrelated_lock_name_as_authority(monkeypa
 
 def test_split_snapshot_writer_permission_stays_inside_the_moved_owner(monkeypatch, tmp_path):
     gates = _load('ci_split_snapshot', 'ci/gates.py')
-    path = tmp_path / 'ops/update_restore.py'
+    path = tmp_path / 'ops/update/update_restore.py'
     path.parent.mkdir(parents=True)
     path.write_text('def _reconcile_restored():\n return Ledger("synthetic.db")\n'
                     'def _cancel_unsent_notices():\n return sqlite3.connect("synthetic.db")\n')
