@@ -178,6 +178,9 @@ def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, 
         with pytest.raises(anthropic_client.AnthropicError) as denied:
             _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='new',
                      selection=selected, max_tokens=selected['max_tokens'])
+        # reextract is not a cloud send route, so the refusal is scoped regardless of the
+        # outcome. Under the bounded retry contract a settled uncertain (timeout) outcome is
+        # retryable, hence not unresolved in the blocking sense: both outcomes refuse as 'scope'.
         assert denied.value.detail == 'scope'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
         assert [tuple(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "

@@ -491,11 +491,52 @@ def test_resident_mode_checks_host_origin_and_one_login(server, headers, path, s
     assert resident_request(server, "GET", path, headers=headers)[0] == status
 
 
-@pytest.mark.parametrize("kwargs", [{"homecare": None, "port": 8765}, {"port": 0}, {"port": 8765, "host": "mac.local"}])
-def test_resident_mode_needs_a_ledger_a_fixed_port_and_a_tailnet_name(tmp_path, kwargs):
+@pytest.mark.parametrize("kwargs", [{"homecare": None, "port": 8765}, {"port": 0}, {"port": 8765, "host": "mac.local"},
+                                    {"port": 8765, "access_log_dir": None}])
+def test_resident_mode_needs_a_ledger_a_fixed_port_a_tailnet_name_and_an_access_log(tmp_path, kwargs):
     with pytest.raises(ValueError, match="resident mode"):
         chat.ChatServer("unused", None, kwargs["port"], homecare=kwargs.get("homecare", tmp_path / "homecare.db"),
-                        tailnet_host=kwargs.get("host", TAILNET))
+                        tailnet_host=kwargs.get("host", TAILNET), access_log_dir=kwargs.get("access_log_dir", tmp_path))
+
+
+def test_resident_mcs_reads_are_recorded_before_they_are_answered(server, tmp_path, monkeypatch):
+    import access_log
+
+    answers = {"patients": {"items": [{"project_id": 1}, {"project_id": 7}]}, "timeline": {"items": []},
+               "drugs": {"items": []}}
+
+    def response(snapshot, allowed, route, query):
+        if "project=2" in query:
+            raise ValueError("project_not_allowed")
+        return answers[route]
+
+    monkeypatch.setattr(chat, "response", response)
+    server.access_log_dir = tmp_path
+    # On this computer only (capability URL) nobody is identified, so nothing is recorded.
+    local = [("Host", "127.0.0.1:8765")]
+    assert resident_request(server, "GET", "/synthetic-capability/api/patients", login=None, headers=local)[0] == 200
+    assert list(access_log.read(tmp_path)) == []
+    server.tailnet_host = TAILNET
+    assert resident_request(server, "POST", "/api/hc/staff.create", BODY)[0] == 200
+    assert resident_request(server, "GET", "/api/patients?q=%E5%90%88%E6%88%90", login="Nurse@Example.invalid")[0] == 200
+    assert resident_request(server, "GET", "/api/timeline?project=1")[0] == 200
+    assert resident_request(server, "GET", "/api/timeline?project=2") == (400, b'{"error": "project_not_allowed"}')
+    assert resident_request(server, "GET", "/api/drugs?q=x")[0] == 200       # the catalogue holds no patient record
+    assert resident_request(server, "GET", "/api/hc/patients")[0] == 200     # ledger reads are not MCS reads
+    seen = [{key: entry[key] for key in ("via", "actor", "op", "kind", "project_id", "patients", "outcome", "query")}
+            for entry in access_log.read(tmp_path)]
+    who = {"via": "local_chat", "actor": "tailscale:nurse@example.invalid", "op": "view"}
+    assert seen == [
+        {**who, "kind": "patients", "project_id": None, "patients": [1, 7], "outcome": "ok", "query": True},
+        {**who, "kind": "timeline", "project_id": 1, "patients": [1], "outcome": "ok", "query": False},
+        {**who, "kind": "timeline", "project_id": 2, "patients": [2], "outcome": "project_not_allowed", "query": False}]
+    assert "合成" not in "".join(path.read_text() for path in (tmp_path / "access_log").glob("*.jsonl"))
+    assert access_log.verify(tmp_path)["ok"] is True
+    # A read that cannot be recorded is withheld; the refusal of another room still answers as a refusal.
+    (tmp_path / "access_log").chmod(0o755)
+    assert resident_request(server, "GET", "/api/timeline?project=1") == (503, b'{"error":"access_log_unavailable"}')
+    assert resident_request(server, "GET", "/api/timeline?project=2")[0] == 400
+    assert access_log.failure(tmp_path) is not None
 
 
 def test_register_script_is_served_and_never_builds_html():

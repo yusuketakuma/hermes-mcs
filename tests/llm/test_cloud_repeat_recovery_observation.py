@@ -106,6 +106,9 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                                   "'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        # A binding change is refused like every other logically-equal mismatch: an answer
+        # paid for an earlier input is never taken up by the current one, and the identical
+        # prompt is never billed again (the parametrize telemetry above expects this refusal).
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(provider)
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')

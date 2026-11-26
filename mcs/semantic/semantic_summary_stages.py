@@ -86,6 +86,9 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
     if (not isinstance(requests, list) or not all(isinstance(item, str) for item in requests)
             or not isinstance(members, list) or not members or not isinstance(generation, str)):
         return False
+    # The root is structural, not the selection role: a bundle built with target
+    # ids masks the root member's role to "target", so role cannot find it and
+    # every cross-pass verification of a cloud-produced summary would fail.
     roots = [m.get("message_id") for m in members if isinstance(m, dict) and m.get("parent_id") is None]
     if len(roots) != 1:
         return False
@@ -104,7 +107,7 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                       "semantic_generation": generation, "semantic_phase": "summary"}
     try:
         rows = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve' "
-                          "AND project_id=? AND message_id=?", (pid, mid)).fetchall()
+                          "AND project_id=? AND message_id=? ORDER BY artifact_id", (pid, mid)).fetchall()
     except sqlite3.Error:
         return False
     for row in rows:
@@ -119,8 +122,10 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
         try:
             import cloud_policy
             cloud_policy.reservation_evidence(db, row["artifact_id"])
-        except (sqlite3.Error, ValueError):
+        except sqlite3.Error:
             return False
+        except ValueError:
+            continue
         return True
     return False
 
@@ -827,6 +832,17 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     # cannot verify is written again, never kept as a duplicate.
     prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
+    if (prev_sum is not None and prev_sum["content"] == summary
+            and isinstance(provenance, dict) and not provenance.get("providers")):
+        stored_proof = prev_sum["meta"].get("provider_provenance")
+        if (isinstance(stored_proof, dict) and stored_proof.get("providers")
+                and stored_proof.get("result_hash") == provenance.get("result_hash")):
+            # A byte-identical re-derivation whose own provenance chain could
+            # not be re-verified (a legacy receipt without its document hash)
+            # keeps the stored row's lineage: copying bytes does not change
+            # how they were produced, and the empty proof would otherwise
+            # rewrite the pair into a verification-exempt copy (FIX-SD1).
+            summary_meta["provider_provenance"] = stored_proof
     if (prev_sum is not None and prev_aud is not None
             and _current_pair_newest(ledger.db, pid, mid, fp, policy, prev_aud)
             and prev_sum["content"] == summary and prev_aud["content"] == audit_content

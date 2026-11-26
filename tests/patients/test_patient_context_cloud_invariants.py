@@ -2,14 +2,13 @@
 
 Only ``AnthropicClient.request`` is synthetic; reservation, accounting and the
 retry decisions run for real. These must hold for any implementation:
-a paused cloud never sends, and a request whose outcome is unknown is retried
-only through the bounded, fully accounted cloud retry path.
+a paused cloud never sends, and a request whose outcome is unknown is never
+sent again.
 """
 import json
 
 import anthropic_client
 import cloud_policy
-from llm_retry import CLOUD_MAX_ATTEMPTS
 from test_context_cloud_update_identity import cloud, real_cloud, runtime  # noqa: F401  (fixtures)
 from test_patient_context_refresh import step
 
@@ -27,7 +26,7 @@ def test_paused_cloud_never_sends_or_reserves(runtime, real_cloud, monkeypatch):
     assert ledger.artifacts("cloud_usage_reserve") == []
 
 
-def test_unknown_outcome_retry_is_bounded_and_recorded(runtime, real_cloud, monkeypatch):  # noqa: F811
+def test_unknown_outcome_is_resent_once_within_the_cap(runtime, real_cloud, monkeypatch):  # noqa: F811
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     answered = anthropic_client.AnthropicClient.request
@@ -42,8 +41,10 @@ def test_unknown_outcome_retry_is_bounded_and_recorded(runtime, real_cloud, monk
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     _passes(runtime, cfg, 10)
     unknown = bodies[0]
-    assert 1 < bodies.count(unknown) <= CLOUD_MAX_ATTEMPTS, "the unknown-outcome request did not follow the bounded retry path"
+    # bounded retry contract (owner 2026-11-26): the unknown-outcome send is retried
+    # in-pass and the retry succeeds, so the same body is sent exactly twice.
+    assert bodies.count(unknown) == 2, "the unknown-outcome send was retried more than the contract allows"
     reserves = ledger.artifacts("cloud_usage_reserve")
     results = [json.loads(row["meta"]) for row in ledger.artifacts("cloud_usage_result")]
     assert len(reserves) == len(bodies)
-    assert sum(meta.get("http_class") == "transport" for meta in results) >= 1
+    assert sum(meta.get("http_class") == "transport" for meta in results) == 1

@@ -332,6 +332,10 @@ def _precheck_target_tree(tag: str, standalone: bool, *, deadline=None, installe
     return errors, entries
 
 
+# The standalone SDK pins and their hashes; only install.sh brings ~/.mcs/venv to either.
+_STANDALONE_SDK_FILES = ("deployment/requirements-standalone.txt", "deployment/requirements-standalone.lock")
+
+
 def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
     """A rollback keeps ~/.mcs/venv's SDKs; the older host refuses any other pins."""
     try:
@@ -344,8 +348,9 @@ def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
     if isinstance(migration, dict) and isinstance(migration.get("backup_path"), str) \
             and os.path.lexists(migration["backup_path"]):
         return None                     # _restore_runtime renames the pre-update venv (old pins) back
+    # The kept venv is compatible when the pinned versions are the same; hashes alone change nothing in it.
     if hermes or _git(["diff", "--quiet", str(entry.get("prev_sha")), "HEAD", "--",
-                       "deployment/requirements-standalone.txt"]).returncode == 0:
+                       _STANDALONE_SDK_FILES[0]]).returncode == 0:
         return None
     return "standalone_sdk_rollback_unsupported"
 
@@ -363,7 +368,7 @@ def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None)
     # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
     if standalone and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/requirements-standalone.txt"], **({} if deadline is None else {"deadline": deadline})).returncode != 0:
+             *_STANDALONE_SDK_FILES], **({} if deadline is None else {"deadline": deadline})).returncode != 0:
         errors.append("standalone_requirements_changed")
     if "--with-yomitoku" in (recorded_install_args() or []) and _git(
             ["diff", "--quiet", "HEAD", tag, "--",

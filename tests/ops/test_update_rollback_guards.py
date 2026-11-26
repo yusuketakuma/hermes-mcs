@@ -881,6 +881,26 @@ def test_standalone_rollback_across_sdk_pins_is_refused_before_changes(
     assert "standalone_sdk_rollback_unsupported" in executed["detail"]
 
 
+def test_standalone_rollback_across_a_hash_list_alone_is_allowed(updater, tmp_path, monkeypatch):  # noqa: F811
+    """Same pins, new hashed list: the kept venv already holds what the older host wants."""
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(update_preflight, "REPO", str(repo))
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    before = _head(repo)
+    (repo / "deployment" / "requirements-standalone.lock").write_text("synthetic-sdk==2 --hash=sha256:00\n")
+    _git(repo, "add", "deployment/requirements-standalone.lock")
+    _git(repo, "commit", "-qm", "synthetic hashed list")
+    cfg = {"runtime_mode": "standalone"}
+    assert update_preflight._standalone_sdk_rollback_error({"prev_sha": before}, cfg) is None
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==3\n")
+    _git(repo, "commit", "-qam", "synthetic sdk bump")
+    assert update_preflight._standalone_sdk_rollback_error({"prev_sha": before}, cfg) \
+        == "standalone_sdk_rollback_unsupported"
+
+
 def test_interrupted_migration_undo_refuses_sdk_pin_rollback_before_changes(
         updater, tmp_path, monkeypatch):  # noqa: F811
     """IA-123: the recovery undo path checks the SDK pins like rollback() does."""

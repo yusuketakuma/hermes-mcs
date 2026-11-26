@@ -574,8 +574,13 @@ def test_only_200_contract_violations_count_toward_the_cloud_circuit(tmp_path, n
             c._circuit_result(db, AnthropicError("contract_error", detail, status=status))
         c._circuit_result(db, AnthropicError("transport", retryable=True))
         assert c.block_reason(db, _cfg(), "patient_context", 1) is None
-        for _ in range(c.CLOUD_MAX_ATTEMPTS):
+        # the retryable transport above counts once toward provider health, so
+        # the circuit opens exactly when the contract violations complete the
+        # attempt-count limit — checked one short, then at the limit
+        for _ in range(c.CLOUD_MAX_ATTEMPTS - 2):
             c._circuit_result(db, AnthropicError("contract_error", "incomplete_response", status=200))
+        assert c.block_reason(db, _cfg(), "patient_context", 1) is None
+        c._circuit_result(db, AnthropicError("contract_error", "incomplete_response", status=200))
         assert c.block_reason(db, _cfg(), "patient_context", 1) == "contract_error"
 
 

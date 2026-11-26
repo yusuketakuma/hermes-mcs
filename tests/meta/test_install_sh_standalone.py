@@ -240,7 +240,7 @@ def test_standalone_install_never_clones_hermes(tmp_path):
     assert not hermes_home.exists()
     assert r.returncode == 0, r.stdout + r.stderr
     venv = str(home / ".mcs" / "venv")
-    assert any(c.startswith("uv pip install") and "requirements-standalone.txt" in c
+    assert any(c.startswith("uv pip install") and "requirements-standalone.lock --require-hashes" in c
                for c in calls), calls
     python = [c for c in calls if c.startswith("venv-python")]
     # The venv receives the selected mode, the empty recovery option, the
@@ -446,7 +446,7 @@ def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install
         assert {path: path.read_bytes() for path in before} == before
     else:
         assert any(call.startswith('venv-hermes') for call in _calls(stub))
-        assert not any('requirements-standalone.txt' in call for call in _calls(stub))
+        assert not any('requirements-standalone' in call for call in _calls(stub))
         assert json.loads(config.read_text()).get('runtime_mode', 'hermes') == 'hermes'
         assert {path: path.read_bytes() for path in before if path != config} == {
             path: raw for path, raw in before.items() if path != config}
