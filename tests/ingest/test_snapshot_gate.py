@@ -834,3 +834,41 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     with closing(sqlite3.connect(data / "ledger.db")) as conn:
         assert conn.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
         assert conn.execute("SELECT status FROM runs").fetchone()[0] == recorded[0]
+
+
+@pytest.mark.parametrize('update_during_copy', [False, True])
+def test_commands_copy_allows_writer_and_rechecks_before_publication(tmp_path, monkeypatch, update_during_copy):
+    db, updater, fd, _ = _finish_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, 'HOME', str(tmp_path))
+    monkeypatch.setattr(run_check, '_config', lambda: {})
+    monkeypatch.setattr(run_check.job_ops, 'drain_commands', lambda *a, **kw: None)
+    monkeypatch.setattr(notify_spool, 'recover', lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cards, 'gc', lambda *a, **kw: None)
+    monkeypatch.setattr(writer_lock, 'wait_run_lock', lambda path, **kw: writer_lock.acquire_run_lock(path))
+    notify_cards.mark_snapshot_dirty(db.db)
+    db.db.commit()
+    prepare = snapshots._prepare_in_child
+    copied = []
+
+    def interleaved(*args, **kwargs):
+        competing_fd = writer_lock.acquire_run_lock(run_check.LOCKFILE)
+        assert competing_fd is not None
+        try:
+            notify_cards.mark_snapshot_dirty(db.db)
+            db.db.commit()
+            if update_during_copy:
+                updater['state'] = (True, 8)
+            copied.append(True)
+        finally:
+            os.close(competing_fd)
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, '_prepare_in_child', interleaved)
+    try:
+        code = run_check._commands_only(fd, time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_GATE_S + 60)
+        assert copied == [True]
+        assert code == int(update_during_copy)
+        assert os.path.exists(_dest()) is not update_during_copy
+        assert notify_cards.snapshot_dirty(db) == 2
+    finally:
+        db.close()

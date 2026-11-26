@@ -31,6 +31,9 @@ def test_incomplete_render_keeps_spec_until_all_uncertain_parts_settle(led):
     assert notify_spool.recover(led, CFG, {})["republished"] == 0
     sealed = spec.read_bytes()
     spec.unlink()  # simulate a spec removed by an older GC
+    with led.db:   # the cadence interval passing between the two recoveries
+        led.db.execute("UPDATE notify_recovery_state SET last_run_at=last_run_at-? "
+                       "WHERE singleton=1", (notify_spool.RECOVER_INTERVAL_S + 1,))
     assert notify_spool.recover(led, CFG, {})["republished"] == 1
     assert spec.read_bytes() == sealed
     pending = led.db.execute("SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
