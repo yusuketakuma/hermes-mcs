@@ -50,7 +50,7 @@ def _snap_value(value):
         # compiled patterns — must come back as the same reference (a copied
         # sentinel would break ``is`` checks).
         try:
-            return ("copy", copy.deepcopy(value))
+            return ("copy", (value, copy.deepcopy(value)))
         except Exception:
             pass
     return ("ref", value)
@@ -66,10 +66,14 @@ def _restore_value(obj, key, entry):
         for field, field_value in value.items():
             setattr(obj, field, field_value)
     elif kind == "copy":
-        try:
-            setattr(obj, key, copy.deepcopy(value))
-        except Exception:
-            setattr(obj, key, value)
+        # Importers share these objects. Restore their contents and original binding.
+        original, contents = value
+        if isinstance(original, list):
+            original[:] = contents
+        else:
+            original.clear()
+            original.update(contents)
+        setattr(obj, key, original)
     else:
         try:
             setattr(obj, key, value)
