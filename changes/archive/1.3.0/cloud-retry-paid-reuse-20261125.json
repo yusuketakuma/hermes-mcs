@@ -9,7 +9,7 @@
     "課金済み応答の論理prompt fingerprintを会計へ保存し、output envelopeや入力束縛が変わっただけの同一promptは再送信せず再利用します。結合・改ざん・証拠不整合がある場合は従来どおりfail-closedです。",
     "抽出・意味解析・患者コンテキストでHTTP 200かつ課金済みでもローカル検証を通らなかった応答をcloud_usage_validation_failure artifactで注記し、固定のvalidation failure理由だけを残します。この注記がある応答は成功応答として再利用せず、上限内の再送対象です。",
     "抽出失敗artifactにはboundedなfailure_observationを追加し、fallback/refusal区分・validation failure理由・repair issue件数・receipt idだけを保持します。自由文・患者本文・provider応答本文は保存しません。",
-    "例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、週次tick側のbackoff再試行に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。"
+    "例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、品質確認の再試行記録によるbackoff（300秒×試行回数・上限3600秒）後の再確認に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。"
   ],
   "refs": [
     "mcs/llm/transport/llm_retry.py",
