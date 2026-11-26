@@ -115,6 +115,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
     failure_fields = ("failure_reason_counts", "exhausted_failed")
     ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
+    ack_optional = ('superseded_acknowledgements',)
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     snapshot_fields = ("snapshot_failure", "snapshot_timing")
@@ -124,7 +125,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                *failure_fields, *ack_fields, *ack_optional, *policy_fields, 'failure_cohort', *snapshot_fields,
                 defer_field, observed_field}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
@@ -160,9 +161,14 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                 raise ValueError("ocr_status_invalid")
         if 'failure_cohort' in value and not valid_hash(value['failure_cohort']):
             raise ValueError('ocr_status_invalid')
-        ack_detail = {key: value[key] for key in ack_fields if key in value}
-        if ack_detail:
-            if (len(ack_detail) != len(ack_fields) or len(failure_detail) != len(failure_fields)
+        if ('superseded_acknowledgements' in value
+                and (type(value['superseded_acknowledgements']) is not int
+                     or value['superseded_acknowledgements'] < 0)):
+            raise ValueError('ocr_status_invalid')
+        ack_detail = {key: value[key] for key in (*ack_fields, *ack_optional) if key in value}
+        if any(key in value for key in ack_fields):
+            if (any(key not in value for key in ack_fields)
+                    or len(failure_detail) != len(failure_fields)
                     or not valid_hash(value.get('failure_cohort'))
                     or any(type(count) is not int or count < 0 for count in ack_detail.values())
                     or ack_detail['acknowledged_exhausted'] > value['exhausted_failed']

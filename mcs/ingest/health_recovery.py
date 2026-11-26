@@ -196,9 +196,10 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
             or notify.get("interactive") not in ("slack", "discord")):
         raise ValueError("gateway_unavailable")
     transport = notify["interactive"]
-    profile = notify[transport]["profile"]
+    profile = notify[transport].get("profile") or "default"
     data = Path(home) / "data"
     path = card_worker_status._path(data, transport, profile)
+    card_worker_status.repair_missing_started_at(path)
     record = _read_gateway_witness(path)
     if type(record) is not dict or set(record) != {"version", "reason", "pid", "at", "started_at"}:
         raise ValueError("witness_missing")
