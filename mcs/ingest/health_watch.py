@@ -257,14 +257,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
         and _count(parts.get('total')) and all(_count(n) for n in states.values())
         and sum(states.values()) == parts['total'] else None)
-    measurement = None
+    measurement = 'unknown' if 'incomplete_parts' in notify else None
     measured = False
     if isinstance(parts, dict):
         observed = parts.get('observed_at')
         status = parts.get('status')
         clock_valid = finite_number(observed) and observed <= now
         counts_valid = part_total is not None and (not tracking_present or tracking is not None)
-        measurement = 'unknown'
         if counts_valid:
             if status == 'recorded':
                 measurement = 'recorded'
@@ -277,6 +276,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
                 measured = True
                 measurement = 'recorded' if now - observed <= CARD_STALL_S else 'stale'
     parts_unknown = measurement == 'unknown'
+    if parts_unknown:
+        tracking = None
     parts_active = parts_unknown or (bool(tracking['total'] or tracking['unknown'])
                                      if tracking else bool(part_total))
     if parts_active and report['status'] == 'ok':
@@ -364,7 +365,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
     elif report['notify_parts_measurement'] == 'unknown':
-        reason = parts.get('reason')
+        reason = parts.get('reason') if isinstance(parts, dict) else None
         report['notify_parts_reason'] = (reason if reason in (
             'observation_limit', 'observation_unavailable') else None)
     held = notify.get("held_reasons")

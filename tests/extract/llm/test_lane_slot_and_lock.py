@@ -494,7 +494,7 @@ def test_resident_never_starts_a_jev_pass_while_a_carry_remains(monkeypatch, cap
     _resident_jev_harness(monkeypatch, events, now, settle)
     assert extract_llm.main() == 0
     kinds = [event[0] for event in events]
-    assert "run_pending" in kinds            # carry processing still proceeds
+    assert kinds.count("run_pending") == 1  # subsequent passes only retry the outstanding write
     # the pass may run in the opening iteration while the carry is still empty,
     # but once the first run_pending produces a carried row it must never run
     # again: the drain span here crosses the lease the renewal grants
