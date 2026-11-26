@@ -26,7 +26,7 @@ def test_paused_cloud_never_sends_or_reserves(runtime, real_cloud, monkeypatch):
     assert ledger.artifacts("cloud_usage_reserve") == []
 
 
-def test_unknown_outcome_is_never_sent_again(runtime, real_cloud, monkeypatch):  # noqa: F811
+def test_unknown_outcome_is_resent_once_within_the_cap(runtime, real_cloud, monkeypatch):  # noqa: F811
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     answered = anthropic_client.AnthropicClient.request

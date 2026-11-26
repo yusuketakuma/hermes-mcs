@@ -142,10 +142,11 @@ def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, mon
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
     # Bounded retry contract (owner decision 2026-11-26, superseding the 2026-11-15
-    # local handover): a transport failure whose outcome is unknown is retried in-pass
-    # up to the shared cap, every send reserved and accounted as possibly billed. After
-    # the cap the unit waits for the cloud instead of falling to local, and later passes
-    # do not send the same logical unit again.
+    # immediate local handover): a transport failure whose outcome is unknown is retried
+    # in-pass up to the shared cap, every send reserved and accounted as possibly billed.
+    # Later passes do not send the same logical unit again; once the capped retries are
+    # exhausted the unit may fall to local inference, with every reservation of the unit
+    # recorded as replaced rather than silently dropped.
     first = step(runtime, cfg=cfg)
     assert first['status'] == 'progressed'
     import llm_retry
@@ -166,9 +167,6 @@ def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, mon
     assert len(sent) == llm_retry.CLOUD_MAX_ATTEMPTS
     assert [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == paid
-    # Once the capped retries are exhausted the unit may fall to local inference;
-    # every reservation of the capped logical unit is then recorded as replaced,
-    # never silently dropped.
     dispositions = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
     superseded = [row for row in dispositions if row.get('disposition') == 'superseded_local']
     assert len(superseded) == llm_retry.CLOUD_MAX_ATTEMPTS
