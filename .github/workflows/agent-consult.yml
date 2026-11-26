@@ -77,7 +77,7 @@ jobs:
         # Codex runs without network in a read-only sandbox, so it reads the thread from a file.
         run: gh issue view "$ISSUE" --comments > "$RUNNER_TEMP/issue.md"
       - id: codex
-        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1.9
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec  # v1.14
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           sandbox: read-only
