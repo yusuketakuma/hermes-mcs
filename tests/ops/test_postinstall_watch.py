@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import mcs_cli
 import mcs_setup
 import postinstall_watch
@@ -32,19 +34,85 @@ def test_once_success_writes_bounded_status(tmp_path):
     assert not (tmp_path / "data/postinstall-watch/agent-repair-brief.md").exists()
 
 
-def test_once_failure_writes_agent_brief_with_only_failed_output(tmp_path):
+def test_failure_brief_excludes_raw_output_and_is_retired_on_recovery(tmp_path):
     runner, _calls = _runner([(1, "check failed synthetic"), (0, "doctor ok")])
     rc = postinstall_watch.run(home=str(tmp_path), repo="/synthetic/repo", once=True,
                                runner=runner, sleep=lambda _: None, out=lambda _: None)
     assert rc == 1
     brief = (tmp_path / "data/postinstall-watch/agent-repair-brief.md").read_text()
-    assert "check failed synthetic" in brief
+    assert "command_failed" in brief
+    assert "check failed synthetic" not in brief
     assert "doctor ok" not in brief
     assert postinstall_watch.REPOSITORY_URL in brief
     assert "セッションを終了せず" in brief
     status = json.loads((tmp_path / "data/postinstall-watch/status.json").read_text())
     assert status["healthy"] is False
     assert oct((tmp_path / "data/postinstall-watch/agent-repair-brief.md").stat().st_mode & 0o777) == "0o600"
+
+    runner, _ = _runner([(0, ""), (0, "")])
+    assert postinstall_watch.run(home=str(tmp_path), repo="/synthetic", once=True, runner=runner) == 0
+    assert not (tmp_path / "data/postinstall-watch/agent-repair-brief.md").exists()
+
+
+@pytest.mark.parametrize("duration,interval", [(float("nan"), 1), (1, float("nan"))])
+def test_nonfinite_budget_rejected(tmp_path, duration, interval):
+    assert postinstall_watch.run(home=str(tmp_path), repo="/synthetic", duration=duration,
+                                 interval=interval, runner=lambda *_: pytest.fail("probe ran")) == 2
+
+
+def test_deadline_stops_probes_even_when_command_succeeds(tmp_path):
+    now = [0.0]
+    def runner(argv, timeout):
+        assert argv[2] == "check" and timeout == 1
+        now[0] += 2
+        return {"rc": 0}
+
+    assert postinstall_watch.run(home=str(tmp_path), repo="/synthetic", once=True, duration=1,
+                                 clock=lambda: now[0], runner=runner) == 1
+    assert "deadline" in (tmp_path / "data/postinstall-watch/agent-repair-brief.md").read_text()
+
+
+@pytest.mark.parametrize("scope", [None, "services", "collection", "card_worker", "restore_delivery"])
+def test_shared_doctor_requires_observations(scope):
+    from support_diagnostics import SCHEMA_VERSION
+    healthy = {"status": "healthy"}
+    report = {"schema_version": SCHEMA_VERSION, "software": {"mode": "standalone"},
+              "checks": dict.fromkeys(("services", "card_worker", "restore_delivery"), healthy),
+              "collection": healthy}
+    if scope == "collection":
+        report["collection"] = {"status": "unknown"}
+    elif scope:
+        report["checks"][scope] = {"status": "warning"}
+    assert postinstall_watch._doctor_result(json.dumps(report).encode())["rc"] == int(scope is not None)
+    assert postinstall_watch._doctor_result(b"invalid")["rc"] == 1
+
+
+def test_default_runner_does_not_accept_unverified_success(tmp_path, monkeypatch):
+    import subprocess
+    def probe(argv, *, stdout, stderr, timeout):
+        assert stderr == subprocess.DEVNULL
+        if argv[2] == "check":
+            assert stdout == subprocess.DEVNULL
+            return subprocess.CompletedProcess(argv, 0)
+        assert "--share" in argv and stdout == subprocess.PIPE
+        return subprocess.CompletedProcess(argv, 0, stdout=b"synthetic unverified report")
+    monkeypatch.setattr(subprocess, "run", probe)
+    assert postinstall_watch.run(home=str(tmp_path), repo="/synthetic", once=True) == 1
+    brief = (tmp_path / "data/postinstall-watch/agent-repair-brief.md").read_text()
+    assert "diagnosis_unverified" in brief and "synthetic unverified report" not in brief
+
+
+def test_unverified_output_directory_leaves_external_directory_untouched(tmp_path):
+    root = tmp_path / "install"
+    data = root / "data"
+    data.mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir(mode=0o755)
+    before = outside.stat().st_mode
+    (data / "postinstall-watch").symlink_to(outside, target_is_directory=True)
+    runner, _ = _runner([(0, ""), (0, "")])
+    assert postinstall_watch.run(home=str(root), repo="/synthetic", once=True, runner=runner) == 1
+    assert outside.stat().st_mode == before and list(outside.iterdir()) == []
 
 
 def test_continuous_requires_configured_success_streak(tmp_path):
