@@ -70,6 +70,11 @@
    "sha256": "30d6bd4a0bcbd7a943e5517633ab6df168ac8b0947ec67842a0ef1fcec4bc545",
    "title": "抽出テストの実行順による誤判定を修正"
   },
+  "live-only-join-notifications": {
+   "path": "changes/archive/1.3.1/live-only-join-notifications.json",
+   "sha256": "f2bb0d59e082bfe829db90af8e73319f7373e18eb3397de43835d64164308afa",
+   "title": "新しく認識したグループでは新着だけを通知"
+  },
   "ocr-runtime-dependency-lock": {
    "path": "changes/archive/1.3.1/ocr-runtime-dependency-lock.json",
    "sha256": "d51ab70a7921dbcbb2231b869a47cca07ac53f2fbd7af2d2b34498860aa875eb",
@@ -90,6 +95,11 @@
    "sha256": "2e01fe31f29e789aff89c89d4e61e16248f14979c078f40ae6e0877bef60541b",
    "title": "収集がロック不足で止まっているとき健康レポートが原因を示すようになりました"
   },
+  "self-id-source": {
+   "path": "changes/archive/1.3.1/self-id-source.json",
+   "sha256": "80d473b5ae53ac4e9a5e29187afa64ef22afa5285bea4ff6e3e86b7174d5ff08",
+   "title": "本人IDの判定に最新の職員名簿を使う"
+  },
   "semantic-assist-default-save-confirmation-20261126": {
    "path": "changes/archive/1.3.1/semantic-assist-default-save-confirmation-20261126.json",
    "sha256": "f8b2b23335ae3241c195ca104cb5da951b604d368b5248736b4ac9d7ab5bcf6c",
@@ -104,6 +114,11 @@
    "path": "changes/archive/1.3.1/semantic-cloud-summary-receipt-settlement-20261126.json",
    "sha256": "bf9ab11485a4661b1a238aed681c212ea4d5a3710e4ceb83330b8a9bd710b20b",
    "title": "要約の生成元をクラウドの決済記録で確認"
+  },
+  "single-tenant-settings": {
+   "path": "changes/archive/1.3.1/single-tenant-settings.json",
+   "sha256": "cce03b67367b7da2dda4e26fd0ed358c8d49f554ecea50abd9ee9517b9fd3418",
+   "title": "施設ごとの設定を config.json に集約"
   }
  },
  "version": "1.3.1"
