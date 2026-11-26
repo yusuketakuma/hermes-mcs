@@ -35,3 +35,17 @@ def test_electrolyte_results_keep_values_across_layouts_and_ranges():
                 lab, = extract_validation.validate({"labs": [raw]}, quote)["labs"]
                 assert lab["value"] == value, quote
                 assert (lab["normalized"]["confirmation"] == "quote_supported") == expected, quote
+
+
+def test_blood_test_comments_and_dosage_forms_after_a_comma():
+    for separator in ("、", ","):
+        for tail, expected in (
+                ("異常なし", "quote_supported"), ("経過観察", "quote_supported"),
+                ("次回再検", "quote_supported"), ("異常なし、分2", "unverified"),
+                ("ドライシロップは1mL", "unverified"), ("ドライシロップ1包", "unverified"),
+                ("アスパラK 分3", "quote_supported")):
+            body = f"採血 カリウム 4.5{separator}{tail}"
+            raw = {"name": "カリウム", "value": "4.5", "evidence": body}
+            lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+            assert lab["normalized"]["confirmation"] == expected, body
+            assert lab["value"] == "4.5"

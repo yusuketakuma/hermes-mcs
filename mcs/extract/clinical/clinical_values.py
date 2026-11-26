@@ -625,7 +625,7 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 # layout on its own source line. Before the item: a bullet, lab headers (the lab
 # section headings of medical_document plus the measurement words 採血/検査/測定 also
 # used for measured_on below), a date or other readings. After the number, up to the
-# end of its clause (、。,; or のため/により: what follows is another statement): units,
+# end of its clause (a comma separates a labelled reading or prescription): units,
 # flags, a note, a previous value, other readings or words about the value. Anything
 # else (塩化, 維持液, ロスバスタチン, 朝夕, 適宜, 分2, 1錠, 4→2) keeps it a candidate.
 # The words are folded once, like the quote they are matched on.
@@ -653,8 +653,8 @@ _LAB_PREFIX = re.compile(fold_surface(
     rf"|{_READING}|補正|血清|[、,/:|・\-~=])*+"))
 _LAB_TAIL = re.compile(fold_surface(
     rf"(?>[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
-    r"|[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
-    r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
+    r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
+    r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*+"))
 # A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
@@ -719,7 +719,7 @@ _LAB_RESULT = re.compile(f"({fold_surface(_LAB_SPELLINGS)})" + _RESULT_NUMBER)
 # A dose direction or dosage form alone has no such label (カリウム 4、分2).
 _NAMED_PRESCRIPTION = rf"(?:[ァ-ヺー]++[a-z]*|[一-龥]+薬[a-z]*)(?:分[0-9]|[0-9]+(?:{MED_FORMS}|包))"
 _LAB_TAIL_END = re.compile(fold_surface(
-    rf"[。;]|の?ため|により|[、,](?!(?:{MED_FORMS}))(?=(?:{_READING}|{_NAMED_PRESCRIPTION}))"))
+    rf"[。;]|の?ため|により|[、,](?!(?:ドライシロップ|{MED_FORMS}))(?=(?:{_READING}|{_NAMED_PRESCRIPTION}))"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
