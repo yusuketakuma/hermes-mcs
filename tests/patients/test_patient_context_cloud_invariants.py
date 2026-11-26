@@ -5,6 +5,7 @@ retry decisions run for real. These must hold for any implementation:
 a paused cloud never sends, and a request whose outcome is unknown is never
 sent again.
 """
+import pytest
 import json
 
 import anthropic_client

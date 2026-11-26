@@ -1,5 +1,6 @@
 """Regressions for the 2026-09-30 adversarial review: each test pins the
 corrected behavior of a reproduced defect. Synthetic data only."""
+import pytest
 import collection_stages
 import mcs_contract
 import semantic_drain
