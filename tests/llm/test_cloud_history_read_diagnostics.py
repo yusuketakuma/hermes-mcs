@@ -118,13 +118,29 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         provider = unit(ledger, owner=_SECRET)
         provider.unit_key = _SECRET if not existing_paid else provider.unit_key
         proxy = ReadFailure(ledger.db, phase, error)
+        probes = []
+        def failing_probe(_ledger, _deadline):
+            # The re-observation runs on an independent read-only connection, so a
+            # continuously locked database fails there too — the probe seam is where
+            # that continuous failure belongs; injecting only the owner connection
+            # would let the probe read around a synthetic failure.
+            probes.append(1)
+            class FailingDb:
+                def execute(self, *args, **kwargs):
+                    raise error
+                def close(self):
+                    pass
+            return SimpleNamespace(db=FailingDb())
         with monkeypatch.context() as patch:
             patch.setattr(ledger, "db", proxy)
+            patch.setattr(cloud_inference, "_independent_read_probe", failing_probe)
             _assert_refusal(provider, phase, "synthetic prompt" if phase == "recover_response" else _SECRET)
-        # A transiently busy exact-answer read earns one bounded fresh-snapshot
-        # retry before the same hold; every other failure classifies on first read.
-        assert proxy.failures == (2 if phase == "recover_response"
-                                  and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) else 1)
+        # A transiently busy exact-answer read earns one bounded probe on an
+        # independent read-only connection before the same hold; every other
+        # failure classifies on first read.
+        retried = phase == "recover_response" and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+        assert proxy.failures == 1
+        assert len(probes) == (1 if retried else 0)
         assert len(calls) == sent and len(locks) == slots
         assert _history(ledger) == before
         assert not ledger.db.in_transaction
