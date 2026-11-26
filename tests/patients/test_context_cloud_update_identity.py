@@ -67,11 +67,19 @@ def real_cloud(runtime, cloud, monkeypatch):
                    ledger_module, semantic_jev, semantic_runtime, semantic_store, state):
         monkeypatch.setattr(module, 'time', fake_time)
     posts = []
+    # Every send must be preceded by exactly one fresh reserve. Bounded retries
+    # re-send a unit whose earlier send may have failed before this synthetic
+    # ran, so the first observation only records the count; every later send
+    # must add exactly one reserve since the previous observation.
+    reserves_seen = [None]
 
     def request(_client, method, body, timeout, *, deadline, max_bytes):
         assert method == 'POST' and timeout > 0 and deadline > clock.mono
         assert not ledger.db.in_transaction
-        assert len(ledger.artifacts('cloud_usage_reserve')) == len(posts) + 1
+        reserves = len(ledger.artifacts('cloud_usage_reserve'))
+        if reserves_seen[0] is not None:
+            assert reserves == reserves_seen[0] + 1
+        reserves_seen[0] = reserves
         payload = json.loads(body['messages'][0]['content'])
         if 'source' in payload:
             sources = list(mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg))
