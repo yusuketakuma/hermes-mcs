@@ -118,29 +118,14 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         provider = unit(ledger, owner=_SECRET)
         provider.unit_key = _SECRET if not existing_paid else provider.unit_key
         proxy = ReadFailure(ledger.db, phase, error)
-        probes = []
-        def failing_probe(_ledger, _deadline):
-            # The re-observation runs on an independent read-only connection, so a
-            # continuously locked database fails there too — the probe seam is where
-            # that continuous failure belongs; injecting only the owner connection
-            # would let the probe read around a synthetic failure.
-            probes.append(1)
-            class FailingDb:
-                def execute(self, *args, **kwargs):
-                    raise error
-                def close(self):
-                    pass
-            return SimpleNamespace(db=FailingDb())
         with monkeypatch.context() as patch:
             patch.setattr(ledger, "db", proxy)
-            patch.setattr(cloud_inference, "_independent_read_probe", failing_probe)
             _assert_refusal(provider, phase, "synthetic prompt" if phase == "recover_response" else _SECRET)
-        # A transiently busy exact-answer read earns one bounded probe on an
-        # independent read-only connection before the same hold; every other
-        # failure classifies on first read.
-        retried = phase == "recover_response" and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
-        assert proxy.failures == 1
-        assert len(probes) == (1 if retried else 0)
+        # A transiently busy exact-answer read earns one fresh-snapshot retry on the
+        # same connection before the same hold; every other failure classifies on
+        # first read.
+        assert proxy.failures == (2 if phase == "recover_response"
+                                  and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) else 1)
         assert len(calls) == sent and len(locks) == slots
         assert _history(ledger) == before
         assert not ledger.db.in_transaction
@@ -276,6 +261,29 @@ def test_one_transient_busy_recover_read_retries_a_fresh_snapshot_and_reuses_the
         assert provider.unresolved is False
         assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
     assert _events(capsys) == []
+
+
+def test_busy_read_failure_inside_an_owner_transaction_does_not_retry(paid, monkeypatch, capsys):
+    """Inside an owner transaction a reread could share the transaction's stale
+    snapshot, so the transient-lock retry stays off and the unit takes the hold."""
+    path, _cfg, calls, locks, _state, unit, _restart = paid
+    busy = sqlite3.OperationalError(_SECRET)
+    busy.sqlite_errorcode, busy.sqlite_errorname = sqlite3.SQLITE_BUSY, "SQLITE_BUSY"
+    with closing(Ledger(path)) as ledger:
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
+        before, sent, slots = _history(ledger), len(calls), len(locks)
+        provider = unit(ledger)
+        ledger.db.execute("BEGIN")
+        proxy = TransientReadFailure(ledger.db, "recover_response", busy)
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(ledger, "db", proxy)
+                _assert_refusal(provider, "recover_response", "synthetic prompt")
+            assert proxy.failures == 1
+        finally:
+            ledger.db.execute("ROLLBACK")
+        assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
 
 
 @pytest.mark.parametrize("error_class,category", [(ValueError, "value_error"), (TypeError, "type_error"),
