@@ -14,7 +14,7 @@
 
 ## 根拠と確認範囲
 
-レーンの割当と順番待ちは[local_llm.py](../../../mcs/core/local_llm.py)、持ち越しとレーン3の処理順は[extract_llm.py](../../../mcs/extract/v4/extract_llm.py)、対象患者と公開前の再確認は[patient_nightly.py](../../../mcs/extract/patient_nightly.py)を正本とします。
+レーンの割当と順番待ちは[local_llm.py](../../../mcs/llm/transport/local_llm.py)、持ち越しとレーン3の処理順は[extract_llm.py](../../../mcs/extract/llm/extract_llm.py)、対象患者と公開前の再確認は[patient_nightly.py](../../../mcs/patients/patient_context_refresh.py)を正本とします。
 
 画像は[SVG原稿](llm-lanes.svg)を既存のQuick LookとImageMagickで描画した説明図で、実画面や実測結果ではありません。実投稿・患者情報は使っていません。画像の原寸確認結果は受入票へ記録します。GitHub Release上の画像表示と実チャットの表示は別の確認で、ローカル画像の確認では代替しません。Release本文は画像なしでも理解できる文章とし、未公開URLは含めません。
 

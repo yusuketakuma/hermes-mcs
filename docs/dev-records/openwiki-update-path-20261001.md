@@ -1,6 +1,6 @@
 # OpenWiki 更新経路の確認（2026-10-01）
 
-生成本文は変更せず、[共有brief](../../openwiki/INSTRUCTIONS.md)を追加した。
+生成本文は変更せず、共有brief（当時の `openwiki/INSTRUCTIONS.md`。現在のcheckoutには同梱されていません）を追加した。
 これは OpenWiki 0.6.1 が明示的に利用者所有・通常更新で保持する生成元であり、
 生成ページ・Claims・index・provenance の直接編集ではない。
 Jev の外部経路、Slack、既読化の cap 回収条件、相対リンク、今回の導入手順を
@@ -8,7 +8,7 @@ Jev の外部経路、Slack、既読化の cap 回収条件、相対リンク、
 
 ## 確認した経路
 
-- [.github/workflows/openwiki-update.yml](../../.github/workflows/openwiki-update.yml)
+- `.github/workflows/openwiki-update.yml`（当時の配置。現在のcheckoutにはありません）
   は `openwiki@0.6.1` を導入し、`openwiki code --update --print` を実行する。
   OpenAI provider とモデルを設定し、LangSmith connector 用認証と tracing 用認証を
   環境変数で渡す。生成後は `openwiki/`・agent指示・workflow の差分を PR にする。
