@@ -1,0 +1,8 @@
+{
+  "id": "alert-ocr-ack-reasons-20261126",
+  "kind": "fix",
+  "summary": "OCR警報の受付記録を照合できないとき、理由に応じて表示が分かれるようになりました。読取りが完了して受付の記録と現在の件数が一致しない場合は「受付のやり直しが必要」（attachment_ocr_ack_reconfirm_required）とやり直し手順つきで表示され、時間切れ・ロック・読取り途中の場合は「次回確認します」（attachment_ocr_ack_recheck_incomplete）と表示されます。設定・方針・更新マーカーが理由の場合は従来どおりです。あわせて、受付のやり直し対象を確認する読取り専用の python3 -m ocr_failure_ack list が追加されました（未受付の失敗の artifact id と件数だけを出し、apply は変更しません）。",
+  "upgrade": "受付のやり直しが必要と表示された場合は、python3 -m ocr_failure_ack list で対象を確認し、python3 -m ocr_failure_ack plan のあと python3 -m ocr_failure_ack apply --confirm-human --reason <理由> で受付をやり直してください。自動で受付が書き換わることはありません。",
+  "affects": ["monitoring", "attachment-ocr"],
+  "fingerprint": false
+}
