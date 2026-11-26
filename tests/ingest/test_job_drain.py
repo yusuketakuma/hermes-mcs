@@ -1235,14 +1235,14 @@ def test_recent_read_arrival_notifies_once_with_age_bound(tmp_path, monkeypatch,
 @pytest.mark.parametrize("save_method", ["save_patient", "save_messages", "save_thread_replies"])
 @pytest.mark.parametrize("realtime", [True, False])
 def test_all_replies_only_notifies_new_realtime_arrivals(tmp_path, save_method, realtime):
-    """All-reply mode bypasses age/read gates, never bulk imports or dedup."""
+    """All-reply mode keeps read live replies and honors the configured age limit."""
     db = ledger.Ledger(str(tmp_path / "db"), notify_all_replies=True)
     db.ensure_patient(84)
     root = _message(mid=60, project_id=84, posted_at="2000-01-01T00:00:00+00:00")
     replies = [
         _message(mid=61, project_id=84, parent_id=60, unread=False,
                  posted_at="2000-01-01T00:00:00+00:00"),
-        _message(mid=62, project_id=84, parent_id=60, unread=False, posted_at="unknown"),
+        _message(mid=62, project_id=84, parent_id=60, unread=False, posted_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())),
     ]
     notify = {"source": "history"} if realtime else None
     kwargs = {"notify": notify, "notify_max_age_s": 24 * 3600, "semantic": True}
@@ -1263,7 +1263,7 @@ def test_all_replies_only_notifies_new_realtime_arrivals(tmp_path, save_method, 
     events = db.db.execute("SELECT payload FROM notify_outbox").fetchall()
     if realtime:
         assert len(events) == 1
-        assert set(json.loads(events[0]["payload"])["message_ids"]) == {61, 62}
+        assert set(json.loads(events[0]["payload"])["message_ids"]) == {62}
     else:
         assert not events
     db.close()

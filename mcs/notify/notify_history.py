@@ -28,33 +28,6 @@ def anchor(card):
     return value if value.get("source") == "initial_history" else {}
 
 
-def targets(db, project_id, payload, transport, *, scope=None):
-    state = initial_import_state.load(db, project_id)
-    if (state is None or payload.get("source") != "initial_history"
-            or payload.get("cohort_id") != state["cohort_id"]):
-        return []
-    phase = "progress"
-    if transport == "lineworks":
-        phase = "start"
-        scope = scope or {}
-        prior = db.execute("SELECT delivery_state,ui_state FROM notification_cards "
-            "WHERE kind='patient_history' AND project_id=? AND transport='lineworks' "
-            "AND json_extract(anchor_key,'$.cohort_id')=? "
-            "AND json_extract(anchor_key,'$.phase')='start' AND profile IS ? AND application_id IS ? AND team_id IS ? "
-            "AND channel_id IS ? ORDER BY card_id DESC LIMIT 1",
-            (project_id, state["cohort_id"], scope.get("profile"), scope.get("application_id"),
-             scope.get("team_id"), scope.get("channel_id"))).fetchone()
-        if prior and prior["delivery_state"] == "delivered" and (
-                (loads_dict(prior["ui_state"]) or {}).get("history_latest") or {}).get("phase") == "complete":
-            phase = "complete"
-        elif prior and prior["delivery_state"] == "delivered":
-            return []  # intermediate LINE WORKS progress has no remote phase
-    return [{"card_key": f"v1|patient_history|{project_id}|{state['cohort_id']}|{phase}",
-             "kind": "patient_history", "project_id": project_id,
-             "coverage": [state["cohort_id"]], "anchor": {
-                 "source": "initial_history", "cohort_id": state["cohort_id"], "phase": phase}}]
-
-
 def _members(db, project_id, cohort, *, before=None):
     join, where = initial_import_state.history_predicate()
     return db.execute(f"SELECT m.* FROM messages m {join} WHERE m.project_id=? AND {where} "
@@ -247,27 +220,6 @@ def actions(card):
     return [[{"id": "link", "ui": "link", "label": "MCSで開く", "url": project_url(card["project_id"])}]]
 
 
-def coalesce_tx(db, card, scope, epoch, now):
-    """Bind due progress intents to one cohort card without inventing delivery."""
-    key = anchor(card)
-    rows = db.execute("SELECT event_id,payload FROM notify_outbox o WHERE kind='patient_history' "
-        "AND project_id=? AND route='interactive' AND state IN ('pending','failed') AND next_try<=? "
-        "AND json_valid(payload) AND json_extract(payload,'$.source')='initial_history' "
-        "AND json_extract(payload,'$.cohort_id')=? AND NOT EXISTS (SELECT 1 "
-        "FROM notification_intent_batches b WHERE b.event_id=o.event_id) ORDER BY event_id",
-        (card["project_id"], now, key["cohort_id"])).fetchall()
-    from mcs_requests import canonical
-    for row in rows:
-        payload = loads_dict(row["payload"])
-        db.execute("INSERT INTO notification_intent_batches(event_id,frozen_payload,payload_hash,"
-            "route_epoch,sealed_at,transport,scope_json) VALUES(?,?,?,?,?,?,?)",
-            (row["event_id"], canonical(payload).decode(), payload_hash(payload), epoch, now,
-             card["transport"], canonical(scope).decode() if card["transport"] in ("slack", "lineworks") else None))
-        db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage) VALUES(?,?,?)",
-            (row["event_id"], card["card_id"], json.dumps([key["cohort_id"]])))
-        db.execute("UPDATE notify_outbox SET next_try=? WHERE event_id=?", (now + 3600, row["event_id"]))
-
-
 def analysis_changed(db, card, cfg, now):
     """Mark one changed source; aggregate work belongs to the bounded sweep."""
     ui = loads_dict(card["ui_state"]) or {}
@@ -277,23 +229,3 @@ def analysis_changed(db, card, cfg, now):
         ui["history_source_dirty"] = True
     db.execute("UPDATE notification_cards SET ui_state=? WHERE card_id=?", (json.dumps(ui), card["card_id"]))
     return {**dict(card), "ui_state": json.dumps(ui)}
-
-
-def emit_completion_tx(ledger, card, now):
-    """Queue LINE WORKS' second phase only after its start receipt is proven."""
-    if card["transport"] != "lineworks" or anchor(card).get("phase") != "start" or card["delivery_state"] != "delivered":
-        return
-    latest = (loads_dict(card["ui_state"]) or {}).get("history_latest") or {}
-    if latest.get("phase") != "complete":
-        return
-    cohort = anchor(card)["cohort_id"]
-    if ledger.db.execute("SELECT 1 FROM notification_cards WHERE kind='patient_history' AND project_id=? "
-            "AND transport='lineworks' AND profile IS ? AND application_id IS ? AND team_id IS ? AND channel_id IS ? "
-            "AND json_extract(anchor_key,'$.cohort_id')=? AND json_extract(anchor_key,'$.phase')='complete'",
-            (card["project_id"], card["profile"], card["application_id"], card["team_id"], card["channel_id"], cohort)).fetchone():
-        return
-    if not ledger.db.execute("SELECT 1 FROM notify_outbox WHERE kind='patient_history' AND project_id=? "
-            "AND state IN ('pending','failed') AND next_try IS NOT NULL AND json_valid(payload) "
-            "AND json_extract(payload,'$.cohort_id')=?", (card["project_id"], cohort)).fetchone():
-        ledger._outbox_insert("patient_history", card["project_id"],
-            {"source": "initial_history", "cohort_id": cohort, "message_ids": []}, route="interactive")

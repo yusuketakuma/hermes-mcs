@@ -572,7 +572,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`）。自動作成したMCSLOGだけは、現在の送り先・接続設定と一致する作成記録のprofileを使う。患者情報と既存の明示した運用先のprofileは変更しない |
 | `notify_system_target` | str | なし | 稼働状況・エラー・復旧などの送り先。患者情報の本文・カードにSlackを使う場合は、各送り先と分離を確認できる明示先が必要。それ以外は空欄で`notify_target`と同じ。[分離の条件](STANDALONE.md#患者情報と運用通知の送り先) |
 | `notify_max_age_h` | num | なし | この時間より古い投稿は通知しない。設定時は期間内の新規取込みを既読でも通知（既読投稿は投稿時刻が必要） |
-| `notify_all_replies` | bool | false | リアルタイム通知経路で新規取得した返信を既読・投稿時刻によらず全件通知。返信には `notify_max_age_h` を適用しない。履歴一括取込み・保存済み返信の再送は対象外 |
+| `notify_all_replies` | bool | false | 新しく取得した返信を既読でも通知。通知期間（`notify_max_age_h`）は返信にも適用する。初回認識前の投稿、初回認識したグループで投稿時刻が不明のもの、履歴の一括取込みは対象外 |
 | `hermes_bin` | str | 自動検出 | `hermes` コマンドのパス |
 | `daily_digest.enabled` | bool | `false` | 朝の日次ダイジェスト（件数と ID のみ）を `notify_target` に送る |
 | `daily_digest.hour_jst` | int(0-23) | `8` | 日次ダイジェストを送る時刻（JST。この時刻以降の最初の実行で1日1回） |

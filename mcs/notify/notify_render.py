@@ -36,6 +36,7 @@ import re
 import sqlite3
 import time
 import mcs_queries
+import initial_import_state
 
 from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
@@ -663,6 +664,27 @@ def patient_heading(db, pid) -> str:
     return out
 
 
+def quiet_thread_card(db, card):
+    """Identify a thread card tied to an initial-history post, including legacy cards."""
+    if card["kind"] != "thread":
+        return False
+    source = own_post(card) or card["root_message_id"]
+    return bool(initial_import_state.quiet_notification_ids(db, card["project_id"], [source]))
+
+
+def live_notification_rows(db, project_id, rows):
+    """Keep the supplied rows in order, excluding the project's initial history."""
+    rows = list(rows)
+    by_project = {}
+    for row in rows:
+        pid = project_id if project_id is not None else row["project_id"]
+        by_project.setdefault(pid, []).append(row["message_id"])
+    quiet = set()
+    for pid, mids in by_project.items():
+        quiet.update(initial_import_state.quiet_notification_ids(db, pid, mids))
+    return [row for row in rows if row["message_id"] not in quiet]
+
+
 def source_fingerprint(db, card, *, legacy_scope=False) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
@@ -680,6 +702,7 @@ def source_fingerprint(db, card, *, legacy_scope=False) -> str:
             "ORDER BY posted_at_ts,message_id",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], own, own)).fetchall()
+        msgs = live_notification_rows(db, card["project_id"], msgs)
         # Selected artifact generations invalidate actions after corrections.
         ready = structured_view.fact_generations(
             db, [m["message_id"] for m in msgs])
@@ -983,7 +1006,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                ORDER BY message_id<>?, posted_at_ts, message_id""",
             (card["root_message_id"], card["root_message_id"],
              card["project_id"], only, only, card["root_message_id"]))]
-        msgs = [m for m in msgs if m["message_id"] not in waiting]
+        msgs = [m for m in live_notification_rows(db, card["project_id"], msgs) if m["message_id"] not in waiting]
         if isinstance(cfg, dict):
             progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
