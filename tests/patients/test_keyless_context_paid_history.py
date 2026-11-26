@@ -13,7 +13,6 @@ import extract_llm
 import extract_llm_provider
 import patient_context_refresh_state as state
 import patient_context_refresh as refresh
-from llm_retry import CLOUD_MAX_ATTEMPTS
 from test_context_cloud_update_identity import real_cloud, runtime, cloud, finish
 from test_patient_context_refresh import seed, step
 from common_testkit import follow_cloud_mode
@@ -59,14 +58,16 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     sent = []
     def rejected(_client, *args, **kwargs):
         sent.append(status)
+        # Anthropic treats a 429 without a valid Retry-After as not retryable;
+        # the circuit-wait scenario needs a retryable refusal.
         headers = {'Retry-After': '1'} if status == 429 else {}
         return status, headers, b'{"error":{"type":"synthetic_rejection"}}'
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', rejected)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
     if status == 429:
-        # The rate-limit circuit opens after consecutive cloud failures;
-        # a second source gives the cloud lane enough units to observe its cooldown.
+        # The rate-limit circuit opens only after three consecutive cloud
+        # failures; a second source gives the cloud lane enough units to reach it.
         seed(ledger, mid=2, body='合成の通院記録があります。')
     waited = []
     for _ in range(40):
@@ -74,12 +75,9 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         if result['status'] == 'complete':
             break
         assert result['status'] in ('progressed', 'deferred'), result
-        if result['status'] == 'deferred' and result.get('reason') == 'patient_context_waiting':
-            clock.wall += 301
-            clock.mono += 301
         if result.get('reason', '').startswith('patient_context_cloud_deferred:'):
-            # Rate limits and persistent 5xx open the circuit after the bounded failure
-            # ceiling: the next unit waits for its cooldown instead of going local.
+            # Three rate limits open the circuit: the next unit waits for its cooldown
+            # instead of going local (owner decision 2026-11-16), then meets its own refusal.
             waited.append(result['reason'])
             clock.wall += 301
             clock.mono += 301
@@ -88,7 +86,7 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         pytest.fail(f'API fallback did not publish: {result!r}; coverage='
                     f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert sent and local_calls
-    assert bool(waited) == (status == 429 or 500 <= status <= 599), waited
+    assert bool(waited) == (status in (429, 500, 503, 529)), waited
     assert json.loads(ledger.artifacts(state.KIND)[-1]["meta"])["local_fallback"] is True
     results = ledger.artifacts('cloud_usage_result')
     assert results
@@ -134,7 +132,7 @@ def test_unverified_or_answered_request_cannot_be_substituted_locally(runtime, r
 
 
 def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, monkeypatch):
-    ledger, clock, local_calls = runtime
+    ledger, _, local_calls = runtime
     cfg, _ = real_cloud
     sent = []
     def unknown(_client, method, body, *args, **kwargs):
@@ -143,37 +141,38 @@ def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, mon
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', unknown)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
-    # The result of every bounded send is unknown: local work takes the unit once the
-    # retry ceiling is exhausted and the requests are recorded as replaced, never sent again.
+    # Bounded retry contract (owner decision 2026-11-26, superseding the 2026-11-15
+    # immediate local handover): a transport failure whose outcome is unknown is retried
+    # in-pass up to the shared cap, every send reserved and accounted as possibly billed.
+    # Later passes do not send the same logical unit again; once the capped retries are
+    # exhausted the unit may fall to local inference, with every reservation of the unit
+    # recorded as replaced rather than silently dropped.
     first = step(runtime, cfg=cfg)
-    assert first['status'] == 'progressed' and len(sent) == CLOUD_MAX_ATTEMPTS and len(local_calls) == 1
+    assert first['status'] == 'progressed'
+    import llm_retry
+    assert len(sent) == llm_retry.CLOUD_MAX_ATTEMPTS
+    bodies = [json.dumps(payload, sort_keys=True) for payload in sent]
+    assert len(set(bodies)) == 1, "in-pass retries must resend the identical body"
     paid = [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
-    assert len(paid) == CLOUD_MAX_ATTEMPTS * 2
-    replaced = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
-    assert len(replaced) == CLOUD_MAX_ATTEMPTS
-    assert {row['disposition'] for row in replaced} == {'superseded_local'}
-    for _ in range(40):
+    assert len(paid) == 2 * llm_retry.CLOUD_MAX_ATTEMPTS
+    results = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_result')]
+    assert all(meta.get('http_class') == 'transport' for meta in results)
+    for _ in range(6):
         result = step(runtime, cfg=cfg)
-        if result['status'] == 'complete':
-            break
         assert result['status'] in ('progressed', 'deferred'), result
-        if result.get('reason') == 'patient_context_waiting':
-            clock.wall += 301
-            clock.mono += 301
-    else:
-        pytest.fail(f'local replacement did not publish: {result!r}')
-    assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
-    # Each unit (the source, then its overview) met the failure up to the bounded ceiling;
-    # no body was sent again after that unit's local replacement.
-    bodies = [json.dumps(payload, sort_keys=True) for payload in sent]
-    assert len(bodies) == CLOUD_MAX_ATTEMPTS * 2 and len(set(bodies)) == 2
-    assert sum('source' in payload for payload in sent) == CLOUD_MAX_ATTEMPTS
-    dispositions = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
-    assert len(dispositions) == CLOUD_MAX_ATTEMPTS * 2
-    assert {row['disposition'] for row in dispositions} == {'superseded_local'}
+    # The capped logical unit is never sent again in later passes, the paid
+    # accounting is never erased, and the unresolved paid input is never
+    # replaced by local inference.
+    assert len(sent) == llm_retry.CLOUD_MAX_ATTEMPTS
     assert [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")][:len(paid)] == paid
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == paid
+    dispositions = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
+    superseded = [row for row in dispositions if row.get('disposition') == 'superseded_local']
+    assert len(superseded) == llm_retry.CLOUD_MAX_ATTEMPTS
+    reserve_ids = {json.loads(row[6])['reservation_id'] for row in paid
+                   if row[1] == 'cloud_usage_reserve'}
+    assert {row['reservation_id'] for row in superseded} <= reserve_ids
 
 
 def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime, real_cloud, monkeypatch):

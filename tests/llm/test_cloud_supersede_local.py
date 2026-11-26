@@ -340,6 +340,18 @@ def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected)
             for _ in range(policy.FAILED_SEND_BILLED_LIMIT - 1):
                 _settle(ledger, _reserve(ledger), status, error, usage)
     before = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    if expected == "repeat_unsettled":
+        # Bounded retry contract (owner 2026-11-26): a settled uncertain failure no longer
+        # blocks the unit — the next send is a new billed attempt, so reserving succeeds
+        # and the block check reports nothing. Every further state keeps refusing below.
+        block = policy.request_send_block_reason(ledger, CFG, _body("synthetic prompt"),
+            route="patient_context", project_id=1, unit_key="synthetic-unit", message_id=1, owner=OWNER)
+        assert block is None
+        reservation = _reserve(ledger)
+        assert isinstance(reservation, dict)
+        after = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+        assert after[:-1] == before and after[-1][1] == "cloud_usage_reserve"
+        return
     send = _refusal(lambda: _reserve(ledger))
     check = _refusal(lambda: policy.request_send_block_reason(ledger, CFG, _body("synthetic prompt"),
         route="patient_context", project_id=1, unit_key="synthetic-unit", message_id=1, owner=OWNER))

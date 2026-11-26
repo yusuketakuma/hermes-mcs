@@ -365,14 +365,15 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
         if damage == 'tokens':
-            # An output-envelope change does not bill the identical prompt again:
-            # the settled paid answer is reused and current validation decides whether it applies.
-            answer = _ask(unit(ledger, binding='original-input', route='patient_context',
-                               purpose='patient_context'), tokens=101)
+            # An output-envelope change for the SAME input does not bill the identical prompt
+            # again: the settled paid answer is reused and validation decides whether it applies.
+            answer = _ask(unit(ledger, binding='original-input',
+                               route='patient_context', purpose='patient_context'), tokens=101)
             assert isinstance(answer, dict) and answer['reused_response'] is True
         elif damage == 'input':
-            # A binding change may be another source occurrence of the same text: the
-            # paid answer is never taken up across that provenance boundary.
+            # An answer paid for an earlier input is never taken up by the current one
+            # (cloud_policy contract): the send is refused as logically already settled
+            # rather than resent, and no reuse happens either.
             with pytest.raises(cloud_client.CloudNotSent):
                 _ask(unit(ledger, binding='changed'), tokens=100)
         else:

@@ -86,6 +86,9 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
     if (not isinstance(requests, list) or not all(isinstance(item, str) for item in requests)
             or not isinstance(members, list) or not members or not isinstance(generation, str)):
         return False
+    # The root is structural, not the selection role: a bundle built with target
+    # ids masks the root member's role to "target", so role cannot find it and
+    # every cross-pass verification of a cloud-produced summary would fail.
     roots = [m.get("message_id") for m in members if isinstance(m, dict) and m.get("parent_id") is None]
     if len(roots) != 1:
         return False
