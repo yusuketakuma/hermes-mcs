@@ -304,7 +304,7 @@ def _fresh_cron_state():
 
 def _fresh_cron_absent():
     """Unknown or matching Hermes schedules never prove a fresh install."""
-    return _fresh_cron_state() == 'clear' 
+    return _fresh_cron_state() == 'clear'
 
 
 def _fresh_workers_state():
@@ -369,7 +369,9 @@ def _fresh_workers_state():
                     continue
                 if fields[0] == '●':
                     fields = fields[1:]
-                if not fields or fields[0].startswith(('mcs-', 'mcs.')):
+                if not fields:
+                    return 'unknown'
+                if fields[0].startswith(('mcs-', 'mcs.')):
                     return 'conflict'
         else:
             return 'unknown'
@@ -389,10 +391,14 @@ def _fresh_precheck():
     Prints a single machine word on stdout: 'clear', 'conflict' or 'unknown'.
     Never mutates state; the bootstrap re-checks everything under the locks.
     """
-    states = (_fresh_workers_state(), _fresh_cron_state())
-    if 'conflict' in states:
+    workers = _fresh_workers_state()
+    if workers == 'conflict':
         print('conflict')
-    elif 'unknown' in states:
+        return 0
+    cron = _fresh_cron_state()
+    if cron == 'conflict':
+        print('conflict')
+    elif 'unknown' in (workers, cron):
         print('unknown')
     else:
         print('clear')

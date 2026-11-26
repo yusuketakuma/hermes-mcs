@@ -638,6 +638,35 @@ def test_fresh_workers_state_distinguishes_conflict_from_unknown(tmp_path, monke
     assert install_options._fresh_workers_absent() is (state == 'clear')
 
 
+def test_fresh_precheck_confirmed_worker_conflict_never_calls_cron(monkeypatch, capsys):
+    """Review regression: a proven worker conflict decides the rejection alone;
+    the cron inventory must not run at all, so its failure can never overwrite
+    the conflict with a mere unknown."""
+    monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'conflict')
+    def exploding_cron():
+        raise PermissionError('synthetic cron inventory failure')
+    monkeypatch.setattr(install_options, '_fresh_cron_state', exploding_cron)
+    assert install_options._fresh_precheck() == 0
+    assert capsys.readouterr().out.strip() == 'conflict'
+
+
+def test_fresh_workers_state_systemctl_bullet_only_line_is_unknown(tmp_path, monkeypatch):
+    """A systemctl line that is only the bullet carries no unit name: malformed
+    inventory proves nothing, and only an actual known label is a conflict."""
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(install_options.sys, 'platform', 'linux')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    def run(argv, **kwargs):
+        if argv[0] == '/bin/ps':
+            return SimpleNamespace(returncode=0, stdout=f'{os.getpid()} python synthetic\n')
+        return SimpleNamespace(returncode=0, stdout='●\n')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert install_options._fresh_workers_state() == 'unknown'
+    assert not install_options._fresh_workers_absent()
+
+
 def test_fresh_precheck_reports_the_worst_state_without_mutating(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'clear')
     monkeypatch.setattr(install_options, '_fresh_cron_state', lambda: 'unknown')
