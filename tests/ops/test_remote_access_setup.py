@@ -1,4 +1,5 @@
 """Remote access: a Mac other devices reach saves its tailnet name, publishes with `tailscale serve` and runs resident."""
+import argparse
 import json
 from pathlib import Path
 import plistlib
@@ -13,6 +14,16 @@ import service_contract
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "mac-mini.example-tailnet.ts.net"
+
+
+def test_remote_help_names_the_workspace_and_its_recommendation(capsys):
+    parser = argparse.ArgumentParser()
+    remote.add_parser(parser.add_subparsers(), services=None)
+    with pytest.raises(SystemExit) as result:
+        parser.parse_args(["remote", "--help"])
+    assert result.value.code == 0
+    help_text = "".join(capsys.readouterr().out.split())
+    assert "MCS訪問薬剤管理" in help_text and "現時点では利用を推奨していません。" in help_text
 
 
 @pytest.mark.parametrize("value, ok", [

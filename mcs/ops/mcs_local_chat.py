@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve an explicitly scoped patient chat on this computer only, reading MCS data and writing only the home-care records under api/hc/."""
+"""MCS 訪問薬剤管理で指定した患者の投稿を閲覧し、台帳を指定した場合は訪問記録を読み書きする。"""
 import argparse
 import hmac
 import json
@@ -391,8 +391,8 @@ def main(argv=None):
             argv = resident_argv(cfg or {}, mcs_util.HOME)
         except ValueError:
             sys.exit("remote_access is not configured; run `mcs setup remote` first. No server started.")
-    parser = argparse.ArgumentParser(description=__doc__, epilog="--resident alone starts the resident workspace "
-                                     "saved by `mcs setup remote`.")
+    parser = argparse.ArgumentParser(description=__doc__ + "現時点では利用を推奨していません。",
+                                     epilog="--resident は `mcs setup remote` に保存した設定で常駐起動します。")
     parser.add_argument("--snapshot", type=Path, required=True,
                         help="Published ledger-snapshot.db only; never the live ledger")
     scope = parser.add_mutually_exclusive_group(required=True)
@@ -400,7 +400,7 @@ def main(argv=None):
     scope.add_argument("--all-patients", action="store_true", help="Explicitly authorize all patients in this local snapshot")
     parser.add_argument("--port", type=int, default=0, help="Loopback port (default: choose an available port)")
     parser.add_argument("--homecare-db", type=Path,
-                        help="Home-care records database to read and edit (created on first use)")
+                        help="訪問記録を読み書きする専用の台帳（初回利用時に作成）")
     parser.add_argument("--homecare-module", action="append", choices=sorted(homecare_catalog.AVAILABLE),
                         help="Occupation module to enable with --homecare-db; repeatable (default: pharmacy)")
     parser.add_argument("--route-settings", type=Path,
@@ -437,12 +437,13 @@ def main(argv=None):
     except (OSError, sqlite3.Error, RuntimeError):
         parser.exit(2, "Home-care database unavailable; no server started.\n")
     with server:
+        print("MCS 訪問薬剤管理は現時点では利用を推奨していません。", flush=True)
         if server.tailnet_host:
-            print("Resident patient workspace. Publish it to your tailnet only (never Funnel) with:", flush=True)
+            print("常駐モードです。自分の tailnet にだけ公開するには次のコマンドを使ってください。Funnel は使わないでください。", flush=True)
             print(f"  tailscale serve --bg http://127.0.0.1:{server.server_port}", flush=True)
-            print(f"Staff open {server.url} and are known by their Tailscale login.", flush=True)
+            print(f"職員は {server.url} を開いてください。Tailscale のログイン名で職員を識別します。", flush=True)
         else:
-            print("Local patient chat (keep this private URL on this computer):", flush=True)
+            print("この Mac で次の専用 URL を開いてください。この URL は共有しないでください。", flush=True)
             print(server.url, flush=True)
         try:
             server.serve_forever()

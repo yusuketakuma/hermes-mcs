@@ -275,6 +275,17 @@ def test_cli_requires_explicit_valid_scope(args):
     assert error.value.code == 2
 
 
+def test_workspace_identifies_itself_and_explains_current_recommendation(capsys):
+    html = (chat.ASSETS / "index.html").read_text()
+    assert "<title>MCS 訪問薬剤管理</title>" in html
+    assert '<strong>MCS 訪問薬剤管理</strong> 現時点では利用を推奨していません。' in html
+    with pytest.raises(SystemExit) as result:
+        chat.main(["--help"])
+    assert result.value.code == 0
+    help_text = "".join(capsys.readouterr().out.split())
+    assert "MCS訪問薬剤管理" in help_text and "現時点では利用を推奨していません。" in help_text
+
+
 def test_browser_dom_contracts():
     node = shutil.which("node")
     if node is None:
