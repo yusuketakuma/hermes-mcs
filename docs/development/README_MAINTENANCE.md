@@ -23,16 +23,15 @@ READMEは、MCS通知を使うスタッフ・導入を判断する責任者・�
 ## 自動生成する部分
 
 `<!-- BEGIN GENERATED:release -->`から`<!-- END GENERATED:release -->`の間は、
-最新のCHANGELOGからversion・日付・見出し・要約・各分類の先頭1件・すべての更新時の注意を生成する。
-技術詳細とその他の変更はCHANGELOGへリンクする。生成部分を手で編集しない。
+最新のCHANGELOGから対象版を読み、CHANGELOGとGitHub Releaseへのリンクを生成する。変更点・比較表・更新時の注意・リリースの説明図はCHANGELOGとRelease本文に掲載する。生成部分は手で編集しない。
 
 ```bash
-python3 scripts/development/readme_release.py          # READMEの最新変更を同期
+python3 scripts/development/readme_release.py          # READMEの対象版とリンクを同期
 python3 scripts/development/readme_release.py --check  # 同期・見直し記録・リンクを検査
-python3 scripts/development/update_readme.py           # README要約（DEVELOPMENTの生成表は main-sync が main で更新）
+python3 scripts/development/update_readme.py           # READMEの対象版・リンク（DEVELOPMENTの生成表は main-sync が main で更新）
 ```
 
-`release_notes.py build`は新しいCHANGELOGとREADMEの要約を同じ作業で更新する。
+`release_notes.py build`は新しいCHANGELOGとREADMEの対象版・リンクを同じ作業で更新する。
 READMEのマーカーが不正なら、CHANGELOG・README・変更記録を書き換える前に停止する。
 複数ファイルの書き込みや記録の移動の途中で失敗した場合は、すべてのgit差分を確認して復旧する。
 
@@ -41,7 +40,7 @@ READMEのマーカーが不正なら、CHANGELOG・README・変更記録を書�
 同じ未公開版への追補が依頼された場合も、`release_notes.py build`は既存versionを上書きしない。
 既存の`render`処理と同じ形式で追加分を統合し、公開済みの旧版や保存済みの技術詳細・適用条件・図を消さない。
 変更記録は元のJSONを保って同版のarchiveへ移し、対応表の全件数・hash・本文との対応を照合する。
-その後、正本の見直し記録とCHANGELOGからREADME要約を生成し、既存のcheckとexportで版・リンク・生成範囲を確認する。
+その後、正本の見直し記録とCHANGELOGからREADMEの対象版・リンクを生成し、既存のcheckとexportで版・リンク・生成範囲を確認する。
 
 CIはrunと対象SHAごとに記録し、失敗・skip・runner未割当のcancelledを成功へ読み替えない。
 修正後のローカル検証と既存の成功結果を併用する場合も、元の失敗ノードと修正後の根拠を対応付ける。
@@ -58,7 +57,7 @@ CIはrunと対象SHAごとに記録し、失敗・skip・runner未割当のcance
 
 ## 毎回リリース時に見直す部分
 
-自動要約だけで、本文全体の機能説明が更新されたことにはしない。
+対象版とリンクの同期後も、README本文を実装と照合する。
 リリースを準備するエージェントは、新しい変更記録とソースを確認し、次の5項目を見直す。
 変更がなければ、何を照合して変更不要と判断したかを記録する。
 
@@ -88,15 +87,4 @@ PR・main・リリースのCIは、生成部分の一致、最新CHANGELOG版と
 候補の記録は公開・全件受入の証明ではない。`readme-review.json`は最新CHANGELOG版と
 一致させ、公開版の`GENERATED:release`を手編集したり、CIを弱めたりしない。
 release build時に候補記録を最終照合して正本へ反映し、
-CHANGELOGとREADME要約の生成・最終一致検査を同じ版で完了する。
-
-## 参考READMEと採用した考え方
-
-2026-10-01に一次資料を確認し、日本語の利用者向けREADMEへ次の考え方を取り入れた。
-文章・画面・ロゴは転載していない。
-
-| 参考 | 読みやすさにつながる構成 | 本リポジトリへの適用 |
-|---|---|---|
-| [Ollama](https://github.com/ollama/ollama/blob/main/README.md) | 短い価値説明、すぐ試せる導入、詳細ドキュメントへの導線 | 冒頭の要点、短い導入コマンド、目的別ガイド |
-| [Supabase](https://github.com/supabase/supabase/blob/master/README.md) | 機能一覧、画面例、ドキュメントと仕組みの分離 | 目的と機能の対応表、通知先別の画面例、利用・運用・開発の導線 |
-| [GitHubの折りたたみ](https://docs.github.com/ja/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-collapsed-sections) | 読み手が詳細を選んで開く | 画面例・使い方・FAQ・リリース詳細の開閉 |
+CHANGELOGとREADMEの対象版・リンクの生成・最終一致検査を同じ版で完了する。

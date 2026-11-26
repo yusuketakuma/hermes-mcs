@@ -6,7 +6,6 @@ CHANGELOG.mdを正本とし、GitHub Releaseのタイトル・本文を同じ内
 
 ## バージョン番号の方針（2026-10-23から）
 
-次版はユーザー指定の **1.2.0**（所有者 2026-11-17。1.1.3・1.1.4 として計画していた内容は 1.2.0 にまとめる）。これは次回の採番であり、公開・本番適用済みを意味しない。
 製品版は `メジャー.機能アップデート.バグフィックス`（SemVerの `MAJOR.MINOR.PATCH`）で管理する。
 
 | 桁 | 上げる条件 | 例（直前が1.1.0の場合） |
@@ -30,7 +29,7 @@ private helperの移動、変更行数、DB schema番号の変化だけでメジ
 明示された番号は勝手に置換せず、実際の非互換変更と矛盾する場合は根拠と代案を示して確認する。
 番号の提案や了承は、タグ作成・公開・push・配備の許可を追加しない。
 
-版番号の正本はCHANGELOG、READMEの最新変更は既存生成器で同期する。
+版番号の正本はCHANGELOG、READMEには対象版とCHANGELOG・GitHub Releaseへのリンクを生成する。
 公開前の採番予定を示すためだけにCHANGELOGの生成やarchive移動を行わない。
 既存の1.0.xの採番・CHANGELOG・archive・タグは歴史として保持し、遡って付け替えない。
 製品版とschema・抽出世代・カードlayout・モデルの版は別に管理する。
@@ -84,7 +83,7 @@ version見出しは `## [X.Y.Z] — YYYY-MM-DD`、新しい順に並べる。
 
 既存のSVG原稿・PNG生成方式を再利用し、Release用はPNGを基本とする。公開URLの到達とRelease実画面での表示を別々に確認する。画像公開が禁止・未承認ならファイルと配置・参照手順まで準備し、ローカルパスは本文へ埋め込まない。準備中の固定tag画像URLは同梱ファイルと対応させ、tag公開前は到達・表示未確認と記録し、公開後に確認する。画像なしでも本文で変更と必要操作が分かることを確認する。版ごとの準備・公開条件は[視覚資料の配置手順](../releases/VISUAL_PREPARATION.md)を参照する。
 
-非公開リポジトリのRelease画像は、同じ公開範囲のリリース添付へPNGを配置し、`https://github.com/yusuketakuma/hermes-mcs/releases/download/vX.Y.Z/name.png`を使う。repo rawや`raw.githubusercontent.com`への直参照を避け、添付の形式・サイズ・SHA256とダウンロードしたbytesを原本へ照合する。README生成時は同じ画像のリポジトリ内相対パスへ変換し、説明図の段落を独立して残す。最新版本文・export・READMEの検査で不適切な画像参照を拒否する。認証付きAPIで原本を取得できても、読者の画面で画像が表示された証拠にはならない。ブラウザーで確認できない場合は描画未確認と記録する。
+非公開リポジトリのRelease画像は、同じ公開範囲のリリース添付へPNGを配置し、`https://github.com/yusuketakuma/hermes-mcs/releases/download/vX.Y.Z/name.png`を使う。repo rawや`raw.githubusercontent.com`への直参照を避け、添付の形式・サイズ・SHA256とダウンロードしたbytesを原本へ照合する。CHANGELOGとReleaseの書出しで画像の参照先を検査する。READMEからは該当版のCHANGELOGとGitHub Releaseへ案内する。認証付きAPIで原本を取得できても、読者の画面で画像が表示された証拠にはならない。ブラウザーで確認できない場合は描画未確認と記録する。
 
 ## 開発時の記録
 
@@ -121,7 +120,7 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
   --output /tmp/release-notes.md --title-output /tmp/release-title.txt
 ```
 
-`build`はCHANGELOGとREADMEの最新変更要約を更新し、入力記録を`changes/archive/<version>/`へ移す。
+`build`はCHANGELOGとREADMEの対象版とリンクを更新し、入力記録を`changes/archive/<version>/`へ移す。
 `update_readme.py`が更新するのはREADMEだけで、`docs/development/DEVELOPMENT.md`の生成表はmainへの合流後に`main-sync`が更新する。tagは、その更新commitが入ったmainに付ける。
 既存versionの上書き、空の変更記録、手書きUnreleased、形式不正では停止する。
 生成後にソースと説明を照合する。CIは文章の事実性まで保証しない。
@@ -148,7 +147,7 @@ slice の shard 報告 artifact の保存・取得に失敗して gate が止ま
 `.github/workflows/release-notes.yml`が次を行う。
 
 1. PR・リリース時に、全versionの見出し・順番・空段落・必須段落・折りたたみを検査する。mainへの通常pushでは起動しない。
-   README要約・見直し記録・参照リンクも検査し、tagではversionの一致も確認する。
+   READMEの対象版とリンク・見直し記録・参照リンクも検査し、tagではversionの一致も確認する。
 2. `vX.Y.Z`タグのpushではタグ内のCHANGELOGから新しいRelease下書きを作る。公開はしない。
 3. 既存Releaseの公開・編集イベントでは、そのイベントの版だけをmainのCHANGELOGから同期する。手動の`sync_existing`では従来どおり既存の安定版を一括確認する。
 4. 対象を事前確認し、内容が同じReleaseは書き換えない。`sync_release_notes.py --tag vX.Y.Z` で手動同期を1版に絞れる。途中の競合編集を検出した場合は停止する。
@@ -165,7 +164,7 @@ GitHub Release本文は125,000字が上限のため、`export`と同期は12万�
 
 同期はexportと同じ本文を正本にするため、下書きと既存Releaseの比較が一致する。
 
-公開済み版の文章改善を依頼された場合は、CHANGELOGの対象版を正本として編集し、関連項目を利用者の目的でまとめられる。archiveの当時の変更記録は保持し、全件の仕様・設定条件・根拠は技術詳細の折りたたみに残す。過去版やtagを付け替えず、README要約を既存生成器で更新し、Releaseは同じCHANGELOGからexport・同期する。
+公開済み版の文章改善を依頼された場合は、CHANGELOGの対象版を正本として編集し、関連項目を利用者の目的でまとめられる。archiveの当時の変更記録は保持し、全件の仕様・設定条件・根拠は技術詳細の折りたたみに残す。過去版やtagを付け替えず、READMEの対象版とリンクを既存生成器で更新し、Releaseは同じCHANGELOGからexport・同期する。
 
 本文更新のAPIには、競合確認済みの既存tag名も同じ値で明示し、下書きとtagの紐付けを保持する。
 API応答と再取得の両方で識別・公開状態を検査し、同期エラーはworkflowを失敗させる。
@@ -178,24 +177,4 @@ GitHubの通常のActions利用条件は適用される。repo権限やbranch保
 公開済みRelease本文を手動編集する場合も、先にCHANGELOGを修正する。
 本文の手動編集だけでは、自動同期でCHANGELOGの内容へ戻る。
 
-## 過去記録の移行
-
-2026-10-01に、v1.0.0〜v1.0.8の9版をこの形式へ再編集した。
-移行元のmainは`c0e1c0ff0a6dd6102909289c9c09454dee69567e`。
-編集前のCHANGELOGとGitHub Release本文は`docs/releases/archive/`に保存。
-公開当時の詳細は各版の技術詳細にも保持する。
-v1.0.3の夜間20分収集は歴史上の変更として残し、後の廃止を明記した。
-v1.0.5のgateway再起動不要と、他の版の再起動必須を区別している。
-
-取り消す場合は変更commitをrevertし、元のCHANGELOGを正本に同期する。
-元のReleaseタイトル・本文を厳密に戻す必要がある場合は保存したJSONを参照する。
-業務DB・モデル・MCSデータの移行はない。
-
-## 設計の参考
-
-2026-10-01に、[VS Code](https://code.visualstudio.com/updates/v1_140)のハイライト、
-[Codex](https://github.com/openai/codex/releases/tag/rust-v0.159.0)の機能分類と根拠、
-[GitHub CLI](https://github.com/cli/cli/releases/tag/v2.102.0)の更新注意、
-[Hermes Agent](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.24)の対象範囲と更新方法、
-[Keep a Changelog日本語版](https://keepachangelog.com/ja/1.1.0/)を比較して構成した。
-API仕様は[GitHub Releases公式文書](https://docs.github.com/en/rest/releases/releases#update-a-release)を参照。
+公開済みの記録を復元する場合は、[保存した変更履歴とRelease原文](../releases/archive/)を参照する。GitHub Releaseの更新APIは[GitHubの公式資料](https://docs.github.com/en/rest/releases/releases#update-a-release)で確認する。

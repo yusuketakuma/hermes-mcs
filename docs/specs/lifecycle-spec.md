@@ -1,21 +1,7 @@
 # MCS ライフサイクル統合仕様書
 
-初期インストール・更新・バックアップ・復旧・エラー時自動メンテナンスを
-1つのライフサイクルとして規定する。各機能の詳細設計は個別文書に
-委ねる（更新機構は `docs/dev-records/auto-update-plan.md`）。
-
-凡例: ✅実装済み / 📋計画（未実装・auto-update-plan.md 参照）/
-🔶将来拡張
-
-**2026-09-24 時点**: 更新機構（§5・§7 の📋項目の大部分）は実装済み。
-コード上の📋は「設計は確定・実装済みだが本機へのロールアウト
-（install.sh 再実行・`update.mode` 設定）は未実施」を意味する。
-auto 有効化（§11 P3）は人の判断事項として残る。
-
-**2026-09-25 更新**: `git reset` 後に更新差分と同名の未追跡ファイルを
-追加で自動削除する処理は、updater/recovery ともに廃止した。以下の
-「外科的削除」は旧設計の記録であり、現行手順には含めない。
-詳細は `docs/dev-records/auto-update-plan.md` 冒頭を参照する。
+初期導入、定期処理、更新、バックアップ、復旧の各段階で守る条件を定める。
+操作は[導入ガイド](../guides/INSTALLATION.md)、[更新ガイド](../guides/UPGRADE_AGENT.md)、[バックアップ・復元ガイド](../guides/BACKUP.md)に従う。
 
 ## 1. 対象範囲と非目標
 
@@ -24,10 +10,11 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 **このマシンの稼働系**の、導入から更新・障害復旧までの全局面。
 
 `runtime_mode: "standalone"`（[STANDALONE.md](../guides/STANDALONE.md)）では `~/.hermes` を
-使わない。`ai.mcs.standalone`の単一hostが8定期ジョブ（wrapperは`~/.mcs/scripts`、
+使わない。`ai.mcs.standalone`の単一hostが既定の8定期ジョブ（wrapperは`~/.mcs/scripts`、
 3600秒上限）・cmd/cmd_int取込・抽出worker3本を所有する。インタプリタは`~/.mcs/venv`。
 更新marker中は背景処理を停止し、updater以外の子処理が完了したことをheartbeatで確認する。
 更新後のhost再起動はgeneration付き要求を発行し、updaterを含む処理の完了後に行う。
+承認済みの外部バックアップを有効にすると定期ジョブが1件加わる。
 復旧ツールは同venvでservicesを再同期し通知を`mcs_standalone send`で送る。
 `deployment/requirements-standalone.txt`かそのハッシュ付き一覧`requirements-standalone.lock`が変わるタグは自動適用しない
 （`standalone_requirements_changed`）。venvが使えない場合は
@@ -45,17 +32,17 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 | I1 | stdlib-only コア | 新規外部依存を足さない（GitHub API も urllib） |
 | I2 | 冪等 | install.sh/services/init は再実行で収束。差分のみ適用 |
 | I3 | atomic write | 状態ファイルは tmp+`os.replace`、DB backup は検証後 publish |
-| I4 | flock 排他 | ledger 書込みは `run.lock`、更新系は `update.lock`📋。順序は update.lock → run.lock |
+| I4 | flock 排他 | 収集は `run.lock` で多重起動を防ぐ。更新時に両方を取る順序は `update.lock` → `run.lock` |
 | I5 | 人承認ゲート | MCS 書込み・要求操作・破壊的復元は人経路のみ |
 | I6 | fail-closed | 検証不能な入力は受理しない（ops スキーマ・tag 形式・receipt 冪等） |
 | I7 | 静かな健全性 | 正常時は出力しない（watchdog 慣例: stdout は失敗警報のみ） |
 | I8 | データ消失禁止 | 既読化は snapshot 検証後、削除通知・復元上書きの罠を避ける |
-| I9 | 秘密の分離 | secret は argv/設定ファイルに載せない（env/getpass → Keychain/.env） |
+| I9 | 秘密の分離 | MCSのパスワードはKeychainか私有の `.env` に保存する。独立モードのトークンの保存先は [独立モードのガイド](../guides/STANDALONE.md) に従う |
 
 ## 3. コンポーネントとストアの地図
 
 ```
-GitHub Releases (tag) ──検出──> mcs_update.py 📋
+GitHub Releases (tag) ──検出──> mcs_update.py
                                      │
 ./install.sh → brew/hermes/plugin/llm/services/recovery   [導入]
 mcs_setup.py init → config.json / Keychain / .env / hermes plugin settings
@@ -63,32 +50,34 @@ mcs_setup.py services → ~/Library/LaunchAgents/* + ~/.hermes/scripts/* + cron
 mcs_setup.py check → 検証ゲート
                                      │
 ~/.mcs/data/                         [runtime・gitignore]
-  ledger.db            原本 SQLite（唯一の正本）
-  backups/             ledger-YYYYMMDD.db（検証済・保持7）+ preupdate-*📋
+  ledger.db            収集した投稿と通知状態を保存するSQLite原本
+  homecare.db          MCS 訪問薬剤管理の専用DB（作成済みの場合）
+  backups/             ledger-YYYYMMDD.db・homecare-YYYYMMDD.db（各3世代）と更新前コピー
   snapshots/           読取専用 snapshot（plugin が読む）
-  run.lock / update.lock📋           flock 排他
+  run.lock / update.lock           flock 排他
   health.json          サブシステム健全状態（F20 契約）
   cmd/ cmd_int/ cmd_results/         コマンド inbox・結果
   discord_render/ discord_state/     カード manifest・state
-  update_state.json📋  stages ジャーナル・試行履歴・rollback 情報
-  update_in_progress.marker📋  quiesce 中の補助 launcher 沈黙フラグ
-  service_manifest.json📋 services が管理した script/agent/cron の配置・登録内容
-~/.mcs/.env                          MCS_PASSWORD・TYPESAFE_API_KEY
-~/.mcs-recovery/mcs_recover.py📋     repo 外の凍結復旧プログラム（+.prev。復旧対象 checkout は同 dir の repo_path）
+  update_state.json  stages ジャーナル・試行履歴・rollback 情報
+  update_in_progress.marker  quiesce 中の補助 launcher 沈黙フラグ
+  service_manifest.json services が管理した script/agent/cron の配置・登録内容
+~/.mcs/config.json                   施設の設定。提供元ごとの設定は provider_settings 内
+~/.mcs/.env                          ローカルの秘密値
+~/.mcs-recovery/mcs_recover.py     repo 外の凍結復旧プログラム（+.prev。復旧対象 checkout は同 dir の repo_path）
 ~/.hermes/.env                       DISCORD_BOT_TOKEN 等
 Keychain 'mcs-adapter'               MCS パスワード
 ```
 
-常駐: `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
-`ai.mcs.extract-drainer{,-2}`・`local.mcs-health`（hermes cron 非依存のヘルス監視）・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
-`org.mcs.recovery`📋（更新 watchdog・install.sh 所有・gateway 非依存）。
+Hermesモードの主な常駐サービスは `local.mcs-cmd`（cmd drain）・`local.mcs-int`（card drain）・
+`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`ai.mcs.extract-drainer-night`・`local.mcs-health`（hermes cron 非依存のヘルス監視）・`ai.mcs.llamaserver`・`ai.hermes.gateway`・
+`org.mcs.recovery`（更新 watchdog・install.sh 所有・gateway 非依存）。
 定期: cron `mcs_check`（10分）・`mcs_deep`（毎時10分・40分のdurable drain）・
-`mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`📋（日次）。
+`mcs_llm_catchup`・`llamacpp daily restart`・`mcs_update`（日次）。
 
-MCSサーバーの負荷対策として、自動取得を5分から10分間隔へ変更する。
+MCSの未読収集は10分間隔で実行する。
 履歴の定期取得も10分の区切りにそろえる。
 
-## 4. 初期インストール仕様 ✅
+## 4. 初期インストール仕様
 
 入口は `./install.sh` 1本（冪等・再実行安全）。`--preflight`
 （別名 `--check-only`）は読取り専用の前提チェック（正常/注意/要対処 +
@@ -108,7 +97,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
 | plugin | `~/.hermes/plugins/` symlink + `plugins enable` | 停止 |
 | LLM | `:8080` 応答済 or hermes管理 plist 既存なら skip（hermes 管理 agent が未ロードなら warn で bootstrap 案内）。else 固定revisionのモデル DL（再開可・既定SHA256照合。`MCS_MODEL_SHA256` は `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ指定値で照合し、警告を出す。フラグなしの指定は警告して無視）+ `ai.mcs.llamaserver` bootstrap。plist 変更時は応答中なら warn で再読込を保留 | 停止 |
 | services | `~/.mcs/data{,/cmd,/cmd_int}` 作成 + `mcs_setup.py services` へ委譲 | 停止 |
-| recovery📋 | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
+| recovery | `mcs_recover.py` → `~/.mcs-recovery/`（旧版は `.prev`）+ `repo_path` に checkout を記録 + `org.mcs.recovery` launchd watchdog bootstrap（変更時・未ロード時のみ） | 停止 |
 
 新規作成物は `umask 077`（所有者のみ）。ソフト準備完了時に日本語の準備結果
 と次のコマンド（venv インタプリタのフルパス付き）を表示する。
@@ -120,7 +109,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
 
 - 必須項目と対象・権限範囲を確認する推奨コース、全設定を確認する詳細コースを選択。
   推奨コースでは高度な項目の既存値を保持し、未設定の項目に既定値を使う。
-  詳細コースは設定項目を最大12節で案内（使わない機能の節は非表示）。
+  詳細コースは、選んだ機能の設定項目を順に表示する。
   Enterで現状・既定値を採用し、`-` で任意キー削除・`--set KEY=JSON` で非対話も可。
 - `interactive=discord|slack` 選択時は公開 CLI のみで: plugin settings を
   `hermes -p <profile> config set`（serving profile・allowlist は質問）、
@@ -130,21 +119,12 @@ pip install・モデル DL の `.part`）は続きから収束する。
 - 対話通知の gateway 同期と、終了時の `check` を自動実行。
   初回は `services`・`check` の手動再実行は不要（未登録・drift の復旧時は別）
 
-`services`（冪等）: `deployment/scripts/*.sh` レンダリング →
-launchd 5件 bootstrap（差分は bootout+bootstrap 案内）→ cron を
-script 名で dedup 登録（現行5件 + 📋`mcs_update`）→
-`interactive=discord|slack` なら gateway を `status`→未 supervised なら
-`install`+`start`。📋manifest 記録・reconcile・atomic render は
-更新仕様で追加。
-
-`services` は services 用インタプリタ
-（`~/.hermes/hermes-agent/venv/bin/python`）が無ければ何も描画せず
-exit 1。
+サービス構成は選んだ実行モードで決まる。`mcs_setup.py services` は必要なwrapperとlaunchd設定を配置し、管理対象をサービスmanifestに記録する。Hermesではcron、独立モードでは単一hostが定期ジョブを起動する。登録対象と時刻は `mcs/core/scheduled_jobs.py` の `configured_cron_jobs` で確認できる。
 
 `check`（exit 1 で失敗）: 実行基盤（services 用インタプリタ・
 launchd PATH での `hermes` 解決・`org.mcs.recovery` の導入/drift/
 `repo_path`/ロード・llama-server agent のロード）→ config 型検証 →
-Keychain・Chrome・LLM・トークン解決・launchd 5件・gateway
+Keychain・Chrome・LLM・トークン解決・管理対象のlaunchd・gateway
 supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾に
 `動作を妨げる問題がN件あります。次の順で修正してください:` を出す。現行`doctor`は読取り専用の診断で、
 `check`・Keychain・原本DBへアクセスしない。選択Python/SQLite・設定・
@@ -157,9 +137,9 @@ LLM・サービスの追加probeは明示した範囲だけに限る。`init` �
 コピーや保存に失敗した場合は表示された案内に従って状態を確認する。親フォルダーのmodeで本人以外に書き込みが許可される場合も停止し、
 シンボリックリンクではmodeで本人以外のアクセスが許可される場合も停止する。ACLは検査しない。
 
-## 5. 更新仕様 📋
+## 5. 更新仕様
 
-詳細は `docs/dev-records/auto-update-plan.md`。要約:
+更新時は[更新ガイド](../guides/UPGRADE_AGENT.md)に従う。以前の復旧監視が構成されている環境では、設定を移す前に同ガイドの §3-A で監視を停止する。
 
 - **検出**: 日次 `mcs_update` cron が `git ls-remote --tags` で semver
   最大 tag を検出 → release notes を GitHub API で取得 → sanitize して
@@ -208,16 +188,15 @@ LLM・サービスの追加probeは明示した範囲だけに限る。`init` �
   hermes cron は `~/.hermes/scripts/` 外を指せず gateway 内 scheduler
   は gateway 死亡で止まるため不適）。wrapper 自体は `exec` のみで
   fallback を持たない
-- **ブートストラップ**: updater 自体は1回手動デプロイが必要。
-  `ops.update_apply` の受理もそれ以降
 
 ## 6. バックアップ仕様
 
 | 対象 | 方式 | 保持 | 状態 |
 |---|---|---|---|
-| ledger.db（日次） | `daily_backup`: sqlite `.backup`→tmp→`valid_mcs_db` 検証→atomic rename | 7件（`BACKUP_KEEP`） | ✅ |
-| ledger.db（暗号化 offsite） | `mcs_backup.py offsite`: 静的日次 DB→gzip→固定 OS OpenSSL→encrypt-then-MAC→復号検証→公開・SHA照合 | 承認済み `max_snapshots` の容量上限。自動 prune なし | CLI・設定/health・明示scheduleの接続を合成検証。実機登録・反映は未実施（[ガイド](../guides/BACKUP.md#9-定期登録の実装と実機での確認)） |
-| ledger.db（更新前） | `preupdate-<ts>.db` 同パターン・別 prefix で日次ローテーションと分離 | **参照ベース**（actionable rollback 点が参照する限り保持） | 📋 |
+| ledger.db（日次） | `daily_backup`: sqlite `.backup`→tmp→`valid_mcs_db` 検証→atomic rename | 3件（`BACKUP_KEEP`） | ✅ |
+| homecare.db（日次、ファイルがあれば） | 専用DBを検証して `homecare-YYYYMMDD.db` を保存 | 3件 | ✅ |
+| ledger.db（暗号化 offsite） | `mcs_backup.py offsite`: 静的日次 DB→gzip→固定 OS OpenSSL→encrypt-then-MAC→復号検証→公開・SHA照合 | 承認済み `max_snapshots` の容量上限。自動 prune なし | 有効化には保存先と定期実行の明示指定が必要（[ガイド](../guides/BACKUP.md#9-定期登録の実装と実機での確認)） |
+| ledger.db（更新前） | `preupdate-<ts>.db` 同パターン・別 prefix で日次ローテーションと分離 | **参照ベース**（actionable rollback 点が参照する限り保持） | ✅ |
 | snapshot | `publish_snapshot`: backup→tmp→DELETE journal→verify→atomic rename。plugin/CCO の読取専用コピー | 単一 latest | ✅ |
 | 添付ファイル | `prune_attachments` が古い実体を削除（行は state='pruned' で name/bytes/sha256/url 残留→再DL可） | 週ポリシー | ✅ |
 | config/.env | git 外・暗号化なし。**バックアップ対象外** — 再生成は `init` | — | ✅（仕様） |
@@ -250,13 +229,13 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | 収集run 重複/クラッシュ | run.lock / 次回 tick | 次回 run が差分継続（cursor/attempts は durable） | ✅自己治癒 |
 | 通知配送失敗 | outbox state | `next_try` リトライ（3600s）・永久不可は `outbox_hold` | ✅ |
 | カード配送クラッシュ | claim 残存 | `notify_transport` の claim 回収・`ops.card_resolve` | ✅/人手 |
-| apply 中断📋 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → 追跡済みファイルのreset（未追跡ファイルの追加削除なし） / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
-| apply 不合格・検証不能📋 | 事後差分 check / `unverifiable` | rollback（追跡済みファイルのreset+（schema_bump 時）束縛された人承認後のDB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
+| apply 中断 | `applying`/`stages` 残存 or watchdog stale 検出 | stages+HEAD+porcelain+stale `.git` lock のジャーナル判定 → 追跡済みファイルのreset（未追跡ファイルの追加削除なし） / 段階追走 / merge --abort / 人へ。repo 外の `mcs_recover.py` が新版破損時も起動可能 | ✅+人手 |
+| apply 不合格・検証不能 | 事後差分 check / `unverifiable` | rollback（追跡済みファイルのreset+（schema_bump 時）束縛された人承認後のDB 復元+snapshot reconcile+restart）→ 通知 | ✅ |
 | DB 破損 | `valid_mcs_db` 失敗 | backups/ から人が復元（原本上書き禁止・別配置で検証後） | 人手のみ |
 | 端末喪失・暗号化 offsite からの回復 | 独立 SHA receipt・MAC・schema/件数・鮮度の検証 | 外部 escrow 鍵を明示 FD で入力→`drill`→`restore`。新規私有配置限定、DBより先に `awaiting_consent` を保持 | 人手。配置後も稼働再開しない |
-| schema_bump 更新📋 | 事前互換判定 | auto 中止。notify 承認時のみ適用し、rollback は DB 復元（消失を明示） | 人手 |
-| updater 自身の破損📋 | watchdog 定期検出（launchd `org.mcs.recovery`）/ repo import probe 失敗 | `~/.mcs-recovery/mcs_recover.py` が git 復旧+manifest snapshot reconcile+旧コード services を実行 | ✅ |
-| quiesce 中 crash📋 | `applying` 残存（停止操作前に記録済み） | recover が判定表で復帰 — drainer 恒久停止を防ぐ | ✅ |
+| schema_bump 更新 | 事前互換判定 | auto 中止。notify 承認時のみ適用し、rollback は DB 復元（消失を明示） | 人手 |
+| updater 自身の破損 | watchdog 定期検出（launchd `org.mcs.recovery`）/ repo import probe 失敗 | `~/.mcs-recovery/mcs_recover.py` が git 復旧+manifest snapshot reconcile+旧コード services を実行 | ✅ |
+| quiesce 中 crash | `applying` 残存（停止操作前に記録済み） | recover が判定表で復帰 — drainer 恒久停止を防ぐ | ✅ |
 
 上表の `.env` fallback は既存ログイン認証の経路であり、backup の専用
 `mcs-backup` service には適用しない。新端末 restore は
@@ -287,8 +266,8 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | extract drainer 滞留 | 昼間2枠・夜間3枠の常駐 drain、新着の次空き枠優先、6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
 | コマンド inbox 滞留 | `local.mcs-cmd`/`local.mcs-int` WatchPaths 常駐 + receipt 冪等で再送安全 | ✅ |
-| apply_failed📋 | tag 単位で記録・自動再試行せず人の再承認待ち | 📋 |
-| 更新 available📋 | `update_notice` 通知（dedup）+ `status` で詳細 | 📋 |
+| apply_failed | tag 単位で記録・自動再試行せず人の再承認待ち | ✅ |
+| 更新 available | `update_notice` 通知（dedup）+ `status` で詳細 | ✅ |
 
 原則: **自動応答は「安全側の再試行・隔離・通知」に限定**。破壊的な
 自己修復（DB 上書き・強制 checkout・MCS 書込み）は自動化しない。
@@ -298,10 +277,10 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | チャンネル | 用途 |
 |---|---|
 | `notify_target`（テキスト）・有効な`notify.<transport>.channel_id`（カード） | 患者情報の原文・要約・添付・解析結果、シグナル・依頼 |
-| `notify_system_target` | セッション失効・run 失敗・更新📋・独立モードの復旧。患者情報にSlackを使わなければ、未設定時は`notify_target`を使用 |
+| `notify_system_target` | セッション失効・run 失敗・更新・独立モードの復旧。患者情報にSlackを使わなければ、未設定時は`notify_target`を使用 |
 | `data/mcs.log` | 共通ログhelperが実行ログの記録とローテーションを管理。`run.log`・`extract_drain*.log`・`semantic_drain.log`等の旧名は移行元として扱う |
 | `health.json` | 機械可読な健全状態（外部監視・警報判定の正本） |
-| `update_state.json`📋 | 更新機構の状態・試行履歴・rollback 情報 |
+| `update_state.json` | 更新機構の状態・試行履歴・rollback 情報 |
 
 患者情報の本文・有効な通知カードにSlackを使う場合、運用通知は各送り先との分離を確認できる
 明示先だけへ送る。いずれかの送り先との分離を確認できなければ運用通知を保留する。
@@ -328,23 +307,7 @@ ops コマンド経由の apply/rollback 指示、破壊的 DB 復元
 **自動化しない**: GitHub への push/tag・リリース作成、hermes-agent
 の pin 変更、秘密情報の repo への書き込み。
 
-## 11. 導入順序
-
-1. ✅ install.sh + init + services + check（現行）
-2. 📋 P1: `mcs_update check`+通知（読取専用・リスクゼロ）
-   + `~/.mcs-recovery/mcs_recover.py` + `org.mcs.recovery` watchdog
-   の install 配置 + `service_manifest.json` の記録開始（P2 の前提）
-3. 📋 P2: apply/rollback/`ops.*` コマンド（receipt 駆動 +
-   plugin/`mcs_requests` の受理経路変更）+ stages ジャーナル +
-   quiesce（marker+stray sweep）+ manifest reconcile +
-   `preupdate-*` backup — **障害注入テスト（各段階 kill・混在ツリー・
-   ignored 追跡・annotated tag・receipt 失敗・quiesce 中 crash・
-   catchup respawn・`.gitattributes` 潜脱）を先行して全通過させる**
-4. 📋 P3: `update.mode` 既定値決定・auto 有効化判断（猶予期間含む）
-5. 🔶 tag 署名 + `require_signed_tag`・リリース manifest（スキーマ
-   互換の明示宣言）・カードへの更新ボタン
-
-## 中断復旧の完了条件（1.0.16）
+## 中断復旧の完了条件
 
 復旧時に抽出処理の起動確認が失敗した場合、`recovery_incomplete` と非0を返し、中断journalと未完の承認receiptを保持する。起動確認に成功した場合だけ完了記録・通知を保存する。同じjournal・HEADの再試行は起動済み処理を停止し直さない。独立watchdogの鮮度判定はロック取得後の最新journalを使う。
 
