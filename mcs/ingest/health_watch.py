@@ -284,6 +284,23 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         report["recorded_state_reasons"] = reasons
         reasons = None
     report["state_reasons"] = reasons
+    # collection-path lock starvation: the ticks die before evidence arm,
+    # so without this chain the stale/degraded report cannot name the wedge
+    # (2026-11-25: a wedged drainer pinned the flock for 40+ minutes)
+    from writer_lock import read_run_lock_refusals
+    refusals = read_run_lock_refusals(os.path.dirname(path))
+    if refusals is not None:
+        span = refusals["last_at"] - refusals["first_at"]
+        recent = now - refusals["last_at"]
+        if refusals["consecutive"] >= 2 and span >= 900 and recent <= 900:
+            report["run_lock_starved"] = {
+                "consecutive": refusals["consecutive"],
+                "span_s": round(span, 1),
+                "last_refusal_age_s": round(max(recent, 0), 1)}
+            if reasons is not None and "run_lock_starved" not in reasons:
+                reasons = list(reasons)
+                reasons.append("run_lock_starved")
+                report["state_reasons"] = reasons
     from collection_diagnostics import validated
     report["collection_diagnostics"] = validated(h.get("collection_diagnostics"), h["at"], fine=True)
     backup = h.get("backup")
