@@ -334,11 +334,6 @@ def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected)
                               ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
     elif status is not None:
         _settle(ledger, reservation, status, error, usage)
-        if status == "timeout":
-            # Bounded retry permits replacement sends while fewer than the ceiling of
-            # uncertain failed sends exist; this row set is at that ceiling.
-            for _ in range(policy.FAILED_SEND_BILLED_LIMIT - 1):
-                _settle(ledger, _reserve(ledger), status, error, usage)
     before = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
     if expected == "repeat_unsettled":
         # Bounded retry contract (owner 2026-11-26): a settled uncertain failure no longer
