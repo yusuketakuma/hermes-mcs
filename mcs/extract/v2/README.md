@@ -1,10 +1,3 @@
-# v2 — retired extraction generation
+# 抽出世代 2 の記録
 
-`extract_llm` schema v2 (最初の LLM 構造化抽出: meds/symptoms/vitals +
-evidence 照合)。実装は v3 → v4 へ **in-place で置き換わったため、
-この世代のコードは残っていない**。旧実装は git 履歴を参照する
-(`git log --follow mcs/extract/llm/extract_llm.py`)。
-
-DB 上の `extract_version=2` artifact は引き続き読み取り可能で、
-有限 cohort による v4 置換の対象となる。仕様の正本は
-`docs/specs/semantic-evaluation.md` の v4 移行節。
+`extract_version=2` は台帳に残る抽出結果の世代番号です。現行のLLM抽出は [extract/llm](../llm/) にあり、保存結果に使う世代番号は [inference_version.py](../../core/inference_version.py) の `LLM_EXTRACT_VERSION` で確認できます。旧い結果の再抽出と保留の条件は[推論の仕様](../../../docs/specs/inference-engine-v1.md)を参照してください。

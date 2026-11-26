@@ -13,9 +13,10 @@
 | 初めて使う・日常の操作を知る | [初めての導入・更新](guides/EASY_SETUP.md) · [利用者ガイド](guides/USER_GUIDE.md) |
 | 導入や接続を設定する | [詳細な導入手順](guides/INSTALLATION.md) · [Hermesを使わない導入](guides/STANDALONE.md) · [LINE WORKS接続](guides/LINEWORKS.md) |
 | AIエージェントに新規導入を依頼する | [新規導入の手順](guides/SETUP_AGENT.md) · [一時フォルダから導入する場合](guides/LOCAL_AGENT_INSTALL.md) |
+| 薬局のMacで訪問・処方を記録する | [MCS 訪問薬剤管理](guides/LOCAL_CHAT.md)（現時点では非推奨） |
 | 既存環境を更新・復旧する | [更新と中断時の復旧](guides/UPGRADE_AGENT.md) · [通知の個別復旧](guides/NOTIFICATION_RECOVERY.md) |
 | バックアップや端末喪失に備える | [鍵の保管と復元](guides/BACKUP.md) |
-| 外部AIの利用・対象・費用を設定する | [Jev・Anthropicの設定と利用状況](guides/ANTHROPIC.md) |
+| 外部AIの利用・対象・費用を設定する | [Jev・Anthropic・OpenAIの設定と利用状況](guides/ANTHROPIC.md) |
 | 医療情報システムとして法令・ガイドラインに対応する | [法令・ガイドライン対応](guides/COMPLIANCE.md) · [運用管理規程ひな形](guides/compliance/OPERATIONS_POLICY_TEMPLATE.md) |
 
 通知の個別復旧は、読取り専用の計画を確認してから対象を指定する管理者向けの手順です。通知の送信結果が不明な場合や復元の承認待ちは、診断だけで解除されません。
@@ -35,7 +36,7 @@
 | GitHub で計画・ラベル・PR を管理する | [GitHub の使い方](development/GITHUB_WORKFLOW.md) |
 | リリースやREADMEを更新する | [変更記録の書き方](../changes/README.md) · [リリースノート規則](development/RELEASE_NOTES.md) · [README運用](development/README_MAINTENANCE.md) |
 | 実機へ配置する資産を調べる | [配備資産](../deployment/README.md) · [接続アダプター](../adapters/README.md) |
-| 今後の計画を確認する | [1.1.0の実装計画](roadmap/v1.1.0-public-launch-plan.md) · [ロードマップ](ROADMAP.md) · [分野ごとの詳細計画](roadmap/) |
+| 計画を調べる | [ロードマップ](ROADMAP.md) · [分野ごとの詳細計画](roadmap/) |
 
 ロードマップの冒頭は現行コードと収録記録の確認先を示し、詳細計画は記載された基準版・日付での判断を保持します。実装・合成検証・公開・本番反映は別の状態です。受入票に公開や配備の完了証拠が含まれるとは限りません。
 
@@ -48,6 +49,6 @@
 | 版ごとの計画・受入・公開時の画像 | [リリース記録の索引](releases/README.md) |
 | 版をまたぐ調査・不具合・検証の証跡 | [開発記録の索引](dev-records/README.md) |
 
-`development/` は現行の開発手順、`releases/v版番号/` はその版の記録を置く場所です。旧 `development/acceptance/` と `development/plans/` の文書は、ファイル名を保って版別のフォルダへ移しました。旧URLは当時のタグで参照でき、移動先は[リリース記録の索引](releases/README.md)から探せます。
+`development/` は現行の開発手順、`releases/v版番号/` はその版の記録を置く場所です。
 
 開発リファレンスの生成表は `scripts/development/update_readme.py` が作り、main への合流後に `main-sync` ワークフローが更新します（PR には含めません）。現行READMEの見直し記録は `development/readme-review.json` で管理します。生成表は手で編集しません。

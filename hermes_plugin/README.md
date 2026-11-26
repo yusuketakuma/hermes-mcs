@@ -93,7 +93,7 @@ Slackカードの人承認結果は、適用後の再renderで古いボタンtok
 保存済みの結果を元の本人へ届ける。送信前にprofile・application・team・channel、
 現在の許可ユーザーとactor、interactive設定・復元保留・transport・route epoch、患者権限を
 再確認し、不一致なら届けない。新しい操作に古いtokenを使えるようにはしない。
-project_idを持たない旧receiptは、従来どおり元のtokenの照合が必要。
+project_idを持たない旧receiptは、元のtokenの照合が必要。
 
 ```text
 /mcs {"op":"read","kind":"receipt","project_id":1,"command_id":"receiptのID","payload_hash":"receiptのhash"}
@@ -185,7 +185,7 @@ Discord利用時はこのCLIのactor自己申告ではなく、上記native plat
 ## システム全体の運用承認（update / rollback / restore）
 
 ```text
-/mcs {"op":"control","phase":"preview","action":"update_apply","tag":"v1.0.6","target_sha":"<40桁>","base_sha":"<40桁>","reason":"リリースノートを確認し適用"}
+/mcs {"op":"control","phase":"preview","action":"update_apply","tag":"<対象タグ>","target_sha":"<40桁>","base_sha":"<40桁>","reason":"リリースノートを確認し適用"}
 /mcs {"op":"control","phase":"preview","action":"update_rollback","reason":"適用後の不具合を確認し戻す"}
 /mcs {"op":"control","phase":"preview","action":"restore_approve","report_id":"<通知のreport_id>","backup_sha256":"<通知の値>","backup_schema":7,"reason":"喪失レポートを確認しDB置換を承認"}
 ```
@@ -209,7 +209,7 @@ previewの3つのpinだけで影響確認を済ませず、[復元承認の範�
 `notify.interactive: discord` を有効にした runner が発行するカード render spec を、
 常駐 gateway の Discord Bot が配送・更新・削除し、ボタン／モーダル操作を
 `data/cmd_int` 経由で runner に返す worker。`/mcs` コマンドとは独立に登録され、
-SDK や設定がなくても `/mcs` 側は従来どおり動く。
+SDK や設定がなくても `/mcs` 側は動く。
 
 ```yaml
       settings:
@@ -254,7 +254,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   wire に出す前に `DiscordRetrySuppressed` で止める。初回が確定済みかもしれない
   ので結果は `unknown`（自動再送しない）。429 は Discord が処理せず拒否した応答
   なので SDK の backoff 後の再送はそのまま通す（重複しない）。Hermes 自身の
-  送信は ContextVar 外なので従来どおり再試行される。この保護は検証済みの
+  送信は ContextVar 外なので再試行される。この保護は検証済みの
   discord.py 2.7.1（client の user_agent で判定）と private session 属性に依存し、
   それ以外の版・属性欠落では作成系を送らず `not_sent`/`retry_policy_unknown` で
   止める（Slack の単発 client と同じ fail closed）。編集・削除・取得は対象外。
@@ -276,7 +276,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   unknown になり、照合 receipt の `parts_unresolvable` に載る（個別調査。解除コマンドは無く、
   そのカードの更新を止め続ける。面の結果が後から記録されると解除できる unknown に移る）。この全件 hold は復元マーカーに
   backup のパスが残る復元（mcs_update の復元）だけが対象で、`mcs_backup` の復元・
-  手動の `mark_restored` は従来どおりの照合になり、90日を超えた journal の根拠は
+  手動の `mark_restored` は照合が必要で、90日を超えた journal の根拠は
   残らない。`data/backups` 外の複製から restore する運用はこの保証の対象外。
   scope ごとの fcntl lock で同一配送先の sender は1つ。
 - runner と常駐 worker は別々に更新される。worker が知らない spec key
@@ -341,7 +341,7 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   `duplicate` / `out_of_scope` / `other`、表示は 誤検知 / 対応済み / 重複 /
   対象外 / その他）＋任意メモ。`ops.signal_dismiss` に `reason_code` を付け、
   メモが空なら区分名を `reason` にする。更新前に開いたフォーム（自由記述の
-  `reason` だけ）は従来どおり `reason_code` なしで送る。
+  `reason` だけ）は `reason_code` なしで送る。
 - `自分のタスク`・`未確認一覧`・`この患者を検索` は view 操作
   （ephemeral 応答のみ、状態を変えない）。runner は `action:"list"` と
   `list`（`title`/`head`/`items[{project_id, group?, text}]`/`more`/`empty`/

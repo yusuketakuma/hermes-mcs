@@ -31,9 +31,9 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer-2` |
-| 患者画面の常駐（`mcs setup remote` を実行した Mac だけ・両方の接続方法） `mcs_local_chat.py --resident` | KeepAlive（設定は config.json の `remote_access`） | launchd `ai.mcs.local-chat` |
+| MCS 訪問薬剤管理の常駐（`mcs setup remote` を実行した Mac だけ・両方の接続方法） `mcs_local_chat.py --resident` | KeepAlive（設定は config.json の `remote_access`） | launchd `ai.mcs.local-chat` |
 
-MCSサーバーの負荷対策として、定期的なMCSアクセスを5分から10分間隔へ変更した。
+MCSの未読収集は10分間隔。
 ヘルス監視はローカルの保管状態を確認するため5分間隔を維持する。
 添付OCRの毎分ジョブも保存済み資料だけを読み、MCSサーバーへ取りに行かない。
 実行中のOCRジョブがあれば重ねず、次回に処理を引き継ぐ。
@@ -123,10 +123,8 @@ install.sh が作る venv インタプリタを使う）
 | `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`。分割GGUFは先頭ファイル） |
 | `__HERMES_HOME__` | install.sh | runtime home（Hermesは`~/.hermes`、standaloneは`~/.mcs`） |
 
-> 注意: パス変更時は plist の ProgramArguments と cron wrapper の双方を
-> 更新すること（`adapter/` → `mcs/` 移動時に実機 plist が旧パスで失敗した実績あり）。
-> launchd 直管理だった `local.mcs-check`/`local.mcs-deep` は 2026-09 に
-> hermes cron へ移行済み（実行履歴・incident が `hermes cron runs` に残る）。
+> パスを変更した場合は、plist の ProgramArguments と cron wrapper の両方を更新する。
+> Hermes モードの定期収集の実行記録は `hermes cron runs` で確認する。
 
 ## 3レーン構成
 

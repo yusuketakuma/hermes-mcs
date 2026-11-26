@@ -10,7 +10,7 @@ Hermesを入れない[スタンドアローンモード](docs/guides/STANDALONE.
 LINE WORKSでは同じ要約・原文・添付をトークルームの連続投稿で配信します。
 Slack・Discordでは、元の投稿をチャンネルのカードに、後から届いた返信を1件ずつのカードとして元の会話のスレッドに表示します。
 
-[画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [最新の更新](#release)
+[画面を見る](#demo) · [できること](#features) · [使い方を選ぶ](#use-cases) · [導入する](#quickstart) · [データの行き先](#data) · [対象版とリリース情報](#release)
 
 > **AIエージェントへ:** このリポジトリのURLを渡されて導入・更新・復旧を頼まれたら、まず次で判断し、該当する手順書を最初から実行してください。
 >
@@ -89,7 +89,7 @@ Slack・Discord・LINE WORKSとも、よく使う`確認する`・`担当する`
 
 ![Slackの本人向け患者情報と、同じ患者の別スレッド・添付OCRを検索して原資料を開く画面例](docs/screenshots/slack-gallery/07-patient-summary.png)
 
-![v1.1.2の流れ：返信から患者情報・検索へ進み、同じ患者の別スレッドや添付OCRを探して出典とMCSへ戻る説明図](docs/releases/v1.1.2/patient-find-v112.png)
+![返信から患者情報・検索へ進み、同じ患者の別スレッドや添付OCRを探して出典とMCSへ戻る説明図](docs/releases/v1.1.2/patient-find-v112.png)
 
 `👤 患者情報`から、取得済み投稿の薬・最新バイタル・次回予定・未完了タスク・履歴取得状況を本人に表示します。解析と必要な品質確認を終えた資料から概況を作り、未反映の資料を区別します。`🔎 この患者を検索`は同じ患者の取得済み投稿と添付OCRを新しい投稿順に探し、検索語は500文字まで・結果は5件ずつです。LLMの完了を待たず生成回数も消費せず、Slack・Discordは本人向けの非公開表示、LINE WORKSは本人DMです。**暫定集約であり、確定した処方一覧ではありません。未取得の記録も「無い」とは扱いません。**
 
@@ -198,7 +198,7 @@ AIが緊急度を高と判定した投稿で元の本文を取得できていな
 | 薬剤の変更経緯と記録の照合 | `mcs drug timeline/reconcile`で、商品名・一般名をまたぐ言及、開始・中止・増減・予定、構造化薬歴との違いを取得範囲・情報時点付きで確認します。本人・家族・過去・予定を区別し、服用中や処方の正本を自動確定しません。 |
 | 規格・剤形・マスター更新の確認 | `mcs drug related/check-surface/master-impact`で名称候補、記載された規格・剤形・単位の差、公式マスターの名称・廃止・経過措置変更と採用辞書への影響を確認します。辞書の採用・有効化は別の人承認操作です。[薬剤ワークフロー仕様](docs/specs/DRUG_MASTER_WORKFLOWS.md) |
 | 状態監視・遠隔支援（CSDC） | コードのみ同梱しています。顧客への接続や遠隔での実行は行いません。`sdc.enabled` を省略すると専用ジョブを登録します（明示した `false` は維持）。接続（`mcs connect`）・別の送信同意・`state_root` の設定がない限り、状態は送信しません。`state_root` を設定済みで `enabled` を省略している環境では、保存済みの同意の範囲で送信が始まる場合があります。登録案内を表示するかどうかは `mcs setup features` で選べます（既定は表示しない） |
-| 患者別の時系列をMac内で閲覧 | `mcs/ops/mcs_local_chat.py`に公開スナップショットと患者の範囲を明示して起動します。患者一覧・投稿・返信・要約・スタンプ・添付の取得状態と、選択中の患者のコンテキストと根拠を、外部チャットを使わず確認できます。自動起動はせず、通知・送信・既読化の条件は変えません。 |
+| 薬局のMacで訪問・処方を記録 | [MCS 訪問薬剤管理](docs/guides/LOCAL_CHAT.md)（現時点では利用を推奨していません）。患者別の投稿・添付を閲覧でき、在宅ケア台帳を指定すると訪問記録・処方歴を管理できます。 |
 | 導入・更新・ローカル診断の統一入口 | `sh scripts/mcs install`、導入後の`mcs setup`・`mcs update`・`mcs doctor`。診断結果やSDK版の取得は接続・更新後プロセスの受入証明ではありません。[更新時の確認](docs/guides/UPGRADE_AGENT.md) |
 
 <a name="use-cases"></a>
@@ -307,7 +307,7 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 | [更新・バックアップ・復旧](docs/specs/lifecycle-spec.md) | 導入後の運用と更新時の確認 |
 
 困ったときは、表示された同じインタープリターで`mcs_setup.py doctor`を実行します。
-1.0.13の統一入口は`mcs doctor`です。既定はローカル診断で、LLM通信やサービス状態のprobeは明示指定します。診断が成功しても、SDKの通信・カード操作や配備済みworkerの反映まで検証したとは扱いません。
+診断コマンドは`mcs doctor`です。既定はローカル診断で、LLM通信やサービス状態のprobeは明示指定します。診断が成功しても、SDKの通信・カード操作や配備済みworkerの反映まで検証したとは扱いません。
 
 処理が進んでいるかを確認するときは、doctorで運用記録の鮮度、待ち件数、中断検出、日次バックアップの状態を確認できます。`--probe data` を付けると、収集エラーの原因分類と件数、未取得の本文の最長経過時間も表示します（[収集の診断](docs/guides/COLLECTION_DIAGNOSTICS.md)）。サポートへ状況を伝えるときは `doctor --share` で、患者件数・設定値・パスを含めない共有用のJSONを確認してから渡せます（自動送信はしません）。詳しい工程別の残数・実測速度・条件付きの見通しは、[処理の残数・停滞の確認](docs/guides/USER_GUIDE.md#cli--処理の残数停滞の確認)へ進んでください。未確認の値は0件と区別し、工程間の件数は合算しません。
 
@@ -322,22 +322,22 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 <a name="processing-flow"></a>
 
 
-![v1.1.2の流れ：MCSの投稿・返信・添付をMacへ保存し、添付OCRと個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成し、通知・検索は解析完了を待たず使える流れの説明図](docs/releases/v1.1.2/data-processing-v112.png)
+![MCSの投稿・返信・添付をMacへ保存し、添付OCRと個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成し、通知・検索は解析完了を待たず使える流れの説明図](docs/releases/v1.1.2/data-processing-v112.png)
 
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。
 
 <details>
-<summary>v1.1.2の患者コンテキスト作成と原資料検索の流れ（補足図・横長5枚）を開く</summary>
+<summary>患者コンテキスト作成と原資料検索の流れ（補足図・横長5枚）を開く</summary>
 
-![v1.1.2の流れ1/5：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](docs/releases/v1.1.2/landscape-01.png)
+![処理の流れ1/5：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](docs/releases/v1.1.2/landscape-01.png)
 
-![v1.1.2の流れ2/5：資料の全区間点検（B）と根拠照合（C）の説明図](docs/releases/v1.1.2/landscape-02.png)
+![処理の流れ2/5：資料の全区間点検（B）と根拠照合（C）の説明図](docs/releases/v1.1.2/landscape-02.png)
 
-![v1.1.2の流れ3/5：概況の項目と順序（A）・品質確認・採用直前の再照合から本人向けの患者情報への説明図](docs/releases/v1.1.2/landscape-03.png)
+![処理の流れ3/5：概況の項目と順序（A）・品質確認・採用直前の再照合から本人向けの患者情報への説明図](docs/releases/v1.1.2/landscape-03.png)
 
-![v1.1.2の流れ4/5：検索・通知の独立経路と設定次第のJev外部監査の説明図](docs/releases/v1.1.2/landscape-04.png)
+![処理の流れ4/5：検索・通知の独立経路と設定次第のJev外部監査の説明図](docs/releases/v1.1.2/landscape-04.png)
 
-![v1.1.2の流れ5/5：待ち・不明時の扱いと、概況の回数・巡回配分・昼夜の処理枠の説明図](docs/releases/v1.1.2/landscape-05.png)
+![処理の流れ5/5：待ち・不明時の扱いと、概況の回数・巡回配分・昼夜の処理枠の説明図](docs/releases/v1.1.2/landscape-05.png)
 
 </details>
 
@@ -358,7 +358,7 @@ MCSの投稿・返信・添付情報をこのMacへ保存します。新着と�
 
 患者コンテキストの生成と本人向け限定閲覧は既定で有効ですが、以前の報告を抽出入力へ渡す `extract.patient_state_context` は別の設定で、既定offです。有効にした抽出でも、入力の取得範囲・鮮度・出典の条件を満たした情報だけを参考にし、抽出する値と引用は対象投稿の原文に基づきます。明示したOFFや閲覧権限は維持します。
 
-添付OCR（1.1.2向け）は、画像・PDFの文章を投稿本文とは別の資料として保存します。
+添付OCRは、画像・PDFの文章を投稿本文とは別の資料として保存します。
 診療情報提供書、看護・薬剤管理等の報告書、PCAポンプの文字を出典付きで整理します。
 文字起こし後の個別解析はローカルLLMで行います。クラウドを使う場合は、対象範囲・予算を守り、患者コンテキスト作成時の入力にOCR全文を含めます。
 必要な解析が完了した原資料を患者コンテキストへ取り込み、チャットでは原文と分けて表示します。
@@ -417,101 +417,17 @@ MCSの投稿・返信・添付情報をこのMacへ保存します。新着と�
 <summary><strong>バックアップがあれば端末故障にも対応できる？</strong></summary>
 
 日次SQLiteバックアップは同じMac上の保存です。端末喪失時の復旧保証にはなりません。
-1.0.13の暗号化backup・escrow-key drill・新規配置restoreはローカル支援であり、原本上書きや通知再開の許可ではありません。別媒体・鍵・独立SHA receipt・保持の承認と復元訓練は運用側で行います。[鍵・同意待ちの条件](docs/guides/BACKUP.md)と[復旧の限界](docs/specs/lifecycle-spec.md)を確認してください。
+暗号化backup・escrow-key drill・新規配置restoreはローカル支援であり、原本上書きや通知再開の許可ではありません。別媒体・鍵・独立SHA receipt・保持の承認と復元訓練は運用側で行います。[鍵・同意待ちの条件](docs/guides/BACKUP.md)と[復旧の限界](docs/specs/lifecycle-spec.md)を確認してください。
 
 </details>
 
 <a name="release"></a>
 
-## 最新の更新
+## 対象版とリリース情報
 
 <!-- BEGIN GENERATED:release -->
 
-**v1.3.1 · 2026-11-26** — **要約の再開・薬剤照合・通知の監視を修正**
-
-クラウドで修復した患者要約は、再監査の途中で処理が止まっても、入力と成功した予約を照合できれば続きから処理できます。通知の監視はワーカーの起動記録と本文・添付の配送記録を個別に確認します。結果不明の部品は保留し、手動で配送先と照合できます。起動状態の照会が時間切れになったときは、その理由を表示します。
-
-処方に「カリウム 4、分2」のような単位のない記載がある場合、服薬量を検査値として確定せず、数値を候補として残します。採血の数値に「異常なし」などの所見だけが続く場合は、元の記載を根拠に検査値を確認します。短い引用の後に「未満なら連絡」などの条件が続く場合も、元の投稿を確認し、その基準値を実測値から除きます。薬剤照合に時間が残っていなければ、次回の収集に持ち越します。
-
-施設の共通設定とAnthropic・OpenAI・Jevの設定を `config.json` にまとめます。AnthropicとOpenAIの合計費用上限は、設定を省略した場合、1日80ドル・1か月350ドルです。新規導入では、各社の上限をそれぞれ1日40ドル・1か月175ドルに設定します。更新時は、未選択の提供元も含め、設定済みのモデルと予算を引き継ぎます。旧版の復旧監視を導入済みのMacでは、[更新ガイド §3-A](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.1/docs/guides/UPGRADE_AGENT.md#3-a-提供元設定の保存形式が変わるときの復旧監視)に沿って監視を切り替えてください。
-
-Slack・Discord・LINE WORKSでは、新しく認識したグループの過去ログを通知せず、新着だけを届けます。過去の投稿に新しい返信が付いたときは、その返信から通知します。履歴は引き続き閲覧・検索できます。
-
-投稿やスタンプの本人IDは、最新の職員名簿で確認します。本人の印がない場合は、MCSの本人プロフィールで確認したIDを使います。
-
-OCRを導入済みのMacでは、更新時に専用環境のライブラリを固定版に揃えます。Jevを使う設定では、保存前の確認画面で送信される可能性のある対象を確認できます。
-
-![通知ワーカーの起動と本文・添付の配送記録を確認する流れ](docs/releases/v1.3.1/notification-observation.png)
-
-図は通知監視の仕組みを示します。ワーカーの起動時刻だけでは個々の部品の送信完了は分かりません。
-
-v1.2.1から更新する場合は、MCSを実行する利用者だけが .env を読めることも確認してください。以前は所有者が正しくても権限が644や640のファイルを読めましたが、v1.3.0以降はその権限では読み込みません。在宅ケア台帳や医薬品検索の変更も適用されます。詳細は[在宅ケアと医薬品検索の変更一覧](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.0/docs/releases/v1.3.0/changelog-1.3.0.md)にまとめています。
-
-<details>
-<summary>主な変更と更新時の注意を開く</summary>
-
-- **新機能 · v3 consent wireをcredential storeとpin fileへ接続**
-  v3自動更新のconsent確認経路が、enrollment済みの端末credentialとpin配布fileから署名wireを組み立てられるようになりました。enrollment未完了・pin未配置では従来どおりfail-closedで利用できません。
-
-- **改善 · クラウドAPIの合計費用上限の既定値を1日80ドル・1か月350ドルに変更**
-  AnthropicとOpenAIの合計費用上限は、設定を省略した場合、1日25ドルから80ドル、1か月75ドルから350ドルに変わります。
-
-- **不具合修正 · 通知の配送記録とworkerの起動を個別に確認**
-  待機中の通知とworkerの起動を個別に調べ、配送を確認できなかった理由を監視警報に表示します。
-
-**更新時の注意**
-
-- 更新後の監視から反映されます。追加操作は不要です。
-
-- 受付のやり直しを案内された場合は、通知の復旧手順に沿って対象と計画を確認し、操作者が受付を行ってください。
-
-- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。keychain のロック解除や設定変更は引き続き行われず、ロックの検出は記録だけに使われます。
-
-- 追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。
-
-- 追加操作は不要です。digest解決にはwire経由のmetadata検証が必要で、release_trust(attestation)配線が未完了の端末では従来どおりfail-closedのままです。
-
-- 追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。
-
-- 現行の動作は変わりません。consent wire実factoryとenrollmentが接続されるまで、この部品を呼ぶ製品経路はありません。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。
-
-- 設定変更は不要です。
-
-- 更新前から合計上限や提供元別の上限を設定している場合は、その値を引き継ぎます。以前の既定値を維持したい場合は、更新前に cloud-llm budget --daily-usd 25 --monthly-usd 75 で指定してください。
-
-- 更新後の通知コマンド処理から適用されます。設定変更は不要です。
-
-- 追加操作は不要です。既存のDBには起動時に小さな記録テーブルが自動で作られます。
-
-- HermesでSlackまたはDiscordに通知している環境が対象です。追加の操作は不要です。
-
-- 追加操作は不要です。更新後の定期収集から適用されます。
-
-- テスト環境の変更です。利用者の操作は不要です。
-
-- 設定の変更は不要です。更新後は通知期間（notify_max_age_h）が既読の返信を通知する設定（notify_all_replies、既定はオフ）にも適用されます。
-
-- OCRを追加済みの環境は通常の更新時に専用環境のパッケージを入れ直します。OCRの有効化は従来どおり設定が必要です。
-
-- 新しく作成する下書きに適用されます。追加操作は不要です。
-
-- 更新後の抽出ワーカーから適用されます。抽出に関わるソースが変わるため、以前の抽出結果を保持した自動保留は再評価の対象になります。
-
-- 更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。
-
-- 追加操作は不要です。更新後の最初の収集で本人プロフィールを取得し直します。出典を確認できない旧版のIDは、現在の名簿かプロフィールで確認できるまで本人判定に使いません。
-
-- 追加操作は不要です。保存前確認の表示が実際の有効条件へ合わせられます。
-
-- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、追加のクラウド送信は発生しません。
-
-- 追加操作は不要です。更新後に要約の生成元を再確認する際に適用されます。
-
-- 移行先の更新ツールを使います。旧版の復旧監視（org.mcs.recovery）が入っているMacでは、[更新ガイド §3-A](https://github.com/yusuketakuma/hermes-mcs/blob/v1.3.1/docs/guides/UPGRADE_AGENT.md#3-a-提供元設定の保存形式が変わるときの復旧監視)に従って監視を停止し、再導入後に新しい監視の配置と起動を確認してください。設定の変更には設定画面またはCLIを使います。
-
-</details>
-
-[すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
+対象版 **v1.3.1**。[変更履歴と版ごとの更新時の注意](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
 
 <!-- END GENERATED:release -->
 
@@ -524,21 +440,21 @@ v1.2.1から更新する場合は、MCSを実行する利用者だけが .env �
 | 読む目的 | 文書 |
 |---|---|
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
-| Mac内の患者別チャット閲覧 | [ローカル患者ワークスペース](docs/guides/LOCAL_CHAT.md)（明示起動・公開スナップショット専用） |
+| Mac内の患者別チャット閲覧 | [MCS 訪問薬剤管理](docs/guides/LOCAL_CHAT.md)（現時点では非推奨） |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
-| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.1.0のリリース資料](docs/releases/v1.1.0/README.md) · [1.0.24の受入票](docs/releases/v1.0.24/ACCEPTANCE_1.0.24.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) · [収集の診断](docs/guides/COLLECTION_DIAGNOSTICS.md) · [保存済み添付の点検](docs/guides/ATTACHMENT_RECOVERY.md) |
+| 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) · [収集の診断](docs/guides/COLLECTION_DIAGNOSTICS.md) · [保存済み添付の点検](docs/guides/ATTACHMENT_RECOVERY.md) |
 | 開発・コマンド・統計・アラート定義 | [開発リファレンス](docs/development/DEVELOPMENT.md) · [Hermesプラグイン](hermes_plugin/README.md) |
 | エクスポート・意味解析の評価 | [外部出力契約](docs/specs/external-export-contract.md) · [意味解析の評価](docs/specs/semantic-evaluation.md) · [rollout](docs/specs/semantic-facts-v2-rollout.md) |
 | 今後の計画 | [ロードマップ](docs/ROADMAP.md) |
 | 候補の封印評価・昇格条件 | [候補評価仕様](docs/specs/SEALED_CANDIDATE_EVALUATION.md)。合成評価と実データの人手評価を分離し、候補指紋と独立承認receiptを照合します。 |
 | リリースとREADMEの更新ルール | [リリースノート規則](docs/development/RELEASE_NOTES.md) · [README運用](docs/development/README_MAINTENANCE.md) |
 
-[版ごとの計画・受入記録](docs/releases/README.md)と[開発記録](docs/dev-records/README.md)は当時の証跡です。[安定稼働版1.0.13の計画](docs/releases/v1.0.13/RELEASE_1.0.13.md)の受入条件も、その版の記録として保持します。現在の仕様・運用手順は上のガイドを参照してください。
+[版ごとの計画・受入記録](docs/releases/README.md)と[開発記録](docs/dev-records/README.md)は当時の証跡です。現在の仕様・運用手順は上のガイドを参照してください。
 
 ## ライセンス
 
 Proprietary — All Rights Reserved。
-1.1.0からの外部利用は、リポジトリ管理者と個別契約した顧客を対象とします。利用者・導入先・用途・改変や再配布の可否は書面の個別契約に従います。このREADME自体は利用許諾ではありません（[LICENSE](LICENSE)）。
+外部利用は、リポジトリ管理者と個別契約した顧客を対象とします。利用者・導入先・用途・改変や再配布の可否は書面の個別契約に従います。このREADME自体は利用許諾ではありません（[LICENSE](LICENSE)）。
 
 開発者向け: [責務別のコード配置・依存・移植範囲](docs/development/REPOSITORY_STRUCTURE.md)。

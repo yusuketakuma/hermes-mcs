@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""READMEの最新変更を生成し、リリースごとの内容見直しを検査する。"""
+"""READMEの対象版を生成し、リリースごとの内容見直しを検査する。"""
 
 import argparse
 import json
@@ -20,49 +20,13 @@ def latest(changelog):
     versions = release_notes.check_changelog(changelog)
     if not versions:
         raise ValueError("READMEに表示するversionがありません")
-    version = versions[0]
-    date = re.search(rf"^## \[{re.escape(version)}\] — (\d{{4}}-\d{{2}}-\d{{2}})$",
-                     changelog, re.M).group(1)
-    return version, date, release_notes.section(changelog, version)
+    return versions[0]
 
 
 def render_block(changelog):
-    version, date, body = latest(changelog)
-    intro, _ = body.split("### ", 1)
-    paragraphs = [p.strip() for p in intro.strip().split("\n\n") if p.strip()]
-    headline = paragraphs[0]
-    summary = "\n\n".join(p for p in paragraphs[1:] if not p.startswith((">", "|")))
-    summary = release_notes.IMAGES.sub(
-        lambda match: f"![{match['alt']}]({release_notes.repository_image_path(match['url']) or match['url']})",
-        summary)
-    warnings = [p for p in paragraphs[1:] if p.startswith(">")]
-    out = [f"**v{version} · {date}** — {headline}", "", summary, ""]
-    for warning in warnings:
-        out += [warning, ""]
-    for comparison in paragraphs[1:]:
-        if comparison.startswith("|"):
-            out += [comparison, ""]
-    out += ["<details>", "<summary>主な変更と更新時の注意を開く</summary>", ""]
-    highlights = []
-    # One item from each category keeps the excerpt balanced; full notes
-    # remain canonical. Every upgrade note is retained without truncation.
-    for label in release_notes.GROUPS.values():
-        match = re.search(rf"^### {re.escape(label)}\n(.*?)(?=^### |\Z)",
-                          body, re.M | re.S)
-        if not match:
-            continue
-        item = re.search(r"^- \*\*(.+)\*\*\n((?:[ \t]+[^\n]+(?:\n|$))+)",
-                         match.group(1), re.M)
-        if item:
-            description = " ".join(line.strip() for line in item.group(2).splitlines())
-            highlights += [f"- **{label} · {item.group(1)}**", f"  {description}", ""]
-    out += highlights
-    upgrades = re.search(r"^### 更新時の注意\n(.*?)(?=^### 技術詳細)",
-                         body, re.M | re.S).group(1).strip()
-    out += ["**更新時の注意**", "", upgrades, "", "</details>", "",
-            "[すべての変更と技術詳細](CHANGELOG.md) · "
-            "[GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)"]
-    return "\n".join(out)
+    return (f"対象版 **v{latest(changelog)}**。"
+            "[変更履歴と版ごとの更新時の注意](CHANGELOG.md) · "
+            "[GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)")
 
 
 def render(readme, changelog):
@@ -131,11 +95,11 @@ def check_links(root, readme):
 def check(root, requested_version=None):
     readme = (root / "README.md").read_text(encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    version, _, _ = latest(changelog)
+    version = latest(changelog)
     if requested_version is not None and requested_version != version:
         raise ValueError("README・CHANGELOG・リリースtagのversionが一致しません")
     if render(readme, changelog) != readme:
-        raise ValueError("READMEの最新変更が古くなっています: scripts/development/readme_release.pyを実行してください")
+        raise ValueError("READMEの対象版が古くなっています: scripts/development/readme_release.pyを実行してください")
     check_review(root, version)
     check_links(root, readme)
 
