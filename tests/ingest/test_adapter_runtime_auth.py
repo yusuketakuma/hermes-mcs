@@ -519,17 +519,19 @@ def test_download_bootstraps_token(monkeypatch, tmp_path):
     assert calls == ["t" * 32] and dest.read_bytes() == b"x"
 
 
-def test_open_browser_session_journals_chrome_error(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error", [mcs_contract.BootstrapError("synthetic private detail"),
+                                   FileNotFoundError("synthetic private path")])
+def test_open_browser_session_journals_chrome_error(monkeypatch, tmp_path, error):
     """A chrome/CDP layer failure must reach the run journal with its
     exception type — state=failed alone crushed the cause of the
     2026-11-25 outage for hours."""
     a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "t.json"))
 
     def broken(*a, **k):
-        raise mcs_contract.BootstrapError("chrome launch timed out")
+        raise error
     monkeypatch.setattr(a, "_ensure_chrome", broken)
     assert a.open_browser_session("/synthetic/profile", "/synthetic/chrome") == "failed"
-    assert a.chrome_error == "bootstrap_error: chrome launch timed out"
+    assert a.chrome_error == type(error).__name__
 
 
 def test_open_browser_session_clears_chrome_facts_each_attempt(
@@ -559,7 +561,7 @@ def test_ensure_chrome_marks_singleton_lock_without_owned_pids(
     profile = tmp_path / "profile"
     profile.mkdir()
     if lock_present:
-        (profile / "SingletonLock").write_text("synthetic")
+        (profile / "SingletonLock").symlink_to("synthetic-host-123")
     monkeypatch.setattr(a, "_cdp_up", lambda: False)
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
     monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: False)
@@ -578,7 +580,7 @@ def test_ensure_chrome_no_singleton_fact_when_chrome_stopped(monkeypatch, tmp_pa
     a = mcs_adapter.MCSAdapter()
     profile = tmp_path / "profile"
     profile.mkdir()
-    (profile / "SingletonLock").write_text("synthetic")
+    (profile / "SingletonLock").symlink_to("synthetic-host-123")
     monkeypatch.setattr(a, "_cdp_up", lambda: False)
     monkeypatch.setattr(a, "_sleep_bounded", lambda s: None)
     monkeypatch.setattr(a, "_stop_profile_chrome", lambda profile, chrome: True)

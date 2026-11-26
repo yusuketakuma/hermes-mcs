@@ -78,7 +78,7 @@ class MCSAuthenticationMixin:
         # debugging port, would absorb the relaunch (same-profile hand-off)
         # and CDP would never come up — stop that instance first
         stopped = self._stop_profile_chrome(profile_dir, chrome_bin)
-        if not stopped and os.path.exists(
+        if not stopped and os.path.lexists(
                 os.path.join(profile_dir, "SingletonLock")):
             # the profile is locked but no matching Chrome process was
             # found — a holder the process listing cannot attribute
@@ -439,15 +439,8 @@ class MCSAuthenticationMixin:
         try:
             self._ensure_chrome(profile_dir, chrome_bin)
         except (MCSError, OSError) as exc:  # incl. deadline_exceeded
-            # without this the journal shows only state=failed and the
-            # cause of a broken CDP/chrome layer is unrecoverable
-            detail = str(exc)
-            if isinstance(exc, MCSError):
-                # str() already embeds the kind ('bootstrap_error: …')
-                self.chrome_error = detail[:150] or type(exc).__name__
-            else:
-                self.chrome_error = type(exc).__name__ + (
-                    f": {detail[:120]}" if detail else "")
+            # Exception text may contain a profile path or browser response.
+            self.chrome_error = type(exc).__name__
             return "failed"
         # cheapest recovery first — before touching the login form at
         # all, a live session (fresh token + valid API check) ends it

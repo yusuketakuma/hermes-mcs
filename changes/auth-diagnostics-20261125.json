@@ -1,19 +1,19 @@
 {
- "category": "improved",
- "title": "ログイン復帰に失敗したときの原因が実行記録に残るようになりました",
- "summary": "ブラウザ（CDP/Chrome）層の破断でログイン復帰が失敗しても、これまで実行記録には失敗という結果だけが残り、原因の切り分けに時間がかかっていました。今回から、復帰を試みるたびに実行記録へ Chrome 起動失敗の例外種別と内容、プロファイルの SingletonLock 競合の検出、login keychain のロック検出が記録されます。keychain がロックされていると .env の資格でログインできても Chrome の cookie 復号は失敗し続けるため、復号不能の根本原因が成功扱いの記録に隠れないように、フォールバックでログインできた場合もロックの事実は記録されます。復帰の手順や再試行の上限、通知の条件は変わりません。",
- "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。keychain のロック解除や設定変更は引き続き行われず、ロックの検出は記録だけに使われます。",
- "details": [
-  "mcs_authentication.open_browser_session は、_ensure_chrome が投げた例外の種別と内容を chrome_error として保持し、collection_stages.attempt_relogin が relogin_attempts の実行記録へ載せる。MCSError は kind を含む形（例: bootstrap_error: chrome launch timed out）、OSError 系は型名と内容で記録される。",
-  "_ensure_chrome は、CDP が落ちているのに停止対象の Chrome プロセスが見つからず、かつプロファイルに SingletonLock がある場合（プロセス一覧で帰属できない保持者または stale lock）を chrome_singleton_lock として記録する。この状態では再起動が吸収されて CDP が立ち上がらない可能性が高い。",
-  "_login_password は keychain のロックを検出した時点で keychain_locked を記録する。.env フォールバックでログインできた場合も残る。",
-  "これらの事実は試行ごとに初期化され、値があるときだけ実行記録に載る。従来の記録（healed_tabs・chrome_restarted）と同じ扱い。"
- ],
- "refs": [
-  "mcs/ingest/mcs_authentication.py",
-  "mcs/ingest/mcs_adapter.py",
-  "mcs/ingest/collection_stages.py",
-  "tests/ingest/test_adapter_runtime_auth.py",
-  "tests/ingest/test_run_check_session_recovery.py"
- ]
+  "category": "fixed",
+  "title": "ログイン復帰に失敗したときの原因が実行記録に残るようになりました",
+  "summary": "ログインの復帰に失敗した場合、実行記録でChrome起動時の例外の種類、プロファイルに残ったロック、キーチェーンのロックを確認できます。予備の認証情報でログインできた場合にも、検出したキーチェーンのロックを記録します。",
+  "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定の変更や追加の操作は不要です。keychain のロック解除や設定変更は引き続き行われず、ロックの検出は記録だけに使われます。",
+  "details": [
+    "Chrome の起動に失敗した場合は例外の種類を記録します。例外本文やプロファイルのパスは記録しません。",
+    "_ensure_chrome は、CDP が落ちているのに停止対象の Chrome プロセスが見つからず、かつプロファイルに SingletonLock がある場合（プロセス一覧で帰属できない保持者または stale lock）を chrome_singleton_lock として記録する。この状態では再起動が吸収されて CDP が立ち上がらない可能性が高い。",
+    "_login_password は keychain のロックを検出した時点で keychain_locked を記録する。.env フォールバックでログインできた場合も残る。",
+    "これらの事実は試行ごとに初期化され、値があるときだけ実行記録に載る。従来の記録（healed_tabs・chrome_restarted）と同じ扱い。"
+  ],
+  "refs": [
+    "mcs/ingest/mcs_authentication.py",
+    "mcs/ingest/mcs_adapter.py",
+    "mcs/ingest/collection_stages.py",
+    "tests/ingest/test_adapter_runtime_auth.py",
+    "tests/ingest/test_run_check_session_recovery.py"
+  ]
 }

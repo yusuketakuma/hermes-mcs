@@ -531,7 +531,7 @@ def test_relogin_journal_carries_chrome_and_keychain_facts(tmp_path):
     adapter = SimpleNamespace(
         auto_login=lambda **kw: "failed",
         healed_tabs=0, chrome_restarted=True,
-        chrome_error="bootstrap_error: chrome launch timed out",
+        chrome_error="BootstrapError",
         chrome_singleton_lock=True, keychain_locked=True)
     result = {"errors": [], "run_id": 7}
     state = collection_stages.attempt_relogin(
@@ -541,7 +541,7 @@ def test_relogin_journal_carries_chrome_and_keychain_facts(tmp_path):
     assert result["relogin_attempts"] == [
         {"stage": "unread", "error": "session_expired(status=403)",
          "state": "failed", "chrome_restarted": True,
-         "chrome_error": "bootstrap_error: chrome launch timed out",
+         "chrome_error": "BootstrapError",
          "chrome_singleton_lock": True, "keychain_locked": True}]
     db.close()
 
