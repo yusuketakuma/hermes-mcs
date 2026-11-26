@@ -4,7 +4,8 @@
   "summary": "cloudで生成されたsemantic summaryは、対応するcloud予約と結果が1件ずつそろい、HTTP 200で決済済みであることを確認できる場合だけcloud由来として扱われます。",
   "upgrade": "追加操作は不要です。不完全または重複したcloud receiptしか残っていないsummaryはcloud由来とみなされず、必要な場合は再生成されます。",
   "details": [
-    "summaryのprovider provenance検証で、reservation idの一致だけでなくcloud accountingのsettled receipt検証を通ることを必須にしました。"
+    "summaryのprovider provenance検証で、reservation idの一致だけでなくcloud accountingのsettled receipt検証を通ることを必須にしました。",
+    "修復済みsummaryは、従来どおり修復時のprompt・回答・owner・contractに結び付いたreceipt検証でcloud由来を証明します。"
   ],
   "refs": [
     "mcs/semantic/semantic_summary_stages.py",

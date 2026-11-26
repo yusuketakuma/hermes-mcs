@@ -106,11 +106,6 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                                   "'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
-        if change == 'binding':
-            assert _ask(provider)['reused_response'] is True
-            assert len(calls) == len(locks) == 1
-            assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
-            return
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(provider)
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
