@@ -729,3 +729,56 @@ def test_fixed_head_is_posted_as_its_own_cache_block_without_changing_request_id
     # a prompt that is only the head carries no empty second block
     assert provider.wire(provider.body(head, 100, head), head)["input"][0]["content"] == [
         {"type": "input_text", "text": head, "prompt_cache_breakpoint": {"mode": "explicit"}}]
+
+
+def _refusal_part_response():
+    return response(output=[{"type": "message", "role": "assistant",
+                             "content": [{"type": "refusal", "refusal": "synthetic refusal"}]}])
+
+
+def test_refusal_content_part_is_a_provider_proven_refusal():
+    instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
+    with pytest.raises(AnthropicError) as caught:
+        instance.answer(_refusal_part_response(), {'usage': None})
+    assert (caught.value.kind, caught.value.detail) == ("contract_error", "refusal")
+    # The resend stop reads exactly this detail: a refusal is never resent or counted.
+    assert caught.value.detail in cloud_client.CONTRACT_ERROR_DETAILS
+
+
+def test_incomplete_content_filter_is_a_provider_proven_refusal():
+    instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
+    filtered = response(status="incomplete", incomplete_details={"reason": "content_filter"})
+    with pytest.raises(AnthropicError) as caught:
+        instance.answer(filtered, {'usage': None})
+    assert (caught.value.kind, caught.value.detail) == ("contract_error", "refusal")
+
+
+@pytest.mark.parametrize("part", [
+    {"type": "output_text"},                        # missing text: still unknown output
+    {"type": "refusalx", "text": "synthetic"},      # look-alike type is not a proven refusal
+    {"type": "image", "text": "synthetic"},         # unknown part stays resendable-unknown
+    "not-a-dict",
+])
+def test_unproven_output_parts_stay_unexpected_output(part):
+    instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
+    unknown = response(output=[{"type": "message", "role": "assistant", "content": [part]}])
+    with pytest.raises(AnthropicError) as caught:
+        instance.answer(unknown, {'usage': None})
+    assert (caught.value.kind, caught.value.detail) == ("contract_error", "unexpected_output")
+    assert caught.value.detail not in cloud_client.CONTRACT_ERROR_DETAILS
+
+
+@pytest.mark.parametrize("details", [
+    {"reason": "max_output_tokens"},     # bounded length handling, never a refusal
+    {"reason": "other_reason"},
+    None,
+])
+def test_incomplete_without_content_filter_is_never_a_refusal(details):
+    instance = client.OpenAIClient('synthetic', model=client.MODEL, effort='low')
+    incomplete = response(status="incomplete", incomplete_details=details,
+                          output=[{"type": "message", "role": "assistant",
+                                   "content": [{"type": "output_text", "text": ""}]}])
+    try:
+        instance.answer(incomplete, {'usage': None})
+    except AnthropicError as error:
+        assert error.detail != "refusal"

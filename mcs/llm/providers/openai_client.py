@@ -323,11 +323,17 @@ class OpenAIClient(CloudClient):
             if not isinstance(content, list):
                 raise AnthropicError("protocol_error", "content_invalid")
             for part in content:
+                if isinstance(part, dict) and part.get("type") == "refusal":
+                    # A provider-proven refusal may be billed: never resent or counted.
+                    raise AnthropicError("contract_error", "refusal")
                 if not isinstance(part, dict) or part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                     raise AnthropicError("contract_error", "unexpected_output")
                 texts.append(part["text"])
         status = obj.get("status")
-        length = status == "incomplete" and obj.get("incomplete_details") == {"reason": "max_output_tokens"}
+        details = obj.get("incomplete_details")
+        if status == "incomplete" and isinstance(details, dict) and details.get("reason") == "content_filter":
+            raise AnthropicError("contract_error", "refusal")
+        length = status == "incomplete" and details == {"reason": "max_output_tokens"}
         answer = "".join(texts)
         reasoning_only = bool(output) and all(item.get("type") == "reasoning" for item in output)
         if ((status != "completed" and not length) or not output
