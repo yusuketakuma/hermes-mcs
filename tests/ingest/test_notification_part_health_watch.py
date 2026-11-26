@@ -131,15 +131,72 @@ def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
 
 def test_legacy_unmeasured_input_with_the_old_code_stays_unmeasured(tmp_path):
     # pre-separation producers wrote notification_parts_incomplete for an
-    # unmeasurable read; a watcher reading such a file still never turns it
-    # into measured work, and adds the dedicated code beside it
+    # unmeasurable read; the current observation is the unmeasurable read, so
+    # the current alert normalizes to the dedicated code — the record itself
+    # keeps the old code for history
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
                    parts=_unmeasured_parts())
     assert report["notify_parts_measurement"] == "unknown"
-    assert report["state_reasons"] == ["notification_parts_incomplete"]
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
     rows = _rows(report)
     assert "件数は未測定" in rows and "0件" not in rows and "5件" not in rows
     assert rows.count("件数は未測定") == 1
+
+
+def test_expired_carry_with_positive_counts_alerts_unavailable_not_incomplete(tmp_path):
+    # a carried measurement past its stall age is no longer evidence: the
+    # record keeps its measured counts, but the current observation is the
+    # unmeasurable read and alerts under the dedicated code only
+    stale = _parts_block(status='stale_measurement', observed_at=100)
+    stale['reason'] = 'observation_limit'
+    report = _tick(tmp_path, 100 + health_watch.CARD_STALL_S + 60,
+                   ["notification_parts_incomplete"], parts=stale)
+    assert report["notify_parts_measurement"] == "unknown"
+    assert report["state_reasons"] == ["notification_parts_unavailable"]
+    assert "notification_parts_incomplete" not in report["state_reasons"]
+    rows = _rows(report)
+    assert "件数は未測定" in rows and rows.count("件数は未測定") == 1
+
+
+def test_zero_scope_with_unknown_records_has_no_empty_breakdown_or_dangling_note(tmp_path):
+    # active unfinished scope is zero, all of it already operationally closed;
+    # the unknown-outcome records exist only outside that scope
+    parts = {'active_total': 0, 'active_cards': 0,
+             'acknowledged_unresolved_total': 3, 'unknown_parts_total': 3,
+             'active_by_state': {'pending': 0, 'unknown': 0, 'not_sent': 0, 'held': 0},
+             'active_by_plan': {'current': 0, 'superseded': 0},
+             'active_oldest_age_s': None,
+             'total': 3, 'cards': 1,
+             'by_state': {'pending': 0, 'unknown': 0, 'not_sent': 3, 'held': 0},
+             'by_plan': {'current': 0, 'superseded': 3},
+             'oldest_age_s': None, 'observed_at': 399, 'status': 'recorded'}
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=parts)
+    rows = _rows(report)
+    # no empty breakdown after the scope, no inclusion note without a referent;
+    # unknown records outside the active scope are separate records
+    assert "（現行0・過去0／）" not in rows and "／）" not in rows
+    assert "上記の結果不明を含む" not in rows
+    assert "別に結果不明の記録 3件" in rows
+
+
+def test_stale_file_history_wording_follows_write_time_measurement_evidence(tmp_path):
+    # never-measured legacy record: the history line cannot assert unfinished work
+    _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=_unmeasured_parts())
+    report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
+    assert report["status"] == "stale"
+    lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "送信完了の件数が未確認" in lines and "送信が未完了" not in lines
+
+
+def test_stale_file_history_keeps_measured_wording_for_a_genuine_measurement(tmp_path):
+    # a genuine measurement stays measured in history even after its carry
+    # would have expired: the record's own write-time evidence governs
+    stale = _parts_block(status='stale_measurement', observed_at=399)
+    _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=stale)
+    report = health_watch.evaluate(str(tmp_path), 3000, cfg={})
+    assert report["status"] == "stale"
+    lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "送信が未完了" in lines and "送信完了の件数が未確認" not in lines
 
 
 def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):

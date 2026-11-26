@@ -104,7 +104,12 @@ def test_notification_part_breakdown_is_explicit_or_unconfirmed(tmp_path, damage
     path.write_text(json.dumps({'at': 3700, 'overall': 'degraded',
         'state_reasons': ['notification_parts_incomplete'], 'notify': {'incomplete_parts': parts}}))
     report = health_watch.classify_health(str(path), 3710, 600)
-    assert report['state_reasons'] == ['notification_parts_incomplete']
+    if damage == 'unknown':
+        # the current observation is the unmeasurable read: the alert
+        # normalizes to the dedicated code, the record keeps its own
+        assert report['state_reasons'] == ['notification_parts_unavailable']
+    else:
+        assert report['state_reasons'] == ['notification_parts_incomplete']
     rows = '\n'.join(health_watch._reason_rows(report, report['state_reasons']))
     if damage is None:
         assert '709件（現行126・過去583／結果不明114・未送信590・処理待ち5）' in rows

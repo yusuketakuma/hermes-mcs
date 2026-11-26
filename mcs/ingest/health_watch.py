@@ -286,8 +286,12 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         # producer's incomplete code for an unmeasurable read is kept as its
         # own record — the measurement state already marks it unmeasured.
         if parts_unknown:
-            if ('notification_parts_unavailable' not in reasons
-                    and 'notification_parts_incomplete' not in reasons):
+            # positive counts an expired carry still shows are the old
+            # measurement's record, not current evidence: the current alert
+            # is the unmeasurable read. The record itself keeps its codes,
+            # so the measured-incomplete one stays visible in history.
+            reasons = [r for r in reasons if r != 'notification_parts_incomplete']
+            if 'notification_parts_unavailable' not in reasons:
                 reasons.append('notification_parts_unavailable')
         elif 'notification_parts_incomplete' not in reasons:
             reasons.append('notification_parts_incomplete')
@@ -361,6 +365,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         if measurement is None:
             measurement = 'unknown'
     report['notify_parts_measurement'] = measurement
+    # write-time evidence for history wording: a measured block stays measured
+    # after its carry expires; only a never-measured block is unverified
+    report['notify_parts_measured'] = (
+        measurement in ('recorded', 'stale')
+        or isinstance(parts, dict) and parts.get('status') in ('recorded', 'stale_measurement'))
     if report['notify_parts_measurement'] == 'stale':
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
@@ -1652,18 +1661,26 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 action = "次回の収集で再確認します。続く場合は収集ログを確認"
             else:
                 extra = f" {n}件" if _count(n) else ""
+                if n == 0:
+                    # a bare zero reads as 'nothing anywhere': the scope is the
+                    # tracked population, with any further records named below
+                    extra = " 追跡対象0件"
                 detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
                 if detail is not None:
                     states, plans = detail['by_state'], detail['by_plan']
                     labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
                               ('処理待ち', states['pending']), ('保留', states['held'])]
-                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                    breakdown = '・'.join(f'{label}{count}' for label, count in labels if count)
+                    if breakdown:
+                        extra += f"（現行{plans['current']}・過去{plans['superseded']}／{breakdown}）"
                 unknown = report.get('notify_unknown_part_outcomes')
-                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
+                active_unknown = detail['by_state']['unknown'] if detail else 0
+                if _count(unknown) and unknown > active_unknown:
                     # the global count already contains the unknown rows the
-                    # breakdown shows: name the inclusion, never add them
-                    extra += f"／結果不明の全記録 {unknown}件（上記の結果不明を含む）"
+                    # breakdown shows: name the inclusion, never add them.
+                    # Rows beyond the active scope are separate records.
+                    extra += (f"／結果不明の全記録 {unknown}件（上記の結果不明を含む）" if active_unknown
+                              else f"／別に結果不明の記録 {unknown}件")
                 closed = report.get('notify_tracking_closed_parts')
                 if _count(closed) and closed:
                     extra += f"／別に運用終了・未回収 {closed}件"
@@ -1835,8 +1852,15 @@ def _alert_lines(report: dict) -> list[str]:
         lines.extend(_delivery_observation_lines(report))
         recorded = report.get("recorded_delivery_reasons")
         if status == "stale" and isinstance(recorded, list):
-            past = list(dict.fromkeys(_RECORDED_DELIVERY_JA[code] for code in recorded
-                                      if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
+            # a recorded incomplete code asserts measured unfinished work only
+            # when the record's own measurement evidence is a real measurement;
+            # writers before the separation used it for unmeasurable reads too
+            unmeasured = not report.get('notify_parts_measured')
+            past = list(dict.fromkeys(
+                _RECORDED_DELIVERY_JA['notification_parts_unavailable']
+                if code == 'notification_parts_incomplete' and unmeasured
+                else _RECORDED_DELIVERY_JA[code]
+                for code in recorded if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
             if past:
                 lines.append(f"過去の通知記録（{_jst(report.get('health_at'), with_year=True)} JST）: " + "、".join(past))
         interrupt = report.get("last_interrupt")
