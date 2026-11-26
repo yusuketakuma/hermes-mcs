@@ -268,7 +268,8 @@ def _labs(message, doc, ref, patient_name, verified):
         actual = body[slice(*span)] if span else None
         candidate = clinical_values.lab_candidate(name, item.get("value", ""), item.get("unit"), actual,
                     unverified=item_unverified(item), subject=item.get("subject"), status=item.get("status"),
-                    measured_on=item.get("measured_on"), condition=item.get("condition"), patient_name=patient_name)
+                    measured_on=item.get("measured_on"), condition=item.get("condition"),
+                    patient_name=patient_name, source_body=body)
         scope = clinical_values.patient_item_scope(item, body, patient_name=patient_name, surface=name)
         anchor = body.find(name, span[0], span[1]) if span else -1
         axes = source_axes(body, anchor, anchor + len(name)) if anchor >= 0 else ("unknown", "unknown")

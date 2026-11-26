@@ -1084,7 +1084,7 @@ class Validator:
                     or clinical_values.fold_surface(item["name"])
                     in self.med_claimed_names),
                 flag=item.get("flag"), subject=subject, status=status,
-                measured_on=item.get("measured_on"), condition=item.get("condition"))
+                measured_on=item.get("measured_on"), condition=item.get("condition"), source_body=self.body)
             if item["normalized"]["confirmation"] == "unverified":
                 item["unverified"] = True
                 if self.drops is not None:
