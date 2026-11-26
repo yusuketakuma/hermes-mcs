@@ -65,6 +65,7 @@ def test_openai_profile_resolution_is_purpose_bound(route, purpose, model, effor
 
 def test_ordered_resolution_prefers_first_unblocked_provider(monkeypatch):
     cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: 'synthetic')
     monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
     monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: None)
     selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
@@ -73,10 +74,15 @@ def test_ordered_resolution_prefers_first_unblocked_provider(monkeypatch):
 
 def test_ordered_resolution_never_adopts_a_fallback_provider_on_budget_block(monkeypatch):
     cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: 'synthetic')
     monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
-    monkeypatch.setattr(c, 'budget_block_reason',
-                        lambda db, settings, *, max_tokens=1600, input_bound=None, selection=None:
-                        'provider_daily_cap' if selection['provider'] == 'anthropic' else None)
+
+    def block(db, settings, *, max_tokens=1600, input_bound=None, selection=None):
+        # the budget read judges each candidate in its own provider view:
+        # pin that contract, or a fallback always mismatches the shared settings
+        assert settings['provider'] == selection['provider']
+        return 'provider_daily_cap' if selection['provider'] == 'anthropic' else None
+    monkeypatch.setattr(c, 'budget_block_reason', block)
     selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
     # the installation's key belongs to the configured provider alone: a
     # fallback entry could never leave the wire, so the unit keeps the
@@ -87,6 +93,7 @@ def test_ordered_resolution_never_adopts_a_fallback_provider_on_budget_block(mon
 
 def test_ordered_resolution_reports_selected_provider_block_when_every_provider_is_blocked(monkeypatch):
     cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: 'synthetic')
     monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
     monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: 'provider_daily_cap')
     selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
@@ -94,6 +101,41 @@ def test_ordered_resolution_reports_selected_provider_block_when_every_provider_
     # unit keeps the ordered contract it was reserved under, and send-time
     # admission reports the same reason again.
     assert selection['provider'] == 'anthropic' and errors == ['provider_daily_cap']
+
+
+def test_ordered_resolution_skips_providers_without_a_key(monkeypatch):
+    cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key',
+                        lambda provider, root=None: 'synthetic' if provider == 'openai' else None)
+    monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
+    monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: None)
+    selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
+    # the keyless primary can never send: the keyed fallback wins without a block
+    assert not errors and selection['provider'] == 'openai'
+
+
+def test_ordered_resolution_returns_none_when_no_provider_can_send(monkeypatch):
+    cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: None)
+    monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
+    monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: None)
+    selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
+    assert selection is None
+
+
+def test_ordered_resolution_skips_unapproved_providers(monkeypatch):
+    import external_transfer
+    cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: 'synthetic')
+    monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
+    monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: None)
+    acknowledged = {"state": "acknowledged", "auto_enable": False,
+                    "acknowledged": {"services": {"openai": True}}}
+    monkeypatch.setattr(external_transfer, 'status', lambda root=None: acknowledged)
+    monkeypatch.setattr(external_transfer, 'service_allowed',
+                        lambda state, service: service == 'openai')
+    selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
+    assert not errors and selection['provider'] == 'openai'
 
 
 def test_explicit_legacy_model_and_invalid_profile_fail_closed():
