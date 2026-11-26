@@ -175,15 +175,19 @@ def run(args, *, connect):
                 if profile != 'monitor':
                     if previous['local_receipt_id'] is None:
                         _initialize_profile(store, profile)
-                        print('対象profileの空の支援記録を準備しました。診断への同意やサービス操作はまだ開始しません。')
+                        if profile == 'auto':
+                            print('対象profileの配布を有効化しました。自動更新はstanding consentとpin配置が揃うまで開始しません。')
+                        else:
+                            print('対象profileの空の支援記録を準備しました。診断への同意やサービス操作はまだ開始しません。')
                     else:
                         _check_existing_profile(store, profile)
-                        print('保存済みのprofileと支援記録を確認しました。停止状態や同意は作り直しません。')
+                        print('保存済みのprofile' + ('' if profile == 'auto' else 'と支援記録') + 'を確認しました。停止状態や同意は作り直しません。')
                     print('配布の状態: mcs connection --state-root <同じ私有領域> --provision-status ' + profile)
                     print('配布の受領: mcs connection --state-root <同じ私有領域> --provision-ack ' + profile
                           + ' --confirm-human --reason <秘密を含まない半角の理由>')
-                    print('次の操作: ' + ('mcs support connect（本人確認済みcase UUID）' if profile == 'support'
-                                          else 'mcs support plan-restart（本人確認済みcase UUID）'))
+                    if profile != 'auto':
+                        print('次の操作: ' + ('mcs support connect（本人確認済みcase UUID）' if profile == 'support'
+                                              else 'mcs support plan-restart（本人確認済みcase UUID）'))
                     return 0
                 print('配布を保存しました。Consoleの対象と登録コードを確認してから、既存のR1登録へ進めます。'
                       'R1登録後には connection --provision-status monitor / --provision-ack monitor で配布との一致を確認します。')
