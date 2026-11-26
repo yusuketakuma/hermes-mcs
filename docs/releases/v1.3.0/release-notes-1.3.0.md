@@ -114,9 +114,6 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **患者コンテキストの品質確認が止まった箇所を記録**
   患者コンテキストの品質確認（資料と概況の Jev による確認と修復）が通らずに終わったとき、クラウド処理の記録（patient_context_pass）に、止まった確認の種類を固定の短いコード（quality_detail）で残します。処理期限、設定・鍵・判定方針の変更、確認中の別の書込み、修復の予算や送信の見送り、保存直前の再確認などを区別できます。記録は観察のためだけで、判定・保存される値・再試行の間隔は変わりません。本文・患者を特定する情報・設定値は含めず、一覧にない値は unclassified とします。
 
-- **意味解析の要約・loopの既定をassistに変更**
-  意味解析の mode が有効な環境で summary_mode・loop_mode を設定していない場合も、既定で assist モード（補助表示）として要約・loop の意味解析が動くようになります。これまで既定は off で意味解析 job は実行されず pending に残るだけでしたが、この変更で未設定の環境でも job が実行され、補助結果が蓄積されます。ローカルLLMの処理量と Jev の要求数が増えます。明示的に off を設定すれば従来どおり無効にできます。extract_qc の既定は off のままです。
-
 - **意味解析backlogの要約生成を非専用workerでもcloudへoffload**
   semantic backlogを非専用workerの常駐処理が拾った場合でも、要約生成stageはownerが開いたsemantic backlog window内でcloud推論を使うようになりました。facts抽出stageは従来どおり専用backlog workerだけがcloudへ送り、realtime laneと新着10分以内の対象はcloudへ送りません。loop候補生成はもともとfactsからの決定的変換で、関係評価はJev APIのため、今回のlocal LLM offload対象ではありません。
 
@@ -282,6 +279,11 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **スナップショット複製の間も他の処理が書込みを続けられるように修正**
   定期処理が台帳スナップショットを複製している間、run lockを保持し続けて患者コンテキストや抽出が待機する問題を修正しました。オンラインバックエップの一貫性を利用し、複製と検証の間だけロックを離して再取得します。
 
+### 動作・設定の変更
+
+- **意味解析の要約・loopの既定をassistに変更**
+  意味解析の mode が有効な環境で summary_mode・loop_mode を設定していない場合も、既定で assist モード（補助表示）として要約・loop の意味解析が動くようになります。これまで既定は off で意味解析 job は実行されず pending に残るだけでしたが、この変更で未設定の環境でも job が実行され、補助結果が蓄積されます。ローカルLLMの処理量と Jev の要求数が増えます。明示的に off を設定すれば従来どおり無効にできます。extract_qc の既定は off のままです。
+
 ### 更新時の注意
 
 - 常駐処理は更新後の再起動から新しい判定を使います。保存済みの抽出結果は再抽出時に更新します。
@@ -433,7 +435,7 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - 更新した定期処理から適用されます。追加操作は不要です。
 
-- 追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。Hermes モードには影響しません。
+- 追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。独立実行では install.sh を再実行すると適用できます。Hermes モードには影響しません。
 
 ### 技術詳細
 
@@ -992,7 +994,7 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - 課金済み応答の論理prompt fingerprintを会計へ保存し、output envelopeや入力束縛が変わっただけの同一promptは再送信せず再利用します。結合・改ざん・証拠不整合がある場合は従来どおりfail-closedです。
 - 抽出・意味解析・患者コンテキストでHTTP 200かつ課金済みでもローカル検証を通らなかった応答をcloud_usage_validation_failure artifactで注記し、固定のvalidation failure理由だけを残します。この注記がある応答は成功応答として再利用せず、上限内の再送対象です。
 - 抽出失敗artifactにはboundedなfailure_observationを追加し、fallback/refusal区分・validation failure理由・repair issue件数・receipt idだけを保持します。自由文・患者本文・provider応答本文は保存しません。
-- 例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、週次tick側のbackoff再試行に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。
+- 例外: 患者サマリ品質判定のJev呼出しだけは従来どおり1送信です。この経路のusage予約は結果不明の送信と再送を区別できず、同一操作内の再送は二重課金防止契約を弱めるため、品質確認の再試行記録によるbackoff（300秒×試行回数・上限3600秒）後の再確認に委ねます。semantic_usageへ論理request会計を入れる別作業で統一予定です。
 - 根拠: mcs/llm/transport/llm_retry.py、mcs/llm/transport/cloud_client.py、mcs/llm/cloud_policy.py、mcs/extract/llm/extract_llm_runner.py、mcs/extract/llm/extract_llm_errors.py、mcs/extract/llm/extract_llm_source_contract.py、mcs/patients/patient_context_refresh.py、mcs/semantic/semantic_transport.py、mcs/semantic/semantic_llm.py、mcs/semantic/semantic_jev.py、mcs/semantic/semantic_runtime.py、tests/llm/test_cloud_response_recovery.py、tests/llm/test_cloud_resend_guard.py、tests/llm/test_anthropic_client.py、tests/semantic/test_semantic_cloud.py、tests/semantic/test_semantic_circuit.py、tests/extract/llm/test_extract_llm_storage.py、mcs/patients/patient_context_quality_controller.py、tests/llm/test_openai_client.py、tests/llm/test_cloud_response_limit.py
 
 #### cloud再試行統一の登録漏れerror codeを補完し、上限内再試行の契約を検証へ反映

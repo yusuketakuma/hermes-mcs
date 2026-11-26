@@ -317,7 +317,7 @@
   },
   "cloud-retry-paid-reuse-20261125": {
    "path": "changes/archive/1.3.0/cloud-retry-paid-reuse-20261125.json",
-   "sha256": "cda53c0aef5b902dc20e8ecca1359f95b486361d6ea45dd071e4553f9af3d8a7",
+   "sha256": "b86952772ecb4c8eb1a1dc09beccda003d085ef80d27fbff1601c4e35eefcb22",
    "title": "cloud処理を初回送信と5回までの再試行に統一し、課金済み応答を安全に再利用"
   },
   "cloud-retry-test-pin-20261125": {
@@ -427,7 +427,7 @@
   },
   "standalone-sdk-hashes": {
    "path": "changes/archive/1.3.0/standalone-sdk-hashes.json",
-   "sha256": "14de87babb4699664f234ae7678a050da300b140ef79000616f316591487e762",
+   "sha256": "515ee9f9e7c2b58280a42b6aec1aeac7fa048078e80b8057eeea62b772c283fc",
    "title": "独立接続の SDK を SHA256 と照合して導入"
   }
  },
