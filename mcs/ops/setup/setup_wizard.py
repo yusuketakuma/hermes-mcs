@@ -334,7 +334,7 @@ OPTIONAL_FEATURES = {
 }
 
 
-def ask(key: str, kind: str, default, desc: str, cur, present=False):
+def ask(key: str, kind: str, default, desc: str, cur, present=False, *, allow_back=False):
     """One wizard item. Returns the value to store, or UNSET.
     `present`: the key exists in cfg (so cur=None is an explicit null)."""
     eff = cur if cur is not None else default
@@ -371,7 +371,7 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
               + (f" [{' / '.join(marks)}]" if marks else "") + ": ")
     while True:
         raw = input(prompt).strip()
-        if raw.lower() in ("b", "back") or raw == "戻る":
+        if allow_back and (raw.lower() in ("b", "back") or raw == "戻る"):
             return BACK
         if raw.lower() in ("q", "quit", "中止"):
             raise KeyboardInterrupt
@@ -401,10 +401,6 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
         if ok:
             return val
         print(f"    {val}")
-
-
-def _restore_key(cfg: dict, dotted: str, present: bool, value) -> None:
-    set_key(cfg, dotted, copy.deepcopy(value) if present else UNSET)
 
 
 def wizard(cfg: dict):
@@ -440,27 +436,22 @@ def wizard(cfg: dict):
     def visible(item):
         return item[4] is None or item[4](cfg)
 
-    def section_has_items(title):
-        return any(entry_title == title and visible(item) for entry_title, item in entries)
-
-    step = 0
-    announced = set()
-    history = {}
+    last_title = None
+    history = []
     index = 0
     while index < len(entries):
         title, (key, kind, default, desc, when) = entries[index]
         if when is not None and not when(cfg):
             index += 1
             continue
-        if title not in announced:
-            step += 1
-            later = [section for later_index, (section, item) in enumerate(entries)
-                     if later_index >= index and section != title and visible(item)]
-            total = step + len(set(later))
+        if title != last_title:
+            visited = {entries[pos][0] for pos, _, _ in history}
+            step = len(visited | {title})
+            total = len(visited | {section for section, item in entries[index:] if visible(item)})
             print(f"\n【手順 {step}】{title}（現在の選択では全{total}段階）")
             if not detailed:
                 print("  質問しない設定は現在の値を保持し、未設定ならその版の既定に従います。")
-            announced.add(title)
+            last_title = title
         if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
             kind = "reqintlist"
         if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
@@ -478,18 +469,13 @@ def wizard(cfg: dict):
         old_value = copy.deepcopy(get_key(cfg, key))
         while True:
             answer = ask(key, kind, default, desc, get_key(cfg, key),
-                         has_key(cfg, key))
+                         old_present, allow_back=True)
             if answer is BACK:
-                previous = index - 1
-                while previous >= 0 and not visible(entries[previous][1]):
-                    previous -= 1
-                if previous < 0:
+                if not history:
                     print("    これ以上前の項目はありません。")
                     continue
-                previous_key = entries[previous][1][0]
-                if previous_key in history:
-                    _restore_key(cfg, previous_key, *history[previous_key])
-                index = previous
+                index, was_present, value = history.pop()
+                set_key(cfg, entries[index][1][0], value if was_present else UNSET)
                 break
             if key in ("notify.slack.project_ids", "notify.discord.project_ids") \
                     and cfg.get("runtime_mode") == "standalone":
@@ -498,11 +484,11 @@ def wizard(cfg: dict):
                 if not automatic and (answer is UNSET or answer == []):
                     print("    自動解決がオフのため、1件以上のプロジェクトIDを入力してください。")
                     continue
-            history[key] = (old_present, old_value)
+            history.append((index, old_present, old_value))
             set_key(cfg, key, answer)
             index += 1
             break
-    return len(announced) + 1
+    return len({entries[pos][0] for pos, _, _ in history}) + 1
 
 def wizard_optional_features(cfg: dict, *, interactive: bool | None = None) -> None:
     """Choose per optional feature whether its setup guidance follows the release default.
