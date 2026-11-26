@@ -1,0 +1,14 @@
+{
+    "category": "fixed",
+    "title": "cloud再試行統一の登録漏れerror codeを補完し、上限内再試行の契約を検証へ反映",
+    "summary": "cloud処理の有界再試行統一（初回送信へ最大5回）で追加された固定エラー区分 cloud_validation_failure_invalid / cloud_validation_failure_transaction_required が error code 登録から漏れていたため補完しました。利用者向けの動作変更はありません。",
+    "upgrade": "更新後に Hermes gateway（独立実行では mcs_standalone）の再起動が必要です。設定変更や追加操作は不要です。",
+    "details": [
+        "upgrade reconciliation launcher の再構築環境で provider_settings が llm_retry を import できず起動に失敗する問題を、使用箇所の遅延 import で修正しました。",
+        "有界再試行の統一契約（上限6送信・各送信の独立したusage会計・auth/payment/content拒否は不再送・unknown outcome は not_sent へ分類しない）を検証テストの固定条件へ反映しました。"
+    ],
+    "refs": [
+        "mcs/core/error_codes.py",
+        "mcs/core/provider_settings.py"
+    ]
+}

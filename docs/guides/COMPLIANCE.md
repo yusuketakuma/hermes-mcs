@@ -1,5 +1,7 @@
 # 医療情報システムとして使うための法令・ガイドライン対応
 
+> コマンド例の `PY` は導入方式のMCS用Pythonです。standalone は `PY="$HOME/.mcs/venv/bin/python3"`、Hermes連携は `PY="<Hermesホーム>/hermes-agent/venv/bin/python"`（既定は `$HOME/.hermes`）を設定してから使います。macOS標準の `python3` とは区別します。
+
 この文書は、薬局・訪問看護ステーション・診療所が hermes-mcs を業務で使うときに、
 施設側で整えるべきことと、ソフトウェアが用意している機能を対応づけたものです。
 **法的助言ではありません。** 実際の導入判断は、施設の顧問弁護士・個人情報保護の担当者、
@@ -75,9 +77,9 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 記録せず、その旨を表示します（確認待ちの間は外部AIへ自動送信しないので、初回収集を先に済ませても送信は始まりません）。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
+"$PY" mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
   --reason "2026-11-20 契約・同意書式・運用管理規程v1を確認" --services anthropic,jev --confirm-human
-python3 mcs/ops/mcs_compliance.py status
+"$PY" mcs/ops/mcs_compliance.py status
 ```
 
 確認は人承認操作 `ops.external_transfer_acknowledge` として、ほかの承認操作と同じ受付記録（`command_receipts`）を
@@ -143,7 +145,9 @@ Jev が確認に含まれない場合は、明示した `semantic.mode` をそ�
 
 `external_transfer.json` を読めない（形式が違う・権限が0600でない・リンクやディレクトリになっている）間は、
 すべての外部AIへの送信を止め、`acknowledge` も `external_transfer_record_invalid`（リンクでは `external_transfer_io_error`）
-で受け付けません。このファイルは削除しないでください（削除すると確認記録の無い既存環境と同じ扱いに戻ります）。
+で受け付けません。このファイルが見つからない場合も同じ扱いです。確認記録と一緒に作る `external_transfer.required` が
+確認の必要な環境であることを示すので、確認記録だけが消えたり削除されたりしても送信は再開しません
+（この目印は、新規導入時と、確認を記録したときに作ります。目印ができる前に導入した環境では、次に確認を記録したときから有効です）。
 MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を `{"v": 1, "required": true, "acknowledged": null}`
 （確認待ち）にしてから、確認を記録し直してください。読めない間は、外部AIを使う設定かどうかにかかわらず、監視が
 `external_transfer_unreadable` の警報を出します。
@@ -160,15 +164,17 @@ MCSを動かすユーザーが所有する権限0600の通常ファイルに戻�
   利用者・チャンネル・操作・患者ID・結果を1行で残します。一覧の回答は、表示した患者のIDも残します
   （1行200人まで、超えた分は人数だけ）。`/mcs-summary`・LINE WORKS の「サマリー」も同じく記録し、記録できないときは表示しません。
   検索語・本文・患者名は残さず、操作・種類が定義済みの名前でない拒否された要求は `invalid` として残します。
+- ローカル患者画面の常駐モード（Tailscale 経由）も、MCS の記録を返す前に同じ記録へ残します。利用者は `tailscale:<ログイン名>`、経路は `local_chat`、
+  操作は `view`、種類は開いた画面（`timeline`・`thread`・`sources` など）です。在宅ケア台帳の表示と、この Mac だけで開く秘密URLのモードは対象外です。
 - 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作の応答は受付番号（`command_id`）・ハッシュ・受付状態だけで患者情報を含まず、操作者・患者・変更内容は受付記録（`command_receipts`）に残るため返します。適用結果の照会は閲覧なので、記録できない間は返しません。
 - 各行は直前の行の SHA-256 を持ち、途中の行の削除・改変・月ファイルの欠落を検出できます。
   末尾の行の削除・改変は連鎖だけでは分からないため、`verify` が出す `records` と `head` を
   点検記録（端末の外）に書き、次回 `--checkpoint 件数:head` で照合します。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回のhead>  # 改ざん検査
-python3 mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
-python3 mcs/ops/mcs_compliance.py access-log show --project 123
+"$PY" mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回のhead>  # 改ざん検査
+"$PY" mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
+"$PY" mcs/ops/mcs_compliance.py access-log show --project 123
 ```
 
 `review` の患者数は、記録に残った患者IDの重複を除いた人数です。1行に載らなかった分（`patients_more`）は

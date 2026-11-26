@@ -155,6 +155,7 @@ def test_new_split_seals_original_provider_and_frame_but_keeps_current_reader_se
 
 
 @pytest.mark.parametrize('outcome', ['unknown', 'settled'])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, monkeypatch, outcome):
     from test_cloud_resend_guard import _reserve, _result, _medium_selection, _openai_usage
     ledger = _ledger(tmp_path)

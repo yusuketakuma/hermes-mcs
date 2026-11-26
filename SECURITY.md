@@ -52,7 +52,7 @@
   REST 接続は行わない。`asyncio` の許可は待機・ローカル I/O の thread 移譲・
   cancellation に限定する
 - `runtime_mode=standalone` では `adapters/{slack,discord}/standalone.py` が
-  `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`）で
+  `deployment/requirements-standalone.txt` の固定版公式 SDK（`~/.mcs/venv`。導入は `requirements-standalone.lock` の SHA256 と照合）で
   Slack/Discord に接続する。トークンはroot配下の私有JSON（優先）または `.env`（0600）からのみ読み、
   SDK は関数内で import、起動時に proxy 環境変数を除去、メンションは無効化
   （Slackの独立CLI本文はプレーンテキスト）、テキスト送信先は `notify_target` /
@@ -81,7 +81,7 @@
 - `brain_export.py` は患者名・病名・要約・薬剤等の PHI を含む Markdown を
   ローカル出力する。出力後の知識ストア同期・LLM 利用は別のデータ経路であり、
   エクスポート実行だけではそれらの外部送信を許可したことにならない
-- Slack・Discord・LINE WORKS の `/mcs` 操作は、回答前に操作者・操作・患者ID・結果を
+- Slack・Discord・LINE WORKS の `/mcs` 操作と、ローカル患者画面の常駐モードでの MCS の記録の閲覧は、回答前に操作者・操作・患者ID・結果を
   ハッシュ連鎖の閲覧記録 `data/access_log/` へ追記する。検索語・本文・患者名は記録しない。
   記録できない閲覧は回答しない
 - 人承認操作（依頼登録・更新、シグナル却下、閾値変更、更新適用・ロールバック・
@@ -140,7 +140,7 @@ Discord等の設定先へ送ります。Jev・Anthropic・OpenAIは、このMCS�
 患者の記録をどこへ送るかは重要なので、使うAIと送付先を明示します。
 
 - **文章の整理**（要約・薬名や症状の拾い上げ）— このマシンの中だけで
-  動くローカルAI（Qwen3.5-9B）が基本経路です。AnthropicまたはOpenAIが有効な場合、患者文脈の作成・更新とその品質修復は外部APIへ送ります。保存済み投稿の再抽出と意味解析の未処理分は、所有者が期限付きの再開期間（`reextract_backlog_until`・`semantic_backlog_until`）と費用上限を設定した間だけ送ります。添付ページの解析は送りません。失敗時のローカル処理も従来の受付・期限条件に従います
+  動くローカルAI（導入時にMacへ合わせたQwen）が基本経路です。AnthropicまたはOpenAIが有効な場合、患者文脈の作成・更新とその品質修復は外部APIへ送ります。保存済み投稿の再抽出と意味解析の未処理分は、所有者が期限付きの再開期間（`reextract_backlog_until`・`semantic_backlog_until`）と費用上限を設定した間だけ送ります。添付ページの解析は送りません。失敗時のローカル処理も従来の受付・期限条件に従います
 - **整理結果の意味チェック** — TypeSafe Jev APIへ確認用の設問と本文を送ります。
   `TYPESAFE_API_KEY` がありmode未指定なら `assist`、キーがなければ `off` です。
   自動有効化時の上限は再試行を含め日本時間の1日10000要求です。明示した `off` や低い予算は維持し、

@@ -29,8 +29,9 @@ def config():
 def test_accept_lineworks_and_existing_slack():
     assert mcs_setup.validate_config(config()) == ([], [])
     cfg = config()
-    cfg["notify"] = {"interactive": "slack", "slack": {
-        "profile": "default", "application_id": "A1", "team_id": "T1", "channel_id": "C1"}}
+    cfg["notify"]["interactive"] = "slack"
+    cfg["notify"]["slack"] = {
+        "profile": "default", "application_id": "A1", "team_id": "T1", "channel_id": "C1"}
     assert mcs_setup.validate_config(cfg) == ([], [])
     assert mcs_setup._apply_plugin_integration(config(), SimpleNamespace()) is True
 
@@ -59,6 +60,38 @@ def test_missing_scope_and_explicit_auto_scope():
     # The runtime adapter additionally requires a published scope snapshot.
 
 
+def test_lineworks_target_requires_the_notify_block():
+    cfg = config()
+    del cfg["notify"]
+    assert any("notify.lineworks: LINE WORKS送信には接続設定が必要です" in e
+               for e in mcs_setup.validate_config(cfg)[0])
+
+
+@pytest.mark.parametrize("runtime", [None, "hermes", "standalone"])
+def test_text_only_lineworks_target_requires_connection_scope(runtime):
+    cfg = config()
+    cfg["notify"]["interactive"] = "off"
+    del cfg["notify"]["lineworks"]
+    if runtime is not None:
+        cfg["runtime_mode"] = runtime
+    assert any("notify.lineworks: LINE WORKS送信には接続設定が必要です" in e
+               for e in mcs_setup.validate_config(cfg)[0])
+    cfg = config()
+    cfg["notify"]["interactive"] = "off"
+    if runtime is not None:
+        cfg["runtime_mode"] = runtime
+    errors, warnings = mcs_setup.validate_config(cfg)
+    assert errors == []
+    assert not any(w.startswith("notify.lineworks: 接続設定がありますが") for w in warnings)
+
+
+@pytest.mark.parametrize("key", ["notify_target", "notify_system_target"])
+def test_lineworks_text_target_must_match_the_configured_room(key):
+    cfg = config()
+    cfg[key] = "lineworks:other-room"
+    assert any(e.startswith(key + ": LINE WORKSの送信先は") for e in mcs_setup.validate_config(cfg)[0])
+
+
 def test_wizard_collects_authority_and_keeps_thread_settings_hidden():
     cfg = config()
     fields = {key: (kind, gate) for _, rows in setup_wizard.WIZARD
@@ -66,6 +99,11 @@ def test_wizard_collects_authority_and_keeps_thread_settings_hidden():
     assert "lineworks" in fields["notify.interactive"][0]
     assert fields["notify.lineworks.allowed_user_ids"][0] == "reqcsv"
     assert fields["notify.lineworks.project_ids"][1](cfg)
+    text_only = config()
+    text_only["notify"]["interactive"] = "off"
+    assert fields["notify.lineworks.project_ids"][1](text_only)
+    text_only["notify_target"] = "local"
+    assert not fields["notify.lineworks.project_ids"][1](text_only)
     assert not fields["notify.card_thread"][1](cfg)
     assert setup_wizard.parse_answer("reqcsv", ",,")[0] is False
     assert setup_wizard.parse_answer("reqcsv", "u1,u2") == (True, ["u1", "u2"])
@@ -101,12 +139,16 @@ def test_lineworks_never_installs_hermes_gateway():
     assert service_management.sync_gateway(config(), 'nonexistent', lambda _: pytest.fail('gateway mutation'), False) == 0
 
 
-def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(monkeypatch, tmp_path):
+@pytest.mark.parametrize("system_only", [False, True])
+def test_off_lineworks_text_target_still_uses_the_independent_local_diagnostic(monkeypatch, tmp_path, system_only):
     import json
     from adapters.lineworks import __main__ as adapter_cli
 
     cfg = config()
     cfg["notify"]["interactive"] = "off"
+    if system_only:
+        cfg["notify_system_target"] = cfg["notify_target"]
+        cfg["notify_target"] = "local"
     (tmp_path / "config.json").write_text(json.dumps(cfg))
     chrome = tmp_path / "synthetic-chrome"
     chrome.write_text("synthetic")

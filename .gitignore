@@ -5,6 +5,7 @@ token_cache.json
 config.json
 config.json.*
 external_transfer.json
+external_transfer.required
 .install-options-migration.pending
 .install-options-migration.reconcile.*
 # Interrupted private configuration writes may leave these staging files.
@@ -40,6 +41,7 @@ ocr-venv/
 /scripts/mcs_llm_catchup.sh
 /scripts/mcs_ocr.sh
 /scripts/mcs_offsite.sh
+/scripts/mcs_release_auto.sh
 /scripts/mcs_update.sh
 
 # Generated release video artifacts

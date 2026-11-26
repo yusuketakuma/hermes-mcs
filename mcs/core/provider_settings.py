@@ -88,6 +88,9 @@ def jev_model_pin_ok(pin, jev_model) -> bool:
 
 
 def _jev_values(value, jev_model):
+    # Deferred: provider_settings is imported by the upgrade reconciliation
+    # launcher, whose reconstructed tree does not put llm/transport on the path.
+    from llm_retry import CLOUD_MAX_ATTEMPTS
     if "model" in value and not jev_model_pin_ok(value["model"], jev_model):
         raise ValueError("provider_model_invalid")
     for key, low, high in (("daily_request_budget", 0, 100000), ("max_attempts_per_try", 1, CLOUD_MAX_ATTEMPTS),
@@ -1071,7 +1074,9 @@ def _validate_bootstrap(config):
 def _bootstrap_common_valid(common):
     from mcs_config import CONFIG_RULES
 
-    allowed = {"runtime_mode", "recovery_python", "install_args"}
+    # The installer owns the first local-model choice as part of the fresh
+    # machine bootstrap; other known settings still mean the machine is not fresh.
+    allowed = {"runtime_mode", "recovery_python", "install_args", "local_llm"}
     known = set(CONFIG_RULES) | _INDEPENDENT_ROOTS
     return (isinstance(common, dict) and all(isinstance(key, str) for key in common)
             and not common.keys() & (known - allowed))

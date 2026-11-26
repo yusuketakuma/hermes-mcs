@@ -24,12 +24,12 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 **このマシンの稼働系**の、導入から更新・障害復旧までの全局面。
 
 `runtime_mode: "standalone"`（[STANDALONE.md](../guides/STANDALONE.md)）では `~/.hermes` を
-使わない。`ai.mcs.standalone`の単一hostが7定期ジョブ（wrapperは`~/.mcs/scripts`、
+使わない。`ai.mcs.standalone`の単一hostが8定期ジョブ（wrapperは`~/.mcs/scripts`、
 3600秒上限）・cmd/cmd_int取込・抽出worker3本を所有する。インタプリタは`~/.mcs/venv`。
 更新marker中は背景処理を停止し、updater以外の子処理が完了したことをheartbeatで確認する。
 更新後のhost再起動はgeneration付き要求を発行し、updaterを含む処理の完了後に行う。
 復旧ツールは同venvでservicesを再同期し通知を`mcs_standalone send`で送る。
-`deployment/requirements-standalone.txt`が変わるタグは自動適用しない
+`deployment/requirements-standalone.txt`かそのハッシュ付き一覧`requirements-standalone.lock`が変わるタグは自動適用しない
 （`standalone_requirements_changed`）。venvが使えない場合は
 `standalone_interpreter_unavailable`、独立入口を持たないタグへの更新・ロールバックは
 `standalone_runtime_missing_in_target`で止まる。旧worktree版のcalendar agentの

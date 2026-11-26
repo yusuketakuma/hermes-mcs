@@ -96,7 +96,7 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は
   保持し、キーがない場合は送信しません。
 
-OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復に限ります。個別の投稿・添付OCR・意味解析への新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。
+OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復、およびownerが開いた`semantic_backlog` window内の意味解析backlog送信に限ります。意味解析ではrealtime laneと、対象threadのいずれかのmemberが新着・通知・編集から10分以内のものはcloudへ送らず、facts抽出は専用backlog worker、summary生成はwindow内のbacklog処理が送ります。添付OCRへの新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。
 
 質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
 コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
@@ -114,13 +114,13 @@ MCS ログインは依存導入を妨げないため、初回収集の直前に�
 3.9 系で、Path A では `install.sh` が `python@3.14` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
 実行しない（Path A は `~/.hermes/hermes-agent/venv/bin/python`、
-Path B は `~/.mcs/venv/bin/python3`）。
+Path B は `~/.mcs/venv/bin/python3`）。`HERMES_HOME`を変更した場合は、Path Aの例を`<Hermesホーム>/hermes-agent/venv/bin/python`に読み替える。
 
 | # | チェック | コマンド | 合格条件 |
 |---|---|---|---|
 | 1 | macOS である | `uname -s` | `Darwin` |
 | 2 | 現 checkout のルート | `ls ./install.sh`。無ければ既存 clone 先へ移動する。新規取得が必要なら `git clone https://github.com/yusuketakuma/hermes-mcs.git` → `cd hermes-mcs`（git が無ければ先に `xcode-select --install`） | ルートの `./install.sh` が存在 |
-| 3 | 前提一式（読取り専用） | `./install.sh --preflight` | exit 0・最終行 `事前確認: 導入を妨げる問題 0件、注意 N件` |
+| 3 | 前提一式（読取り専用の予備確認） | `./install.sh --preflight` | exit 0・最終行 `事前確認: 導入を妨げる問題 0件、注意 N件`。mode未指定のため新規導入ではstandaloneとして確認される。Path A/Bを選んだ後は、そのmodeで再確認する |
 | 4 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | 有無だけでは初期設定の完了を判断しない。既存値を表示せず、保持して不足項目を確認する |
 
 `--preflight` は何も書き込まず、root 実行・macOS 版・Xcode CLT・
@@ -162,21 +162,23 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 > **B**: スタンドアローン（全MCS機能。Slack/Discord/LINE WORKSの
 > 通知・操作をHermesなしで使う）
 
-- A → Phase 3
-- B → Phase 6
+- A → `./install.sh --mode hermes --preflight` が exit 0 であることを確認してPhase 3
+- B → `./install.sh --mode standalone --preflight` が exit 0 であることを確認してPhase 6
+
+mode付きのpreflightは読取り専用です。mode未指定の予備確認が通っても、選んだ方式の前提確認を省略しません。
 
 ## Phase 3 — Path A: 依存の自動導入
 
 ### 3-1. install.sh
 
-Phase 1 の `--preflight` が exit 0 であることが前提。
+Phase 2 で確認した `./install.sh --mode hermes --preflight` が exit 0 であることが前提。
 
 【実行】
 
 ```bash
 # Phase 1 で確認した同じリポジトリルートで実行
-./install.sh --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
-./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
+./install.sh --mode hermes --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
+./install.sh --mode hermes             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
 
 【検証】`ソフトの準備が完了しました` と 6 ステージ分の結果が表示される。
@@ -196,7 +198,7 @@ cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パ�
 
 【失敗時】install.sh は失敗したステージで止まり、`エラー: <原因と直し方>`
 と `エラー: 導入を中断しました。失敗した段階の原因を確認してください。<段階名>の段階で止まっていました。同じコマンドを再実行すると途中から再開します` を出す（後続ステージは実行されない。更新処理の一部として動いた導入では `mcs recover` の確認を案内する）。止まった段階は `~/.mcs/data/install_progress.json` にも記録され（初回導入で bootstrap 検査が data/ を厳密に確認する区間の brew・runtime 段階は記録対象外）、`mcs setup check` の注意にも残った記録が出る（診断の注意であり、初期設定や実接続の完了を意味しない）。`エラー:` 行の指示を
-実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
+実行し、同じフラグで `./install.sh --mode hermes` を再実行する — 完了済みの部分は
 skip され、中断した clone/checkout・venv・依存導入・モデル DL
 （`.part` から再開）は続きから進み、再実行の冒頭に前回の記録が残っている段階の案内が出る（記録は実行中かどうかを証明しないため、案内は「残っています」と「実行中なら完了を待つ」形で、時間経過だけで中断とは断定しない）。よくある原因と対処は
 INSTALLATION.md §7-1。`注意:` 行（`~/.local/bin` が PATH に無い、
@@ -419,8 +421,8 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 ```bash
 PY=~/.hermes/hermes-agent/venv/bin/python
-$PY mcs/ingest/run_check.py --json --download-files --mark-read
-$PY mcs/views/mcs_view.py status
+"$PY" mcs/ingest/run_check.py --json --download-files --mark-read
+"$PY" mcs/views/mcs_view.py status
 ```
 
 【検証】`run_check` が exit 0 で終了し、`status` に患者・メッセージ
@@ -446,8 +448,8 @@ installer内で初期設定を完了した場合は、次の`mcs setup`を繰り
 
 ```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py check
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py check
+"$PY" -m mcs_standalone status
 ```
 
 Chromeは[両モード共通の初回準備](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従います。専用profile準備・本人ログイン・CDP稼働・MCSセッション・初回収集は別々に確認し、同節のPath A用Pythonではなく上の`$PY`を使います。収集・通知・既読化は承認した範囲でだけ確認します。
@@ -458,12 +460,12 @@ Bot token等は端末の非表示入力に委ね、チャットやargvへ含め�
 `init --yes`も、§0-1で本人が準備した指定名の環境変数を認証情報登録の入力として使います。既存の保存値を優先し、必要な値が足りなければ新しい資格情報を保存せず停止します。実行時の`run`・`send`はroot配下の私有JSONを優先し、私有`.env`を互換経路として読むだけで、環境変数からトークンを推測しません。
 
 SlackはBot/App token、DiscordはBot tokenを専用0600ファイルへ保存します。
-LINE WORKSの認証・HTTPS Callbackは[専用手順](LINEWORKS.md)に従います。
-LINE WORKSは独立host内で起動するため、同じ資格情報で別アダプターを常駐させません。
+LINE WORKSの認証は[専用手順](LINEWORKS.md)に従い、HTTPS Callbackはカード・操作を使う場合だけ設定します。
+LINE WORKSのカード・操作では独立host内でアダプターが起動するため、同じ資格情報で別アダプターを常駐させません。文章だけの通知ではアダプターの常駐は不要です。
 
 旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
 手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
-独立hostは7定期ジョブ・3抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
+独立hostは8定期ジョブ・3抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
 
 `check`の失敗は想定内として無視しません。モード・専用venv・scope・資格情報・常駐状態・
 文書生成とのdriftを確認し、固定エラーコードで原因を報告します。

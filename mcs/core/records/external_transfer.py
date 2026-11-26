@@ -5,7 +5,9 @@ Anthropic, OpenAI and Jev send only when a person has recorded the review
 (who, when, why, which services) and it names that service — with an omitted
 or an explicit ``mode`` in config.json alike (cloud_policy.select_settings,
 semantic_policy.semantic_config). Installations without the record keep their
-previous behaviour. A review is recorded only by the
+previous behaviour. A second file, the witness, is written with the record:
+while it exists a missing record is an unreadable one, so losing or deleting
+the record alone never turns the review off. A review is recorded only by the
 human-confirmed ``ops.external_transfer_acknowledge`` command, whose receipt
 names the same command id as the published record.
 """
@@ -22,6 +24,8 @@ import mcs_util
 import safe_io
 
 FILE_NAME = "external_transfer.json"
+WITNESS_NAME = "external_transfer.required"
+_WITNESS = b'{"required": true, "v": 1}\n'
 SERVICES = ("anthropic", "openai", "jev")
 MAX_BYTES = 16384
 HISTORY_LIMIT = 5  # older reviews belong in the facility's paper record
@@ -35,6 +39,18 @@ _WRITER_CODES = ("confirm_human_required", "by_and_reason_required", "services_i
 
 def path(root=None) -> str:
     return os.path.join(root or mcs_util.HOME, FILE_NAME)
+
+
+def witness_path(root=None) -> str:
+    return os.path.join(root or mcs_util.HOME, WITNESS_NAME)
+
+
+def _witness(root) -> None:
+    """Leave the sign that this installation needs the review; whatever already sits there counts."""
+    try:
+        safe_io.publish_new_bytes(witness_path(root), _WITNESS)
+    except FileExistsError:
+        pass
 
 
 _RECORD_KEYS = {"v", "required", "acknowledged", "history"}
@@ -64,6 +80,9 @@ def _current(root):
     try:
         raw = safe_io.read_private_bytes(path(root), MAX_BYTES)
     except FileNotFoundError:
+        if os.path.lexists(witness_path(root)):
+            # The review is required here and its record is gone: unreadable, never "not required".
+            raise ValueError("external_transfer_record_invalid") from None
         return None, None
     try:
         record = json.loads(raw.decode("utf-8"))
@@ -117,8 +136,8 @@ def hold_message(label: str, state: dict) -> str:
     if record == "unreadable":
         # acknowledge refuses a broken record (external_transfer_record_invalid, or
         # external_transfer_io_error for a link), so it has to be repaired first.
-        return (f"施設の確認記録（{FILE_NAME}）を読み取れないため、{label}への送信を止めています。"
-                "削除すると確認記録の無い既存環境と同じ扱いに戻るため、削除しないでください。"
+        return (f"施設の確認記録（{FILE_NAME}）を読み取れない、または見つからないため、{label}への送信を止めています。"
+                f"確認記録は削除しないでください（削除しても送信は再開しません。{WITNESS_NAME} が確認の必要な環境であることを示します）。"
                 "記録が壊れている間は確認の記録も external_transfer_record_invalid で拒否されます。"
                 "先に、MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を"
                 '{"v": 1, "required": true, "acknowledged": null} にしてから、'
@@ -132,7 +151,8 @@ def hold_message(label: str, state: dict) -> str:
 
 
 def require(root=None) -> bool:
-    """Write the pending record for a new installation; never replace an existing one."""
+    """Write the witness and the pending record for a new installation; never replace an existing one."""
+    _witness(root)  # first: an interrupted run leaves a hold, never a record that can vanish unnoticed
     raw = json.dumps({"v": 1, "required": True, "acknowledged": None},
                      ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n"
     try:
@@ -180,6 +200,7 @@ def _write(root, acknowledged, expected_raw=None) -> dict:
     if expected_raw is not None and raw != expected_raw:
         raise ValueError("receipt_file_mismatch")
     record, body = _replacement(current, acknowledged)
+    _witness(root)  # a record published before the witness existed gains it with its next review
     safe_io.atomic_write(path(root), lambda stream: stream.write(body), 0o600, binary=True, makedirs=False)
     return record
 

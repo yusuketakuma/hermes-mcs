@@ -6,7 +6,7 @@
 
 ## 初めて導入する場合
 
-今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。正式対応や新しいMacでの受入完了を示すものではなく、既存のHermes設定は維持します。新規導入の推奨・既定はstandaloneです。
+新規導入の推奨・既定はmacOS・Apple silicon・Slackのstandaloneです。この組み合わせは最初の受入候補で、正式対応や新しいMacでの受入完了を示しません。既存のHermes設定は維持します。
 [能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
 
 [はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
@@ -45,13 +45,14 @@ installer内で初期設定を完了した場合は再度initを実行せず、�
 
 ```bash
 PY="$HOME/.mcs/venv/bin/python3"
-$PY mcs/ops/mcs_setup.py check
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py check
+"$PY" -m mcs_standalone status
 ```
 
 MCSの収集前にはChromeのログインとCDPポート`:9333`も準備します。[導入ガイドの動作確認](INSTALLATION.md#a-5-動作確認)の冒頭を確認し、同節のHermes用Pythonを使う例では上の`$PY`に読み替えます。収集・通知・既読化の確認は、許可した範囲で行います。
 
 installerはHermesを取得・設定せず、独立venvへ[公式SDKの固定バージョン](../../deployment/requirements-standalone.txt)を導入します。
+導入は[SHA256付きの一覧](../../deployment/requirements-standalone.lock)と照合し、記録と中身が違う配布物は導入しません。
 ローカルLLM、独立host、repo外の復旧watchdogも登録します。
 ウィザードはMCSのログイン、配信先、操作・閲覧範囲と非表示の秘密入力を案内します。
 既存値は保持されます。認証情報不足のまま起動成功と扱いません。
@@ -107,7 +108,7 @@ actor/project範囲を設定します。`allowed_role_ids`は任意で、@everyo
 `init`はその明示ファイルをJSONへ取り込み、既存ファイルは削除しません。
 JSONが存在して壊れている場合は `.env` へfallbackせず停止します。
 CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileから自動取得しません。
-`$PY -m mcs_standalone init --transport slack`または`discord`で認証情報を登録できます。
+`"$PY" -m mcs_standalone init --transport slack`または`discord`で認証情報を登録できます。
 既存の認証情報がある場合は、保持・変更希望・中止を選べます。変更希望は、古い接続や
 送信処理の停止を確認できる仕組みが整うまで保留し、認証情報は変更しません。
 `--yes`と端末を使わない実行では、既存の認証情報を保持します。
@@ -116,12 +117,11 @@ CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileか
 入力中の`.env`の変更を検出した場合も保存を中止します。
 入力を非表示にできない端末では、認証情報の入力を中止します。
 
-独立接続の認証情報を使えない場合は、`$PY -m mcs_standalone credential-status`で
+独立接続の認証情報を使えない場合は、`"$PY" -m mcs_standalone credential-status`で
 保留ファイルの状態を確認できます。この確認ではファイルを変更せず、旧版や手動で
 起動したプロセスの停止は確認できません。保留中や状態不明の場合は管理担当者に相談してください。
 
-LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設定します。
-独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。
+LINE WORKSは[専用手順](LINEWORKS.md)で接続を設定します。カード・操作を使う場合だけ公開HTTPS Callbackを設定し、独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。文章だけの通知ではアダプターの常駐は不要です。
 
 ### 患者情報と運用通知の送り先
 
@@ -148,6 +148,8 @@ Hermesで自動作成した患者情報用チャンネルとMCSLOGは、`data/sl
 
 ## 常駐・診断
 
+macOSの常駐処理は、導入したユーザーがログインしている間だけ動きます。停電・macOS更新・不意の再起動のあとは、そのユーザーがログインするまで収集・通知・ローカルAI・復旧監視は再開しません。施設で常時稼働させるMacでは、再起動後のログイン担当、スリープ停止、停電後の自動起動、FileVaultと自動ログインの関係を管理担当者と決めてください。自動ログインは物理アクセスと画面ロックの管理が必要です。
+
 macOSの`ai.mcs.standalone`が定期7ジョブ、抽出worker3本、cmd/cmd_int取込と接続を所有します。
 昼間（JST 08:00〜20:00）はバックグラウンド2枠、夜間は最大3枠で処理し、新着は次の空き枠を優先します。
 クラウドの患者コンテキスト処理は抽出workerが所有する別の子プロセスで進めます。
@@ -158,15 +160,16 @@ LLMとrepo外の復旧watchdogは別のnative supervisorが所有します。
 個々の定期ジョブや抽出workerをcrontab・Hermes cron・LaunchAgentへ重複登録しません。
 
 ```bash
-$PY mcs/ops/mcs_setup.py services --dry-run
-$PY mcs/ops/mcs_setup.py services
-$PY mcs/ops/mcs_setup.py doctor
-$PY -m mcs_standalone status
+"$PY" mcs/ops/mcs_setup.py services --dry-run
+"$PY" mcs/ops/mcs_setup.py services
+"$PY" mcs/ops/mcs_setup.py doctor
+"$PY" -m mcs_standalone status
 ```
 
-サービスを使わず端末で動かすなら`$PY -m mcs_standalone run`を使います。
+サービスを使わず端末で動かすなら`"$PY" -m mcs_standalone run`を使います。
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
 ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
+端末喪失に備える暗号化backupは、設定ファイルの編集だけでは定期実行されません。利用する場合は[バックアップと復元の手順](BACKUP.md)で保存先・鍵保管・登録・復元訓練を別途確認します。
 
 ### 自己回復と外部監視
 
@@ -195,7 +198,7 @@ hostは同じdata rootに1つだけ起動できます。本文・秘密値を含
 - 状態ファイルは内容が変わったときと5秒ごとにだけ書き、ディスク満杯でも
   hostは落ちずにログへ1回記録します。
 
-Linuxでは`$PY -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
+Linuxでは`"$PY" -m mcs_standalone service`コマンドがsystemd user serviceの候補を生成します。
 `mcs_setup services`はユーザーsystemdへ配置します。Chrome・ローカルLLMなどの
 既存macOS向け導入は別途必要です。Linux候補の生成・隔離テストと実機検証は区別します。
 
@@ -213,9 +216,9 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。
 
-ローカルLLMのモデル（約5.7 GB）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
+ローカルLLMのモデル（容量は自動選択されたQwenで変わる）の保存先はモードごとに分かれます（Hermes: `~/.hermes/models`、
 独立: `~/.mcs/models`）。そのまま切り替えると`install.sh`が新しい保存先へ再ダウンロードし、
-元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に移動します。
+元の場所のモデルは自動では削除しません。再ダウンロードを避けるには、`install.sh`の前に導入済みのQwen GGUF（分割モデルは全ファイル）を移動します。Qwen3.5-9Bの例:
 
 ```bash
 mkdir -p ~/.mcs/models

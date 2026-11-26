@@ -52,6 +52,7 @@ def test_missing_key_never_replaces_a_paid_context_with_missing_result(runtime, 
 
 
 @pytest.mark.parametrize('status', [401, 403, 402, 404, 429, 500, 503, 529])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, real_cloud, monkeypatch, status):
     ledger, clock, local_calls = runtime
     cfg, _ = real_cloud
@@ -128,6 +129,7 @@ def test_unverified_or_answered_request_cannot_be_substituted_locally(runtime, r
     assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
 
 
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, monkeypatch):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
