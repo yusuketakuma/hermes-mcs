@@ -859,11 +859,10 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
     # as the signal engine's default self (config overrides). Never
     # fails the run — an unusable profile is a logged warning. The
     # profile rarely changes: refresh it on deep (--jobs-only) runs, and
-    # on a tick only until the first artifact exists.
+    # on a tick until a directly observed profile replaces any legacy copy.
     try:
         import self_identity
-        if args.jobs_only \
-                or not self_identity.latest_self_profile(ledger.db):
+        if args.jobs_only or self_identity.needs_profile_fetch(ledger.db):
             prof = adapter.self_profile()
             _require_closed_transaction(ledger, result)
             with ledger.db:
@@ -885,9 +884,10 @@ def _refresh_station_staff(adapter, ledger, prof, result):
     ``errors``, so it cannot degrade health on every jobs-only run."""
     import self_identity
     try:
-        staff = adapter.station_staffs(prof.get("stations") or [])
+        stations = prof.get("stations") or []
+        staff = adapter.station_staffs(stations)
         _require_closed_transaction(ledger, result)
-        if staff:
+        if stations:
             with ledger.db:
                 if self_identity.record_station_staff(ledger.db, staff):
                     result["station_staff"] = "updated"
