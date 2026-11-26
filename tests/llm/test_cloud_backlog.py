@@ -26,14 +26,14 @@ import cloud_policy
 import ledger as ledger_module
 import mcs_util
 import run_log_install
+# Individual cloud routes are closed; worker pass mechanics below are dormant-path.
+from test_cloud_response_recovery import legacy_cloud_routes
 
 # Captured at import time, before any test's monkeypatching: the carry_worker
 # fixture replaces module attributes, and the real budget accounting is needed
 # to prove the resolver-to-wait connection rather than a stubbed reason.
 _REAL_LEDGER = ledger_module.Ledger
 _REAL_BUDGET_BLOCK_REASON = cloud_policy.budget_block_reason
-# Individual cloud routes are closed; worker pass mechanics below are dormant-path.
-from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.fixture(autouse=True)
