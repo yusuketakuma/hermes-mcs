@@ -548,3 +548,24 @@ def test_no_effect_journal_releases_or_holds_an_old_unknown_receipt(gateway, ali
         assert out["reason"] == "gateway_request_unresolved" and gateway["calls"] == []
     else:
         assert out["actions"] and len(gateway["calls"]) == 1
+
+
+def test_missing_started_at_is_reacquired_for_the_same_live_pid(gateway):
+    """A5: a record written while ps exceeded its budget carries started_at=None;
+    the live pid's birth is provable again, so the witness repairs once."""
+    path = _record(gateway, started_at=None)
+    assert card_worker_status.status(gateway["home"] / "data", "slack", "synthetic") == {
+        "state": "disabled", "reason": "worker_start_failed"}
+    repaired = json.loads(path.read_text())
+    assert repaired["started_at"] == gateway["native"]["started_at"]
+    assert {key: repaired[key] for key in ("version", "reason", "pid", "at")} == {
+        "version": card_worker_status.VERSION, "reason": "worker_start_failed",
+        "pid": PID, "at": NOW}
+    result = recovery._gateway_observation(str(gateway["home"]), gateway["cfg"], NOW)
+    assert result["healthy"] is False and result["reasons"] == ["worker_start_failed"]
+
+
+def test_repair_never_overwrites_a_present_but_wrong_started_at(gateway):
+    path = _record(gateway, started_at=12345.0)
+    assert card_worker_status.repair_missing_started_at(path) is False
+    assert json.loads(path.read_text())["started_at"] == 12345.0

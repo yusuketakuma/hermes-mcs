@@ -71,6 +71,7 @@ def test_ack_keeps_exact_failure_coverage_and_future_retry_evidence(case):
     counts = observed(case)
     assert counts['pending_failed'] == counts['exhausted_failed'] == 1
     assert counts['acknowledged_exhausted'] == 0
+    assert counts['superseded_acknowledgements'] == 0
     receipt = operator.apply(case.root, request(case))
     assert receipt['outcome'] == 'applied' and receipt['receipt_state'] == 'saved'
     assert receipt['ocr_outcome'] == 'failed' and receipt['source_coverage'] == 'unrecovered'
@@ -557,8 +558,12 @@ def test_reboot_renumbering_the_device_keeps_the_ack_but_a_new_inode_voids_it(ca
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
     assert report['reason'] == 'attachment_ocr_acknowledged_gap' and report['alert_required'] is False
     _restat(monkeypatch, database, lambda info: {'st_dev': info.st_dev + 1, 'st_ino': info.st_ino + 1})
-    assert observed(case)['acknowledged_exhausted'] == 0
+    voided = observed(case)
+    assert voided['acknowledged_exhausted'] == 0
+    assert voided['superseded_acknowledgements'] == 1
     report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
     assert report['reason'] == 'attachment_ocr_ack_reconfirm_required'
     operator.apply(case.root, request(case))       # an old acknowledgement is redone, never revived
-    assert observed(case)['acknowledged_exhausted'] == 1
+    redone = observed(case)
+    assert redone['acknowledged_exhausted'] == 1
+    assert redone['superseded_acknowledgements'] == 1

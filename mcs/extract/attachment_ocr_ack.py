@@ -129,8 +129,12 @@ def target(db, artifact_id):
     return value
 
 
-def acknowledged(db, current, *, deadline=None):
-    """Resolve only exact current proofs; valid older acknowledgements stay as history."""
+def acknowledged(db, current, *, deadline=None, superseded_out=None):
+    """Resolve only exact current proofs; valid older acknowledgements stay as history.
+
+    With superseded_out (a one-element list) the count of valid receipts whose
+    proof no longer matches the current source is reported separately — they are
+    evidence of past operator review, never coverage of the present failure."""
     # shortcut: refuse more than 128 records for one failure; extend with a
     # bounded history reader if real operational review reaches this limit.
     rows = db.execute("SELECT CASE WHEN typeof(a.content)='text' AND length(a.content)<=65536 "
@@ -146,6 +150,7 @@ def acknowledged(db, current, *, deadline=None):
     if len(rows) > 128:
         raise ValueError('ocr_ack_receipt_unverified')
     found = 0
+    superseded = 0
     for row in rows:
         if deadline is not None and time.monotonic() >= deadline:
             raise ValueError('ocr_ack_observation_incomplete')
@@ -171,11 +176,19 @@ def acknowledged(db, current, *, deadline=None):
                     or record['target'] not in receipt['targets']
                     or receipt['acknowledgement_ids'][receipt['targets'].index(record['target'])] != row[2]):
                 raise ValueError('ocr_ack_receipt_unverified')
-            found += int(record['target'] == current)
+            if record['target'] == current:
+                found += 1
+            else:
+                # a valid older acknowledgement whose proof no longer matches the
+                # current source: still a real receipt, but it must never count
+                # as covering the present failure.
+                superseded += 1
         except (ValueError, TypeError, KeyError, RecursionError):
             raise ValueError('ocr_ack_receipt_unverified') from None
     if found > 1:
         raise ValueError('ocr_ack_receipt_unverified')
+    if superseded_out is not None:
+        superseded_out[0] = superseded
     return found == 1
 
 
@@ -198,7 +211,7 @@ def failure_counts(db, *, cfg=None, deadline=None):
     counts = {'pending_failed': 0, 'queue_status': 'partial',
               'failure_reason_counts': {}, 'exhausted_failed': 0,
               'acknowledged_exhausted': 0, 'unacknowledged_pending_failed': 0,
-              'failure_cohort': payload_hash([])}
+              'superseded_acknowledgements': 0, 'failure_cohort': payload_hash([])}
     policy = attachment_ocr.rejection_policy(cfg)
     if policy:
         counts.update(policy_binding=policy, policy_rejected_failed=0,
@@ -229,9 +242,11 @@ def failure_counts(db, *, cfg=None, deadline=None):
                     try:
                         current = target(db, prior['artifact_id'])
                         proof = current['proof']
-                        if acknowledged(db, current, deadline=deadline):
+                        superseded_box = [0]
+                        if acknowledged(db, current, deadline=deadline, superseded_out=superseded_box):
                             counts['acknowledged_exhausted'] += 1
                             accepted = True
+                        counts['superseded_acknowledgements'] += superseded_box[0]
                     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
                         if policy:
                             verified = False

@@ -51,12 +51,51 @@ def record(root, transport, profile, reason):
     atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
 
 
+def repair_missing_started_at(path):
+    """Re-acquire a missing started_at once for a live record pid.
+
+    A record written while `ps` exceeded its one-second budget carries
+    started_at=None; that witness can never validate, so the worker stays
+    unverified until the next gateway restart. When the same pid is still
+    alive its start time is provable again — fill exactly that field, leaving
+    every other byte of the evidence untouched. Returns True when the file
+    now carries a verifiable started_at."""
+    try:
+        p = Path(path)
+        if p.is_symlink() or p.stat().st_size > 2048:
+            return False
+        value = json.loads(p.read_text())
+        if (not isinstance(value, dict) or value.get('version') != VERSION
+                or value.get('reason') not in REASONS):
+            return False
+        pid = value.get('pid')
+        if type(pid) is not int or pid <= 0:
+            return False
+        started_at = value.get('started_at')
+        os.kill(pid, 0)
+        birth = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 3)
+        if type(birth) not in (int, float) or not math.isfinite(birth) or birth <= 0:
+            return False
+        if type(started_at) in (int, float) and math.isfinite(started_at) and started_at > 0:
+            return started_at == birth  # present evidence is never overwritten
+        if started_at is not None:
+            return False  # a malformed stamp is evidence, never overwritten
+        current = json.loads(p.read_text())
+        if current != value:
+            return False  # rewritten since our read: leave the newer evidence alone
+        atomic_write(str(p), lambda f: json.dump({**value, 'started_at': birth}, f), mode=0o600)
+        return True
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+        return False
+
+
 def status(root, transport, profile):
     """Read startup evidence; missing, old-version and dead-process records fail closed."""
     try:
         p = _path(root, transport, profile)
         if p.is_symlink() or p.stat().st_size > 2048:
             raise ValueError('invalid')
+        repair_missing_started_at(p)
         value = json.loads(p.read_text())
         if not isinstance(value, dict) or value.get('reason') not in REASONS:
             raise ValueError('invalid')
