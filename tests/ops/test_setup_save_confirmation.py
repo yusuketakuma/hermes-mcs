@@ -45,7 +45,9 @@ def test_disabled_features_and_stamp_conditions_are_not_invented(monkeypatch, ca
     monkeypatch.setattr("builtins.input", lambda prompt: "2")
     setup_wizard.confirm_save(cfg, plugin_profile="unused")
     output = capsys.readouterr().out
-    for value in ("朝のまとめ通知: 無効", "外部Jev追加解析: 無効", "定期的な薬情報更新確認: 無効",
+    # 意味解析の summary/loop は未設定でも assist が既定（e407e2eac）。Jev の表示は
+    # 無効ではなく、許可条件がそろった場合の条件付き送信として示される
+    for value in ("朝のまとめ通知: 無効", "外部Jev追加解析: 対象プロジェクト", "定期的な薬情報更新確認: 無効",
                   "MCSスタンプ送信: 現在の設定では無効", "独立接続"):
         assert value in output
     assert "Hermesへの接続設定" not in output
