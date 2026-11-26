@@ -227,7 +227,7 @@ def test_doctor_resolves_auto_without_exposing_keys(world):
     _key(root)
     defaults = cli.diagnostics({"mcs_login_id": "synthetic"}, root=str(root))["anthropic"]
     assert defaults["mode"] == "on" and defaults["block_reason"] is None
-    assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (25, 75)
+    assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (80, 350)
     uncapped = cli.diagnostics({"mcs_login_id": "synthetic", "cloud_llm": {
         "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}, root=str(root))["anthropic"]
     assert (uncapped["mode"], uncapped["status"], uncapped["block_reason"]) == ("off", "local", "cost_limit_required")

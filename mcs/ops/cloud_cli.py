@@ -1419,8 +1419,10 @@ def add_parsers(sub):
                            choices=sorted(module.PROFILE_DEFINITIONS), help=f"{provider} の {purpose} 用profile")
     q.set_defaults(fn=providers_command, cloud_action="providers")
     q = actions.add_parser("budget", help="外部AI合計の費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
-    q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル、設定省略時25）。none でこの上限を解除")
-    q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル、設定省略時75）。none でこの上限を解除")
+    q.add_argument("--daily-usd", dest="daily_usd",
+                   help=f"1日の合計上限（ドル、設定省略時{policy.DEFAULT_DAILY_COST_LIMIT_USD}）。none でこの上限を解除")
+    q.add_argument("--monthly-usd", dest="monthly_usd",
+                   help=f"1か月の合計上限（ドル、設定省略時{policy.DEFAULT_MONTHLY_COST_LIMIT_USD}）。none でこの上限を解除")
     q.add_argument("--period-usd", dest="period_usd",
                    help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")

@@ -110,8 +110,8 @@ from mcs_util import (canonical, private_env_problem, private_env_value, payload
 # A byte-pair token never covers less than one UTF-8 byte, so a request's text
 # bytes plus the framing tokens bound its billable input; a reservation at the
 # 1M ceiling would hold ~$0.53 per attempt against a daily/monthly cap.
-DEFAULT_DAILY_COST_LIMIT_USD = 25
-DEFAULT_MONTHLY_COST_LIMIT_USD = 75
+DEFAULT_DAILY_COST_LIMIT_USD = 80
+DEFAULT_MONTHLY_COST_LIMIT_USD = 350
 
 
 def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
