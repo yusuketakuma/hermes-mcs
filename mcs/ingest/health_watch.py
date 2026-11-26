@@ -1695,12 +1695,33 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     if any(type(n) is int and n > 0 for key, n in failed_counts.items()
                            if key != "output_schema_table_overlap"):
                         action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
-                if ocr["exhausted_failed"] > 0:
-                    note = (f"観測範囲で自動再試行が上限に到達した記録が{ocr['exhausted_failed']}件あります。"
-                            "元の添付を確認してください。")
-                    if not action.endswith("。"):
-                        action += "。"
-                    action += note
+                # 3回到達は終了ではない: 一般失敗は日次で再試行が続く。再試行の停止を
+                # 証明するのは policy_rejected_exhausted だけなので、残りを再試行中・
+                # 停止・直近の実行で失敗に分けて表示する。数えられないときは言わない。
+                stopped = ocr.get("policy_rejected_exhausted")
+                stopped = stopped if type(stopped) is int and stopped >= 0 else 0
+                pending = ocr.get("pending_failed")
+                if type(pending) is int and pending >= stopped:
+                    active = pending - stopped
+                    pieces = []
+                    if active:
+                        pieces.append(f"再試行を続ける記録が{active}件")
+                    if stopped:
+                        pieces.append(f"再試行が止まっている記録が{stopped}件")
+                    latest = ocr.get("failed")
+                    if type(latest) is int and latest > 0:
+                        pieces.append(f"直近の実行で失敗した記録が{latest}件")
+                    if pieces:
+                        scope = ("観測範囲の確認が完了していないため、件数は確認できた範囲のものです。"
+                                 if ocr.get("queue_status") not in (None, "known") else "")
+                        note = "観測範囲で" + "、".join(pieces) + "あります。"
+                        if "元の添付を確認してください" not in action:
+                            note += "元の添付を確認してください。"
+                        if scope:
+                            note += scope
+                        if not action.endswith("。"):
+                            action += "。"
+                        action += note
         guide = None
         stop = (stop_explanation(report.get("run_stop"))
                 if base in ("run_failed", "session_expired") and not report.get("observations_recorded")
