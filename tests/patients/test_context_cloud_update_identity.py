@@ -77,6 +77,10 @@ def real_cloud(runtime, cloud, monkeypatch):
         assert method == 'POST' and timeout > 0 and deadline > clock.mono
         assert not ledger.db.in_transaction
         reserves = len(ledger.artifacts('cloud_usage_reserve'))
+        if not posts:
+            # A reset wipes the paid rows and the wire's send log together, so
+            # the first send after it re-baselines the count like the first ever.
+            reserves_seen[0] = None
         if reserves_seen[0] is not None:
             assert reserves == reserves_seen[0] + 1
         reserves_seen[0] = reserves
