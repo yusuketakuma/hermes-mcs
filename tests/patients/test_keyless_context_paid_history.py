@@ -59,7 +59,8 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     sent = []
     def rejected(_client, *args, **kwargs):
         sent.append(status)
-        return status, {}, b'{"error":{"type":"synthetic_rejection"}}'
+        headers = {'Retry-After': '1'} if status == 429 else {}
+        return status, headers, b'{"error":{"type":"synthetic_rejection"}}'
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', rejected)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
