@@ -1,7 +1,6 @@
 {
   "repository_id": 1379530125,
   "repository_owner_id": 28248041,
-  "owner_id": 28248041,
   "ci_workflow_id": 363300135,
   "publisher_workflow": ".github/workflows/ci.yml",
   "tag_pattern": "^v\\d+\\.\\d+\\.\\d+$"

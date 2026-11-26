@@ -34,7 +34,7 @@ def _event(tmp_path, **over):
 
 
 def _policy(tmp_path, **over):
-    policy = {'repository_id': 12345, 'owner_id': 777,
+    policy = {'repository_id': 12345, 'repository_owner_id': 777,
               'tag_pattern': '^v\\d+\\.\\d+\\.\\d+$'}
     policy.update(over)
     path = tmp_path / 'policy.json'
@@ -54,6 +54,14 @@ def test_inspect_event_happy(tmp_path):
     assert doc['repository_id'] == 12345 and doc['owner_id'] == 777
     assert doc['main_snapshot_sha'] == MAIN_SNAPSHOT
     assert len(doc['publisher_policy_sha256']) == 64
+
+
+def test_inspect_event_rejects_missing_owner_on_both_sides(tmp_path):
+    result = _run('inspect-event', '--event', str(_event(tmp_path, repository={'id': 12345})),
+                  '--policy', str(_policy(tmp_path, repository_owner_id=None)),
+                  '--main-snapshot-sha', MAIN_SNAPSHOT, '--output', str(tmp_path / 'out.json'))
+    assert result.returncode != 0 and 'OWNER_MISMATCH' in result.stderr
+    assert not (tmp_path / 'out.json').exists()
 
 
 def test_inspect_event_rejects_fork_repo(tmp_path):
