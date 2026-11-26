@@ -429,6 +429,31 @@
    "path": "changes/archive/1.3.0/standalone-sdk-hashes.json",
    "sha256": "515ee9f9e7c2b58280a42b6aec1aeac7fa048078e80b8057eeea62b772c283fc",
    "title": "独立接続の SDK を SHA256 と照合して導入"
+  },
+  "auto-update-v3-consent-wire": {
+   "path": "changes/archive/1.3.0/auto-update-v3-consent-wire.json",
+   "sha256": "63c8babb6e001da6b952f16f0562e00463ad6c2ffdd4735f9bf36e973b1ccac4",
+   "title": "v3 consent wireをcredential storeとpin fileへ接続"
+  },
+  "auto-update-v3-contract-digests": {
+   "path": "changes/archive/1.3.0/auto-update-v3-contract-digests.json",
+   "sha256": "37d47dfc93013b7277f1a7e1dfbbee55897df3c8ceadfc7324ef1e4392698f4d",
+   "title": "v3 contract digestを検証済みCompatibilityから解決"
+  },
+  "auto-update-v3-driver-wire": {
+   "path": "changes/archive/1.3.0/auto-update-v3-driver-wire.json",
+   "sha256": "25c9078bfd1b60cd916c68de2acc3903abc4e57802ec1e4c56c379bc9c22b182",
+   "title": "v3 owner tick driverへwire接続を追加"
+  },
+  "auto-update-v3-pin-distribution": {
+   "path": "changes/archive/1.3.0/auto-update-v3-pin-distribution.json",
+   "sha256": "535f0e40aed6201cd731278cab3c891983ee02938438847bfba527caa69afdf2",
+   "title": "v3自動更新のpin配布形式を追加"
+  },
+  "semantic-cloud-repair-render-root-detection": {
+   "path": "changes/archive/1.3.0/semantic-cloud-repair-render-root-detection.json",
+   "sha256": "250c8aee3ac8d1549223f3873ff8b40c293a65c0fabcd784dd957772b084be5c",
+   "title": "クラウドで修復した要約が中断後に反映されない問題を修正"
   }
  },
  "version": "1.3.0"

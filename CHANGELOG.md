@@ -73,6 +73,18 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **費用上限などの変更を設定の保存ごとに記録**
   提供元別設定の環境では、設定を保存するたびに、保存した入口と、費用上限・期間予算・終了日時・API別上限・Jevの件数と期限の保存前後の値を小さな私有の記録に残します。cloud-llm budget・providers に最後の上限変更と、現在の設定が記録された保存の結果と一致するかを表示し、budget --history N で記録を確認できます。上限の判定・費用の集計・承認条件・設定内容は変わりません。
 
+- **v3 consent wireをcredential storeとpin fileへ接続**
+  v3自動更新のconsent確認経路が、enrollment済みの端末credentialとpin配布fileから署名wireを組み立てられるようになりました。enrollment未完了・pin未配置では従来どおりfail-closedで利用できません。
+
+- **v3 contract digestを検証済みCompatibilityから解決**
+  v3自動更新のattempt_keyで使うcontract digestを、中央が署名配布する検証済みCompatibility metadataの値から解決するようになりました。digestが取れないtargetはdownload前にfail-closedし、繰り返しdownloadを防ぎます。enrollment・pin未配置の端末では従来どおり先へ進みません。
+
+- **v3 owner tick driverへwire接続を追加**
+  v3自動更新の定期tickと同意CLIが、enrollment済みcredentialとpin配置のある端末で中央への署名通信(offer照会・consent確定/撤回など)を行えるようになりました。未enrollment・pin未配置では従来どおりfail-closedで通信しません。
+
+- **v3自動更新のpin配布形式を追加**
+  利用者の動作は変わりません。v3自動更新で使う公開鍵pinの配布形式(mcs.auto-v3-pins.v1)と読込み部品を追加し、pinはrelease control rootのauto-v3-pins.jsonだけから読み、networkから取得・更新しません。
+
 ### 改善
 
 - **クラウド4モデルの料金を再確認し、確認期限を12月24日に更新**
@@ -289,6 +301,9 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - **スナップショット複製の間も他の処理が書込みを続けられるように修正**
   定期処理が台帳スナップショットを複製している間、run lockを保持し続けて患者コンテキストや抽出が待機する問題を修正しました。オンラインバックエップの一貫性を利用し、複製と検証の間だけロックを離して再取得します。
 
+- **クラウドで修復した要約が中断後に反映されない問題を修正**
+  意味解析の要約をクラウドで品質修復したあと、検証が中断（時間切れ・送信不可）されると、その後いくら処理を進めても支払い済みの修復が要約へ反映されない問題を修正しました。スレッドの最初のメッセージの特定を構造的な親子関係で行うようにしたもので、単発の記録など最初のメッセージ自体が処理対象の場合に起きていました。
+
 ### 動作・設定の変更
 
 - **意味解析の要約・loopの既定をassistに変更**
@@ -446,6 +461,16 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 - 更新した定期処理から適用されます。追加操作は不要です。
 
 - 追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。独立実行では install.sh を再実行すると適用できます。Hermes モードには影響しません。
+
+- 追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。
+
+- 追加操作は不要です。digest解決にはwire経由のmetadata検証が必要で、release_trust(attestation)配線が未完了の端末では従来どおりfail-closedのままです。
+
+- 追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。
+
+- 現行の動作は変わりません。consent wire実factoryとenrollmentが接続されるまで、この部品を呼ぶ製品経路はありません。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。
+
+- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、追加のクラウド送信は発生しません。
 
 ### 技術詳細
 
@@ -1156,6 +1181,39 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - SDK の版を上げるときは、ファイル先頭のコマンドでハッシュ付きの一覧を作り直す。2つの一覧の版が違うとテストが失敗する。
 - 根拠: deployment/requirements-standalone.lock、deployment/install/runtime.sh、mcs/ops/update_preflight.py
+
+#### v3 consent wireをcredential storeとpin fileへ接続
+
+- credentialは使用毎にconnector storeから解決し、pinはnetworkから取得しない。
+- release_metadataのattestation trustは未配線のまま。
+- confirm応答の保存はcompare-and-swapで行い、送信中のauto-disable撤回をconfirmで上書きしない。pin fileの不備はwire構築時にfail-closedする。
+- 根拠: mcs/ops/update_cli.py、mcs/ops/release_auto_trust.py
+
+#### v3 contract digestを検証済みCompatibilityから解決
+
+- 端末はconfig/data契約文書からdigestを計算せず、配備値としても配置しない。
+- release_metadataの戻り値にconfig/data contract sha256を追加し、build_depsがwire注入時にdigest解決を自動構成する。
+- digest解決をartifact fetch前へ移し、stage不能なtargetの反復downloadを防ぐ。
+- 根拠: mcs/ops/release_auto_wire.py、mcs/ops/release_auto_deps.py、mcs/ops/release_auto_owner.py
+
+#### v3 owner tick driverへwire接続を追加
+
+- wire factoryをrelease_auto_wire_factoryへ集約し、consent CLIとowner tick driverが共有する。
+- wire構築の失敗はtickを停止させずunavailable wireとしてfail-closedする。
+- auto-disableでもwireが組み立てられる場合は中央consent-revokeを送る。
+- 根拠: mcs/ops/release_auto_wire_factory.py、mcs/ops/release_auto_driver.py、mcs/ops/update_cli.py
+
+#### v3自動更新のpin配布形式を追加
+
+- 閉じたschemaで検査し、symlink・16KiB超・未知keyを拒否する。
+- pinの用途と期限の評価は既存の署名検証側が担う。
+- 根拠: mcs/ops/release_auto_trust.py、docs/specs/auto-update-v2.md
+
+#### クラウドで修復した要約が中断後に反映されない問題を修正
+
+- 原因は支払い済み修復の検証がスレッドの最初のメッセージを選択用の役割名で探していたことで、最初のメッセージが処理対象のとき役割名が上書きされて検証が必ず失敗していました。
+- 検証は構造的な親子関係（parent_id）で特定する方式に変わり、選択の対象指定に影響されなくなりました。
+- 根拠: mcs/semantic/semantic_summary_stages.py、tests/semantic/test_semantic_budget_retry.py
 
 </details>
 

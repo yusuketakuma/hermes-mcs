@@ -612,6 +612,16 @@ v1.3.0は在宅ケア台帳・訪問/処方記録、医薬品検索と患者横�
 
 - 追加操作は不要です。導入済みの SDK はそのまま使い、次に SDK を入れ直すときから照合します。ハッシュ付きの一覧が変わるタグは、SDK の版が変わるタグと同じく自動適用しません（`standalone_requirements_changed`）。独立実行では install.sh を再実行すると適用できます。Hermes モードには影響しません。
 
+- 追加操作は不要です。wireが実際に使われるには、SDC enrollment完了とauto-v3-pins.jsonの配置が必要です。配置しない限り従来どおりconsent確認はunavailableを返します。
+
+- 追加操作は不要です。digest解決にはwire経由のmetadata検証が必要で、release_trust(attestation)配線が未完了の端末では従来どおりfail-closedのままです。
+
+- 追加操作は不要です。wireはSDC enrollment完了とauto-v3-pins.jsonの配置がある場合だけ組み立てられ、無い場合は従来どおりunavailableのままです。
+
+- 現行の動作は変わりません。consent wire実factoryとenrollmentが接続されるまで、この部品を呼ぶ製品経路はありません。配備時は管理者または署名済みrelease closureがauto-v3-pins.jsonを配置します。
+
+- 適用後の最初の処理から有効です。反映されなかった修復は次の再検証で支払い済みの結果がそのまま使われ、追加のクラウド送信は発生しません。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
