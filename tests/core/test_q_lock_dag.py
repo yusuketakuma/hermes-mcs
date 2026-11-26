@@ -171,7 +171,9 @@ def test_start_intent_consistency_gate(runtime_home):
                     'start_receipt_id': None, 'candidate_generation': None,
                     'startup_nonce': None, 'activation_receipt_id': None,
                     'runtime_proof': None, 'reserved_owner_bytes': 1,
-                    'error_code': None, 'rollout': rollout}
+                    'error_code': None, 'rollout': rollout,
+                    'contract_digests': {'config_contract_sha256': '1' * 64,
+                                         'data_contract_sha256': '2' * 64}}
 
         def intent(phase='open', **over):
             value = {'schema_version': 'mcs.start-intent.v3', 'operation_id': op,

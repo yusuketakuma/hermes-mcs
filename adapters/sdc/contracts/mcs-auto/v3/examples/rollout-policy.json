@@ -18,7 +18,7 @@
         "stage": "self",
         "cumulative_basis_points": 0,
         "soak_ms": 3600000,
-        "min_new_verified": 1,
+        "min_new_verified": 0,
         "requires_manual_advance": true
       },
       {
