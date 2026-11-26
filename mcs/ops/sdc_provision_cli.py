@@ -127,6 +127,10 @@ def _initialize_profile(store, profile):
     elif profile == 'restart':
         def initialize():
             restart_client.initialize_local_state(store)
+    elif profile == 'auto':
+        # autoにはconsumer state fileが無い — 初期化はpermitの消費だけ。
+        def initialize():
+            pass
     else:
         raise ValueError('SDC_PROVISION_UNSUPPORTED')
     provision.initialize_profile(store, profile=profile, now_ms=int(time.time() * 1000), initializer=initialize)
@@ -137,6 +141,8 @@ def _check_existing_profile(store, profile):
 
     now_ms = int(time.time() * 1000)
     provision.profile_snapshot(store, profile=profile, now_ms=now_ms)
+    if profile == 'auto':
+        return  # consumer stateを持たないためclient statusは無い
     client = support_client if profile == 'support' else restart_client
     client.status(store, now_ms=now_ms)
 
