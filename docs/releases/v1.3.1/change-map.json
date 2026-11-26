@@ -1,0 +1,100 @@
+{
+ "records": {
+  "alert-delivery-observation-20261126": {
+   "path": "changes/archive/1.3.1/alert-delivery-observation-20261126.json",
+   "sha256": "fb27be290db0985b7ff3e53079c381b5b869ee33852cfd32d0fef7b077da289d",
+   "title": "通知の配送記録とworkerの起動を個別に確認"
+  },
+  "alert-ocr-ack-reasons-20261126": {
+   "path": "changes/archive/1.3.1/alert-ocr-ack-reasons-20261126.json",
+   "sha256": "56e9e3b674168b644abe4e76f77918781a26576c2bd9d0b06ba49af8eb90f78d",
+   "title": "OCR警報の受付対象を一覧で確認"
+  },
+  "auth-diagnostics-20261125": {
+   "path": "changes/archive/1.3.1/auth-diagnostics-20261125.json",
+   "sha256": "bb031c76a6888b8d08b2089678b2e138145245d981d3c9dce9114b70dfae5215",
+   "title": "ログイン復帰に失敗したときの原因が実行記録に残るようになりました"
+  },
+  "auto-update-v3-consent-wire": {
+   "path": "changes/archive/1.3.1/auto-update-v3-consent-wire.json",
+   "sha256": "63c8babb6e001da6b952f16f0562e00463ad6c2ffdd4735f9bf36e973b1ccac4",
+   "title": "v3 consent wireをcredential storeとpin fileへ接続"
+  },
+  "auto-update-v3-contract-digests": {
+   "path": "changes/archive/1.3.1/auto-update-v3-contract-digests.json",
+   "sha256": "37d47dfc93013b7277f1a7e1dfbbee55897df3c8ceadfc7324ef1e4392698f4d",
+   "title": "v3 contract digestを検証済みCompatibilityから解決"
+  },
+  "auto-update-v3-driver-wire": {
+   "path": "changes/archive/1.3.1/auto-update-v3-driver-wire.json",
+   "sha256": "25c9078bfd1b60cd916c68de2acc3903abc4e57802ec1e4c56c379bc9c22b182",
+   "title": "v3 owner tick driverへwire接続を追加"
+  },
+  "auto-update-v3-pin-distribution": {
+   "path": "changes/archive/1.3.1/auto-update-v3-pin-distribution.json",
+   "sha256": "535f0e40aed6201cd731278cab3c891983ee02938438847bfba527caa69afdf2",
+   "title": "v3自動更新のpin配布形式を追加"
+  },
+  "clinical-unitless-electrolyte-prescription": {
+   "path": "changes/archive/1.3.1/clinical-unitless-electrolyte-prescription.json",
+   "sha256": "ce41834b7bf666f477b95d64b984c36aa35befde49e4c42a55ad4c5091b11f41",
+   "title": "電解質の服薬量を検査値と誤認する問題を修正"
+  },
+  "command-snapshot-release-lock": {
+   "path": "changes/archive/1.3.1/command-snapshot-release-lock.json",
+   "sha256": "bc00effaf886abdebbdaa97b862e28eb2e1a1d712198873cdc5053ea7b8f1bc6",
+   "title": "通知操作後の台帳コピー中にも患者コンテキストを保存可能に"
+  },
+  "commands-recover-cadence-20261125": {
+   "path": "changes/archive/1.3.1/commands-recover-cadence-20261125.json",
+   "sha256": "30a4293a49df53d6d7e68994a555da1f335fba7a57630daaf62b9ab7b3e4a951",
+   "title": "コマンド処理が数秒おきに走るたび収集ロックを長く握る問題を修正"
+  },
+  "delivery-monitor-worker-and-attempts": {
+   "path": "changes/archive/1.3.1/delivery-monitor-worker-and-attempts.json",
+   "sha256": "7cb51469ed99bbae0589d917a0ec13a3d3d0ef93068be5d96c5d5a3abfbf9b4c",
+   "title": "通知の配送記録の読取りが時間切れでも通知ワーカーの起動を確認"
+  },
+  "drug-map-zero-budget-deferral": {
+   "path": "changes/archive/1.3.1/drug-map-zero-budget-deferral.json",
+   "sha256": "4ecd43983c4a841ee95c02194ede0f9d86d45c0ed365e122da5bdd2352c6f741",
+   "title": "薬剤照合の持ち越しを進捗停止として警報する問題を修正"
+  },
+  "ocr-runtime-dependency-lock": {
+   "path": "changes/archive/1.3.1/ocr-runtime-dependency-lock.json",
+   "sha256": "d51ab70a7921dbcbb2231b869a47cca07ac53f2fbd7af2d2b34498860aa875eb",
+   "title": "添付OCRで使うパッケージの版を固定"
+  },
+  "release-draft-target-and-acceptance": {
+   "path": "changes/archive/1.3.1/release-draft-target-and-acceptance.json",
+   "sha256": "9140f8e3c48af84a8f1ea1d11cbe6735e10771471b15e69ae5c69d9bc516d351",
+   "title": "リリース下書きの対象をタグのコミットに固定"
+  },
+  "retired-frame-occurrence-retry": {
+   "path": "changes/archive/1.3.1/retired-frame-occurrence-retry.json",
+   "sha256": "cb9258037d4953cfa9cded070070bf8e42162d87ab286035920d44b830dbc937",
+   "title": "投稿の更新後も過去の抽出記録を確認して処理を再開"
+  },
+  "run-lock-starvation-visibility-20261125": {
+   "path": "changes/archive/1.3.1/run-lock-starvation-visibility-20261125.json",
+   "sha256": "2e01fe31f29e789aff89c89d4e61e16248f14979c078f40ae6e0877bef60541b",
+   "title": "収集がロック不足で止まっているとき健康レポートが原因を示すようになりました"
+  },
+  "semantic-assist-default-save-confirmation-20261126": {
+   "path": "changes/archive/1.3.1/semantic-assist-default-save-confirmation-20261126.json",
+   "sha256": "f8b2b23335ae3241c195ca104cb5da951b604d368b5248736b4ac9d7ab5bcf6c",
+   "title": "保存前確認の外部Jev追加解析表示を実効条件へ修正"
+  },
+  "semantic-cloud-repair-render-root-detection": {
+   "path": "changes/archive/1.3.1/semantic-cloud-repair-render-root-detection.json",
+   "sha256": "250c8aee3ac8d1549223f3873ff8b40c293a65c0fabcd784dd957772b084be5c",
+   "title": "クラウドで修復した要約が中断後に反映されない問題を修正"
+  },
+  "semantic-cloud-summary-receipt-settlement-20261126": {
+   "path": "changes/archive/1.3.1/semantic-cloud-summary-receipt-settlement-20261126.json",
+   "sha256": "1827ba39e323694301228af8cdc74b6f36d995b008eac50d12ff7cb3acb69c40",
+   "title": "要約の生成元をクラウドの決済記録で確認"
+  }
+ },
+ "version": "1.3.1"
+}
