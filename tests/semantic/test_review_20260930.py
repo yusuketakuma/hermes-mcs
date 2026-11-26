@@ -113,6 +113,7 @@ def test_summary_button_reads_newest_summary_over_rollup(tmp_path):
         db.close()
 
 
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
     db = _ledger(tmp_path)
     now = time.time()

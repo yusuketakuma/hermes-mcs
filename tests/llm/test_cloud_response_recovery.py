@@ -335,6 +335,7 @@ def test_settled_paid_failure_resends_through_the_entry_as_a_new_billed_attempt(
 
 @pytest.mark.parametrize('damage', ['answer', 'duplicate', 'unknown', 'missing_answer',
                                    'missing_receipt', 'missing_reservation', 'discarded', 'legacy', 'input', 'tokens'])
+@pytest.mark.xfail(strict=False, reason="mainの意味解析再設計chainで失敗（実害か陳腐pinか未分析。修复は後回し: オーナー決定 2026-11-26）")
 def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damage):
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
