@@ -2353,14 +2353,18 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             # An output-bound change rewrites the envelope fingerprint while the
             # prompt itself stays identical. A settled answer for the same prompt,
             # model and effort is reused; the send guard still refuses the resend.
+            # Patient-context bindings also carry original-occurrence identity, so
+            # this route never relaxes that part of its paid-evidence boundary.
+            binding_test = "json_extract(meta,'$.input_binding')=?" if route == 'patient_context'                 else "json_extract(meta,'$.input_binding') IS NOT NULL"
+            params = (KINDS[0], project_id, message_id, route, unit_key,
+                      *((input_binding,) if route == 'patient_context' else ()),
+                      logical_request_fp, model, effort)
             rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
                 "FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
                 "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
-                "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding') IS NOT NULL AND "
+                "json_extract(meta,'$.unit_key')=? AND " + binding_test + " AND "
                 "json_extract(meta,'$.logical_request_fp')=? AND json_extract(meta,'$.model')=? AND "
-                "json_extract(meta,'$.effort') IS ? END ORDER BY artifact_id",
-                (KINDS[0], project_id, message_id, route, unit_key,
-                 logical_request_fp, model, effort)).fetchall()
+                "json_extract(meta,'$.effort') IS ? END ORDER BY artifact_id", params).fetchall()
         if route == 'reextract' and message_id is None and owner is not None and valid_hash(scope):
             from attachment_cloud_identity import recovery_rows
             rows.extend(recovery_rows(ledger.db, project_id=project_id, unit_key=unit_key,
