@@ -90,8 +90,7 @@ def _homecare_inventory(path: Path) -> dict[str, int]:
     copy; the applied migrations when it is one."""
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1",
                                  uri=True)) as db:
-        if (db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]
-                or db.execute("PRAGMA foreign_key_check").fetchone() is not None):
+        if not local_backup.homecare_integrity_ok(db, full=True):
             raise backup_evidence.BackupError("backup_integrity_failed")
         migrations = local_backup.homecare_migrations(db)
     if migrations is None:
