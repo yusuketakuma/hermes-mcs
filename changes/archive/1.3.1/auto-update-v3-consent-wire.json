@@ -9,7 +9,7 @@
     "confirm応答の保存はcompare-and-swapで行い、送信中のauto-disable撤回をconfirmで上書きしない。pin fileの不備はwire構築時にfail-closedする。"
   ],
   "refs": [
-    "mcs/ops/update_cli.py",
-    "mcs/ops/release_auto_trust.py"
+    "mcs/ops/update/update_cli.py",
+    "mcs/ops/update/release_auto_trust.py"
   ]
 }
