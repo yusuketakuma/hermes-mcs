@@ -137,6 +137,7 @@ def services():
     assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==3
     assert set(json.loads(Path(home,'config.json').read_text())['provider_settings'])=={'anthropic','openai','jev'}
     assert not list((Path(update.DATA)/'provider_settings').glob('*.json'))
+    if case=='service_failure':raise update.UpdateError('synthetic service failure')
     events.append('services')
 update._quiesce_for_mode=migration._quiesce_for_mode=quiesce
 update._plan_runtime_migration=migration._plan_runtime_migration=lambda *_a,**_k:None
@@ -499,7 +500,8 @@ update._services_reconcile=recovery._services_reconcile=services
 update.restart_agents=recovery.restart_agents=lambda *_a,**_k:events.append('restart') or []
 update.restart_services=recovery.restart_services=lambda *_a,**_k:events.append('restart-services')
 update._postcheck=recovery._postcheck=lambda *_a,**_k:[]
-update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:True
+update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:notices.append(str(_k.get('notice_code'))) or True
+notices=[]
 update._report=recovery._report=lambda result,detail,**extra:reports.append({'result':result,**extra})
 if case=='runtime_reinstall_done':
     update._use_migrated_runtime=recovery._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
@@ -526,7 +528,7 @@ try:
     else:result=update.main(['recover'])
 except Exception as exc:
     result='error:'+type(exc).__name__
-print(json.dumps({'result':result,'events':events,'reports':reports}))
+print(json.dumps({'result':result,'events':events,'reports':reports,'notices':notices}))
 '''
 
 
@@ -608,7 +610,13 @@ def test_forward_recovery_interrupted_commit_retries_safely(legacy_entry, point)
     assert outcome['result'] != 0 and 'commit-interrupted' in outcome['events']
     assert 'services' not in outcome['events'] and 'restart' not in outcome['events']
     assert legacy_entry['marker'].is_file()
-    assert (legacy_entry['data'] / 'update_state.json').read_bytes() == before
+    # R4: the consolidation start is journaled before the mutation, so an
+    # interrupted commit leaves exactly that record behind — nothing else.
+    before_state = json.loads(before)
+    after_state = update_journal.load_state(legacy_entry['data'] / 'update_state.json')
+    started = after_state['applying'].pop('provider_settings_migration_started', None)
+    assert started is True and after_state == before_state
+    assert 'provider_migration_blocked' in outcome['notices']
     authority = legacy_entry['data'] / '.provider-settings-authority.json'
     assert authority.exists() == (point == 'after')
     outcome = _run_recovery(legacy_entry, 'resume')
@@ -743,7 +751,7 @@ def test_forward_recovery_rejects_active_release_owner(legacy_entry):
     assert not (legacy_entry['data'] / '.provider-settings-authority.json').exists()
 
 
-@pytest.mark.parametrize('child_case', ['success', 'v2_options', 'mode_selected_changed', 'mode_selected_unknown'])
+@pytest.mark.parametrize('child_case', ['success', 'v2_options', 'mode_selected_changed', 'mode_selected_unknown', 'service_failure'])
 def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_entry, tmp_path, monkeypatch, child_case):
     """Keep the parent/child FD path real; redirect only child argv to stub effects."""
     import importlib.util
@@ -849,12 +857,26 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     assert len(spawned) == 1
     assert _git(repo, 'rev-parse', 'HEAD') == target
     final = update_journal.load_state(data / 'update_state.json')
-    if child_case not in ('success', 'v2_options'):
+    if child_case == 'service_failure':
+        # R4(b): the child journaled the consolidation start and completed the
+        # migration before failing, so the parent holds for recovery — writers
+        # stay down, no rollback onto code the new layout cannot run.
         assert result == 1
         assert parent_effects == []
         assert legacy_entry['marker'].is_file() and final['applying'] is not None
-        assert final['applying']['provider_settings_migration_required'] is True
+        assert final['applying']['provider_settings_migration_started'] is True
         assert reports[-1] == ('provider_migration_recovery_blocked', {'writers_stopped': False})
+        assert (data / '.provider-settings-authority.json').is_file()
+        return
+    if child_case not in ('success', 'v2_options'):
+        # R4(a): the child failed before the journaled consolidation start, so
+        # settings are untouched and the parent rolls back as before — writers
+        # resume instead of a recovery hold.
+        assert result == 1
+        assert parent_effects == ['rollback', 'restart']
+        assert final['applying'] is None
+        assert 'provider_settings_migration_started' not in json.dumps(final)
+        assert not any(report[0] == 'provider_migration_recovery_blocked' for report in reports)
         assert 'mode-changed' in json.loads((runtime / 'synthetic-events.json').read_text())
         assert not (data / '.provider-settings-authority.json').exists()
         return

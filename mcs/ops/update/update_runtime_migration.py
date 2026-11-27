@@ -292,6 +292,29 @@ def _restore_runtime(entry: dict) -> None:
             raise UpdateError("runtime_restore_checkout_failed")
 
 
+
+def _journal_provider_migration_start(state: dict) -> None:
+    """Durable proof that v3 settings consolidation has begun.
+
+    Written at the mutation boundary (inside before_publication, after every
+    pre-publication check) so a later failure is a hold decided from the
+    journal — never a guessed branch. A failure of this write itself happens
+    before any settings mutation, so the caller treats it as not started."""
+    applying = state.get("applying")
+    if not isinstance(applying, dict):
+        raise update_migrations.MigrationError("provider_migration_start_unverified")
+    if applying.get("provider_settings_migration_started") is not True:
+        applying["provider_settings_migration_started"] = True
+        journal_store.save_state(STATE_PATH, state)
+    try:
+        current = journal_store.load_state(STATE_PATH).get("applying")
+    except (OSError, ValueError, TypeError, RecursionError):
+        current = None
+    if not isinstance(current, dict) \
+            or current.get("provider_settings_migration_started") is not True:
+        raise update_migrations.MigrationError("provider_migration_start_unverified")
+
+
 @contextmanager
 def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=None):
     """Hold and recheck the legacy updater evidence while consolidating settings."""
@@ -404,6 +427,8 @@ def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=
                 check(prior=True)
                 _quiesce_for_mode(mode)
                 check(prior=True)
+                _journal_provider_migration_start(state)
+                check()
 
             yield before_publication
             check()
@@ -447,7 +472,9 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
                 update_migrations.migrate_provider_settings(
                     HOME, before_publication=before_publication, allow_legacy_retire=allow_retire)
             elif native_provider_migration:
-                update_migrations.migrate_provider_settings(HOME, allow_legacy_retire=allow_retire)
+                update_migrations.migrate_provider_settings(
+                    HOME, before_publication=lambda: _journal_provider_migration_start(state),
+                    allow_legacy_retire=allow_retire)
     except update_migrations.MigrationError as error:
         raise UpdateError("provider_settings_migration_unverified") from error
     _prepare_run_log(promote=True)

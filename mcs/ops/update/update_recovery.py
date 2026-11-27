@@ -263,6 +263,16 @@ def _provider_migration_recovery_hold(*, allow_resume=False, expected_mode=None)
         return mode
     _report("provider_migration_recovery_blocked", "provider migration is not verified",
             writers_stopped=stopped)
+    # R4(b): the hold must be visible and recoverable — writers stay down, so the
+    # operator is told on the terminal and by a notice (notice_id keeps repeated
+    # recovery passes idempotent; a lost enqueue retries on the next pass).
+    print("[MCS] 設定の統合が完了したか確認できないため、更新を保留し書込みを止めています。"
+          "mcs recover で復旧できます。状態は status と recovery_report.json を確認してください。")
+    _enqueue_notice(
+        "[MCS] 設定の統合が完了したか確認できないため、更新を保留し書込みを止めています。"
+        "mcs recover で復旧してください（要手動対応）",
+        notice_code="provider_migration_blocked",
+        notice_id="provider-migration-blocked")
     return 1
 
 

@@ -327,7 +327,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # leave the system running NEW code while claiming nothing
                 # happened; fall back to the surgical rollback path
                 entry = state["applying"]
-                if borrowed is None and entry.get("provider_settings_migration_required") is True:
+                if borrowed is None and entry.get("provider_settings_migration_started") is True:
+                    # The child journaled the consolidation start before failing:
+                    # settings may be half-integrated, so hold for recovery instead
+                    # of rolling back onto code the new layout cannot run. A child
+                    # that failed before that record never touched settings and
+                    # rolls back as before.
                     rollback_failed = True
                     return _provider_migration_recovery_hold(expected_mode=hold_mode or "")
                 try:
