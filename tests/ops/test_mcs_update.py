@@ -1034,6 +1034,7 @@ def test_postcheck_accepts_only_same_legacy_diagnostic(
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 123)
     monkeypatch.setattr(update_execution, '_agent_pid', mcs_update._agent_pid)
     monkeypatch.setattr(update_services, '_agent_pid', mcs_update._agent_pid)
+    _mk_schema(updater.LEDGER, 8)
     monkeypatch.setattr(ledger, "Ledger", lambda path:
                         SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
     monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([after], []))

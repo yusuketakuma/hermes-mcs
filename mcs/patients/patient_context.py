@@ -288,6 +288,14 @@ def _noncurrent_detail(body: str, span, value: str) -> bool:
     return bool(verdicts) and all(verdicts)
 
 
+def noncurrent_detail(body: str, evidence: str, value: str) -> bool:
+    """Whether one grounded detail is negated, uncertain or explicitly past-only."""
+    if not isinstance(body, str) or not isinstance(evidence, str):
+        return True
+    span = locate_quote_span(body, evidence)
+    return span is None or _noncurrent_detail(body, span, value)
+
+
 def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
     """Keep each raw attribute only inside its parent's unique source quote, category and drug owner."""
     if not isinstance(items, list) or not isinstance(body, str) or parent_span is None:
@@ -303,8 +311,6 @@ def detail_items(items, body: str, parent_span, category=None, subject=None) -> 
                 or item["value"] not in body[span[0]:span[1]]):
             continue
         if category is not None and item["key"] in _DRUG_ONLY_KEYS and category != "medication_management":
-            continue
-        if _noncurrent_detail(body, span, item["value"]):
             continue
         if subject in ("patient", "unspecified") and _other_persons_drug(body, span, item["value"]):
             continue

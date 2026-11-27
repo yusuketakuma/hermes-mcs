@@ -582,7 +582,8 @@ _CONTEXT_SUBJECT_JP = {"family": "家族", "other": "本人以外", "unspecified
 
 
 def _pharmacy_detail_lines(db, mid: int) -> list[str]:
-    """One short line per allowed detail, quoting only its own source value."""
+    """One short line per allowed current detail, quoting only its own source value."""
+    import patient_context
     from read_model import message_patient_context, reference_text
     row = db.execute("SELECT project_id,message_id,content_hash,body_state,body_text,posted_at_ts "
                      "FROM messages WHERE message_id=?", (mid,)).fetchone()
@@ -593,7 +594,8 @@ def _pharmacy_detail_lines(db, mid: int) -> list[str]:
         scope = _CONTEXT_SUBJECT_JP.get(item.get("subject"))
         for detail in item.get("details") or []:
             label = _CARD_DETAIL_LABEL.get(detail.get("key"))
-            if label is None:
+            if label is None or patient_context.noncurrent_detail(
+                    row["body_text"], detail.get("evidence"), detail.get("value")):
                 continue
             # the whole quote: a cut would drop a trailing negation (…していない)
             line = (f"服薬管理（{label}）: 「{detail['value']}」"

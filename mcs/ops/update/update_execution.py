@@ -192,23 +192,8 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         # creation leaves behind, and SQLite would silently adopt it.
         if not os.path.isfile(LEDGER) or stat_result.st_size == 0:
             errors.append("ledger_invalid")
-        else:
-            try:
-                import sqlite3
-                probe = sqlite3.connect(
-                    Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-                try:
-                    known = probe.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone()
-                finally:
-                    probe.close()
-                if not known:
-                    errors.append("ledger_invalid")
-                else:
-                    db = ledger.Ledger(LEDGER)
-                    db.db.close()
-            except Exception:
-                errors.append("ledger_open_failed")
+        elif not ledger.valid_mcs_db(LEDGER):
+            errors.append("ledger_invalid")
     try:
         cfg = mcs_util.load_config()
         errs, _ = _check_environment(cfg)
