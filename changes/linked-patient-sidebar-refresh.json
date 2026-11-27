@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "訪問記録から関連患者を開いたときに患者一覧の検索条件を解除",
+  "summary": "訪問記録から関連するMCS患者のタイムラインを開くと、サイドバーの検索条件が解除され、最新の患者一覧が表示されます。「患者をさらに表示」で、一覧の続きを読み込めます。",
+  "upgrade": "追加の設定や操作は不要です。",
+  "details": [
+    "検索結果と次ページの位置を消して一覧を読み直し、訪問記録に対応する患者を選択します。後から別の患者を選んだり検索したりした場合は、その操作を優先します。"
+  ],
+  "refs": [
+    "mcs/views/local_chat/app.js",
+    "mcs/views/local_chat/homecare.js",
+    "tests/views/local_chat_dom_checks.js"
+  ]
+}

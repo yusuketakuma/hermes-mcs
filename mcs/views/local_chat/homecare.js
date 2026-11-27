@@ -660,15 +660,24 @@ function routeCard(date) {
 async function openMcs(projectId) {
   // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
   $("patient-search").value = ""; state.panel = "";
-  const loading = setMode("mcs");
-  const request = ++state.patientRequest;
+  state.openPatient = null; state.patients = []; state.patientCursor = null;
+  $("patients").replaceChildren(el("p", "患者一覧を読み込んでいます。", "empty"));
+  $("patient-count").textContent = ""; $("more-patients").hidden = true;
+  // Refresh the unfiltered sidebar without opening the first or remembered patient.
+  const loading = setMode("mcs", {deferSelection: true});
+  const request = state.patientRequest;
   await loading;
   if (request !== state.patientRequest) return;
   let cursor = null, patient = null;
   do {
     const query = {q: String(projectId)};
     if (cursor) query.cursor = cursor;
-    const data = await api("patients", query);
+    let data;
+    try {data = await api("patients", query);}
+    catch (error) {
+      if (request !== state.patientRequest) return;
+      patientList(); throw error;
+    }
     if (request !== state.patientRequest) return;
     patient = data.items.find(row => row.project_id === projectId) || patient;
     cursor = data.next_cursor;
@@ -695,7 +704,7 @@ function markMode(mode) {
     button.classList.toggle("selected", picked); button.setAttribute("aria-pressed", String(picked));
   }
 }
-function setMode(mode) {
+function setMode(mode, listOptions) {
   hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
   markMode(mode);
   shell.setMode(mode);
@@ -705,7 +714,7 @@ function setMode(mode) {
     $("timeline").replaceChildren(); $("panel-view").replaceChildren();
     $("timeline-status").textContent = "患者を選ぶと投稿を表示します。";
     $("panel-view").hidden = !state.panel; $("timeline").hidden = false; $("timeline-status").hidden = false;
-    return loadPatients();
+    return loadPatients(false, listOptions);
   }
   const listed = loadHcPatients().catch(fail);
   if (mode === "day") showDay(hc.day || siteToday());

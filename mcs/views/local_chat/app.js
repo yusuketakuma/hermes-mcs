@@ -188,7 +188,7 @@ async function rememberedPatient() {
   return state.patients.find(row => row.project_id === id)
     || (await api("patients", {q: String(id)}).catch(() => ({items: []}))).items.find(row => row.project_id === id) || null;
 }
-async function loadPatients(more = false) {
+async function loadPatients(more = false, {deferSelection = false} = {}) {
   const request = ++state.patientRequest;
   if (!state.project) loadSideStatus();
   try {
@@ -196,6 +196,8 @@ async function loadPatients(more = false) {
     if (request !== state.patientRequest) return;
     state.patients = more ? state.patients.concat(data.items) : data.items;
     state.patientCursor = data.next_cursor;
+    // A linked navigation draws this page when it selects its patient.
+    if (deferSelection) return;
     patientList();
     if (!state.project && state.patients.length) {
       const chosen = await rememberedPatient() || state.patients[0];

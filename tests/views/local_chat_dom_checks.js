@@ -616,15 +616,34 @@ async function checkOpenMcsPatientSelection() {
   assert.equal(byId("patient-meta").textContent, "ID 22");
   assert.match(byId("timeline-status").textContent, /見つかりません/);
 
+  const filtered = {project_id: 44, heading: "合成 旧検索", message_count: 1};
+  byId("patient-search").value = "旧検索";
+  sandbox.api = async () => ({items: [filtered], next_cursor: "old-search-page"});
+  await run("loadPatients()");
+  assert.match(content(byId("patients")), /旧検索/);
   sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
+    if (kind === "hc/patients") return {items: []};
     if (params.q === "22" && !params.cursor) return {items: [], next_cursor: "next"};
     if (params.q === "22" && params.cursor === "next") return {items: [{...p22, heading: "合成 新二十二"}], next_cursor: null};
-    return {items: [p11], next_cursor: null};
+    assert.equal(params.q, "");
+    if (!params.cursor) return {items: [p11], next_cursor: "all-patients-page"};
+    assert.equal(params.cursor, "all-patients-page", "an unfiltered page uses its own cursor");
+    return {items: [p33], next_cursor: null};
   };
-  await run("openMcs(22)");
-  assert.equal(run("state.project", sandbox), 22);
-  assert.equal(run("state.openPatient.heading", sandbox), "合成 新二十二");
-  run("state.patients = []", sandbox);
+  await run('setMode("pharmacy")');
+  const card = run('mcsCard({project_id: 22, patient_name: "合成 二十二"}, () => true)');
+  await button(card, "タイムラインを開く").onclick();
+  assert.equal(byId("patient-search").value, "");
+  assert.equal(run("state.project"), 22);
+  assert.equal(run("state.openPatient.heading"), "合成 新二十二");
+  assert.match(content(byId("patients")), /合成 十一/);
+  assert.doesNotMatch(content(byId("patients")), /合成 旧検索/);
+  assert.equal(byId("more-patients").hidden, false);
+  await byId("more-patients").onclick();
+  assert.match(content(byId("patients")), /合成 三十三/);
+  assert.equal(byId("more-patients").hidden, true);
+  assert.equal(run("state.project"), 22);
 
   let answer22;
   sandbox.api = async (kind, params) => {
@@ -641,6 +660,29 @@ async function checkOpenMcsPatientSelection() {
   answer22({items: [p22], next_cursor: null});
   await first;
   assert.equal(run("state.project", sandbox), 33);
+
+  // A later search owns the sidebar and selection even if the linked lookup then fails.
+  let rejectOld;
+  sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
+    if (params.q === "22") return new Promise((resolve, reject) => {rejectOld = reject;});
+    return {items: params.q ? [p33] : [p11], next_cursor: params.q ? null : "new-page"};
+  };
+  const stale = button(card, "タイムラインを開く").onclick();
+  for (let i = 0; i < 20 && !rejectOld; i++) await Promise.resolve();
+  assert.equal(typeof rejectOld, "function");
+  assert.equal(byId("more-patients").hidden, true, "the sidebar opens with its linked selection");
+  assert.match(content(byId("patients")), /読み込んでいます/);
+  assert.equal(byId("patient-count").textContent, "");
+  byId("patient-search").value = "三十三";
+  byId("patient-form").onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && run("state.project") !== 33; i++) await Promise.resolve();
+  assert.equal(run("state.project"), 33);
+  byId("error").hidden = true;
+  rejectOld(new Error("合成 旧リンクの失敗"));
+  await stale;
+  assert.equal(byId("error").hidden, true);
+  assert.match(content(byId("patients")), /合成 三十三/);
 }
 
 
