@@ -282,25 +282,13 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
         raise UpdateError("membership: " + ",".join(problems))
 
 
-def rollback_notice_cancel_needed(applying: dict) -> bool:
-    """True only when the tree actually carries the pre-update code that will restart."""
-    if not applying.get("rollback"):
-        return False
-    try:
-        head = _head_sha()
-    except (UpdateError, OSError):
-        return False
-    target = applying.get("sha")
-    return bool(target and head == target)
-
-
 def _cancel_unsent_notices() -> int:
     """After a tree rollback, a queued never-attempted render still
     carries the newer renderer's spec (e.g. preview_text, post_actions),
     which the restored worker rejects forever while the runner counts it
     as live. Cancel it — the restored dispatch issues a fresh notice
     render for the same event, and the restored sweep a fresh card render
-    for the unbound intents or drift, as for a moved route. Best-effort."""
+    for the unbound intents or drift, as for a moved route. Unverifiable queued work holds the restart."""
     if not os.path.isfile(LEDGER):
         return 0
     try:
@@ -308,23 +296,31 @@ def _cancel_unsent_notices() -> int:
                               uri=True, timeout=30)
         try:
             with con:
+                con.execute("BEGIN IMMEDIATE")
                 now = time.time()
-                tables = {row[0] for row in con.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 if "notification_renders" not in tables:
+                    if {"notification_delivery_attempts", "notification_intent_cards"} & tables:
+                        raise sqlite3.DatabaseError("notice_renders_unverified")
                     return 0
-                required = {"notification_delivery_attempts", "notify_outbox", "notification_intent_cards"}
+                if not con.execute("SELECT 1 FROM notification_renders WHERE state='queued' LIMIT 1").fetchone():
+                    return 0
                 columns = {row[1] for row in con.execute("PRAGMA table_info(notification_renders)")}
-                if not required <= tables or not {"card_id", "intent_event_id", "updated_at"} <= columns:
-                    return 0
+                # Schema 7 predates outbox-linked notice renders. Only its card renders
+                # have a verifiable reissue path without an intent_event_id.
+                event_column = "intent_event_id"
+                if "intent_event_id" not in columns and con.execute("PRAGMA user_version").fetchone()[0] == 7:
+                    event_column = "NULL"
                 rows = con.execute(
-                    "SELECT delivery_id,card_id,intent_event_id "
+                    f"SELECT delivery_id,card_id,{event_column} "
                     "FROM notification_renders r WHERE state='queued' "
                     "AND NOT EXISTS ("
                     "SELECT 1 FROM notification_delivery_attempts a "
                     "WHERE a.delivery_id=r.delivery_id "
                     "AND a.state IN ('granted','unknown'))").fetchall()
                 for delivery_id, card_id, event_id in rows:
+                    if card_id is None and event_id is None:
+                        raise sqlite3.DatabaseError("notice_event_unverified")
                     con.execute(
                         "UPDATE notification_renders SET state='cancelled',"
                         "updated_at=? WHERE delivery_id=? AND state='queued'",

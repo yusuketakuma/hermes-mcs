@@ -36,7 +36,8 @@ def test_post_merge_provider_migration_precedes_services(updater, monkeypatch, n
     state = updater.journal_store.default_state()
     state['applying'] = {'tag': 'v1.1.0', 'sha': 'a' * 40, 'prev_sha': 'b' * 40,
                          **({'release_ref': {'synthetic': True}} if native else {})}
-    def migrate(root):
+    def migrate(root, *, allow_legacy_retire):
+        assert not allow_legacy_retire
         assert root == updater.HOME
         calls.append('migrate')
         if failed:
