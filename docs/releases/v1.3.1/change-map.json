@@ -45,6 +45,11 @@
       "sha256": "eacaf5232ed60ec85068983f7bc7d1796570c540e51093c94b899935460577d8",
       "title": "知識ストア向けの投稿件数を集計期間内に限定"
     },
+    "card-storage-predicate-scope": {
+      "path": "changes/archive/1.3.1/card-storage-predicate-scope.json",
+      "sha256": "431152f51f8a93c00779686701cbbdc454813f1dc719ba56a4bea26bcede9ce4",
+      "title": "副作用なしの記載が続くと通知カードから薬の保管場所が消える問題を修正"
+    },
     "check-current-release-archive": {
       "path": "changes/archive/1.3.1/check-current-release-archive.json",
       "sha256": "7d2dd19ff2b59d3ff36d3eba8ecca7ebb1520d0b9a1c807948eec89ad92e216a",
@@ -144,6 +149,11 @@
       "path": "changes/archive/1.3.1/install-fresh-conflict-precheck-20261127.json",
       "sha256": "b9033358602879d811c2b268ee1a44a07da02f24aee3a1dfc69975e59520e96d",
       "title": "初回導入が既存の処理と競合するとき設定作成前に停止"
+    },
+    "linked-patient-sidebar-refresh": {
+      "path": "changes/archive/1.3.1/linked-patient-sidebar-refresh.json",
+      "sha256": "28cebd7e4fc46b39b788de9a3eacdf10596c6c747fee063de67d8412e7b4a7c8",
+      "title": "訪問記録から関連患者を開いたときに患者一覧の検索条件を解除"
     },
     "live-only-join-notifications": {
       "path": "changes/archive/1.3.1/live-only-join-notifications.json",
