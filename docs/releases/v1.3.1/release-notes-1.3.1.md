@@ -339,27 +339,27 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - credentialは使用毎にconnector storeから解決し、pinはnetworkから取得しない。
 - release_metadataのattestation trustは未配線のまま。
 - confirm応答の保存はcompare-and-swapで行い、送信中のauto-disable撤回をconfirmで上書きしない。pin fileの不備はwire構築時にfail-closedする。
-- 根拠: mcs/ops/update_cli.py、mcs/ops/release_auto_trust.py
+- 根拠: mcs/ops/update/update_cli.py、mcs/ops/update/release_auto_trust.py
 
 #### v3 contract digestを検証済みCompatibilityから解決
 
 - 端末はconfig/data契約文書からdigestを計算せず、配備値としても配置しない。
 - release_metadataの戻り値にconfig/data contract sha256を追加し、build_depsがwire注入時にdigest解決を自動構成する。
 - digest解決をartifact fetch前へ移し、stage不能なtargetの反復downloadを防ぐ。
-- 根拠: mcs/ops/release_auto_wire.py、mcs/ops/release_auto_deps.py、mcs/ops/release_auto_owner.py
+- 根拠: mcs/ops/update/release_auto_wire.py、mcs/ops/update/release_auto_deps.py、mcs/ops/update/release_auto_owner.py
 
 #### v3 owner tick driverへwire接続を追加
 
 - wire factoryをrelease_auto_wire_factoryへ集約し、consent CLIとowner tick driverが共有する。
 - wire構築の失敗はtickを停止させずunavailable wireとしてfail-closedする。
 - auto-disableでもwireが組み立てられる場合は中央consent-revokeを送る。
-- 根拠: mcs/ops/release_auto_wire_factory.py、mcs/ops/release_auto_driver.py、mcs/ops/update_cli.py
+- 根拠: mcs/ops/update/release_auto_wire_factory.py、mcs/ops/update/release_auto_driver.py、mcs/ops/update/update_cli.py
 
 #### v3自動更新のpin配布形式を追加
 
 - 閉じたschemaで検査し、symlink・16KiB超・未知keyを拒否する。
 - pinの用途と期限の評価は既存の署名検証側が担う。
-- 根拠: mcs/ops/release_auto_trust.py、docs/specs/auto-update-v2.md
+- 根拠: mcs/ops/update/release_auto_trust.py、docs/specs/auto-update-v2.md
 
 #### 電解質の服薬量や連絡基準を検査の実測値と誤認する問題を修正
 
