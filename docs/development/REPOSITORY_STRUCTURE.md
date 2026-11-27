@@ -75,7 +75,7 @@
 | `mcs/ops/services/` | 常駐処理の構成と照合・適用 |
 | `mcs/medications/drug_info.py` | 公開医薬品情報の照会 |
 
-`settings_migration_reconcile.py`は旧ランチャーの固定入口として直下に残します。`status_fields.json`は固定CLIとの隣接読取りを維持します。CSDC専用コードの配置は専任担当の所有範囲を保ちます。
+`settings_migration_reconcile.py`は旧ランチャーの固定入口として直下に残します。`release_auto_bridge.py`は従来のmodule起動入口と復旧用ファイル一覧の固定配置として直下に残します。`status_fields.json`は固定CLIとの隣接読取りを維持します。CSDC専用コードの配置は専任担当の所有範囲を保ちます。
 
 SDKチェックは`scripts/development/`、オフライン評価の実行コードは`scripts/evaluation/`へまとめます。評価入力・基準・manifestは`evaluation/`に保持し、内容とハッシュを変えません。説明図のHTML原稿とSVGは`docs/assets/diagrams/`にそろえます。履歴記録と過去版のfixtureは、当時のパスを保持します。
 

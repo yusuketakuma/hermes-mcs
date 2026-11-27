@@ -8,7 +8,7 @@
    ]
   },
   "docs": {
-   "notes": "19件の変更記録を版別の変更一覧と対応付け、公開用の本文とタイトルを生成しました。",
+   "notes": "35件の変更記録を版別の変更一覧と対応付け、公開用の本文とタイトルを生成しました。",
    "sources": [
     "CHANGELOG.md",
     "docs/releases/v1.3.1/change-map.json",
@@ -16,27 +16,30 @@
    ]
   },
   "features": {
-   "notes": "中断した要約の再開、服薬量と検査値の区別、薬剤照合の持ち越し条件を確認しました。",
+   "notes": "中断した要約の再開、服薬量と検査値の区別、薬剤照合の持ち越し条件、OpenAIの拒否応答で課金再送しないことを確認しました。",
    "sources": [
     "mcs/semantic/semantic_summary_stages.py",
     "mcs/extract/clinical/clinical_values.py",
-    "mcs/ingest/run_check.py"
+    "mcs/ingest/run_check.py",
+    "mcs/llm/cloud_inference.py"
    ]
   },
   "quickstart": {
-   "notes": "OCR導入済みの更新経路と、設定保存前のJev送信対象の表示を確認しました。",
+   "notes": "OCR導入済みの更新経路、初期設定で1つ前の項目へ戻る操作、導入後の継続確認とAIエージェント向け修正依頼を確認しました。",
    "sources": [
     "docs/guides/UPGRADE_AGENT.md",
-    "scripts/setup_yomitoku.py",
-    "mcs/ops/setup/setup_wizard.py"
+    "docs/guides/EASY_SETUP.md",
+    "mcs/ops/setup/setup_wizard.py",
+    "mcs/ops/setup/postinstall_watch.py"
    ]
   },
   "safety": {
-   "notes": "結果不明の部品は配送記録に従って保留します。クラウド要約は予約と成功記録を照合します。医薬品マスターは同梱原本との一致を確認しました。",
+   "notes": "結果不明の部品は配送記録に従って保留します。クラウド要約は予約と成功記録を照合します。医薬品マスターは同梱原本との一致を確認し、v3復旧世代は必要なファイルがそろうことを配備前に検査します。",
    "sources": [
     "mcs/ingest/health_delivery.py",
     "mcs/semantic/semantic_summary_stages.py",
-    "docs/releases/v1.3.1/ACCEPTANCE_1.3.1.md"
+    "docs/releases/v1.3.1/ACCEPTANCE_1.3.1.md",
+    "mcs/ops/release_auto_bridge.py"
    ]
   }
  },
