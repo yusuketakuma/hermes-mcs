@@ -33,11 +33,19 @@ def _path(root, transport, profile):
 
 
 @contextmanager
-def _write_fence(directory):
-    """Serialize every writer of one worker-status directory."""
+def _write_fence(directory, deadline=None):
+    """Serialize writers without letting a held lock consume the caller's probe budget."""
+    deadline = time.monotonic() + 1 if deadline is None else deadline
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('worker_status_lock_timeout') from None
+                time.sleep(0.02)
         yield
     finally:
         os.close(fd)
@@ -53,15 +61,18 @@ def record(root, transport, profile, reason):
     target.parent.mkdir(mode=0o700, exist_ok=True)
     if target.parent.is_symlink():
         raise ValueError('worker_status_path_invalid')
-    with _write_fence(target.parent):
-        pid = os.getpid()
-        try:
-            started_at = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1)
-        except (OSError, ValueError, TypeError, OverflowError):
-            started_at = None
-        value = {'version': VERSION, 'reason': reason, 'pid': pid,
-                 'at': time.time(), 'started_at': started_at}
-        atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
+    try:
+        with _write_fence(target.parent, time.monotonic() + 1):
+            pid = os.getpid()
+            try:
+                started_at = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1)
+            except (OSError, ValueError, TypeError, OverflowError):
+                started_at = None
+            value = {'version': VERSION, 'reason': reason, 'pid': pid,
+                     'at': time.time(), 'started_at': started_at}
+            atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
+    except TimeoutError:
+        return
 
 
 def _read_witness(p):
@@ -106,32 +117,32 @@ def _repair_missing_started_at(p, deadline):
     return True, birth
 
 
-def repair_missing_started_at(path):
+def repair_missing_started_at(path, *, deadline=None):
     """Re-acquire a missing started_at once for the same live record pid.
 
     A process born after the record cannot be its writer (PID reuse), and a
     malformed present stamp is evidence rather than a value to overwrite."""
     try:
         p = Path(path)
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + 1 if deadline is None else deadline
         if p.is_symlink() or p.stat().st_size > 2048:
             return False
-        with _write_fence(p.parent):
+        with _write_fence(p.parent, deadline):
             repaired, _birth_value = _repair_missing_started_at(p, deadline)
             return repaired
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return False
 
 
-def status(root, transport, profile):
+def status(root, transport, profile, *, deadline=None):
     """Read startup evidence; missing, old-version and dead-process records fail closed."""
     try:
         p = _path(root, transport, profile)
-        deadline = time.monotonic() + 1
+        deadline = time.monotonic() + 1 if deadline is None else deadline
         if p.is_symlink() or p.stat().st_size > 2048:
             raise ValueError('invalid')
         birth = None
-        with _write_fence(p.parent):
+        with _write_fence(p.parent, deadline):
             repaired, birth = _repair_missing_started_at(p, deadline)
             value = _read_witness(p)
         if value.get('reason') not in REASONS:
@@ -146,7 +157,7 @@ def status(root, transport, profile):
             raise ValueError('invalid')
         if birth is None or not repaired:
             birth = _birth(value['pid'], deadline)
-        if time.monotonic() >= deadline or birth != started_at:
+        if time.monotonic() >= deadline or birth != started_at or _read_witness(p) != value:
             raise ValueError('invalid')
         return {'state': 'started' if value['reason'] == 'worker_started' else 'disabled',
                 'reason': value['reason']}

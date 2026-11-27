@@ -1291,3 +1291,28 @@ def test_dates_cell_counts_periods_and_undecided_words_in_a_specimen_section(bod
 ])
 def test_a_firm_result_ends_a_specimen_section_at_a_blank_line(body):
     assert _validated("WBC", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported", body
+
+
+@pytest.mark.parametrize("body,evidence,name,value,unit", [
+    ("採血 クレアチニン 12.7", "クレアチニン 1", "クレアチニン", "1", None),
+    ("尿検査 蛋白 1+", "蛋白 1", "蛋白", "1", None),
+    ("塩化カリウム 4.5mEq/L", "カリウム 4.5mEq/L", "カリウム", "4.5", "mEq/L"),
+])
+def test_cropped_quotes_cannot_turn_longer_results_or_prescriptions_into_labs(body, evidence, name, value, unit):
+    raw = {"name": name, "value": value, "evidence": evidence}
+    if unit:
+        raw["unit"] = unit
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+def test_reported_panel_result_stays_confirmed_while_conditional_result_does_not():
+    positive = "採血 カリウム 4.5mEq/L、補正カルシウム 8.5mg/dL、医師に報告済み。"
+    raw = {"name": "カリウム", "value": "4.5", "unit": "mEq/L", "evidence": "採血 カリウム 4.5mEq/L"}
+    lab, = extract_validation.validate({"labs": [raw]}, positive)["labs"]
+    assert lab["normalized"]["confirmation"] == "quote_supported" and not lab.get("unverified")
+
+    negative = "採血 カリウム 4.5mEq/L、補正カルシウム 8.5mg/dL未満なら医師に報告"
+    lab, = extract_validation.validate({"labs": [raw]}, negative)["labs"]
+    assert lab["unverified"] is True and lab["normalized"]["confirmation"] == "unverified"

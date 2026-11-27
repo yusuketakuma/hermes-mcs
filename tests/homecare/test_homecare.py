@@ -421,6 +421,20 @@ def test_write_route_saves_and_maps_errors(server):
     assert post(server, b"{not json")[0] == 400
     assert post(server, b"x" * (chat.MAX_BODY + 1), without("Content-Length", str(chat.MAX_BODY + 1)))[0] == 413
 
+    db = homecare_store.connect(server.homecare, REGISTRY.modules)
+    row = patient(db, 1)
+    db.close()
+    for bad_time in (False, "10:00\n", "１０:００"):
+        status, data, _mime = post(server, {"actor": 1, "values": visit_values(row["patient_id"], start_time=bad_time)},
+                                   op="visit.create")
+        assert status == 400 and json.loads(data) == {"error": "invalid_fields", "fields": ["start_time"]}
+    status, data, _mime = post(server, {"actor": 1, "values": visit_values(row["patient_id"], start_time="")},
+                               op="visit.create")
+    assert status == 200 and json.loads(data)["record"]["start_time"] is None
+    status, data, _mime = post(server, {"actor": 1, "values": visit_values(row["patient_id"], start_time="10:00")},
+                               op="visit.create")
+    assert status == 200 and json.loads(data)["record"]["start_time"] == "10:00"
+
 
 def test_write_without_homecare_database_is_refused(server):
     server.homecare = None
@@ -559,7 +573,9 @@ def test_visits_are_validated_versioned_and_audited(db):
     row = patient(db, me["staff_id"])
     for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
                         ({"visit_date": "2026-02-30"}, ["visit_date"]),
-                        ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
+                        ({"start_time": "25:00"}, ["start_time"]), ({"start_time": "10:00\n"}, ["start_time"]),
+                        ({"start_time": "１０:００"}, ["start_time"]), ({"start_time": False}, ["start_time"]),
+                        ({"status": "done"}, ["staff_id"]),
                         ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"]),
                         ({"kind": None}, ["kind"]), ({"kind": ["pharmacy.home_visit"]}, ["kind"]),
                         ({"kind": {"pharmacy.home_visit": 1}}, ["kind"])):
@@ -832,6 +848,38 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     failing = lambda request: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
     with pytest.raises(ValueError, match="route_failed"):
         route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=failing)
+
+
+def test_route_rejects_null_duplicate_and_malformed_route_replies(db, tmp_path):
+    me = first_staff(db)
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
+    path.chmod(0o600)
+    row = patient(db, me["staff_id"], address="合成市2-2")
+    visit = visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])
+    settings = route.RouteSettings(path)
+
+    def fetch(reply):
+        def send(request):
+            if request.full_url.startswith(route.GEOCODE_URL):
+                return [{"geometry": {"coordinates": [139.7, 35.6]}}]
+            return reply
+        return send
+
+    for reply in ({"routes": None}, {"routes": [{}, {}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 600},
+                                           {"type": "job", "id": 1, "arrival": 900}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": "600"}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 600, "waiting_time": -1}]}]}):
+        with pytest.raises(ValueError, match="route_failed"):
+            route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch(reply))
+
+    empty = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch({"routes": []}))
+    assert empty["stops"] == [] and empty["unscheduled"] == [visit["visit_id"]]
+    ordered = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch(
+        {"routes": [{"steps": [{"type": "start"}, {"type": "job", "id": 1, "arrival": 600, "duration": 300},
+                               {"type": "end"}]}]}))
+    assert [stop["visit_id"] for stop in ordered["stops"]] == [visit["visit_id"]]
 
 
 def test_route_transport_refuses_other_hosts():

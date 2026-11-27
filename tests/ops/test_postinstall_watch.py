@@ -201,3 +201,14 @@ def test_deadline_before_required_streak_publishes_failed_status_and_brief(tmp_p
 def test_probe_check_uses_offline_mode():
     commands = dict(postinstall_watch._probe_commands(Path("/synthetic/repo")))
     assert commands["check"][-1] == "--offline"
+
+
+def test_writable_resolved_root_is_rejected_before_data_is_created(tmp_path):
+    target = tmp_path / "target-home"
+    target.mkdir(mode=0o777)
+    target.chmod(0o777)
+    alias = tmp_path / "alias-home"
+    alias.symlink_to(target, target_is_directory=True)
+    runner, _ = _runner([(0, ""), (0, "")])
+    assert postinstall_watch.run(home=str(alias), repo="/synthetic", once=True, runner=runner) == 1
+    assert not (target / "data").exists()

@@ -97,9 +97,9 @@ def test_delivery_probe_identifies_missing_witness(gateway, monkeypatch, during_
     if during_status:
         status = card_worker_status.status
 
-        def disappear(*args):
+        def disappear(*args, **kwargs):
             path.unlink()
-            return status(*args)
+            return status(*args, **kwargs)
 
         monkeypatch.setattr(card_worker_status, "status", disappear)
     else:
@@ -194,8 +194,8 @@ def test_worker_witness_requires_strict_private_stable_bytes(gateway, monkeypatc
     else:
         status = card_worker_status.status
 
-        def race(*args):
-            value = status(*args)
+        def race(*args, **kwargs):
+            value = status(*args, **kwargs)
             _record(gateway, pid=PID + 1)
             return value
 

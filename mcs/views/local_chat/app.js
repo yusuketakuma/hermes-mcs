@@ -213,6 +213,7 @@ function closeDetail() {
 }
 function selectPatient(patient) {
   shell.openList(false);
+  ++state.patientRequest;
   state.project = patient.project_id; state.openPatient = patient; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
   const meta = [`ID ${patient.project_id}`, ...placeNames(patient), patient.disease, `保存済み ${patient.message_count} 件`,
     patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`, patient.last_complete_fetch != null && `最終取得 ${postTime(patient.last_complete_fetch)}`];

@@ -155,18 +155,25 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
         try:
             result = fetch(request)
             routes = result["routes"]
-            # A successful answer with no route means no visit could be placed; they all count as unscheduled.
+            if not isinstance(routes, list) or len(routes) > 1:
+                raise ValueError("route_failed")
+            # A successful empty answer means no visit could be placed; they all count as unscheduled.
             steps = routes[0]["steps"] if routes else []
             if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
                 raise ValueError("route_failed")
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             raise ValueError("route_failed") from None
+        positions = set()
         for step in steps:
-            position = step.get("id") if step.get("type") == "job" else None
-            waiting = step.get("waiting_time", 0)
-            if type(position) is not int or not 1 <= position <= len(placed) or type(step.get("arrival")) is not int \
-                    or type(waiting) is not int or waiting < 0:
+            kind = step.get("type")
+            if kind in ("start", "end"):
                 continue
+            position = step.get("id") if kind == "job" else None
+            waiting = step.get("waiting_time", 0)
+            if type(position) is not int or not 1 <= position <= len(placed) or position in positions \
+                    or type(step.get("arrival")) is not int or type(waiting) is not int or waiting < 0:
+                raise ValueError("route_failed")
+            positions.add(position)
             row = placed[position - 1]
             # Arriving early means waiting for the booked window, so the shown time is when the visit can start.
             stops.append({"visit_id": row["visit_id"], "patient_name": row["patient_name"],

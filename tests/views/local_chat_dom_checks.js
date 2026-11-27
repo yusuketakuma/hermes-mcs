@@ -7,19 +7,26 @@ class Element {
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
   get firstElementChild() {return this.children[0];}
+  get firstChild() {return this.children[0];}
   remove() {this.parentNode.children = this.parentNode.children.filter(node => node !== this);}
   set id(value) {nodes.set(value, this);}
   setAttribute() {}
   scrollIntoView() {}
   focus() {document.activeElement = this;}
   contains(node) {for (; node; node = node.parentNode) if (node === this) return true; return false;}
+  get options() {return this.children.filter(node => node.tagName === "option");}
+  matches(selector) {return selector === this.tagName || (selector.startsWith(".") && this.className.split(" ").includes(selector.slice(1))) || (selector.startsWith('[name="') && this.name === selector.slice(7, -2));}
+  querySelector(selector) {return this.querySelectorAll(selector)[0] || null;}
+  querySelectorAll(selector) {const out = []; const walk = node => {for (const child of node.children) {if (child.matches && child.matches(selector)) out.push(child); walk(child);}}; walk(this); return out;}
+  addEventListener(type, handler) {(this.listeners ||= {})[type] = handler;}
 }
 const nodes = new Map();
 const listeners = {};
-const document = {body: new Element("body"), activeElement: null, addEventListener(type, handler) {(listeners[type] ||= []).push(handler);}, getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
+const document = {body: Object.assign(new Element("body"), {dataset: {}}), activeElement: null, addEventListener(type, handler) {(listeners[type] ||= []).push(handler);}, getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, querySelectorAll: () => [], createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
 const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promise(() => {})};
 vm.createContext(sandbox);
-const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");
+const source = process.argv.slice(2).map(path => fs.readFileSync(path, "utf8")
+  .replace(/loadPatients\(\);\s*$/, "").replace(/initHomecare\(\);\s*$/, "")).join("\n");
 vm.runInContext(source, sandbox);
 const realApi = sandbox.api;
 function content(node) {return [node.textContent, ...node.children.map(content)].join("\n");}
@@ -595,5 +602,67 @@ async function checkMcsData() {
   assert.equal(lines, "@自分宛て: 自分のアカウントを特定できません|ピン留め: 未取得|ブックマーク: なし");
   assert.equal(texts(run("flagLines")({})), "@自分宛て: 状態不明|ピン留め: 状態不明|ブックマーク: 状態不明");
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); console.log("local chat DOM contracts passed");}
+
+async function checkOpenMcsPatientSelection() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  const p11 = {project_id: 11, heading: "合成 十一", message_count: 1}, p22 = {project_id: 22, heading: "合成 二十二", message_count: 1}, p33 = {project_id: 33, heading: "合成 三十三", message_count: 1};
+  run("hc.enabled = true; hc.meta = {qualifications: {}, roles: {}, visit_kinds: {}}; state.project = 11; state.openPatient = null", sandbox);
+  run("loadMain = async () => {}; loadPatientContext = async () => {}; loadSideStatus = async () => {}; loadCounts = async () => {}", sandbox);
+  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [] : [p11], next_cursor: null});
+  await run("openMcs(22)");
+  assert.equal(run("state.project", sandbox), null);
+  assert.equal(byId("patient-name").textContent, "患者が見つかりません");
+  assert.equal(byId("patient-meta").textContent, "ID 22");
+  assert.match(byId("timeline-status").textContent, /見つかりません/);
+
+  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [p22] : [p11], next_cursor: null});
+  await run("openMcs(22)");
+  assert.equal(run("state.project", sandbox), 22);
+
+  let answer22;
+  sandbox.api = async (kind, params) => {
+    if (params.q === "22") return new Promise(resolve => {answer22 = resolve;});
+    if (params.q === "33") return {items: [p33], next_cursor: null};
+    return {items: [], next_cursor: null};
+  };
+  const first = run("openMcs(22)");
+  for (let i = 0; i < 20 && !answer22; i++) await Promise.resolve();
+  assert.equal(typeof answer22, "function");
+  const second = run("openMcs(33)");
+  await second;
+  assert.equal(run("state.project", sandbox), 33);
+  answer22({items: [p22], next_cursor: null});
+  await first;
+  assert.equal(run("state.project", sandbox), 33);
+}
+
+
+async function checkRouteStaffRace() {
+  const run = code => vm.runInContext(code, sandbox);
+  run('hc.enabled = true; hc.routes = true; hc.actor = 1; hc.csrf = "synthetic"; hc.staff = [{staff_id:1,name:"合成 一",active:true},{staff_id:2,name:"合成 二",active:true}]; hc.meta = {qualifications:{},roles:{},visit_kinds:{}}', sandbox);
+  const route = run('routeCard("2026-11-27")', sandbox), form = route.card.querySelector("form"), select = form.querySelector("select"), result = route.card.querySelector(".route-result");
+  assert.ok(form && select && result);
+  let answer1, answer2;
+  sandbox.fetch = (_url, options) => {
+    const body = JSON.parse(options.body);
+    return new Promise(resolve => {if (body.staff === 1) answer1 = resolve; else answer2 = resolve;})
+      .then(plan => ({ok: true, json: async () => plan}));
+  };
+  select.value = "1";
+  const first = form.onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && !answer1; i++) await Promise.resolve();
+  select.value = "2";
+  select.listeners.change();
+  answer1({stops: [{patient_name: "合成一の患者", start_time: "10:00", arrival: "09:50"}], unscheduled: [], unlocated: []});
+  await first;
+  assert.doesNotMatch(content(result), /合成一の患者/);
+  const second = form.onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && !answer2; i++) await Promise.resolve();
+  answer2({stops: [{patient_name: "合成二の患者", start_time: "11:00", arrival: "10:50"}], unscheduled: [], unlocated: []});
+  await second;
+  assert.match(content(result), /合成二の患者/);
+  assert.doesNotMatch(content(result), /合成一の患者/);
+}
+
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); await checkOpenMcsPatientSelection(); await checkRouteStaffRace(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

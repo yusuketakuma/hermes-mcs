@@ -395,7 +395,7 @@ _OTHER_SENSE_CLAUSE = {
 _CLAUSE_END = re.compile(r"[。、;]")
 # A closed affirmative form is required unless a separate named reading follows.
 _LAB_NUMBER_CLOSED_TAIL = re.compile(
-    r"ヲ(?:測定|検査)シマシタ|(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常|[↑↓]+|報告シ(?:マス|マシタ))?"
+    r"ヲ(?:測定|検査)シマシタ|(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常|[↑↓]+|報告シ(?:マス|マシタ)|報告済ミ)?"
     r"(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\)|\(前回[0-9]+(?:\.[0-9]+)?(?:[a-zμ%/]+)?\))?$")
 _LAB_NEXT_NUMBER = re.compile(
     r"(" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
@@ -728,8 +728,9 @@ _LAB_TAIL = re.compile(fold_surface(
     rf"(?>{_PANEL_ITEM.pattern}|[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
     r"|[、,]?[でとにがはも]?(?:高値|低値|高め|低め|上昇|低下|高|低|↑++|↓++|high|low|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|(?:次回)?再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
-    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
+    r"|報告(?:します|しました|あり|済み)?|採血|検査|測定)"
     r"|[、,](?:検査)?結果を(?:(?:主治医|医師|担当医)に)?(?:共有|報告)(?:しました|済み)$"
+    r"|[、,]?(?:主治医|医師|担当医)に報告(?:しました|済み)?"
     rf"|{_LAB_COPULA})*+"))
 _LAB_TAIL_END = re.compile(fold_surface(
     rf"[。;]|の?ため|により|{_LAB_COPULA}(?={_PANEL_ITEM.pattern})|{_AFTER_COMMA}(?={_NAMED_PRESCRIPTION})"))
@@ -866,6 +867,14 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         elif not re.search(r"[\r\n]\s*$", source_body[slice(*span)]):
             source_tail = _LAB_SOURCE_REST.match(source_body, span[1])[0]
             panel_quote += fold_surface(source_tail).replace("µ", "μ")
+        # A quote may end before a unit or a later condition, but not in the
+        # middle of the result token itself (12.7 -> 1, 1+ -> 1).
+        if span is not None and re.match(r"[0-9.+-]", source_tail):
+            unverified = True
+        # A quote that starts after a salt stem can turn a prescription
+        # (塩化カリウム) into a blood reading. Read the missing left context.
+        if span is not None and _SALT_STEM.search(fold_surface(source_body[max(0, span[0] - 12):span[0]])):
+            unverified = True
     names = _LAB_NAMES[analyte] if analyte else (label,)
     pattern = (r"(?P<name>" + _lab_name_pattern(names)
                + r")(?![a-z])(?:値|ハ|:|=)*")

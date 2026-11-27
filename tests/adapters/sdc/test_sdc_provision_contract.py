@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 
 import pytest
+import re
 
 from adapters.sdc import provision_contract as contract
 from adapters.sdc.support_contract import canonical
@@ -392,6 +393,22 @@ def test_import_window_is_separate_from_common_bundle_and_historical_metadata():
     for definition in ('Status', 'Receipt', 'StatusResponse', 'AckResponse'):
         saved = example(definition)
         assert contract.validate_provision(definition, saved, now_ms=SAFE) == saved
+
+
+
+
+def test_auto_bundle_shares_v3_key_id_validation_before_a_receipt_can_exist():
+    value = bundle('auto')
+    assert contract.validate_import_bundle(value, now_ms=NOW) == value
+    assert all(contract.validate_provision('Hash', pin['kid'], now_ms=NOW) == pin['kid'] for pin in value['pins'])
+    short = copy.deepcopy(value)
+    short['pins'][0]['kid'] = 'synthetic-short'
+    rejected('Bundle', short)
+    # support/restart retain their distinct base64url key-id contract.
+    for profile in ('support', 'restart'):
+        legacy = bundle(profile)
+        assert not re.fullmatch(r'[0-9a-f]{64}', legacy['pins'][0]['kid'])
+        assert contract.validate_import_bundle(legacy, now_ms=NOW) == legacy
 
 
 def test_bundle_authority_cannot_outlive_the_shortest_selected_pin():

@@ -537,6 +537,23 @@ def test_historical_lab_with_short_evidence_keeps_the_sources_panel_condition(db
     assert "検査: カリウム" not in text
 
 
+def test_validate_then_structured_view_separates_cropped_and_reported_labs(db):
+    body = "採血 カリウム 4.5mEq/L、補正カルシウム 8.5mg/dL、医師に報告済み。"
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text=? WHERE message_id=1", (body,))
+    text = _render(db, {"labs": [
+        {"name": "カリウム", "value": "4.5", "unit": "mEq/L", "evidence": "カリウム 4.5mEq/L"}]})
+    assert "検査: カリウム 4.5mEq/L" in text
+
+    cropped = "採血 クレアチニン 12.7"
+    with db.db:
+        db.db.execute("UPDATE messages SET body_text=? WHERE message_id=1", (cropped,))
+    text = _render(db, {"labs": [
+        {"name": "クレアチニン", "value": "1", "evidence": "クレアチニン 1"}]})
+    assert "検査候補（未確認）: クレアチニン 1" in text
+    assert "検査: クレアチニン" not in text
+
+
 def test_unverified_only_labs_keep_candidate_label_and_every_value(db):
     # the 6-item cap silently dropped later labs (bug sweep 2026-11-13): every value is shown
     joined = _render(db, {"labs": [

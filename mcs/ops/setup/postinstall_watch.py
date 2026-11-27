@@ -81,7 +81,12 @@ def _open_home(home: str, flags: int) -> int:
         if os.lstat(home).st_uid != os.getuid():
             raise PermissionError("unsafe root link")
         home = os.path.realpath(home)
-    return os.open(home, flags)
+    fd = os.open(home, flags)
+    info = os.fstat(fd)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        os.close(fd)
+        raise PermissionError("unsafe root directory")
+    return fd
 
 
 def _publish(home: str, status: dict, brief: str | None) -> None:

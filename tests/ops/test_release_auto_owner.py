@@ -1049,3 +1049,15 @@ def test_cancel_prepared_status_failure_stays_pending(store):
     deps.status_fail = False
     info = owner_mod.resume(store, deps)
     assert info['action'] == 'cancelled'
+
+
+def test_offer_is_not_requested_with_revoked_or_expired_consent(store):
+    for consent in (dict(CONSENT, enabled=False), dict(CONSENT, expires_at=NOW_MS - 1)):
+        seed(store, consent=consent)
+        deps = FakeDeps()
+        assert owner_mod.request_offer(store, deps) is None
+        assert deps.sent == []
+    seed(store)
+    deps = FakeDeps()
+    assert owner_mod.request_offer(store, deps) is not None
+    assert len(deps.sent) == 1

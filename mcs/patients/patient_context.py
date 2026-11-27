@@ -154,7 +154,7 @@ _DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_mana
 _PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
 _DRUG_OWNER = re.compile(
     rf"(?P<who>ご本人|本人|患者|利用者|{clinical_scope.FAMILY_PERSON})"
-    r"(?:さん|様)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
+    r"(?:さん|様)?(?:が|は)?(?:自分|自身)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
 
 
 PHARMACY_STATE_KEYS = frozenset({"inquiry_result", "storage_status", "storage_place",
@@ -266,6 +266,27 @@ def _other_persons_drug(body: str, span, value: str) -> bool:
         at = body.find(value, at + 1, span[1])
     return bool(owned) and all(owned)
 
+_DETAIL_NEGATIVE = re.compile(r"していない|していません|しない|しません|なかった|ありません|ではない|なし")
+_DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|検討")
+
+
+def _noncurrent_detail(body: str, span, value: str) -> bool:
+    """Whether every occurrence is in a negated, uncertain or explicitly past-only clause."""
+    verdicts = []
+    at = body.find(value, span[0], span[1])
+    while at >= 0:
+        start = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
+        end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
+        before, tail = body[start:at], body[at + len(value):end]
+        current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
+        past = re.search(r"以前|過去|前は", before)
+        near = tail[:12]
+        unconfirmed = re.search(r"予定|検討|可能性|かもしれ", near)
+        verdicts.append(bool(_DETAIL_NEGATIVE.search(near) or unconfirmed
+                             or past is not None and current < 0))
+        at = body.find(value, at + 1, span[1])
+    return bool(verdicts) and all(verdicts)
+
 
 def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
     """Keep each raw attribute only inside its parent's unique source quote, category and drug owner."""
@@ -282,6 +303,8 @@ def detail_items(items, body: str, parent_span, category=None, subject=None) -> 
                 or item["value"] not in body[span[0]:span[1]]):
             continue
         if category is not None and item["key"] in _DRUG_ONLY_KEYS and category != "medication_management":
+            continue
+        if _noncurrent_detail(body, span, item["value"]):
             continue
         if subject in ("patient", "unspecified") and _other_persons_drug(body, span, item["value"]):
             continue

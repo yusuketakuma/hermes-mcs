@@ -115,3 +115,21 @@ def test_an_edited_or_deleted_source_shows_no_detail(led, change):
     led.db.commit()
     assert not any(line.startswith("服薬管理（")
                    for line in structured_view.structured_lines(led.db, 100))
+
+
+@pytest.mark.parametrize("body,key,value", [
+    ("本人の薬は冷蔵保管していません。", "storage_status", "冷蔵保管"),
+    ("以前は冷蔵庫、現在は常温で保管しています。", "storage_place", "冷蔵庫"),
+    ("母が自分の薬を冷蔵庫に保管しています。", "storage_place", "冷蔵庫"),
+])
+def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_fact(led, body, key, value):
+    item = _item("medication_management", body, [{"key": key, "value": value, "evidence": body}])
+    _seed(led, [item], body=body)
+    assert not any(line.startswith("服薬管理（") for line in structured_view.structured_lines(led.db, 100))
+
+
+def test_a_current_patient_storage_value_still_reaches_the_shared_card(led):
+    body = "本人の薬は常温で保管しています。"
+    item = _item("medication_management", body, [{"key": "storage_status", "value": "常温で保管", "evidence": body}])
+    _seed(led, [item], body=body)
+    assert "服薬管理（保管状況）: 「常温で保管」" in structured_view.structured_lines(led.db, 100)

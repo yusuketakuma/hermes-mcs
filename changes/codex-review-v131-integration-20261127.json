@@ -1,0 +1,29 @@
+{
+  "category": "fixed",
+  "title": "導入確認・訪問記録・共有カードの誤表示を修正",
+  "summary": "導入後確認が安全なフォルダーだけへ結果を書き、訪問ルートと訪問時刻の不正な応答・入力を確定しません。服薬管理では、否定・過去・本人以外の薬の情報を現在の本人の事実として共有カードへ出しません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "初期導入後の自動確認は、install時に許可された私有root symlinkを使えますが、解決先や子フォルダーが所有者・権限の条件を満たさない場合はデータ作成前に失敗します。",
+    "訪問ルートは地図サービスの不正・重複した訪問割当をルート失敗として扱い、職員を切り替えた後に古い作成結果が画面へ残らないようにしました。",
+    "訪問開始時刻はHH:MMだけを受け付け、真偽値や改行付きの値を未指定扱いせず入力エラーにします。",
+    "MCS患者を開く操作では、見つからない患者で前の患者を表示したままにせず、遅れて届いた検索結果が後の選択を上書きしません。",
+    "服薬管理の共有カードと次回抽出の参考情報では、否定・過去・本人以外の薬の保管情報を現在の本人の値として使いません。",
+    "自動更新のSDC provisionでは、auto用途の鍵IDをv3配布pinと同じ64桁sha256 hexとして検証します。support/restartの既存形式は変わりません。",
+    "同意が撤回・期限切れになった後は、自動更新のoffer要求を新しく送りません。"
+  ],
+  "refs": [
+    "mcs/ops/setup/postinstall_watch.py",
+    "mcs/views/card_worker_status.py",
+    "mcs/ingest/health_recovery.py",
+    "mcs/homecare/core/homecare_route.py",
+    "mcs/homecare/core/homecare_visits.py",
+    "mcs/views/local_chat/homecare.js",
+    "mcs/views/local_chat/app.js",
+    "mcs/patients/patient_context.py",
+    "mcs/extract/llm/extraction_context.py",
+    "adapters/sdc/provision_contract.py",
+    "mcs/ops/update/release_auto_owner.py",
+    "mcs/extract/clinical/clinical_values.py"
+  ]
+}

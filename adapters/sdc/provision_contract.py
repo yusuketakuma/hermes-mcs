@@ -153,9 +153,9 @@ def _pin(value, profile, now):
     _check(value['not_before'] <= now < value['expires_at'])
     # These existing functions inspect canonical base64url and minimal RSA3072
     # e65537 SPKI in Python. They neither verify a signature nor invoke OpenSSL.
-    from sdc_support_signatures import validate_auto_pins, validate_pins, validate_restart_pins
+    from sdc_support_signatures import validate_auto_v3_pins, validate_pins, validate_restart_pins
     validate = {'support': validate_pins, 'restart': validate_restart_pins,
-                'auto': validate_auto_pins}[profile]
+                'auto': validate_auto_v3_pins}[profile]
     validate([value], purpose=uses[0], now_ms=now)
 
 
