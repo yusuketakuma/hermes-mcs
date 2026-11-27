@@ -232,8 +232,10 @@ def test_lineworks_revoke_invalidates_tokens_without_remote_delete(led):
     assert _card(led)["delivery_state"] == "revoked"
 
 
+@pytest.mark.parametrize("cfg", [LINEWORKS, {**CFG, "notify": {**CFG["notify"], "reply_cards": False}}],
+                         ids=["lineworks", "discord-combined"])
 @pytest.mark.parametrize("notify_all_replies", [False, True])
-def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, notify_all_replies):
+def test_thread_capture_window_keeps_old_reply_and_file_out_of_delivery(led, notify_all_replies, cfg):
     from ingest_testkit import _message
     from notify_testkit import _attach
 
@@ -253,7 +255,7 @@ def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, 
     event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
     assert json.loads(event["payload"])["message_ids"] == [102]
     # Dispatch later, after both posts have aged out, with the setting removed.
-    assert _dispatch(led, event, LINEWORKS, now=NOW + 3 * day)["dispatched"]
+    assert _dispatch(led, event, cfg, now=NOW + 3 * day)["dispatched"]
     render = _latest_render(led)
     spec = json.loads(render["spec_json"])
     shown = json.loads(led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
@@ -385,18 +387,23 @@ def test_lineworks_legacy_window_preserves_a_delivered_reply_without_an_intent(l
     assert "返信未取得" not in render["spec_json"]
 
 
-def test_lineworks_rechecks_a_legacy_queued_face_before_grant(led):
+@pytest.mark.parametrize("base_cfg", [
+    LINEWORKS,
+    {**CFG, "notify": {**CFG["notify"], "reply_cards": False,
+                       "discord": {"profile": "mcs", "application_id": "1", "guild_id": "7", "channel_id": "42"}}},
+], ids=["lineworks", "discord-combined"])
+def test_thread_rechecks_a_legacy_queued_face_before_grant(led, base_cfg):
     from notify_testkit import _msg
 
     _seed_thread(led)
     _msg(led, 102, parent=100, body="SYNTHETIC-LEGACY-OLD", ts=int(NOW - 2 * 86400))
     led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=102", (NOW - 300,))
     led.db.commit()
-    _dispatch(led, _intent(led), LINEWORKS)
+    _dispatch(led, _intent(led), base_cfg)
     legacy = _latest_render(led)
     assert "SYNTHETIC-LEGACY-OLD" in legacy["spec_json"]
 
-    cfg = {**LINEWORKS, "notify_max_age_h": 24}
+    cfg = {**base_cfg, "notify_max_age_h": 24}
     result = _apply(led, envelopes.transport_begin(_claim(legacy)), cfg)
     assert not result["granted"] and result["error"] == "denied_source_changed"
     updated = _latest_render(led)
