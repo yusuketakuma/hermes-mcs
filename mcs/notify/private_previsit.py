@@ -7,6 +7,7 @@ import json
 import math
 import re
 import sqlite3
+import time as clock
 from zoneinfo import ZoneInfo
 
 import notify_views
@@ -506,7 +507,9 @@ def _claim(ledger, event, now):
             metadata_fields = {"schema", "visit_date", "logical_key", "assignment_artifact_id",
                                "assignment_revision", "registration_artifact_id", "schedule_pin",
                                "source_pins", "source_watermark", "date_basis"}
-            registration_id = meta.get("registration_artifact_id") if type(meta) is dict else None
+            if type(meta) is not dict or meta.keys() != metadata_fields:
+                raise PrevisitError("previsit_note_invalid")
+            registration_id = meta["registration_artifact_id"]
             expected_basis = "registered" if registration_id is not None else "source_schedule"
             try:
                 valid_visit_date = (isinstance(meta.get("visit_date"), str)
@@ -514,9 +517,8 @@ def _claim(ledger, event, now):
                                    == meta["visit_date"])
             except (TypeError, ValueError):
                 valid_visit_date = False
-            watermark = meta.get("source_watermark") if type(meta) is dict else None
-            if (type(meta) is not dict or meta.keys() != metadata_fields
-                    or type(meta.get("schema")) is not int or meta["schema"] != 1
+            watermark = meta["source_watermark"]
+            if (type(meta["schema"]) is not int or meta["schema"] != 1
                     or meta.get("logical_key") != payload["logical_key"]
                     or meta.get("visit_date") != payload["visit_date"]
                     or not valid_visit_date
@@ -717,7 +719,7 @@ def dispatch_event(ledger, event, cfg, sender=None, now=None) -> dict:
     return {"state": state, "event_id": event_id}
 
 
-def dispatch_due(ledger, cfg, sender=None, now=None, limit=20) -> list[dict]:
+def dispatch_due(ledger, cfg, sender=None, now=None, limit=20, *, deadline=None) -> list[dict]:
     if type(limit) is not int or not 1 <= limit <= 20:
         raise ValueError("invalid_previsit_limit")
     current = _instant(now)
@@ -726,4 +728,10 @@ def dispatch_due(ledger, cfg, sender=None, now=None, limit=20) -> list[dict]:
         "FROM notify_outbox WHERE (kind=? OR route=?) AND state IN ('pending','failed') "
         "AND next_try<=? ORDER BY event_id LIMIT ?",
         (KIND, PRIVATE_ROUTE_MARKER, current, limit)).fetchall()
-    return [dispatch_event(ledger, dict(row), cfg, sender=sender, now=current) for row in rows]
+    outcomes = []
+    for row in rows:
+        if deadline is not None and clock.monotonic() >= deadline:
+            break
+        # A preceding send may have crossed midnight since the queue was read.
+        outcomes.append(dispatch_event(ledger, dict(row), cfg, sender=sender, now=now))
+    return outcomes
