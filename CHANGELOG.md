@@ -266,6 +266,12 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - 追加操作は不要です。既に外れてしまった保留は自動では復元されません。
 
 
+- 追加の設定は不要です。更新前から送信待ちのカードも、送信前に対象の投稿を確認します。
+
+- 追加操作は不要です。更新前に作った訪問薬剤管理の台帳の日次コピーは、再利用や世代整理の際に必要な分だけ再検証します。
+
+- 追加操作は不要です。旧い復旧監視を持つ独立動作から提供元設定の保存形式を移行する場合は、更新ガイド§3-Aのとおり移行先のscripts/mcs_upgrade.pyに --target-standalone を付けてください。
+
 ### 技術詳細
 
 <details>
@@ -512,27 +518,29 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 #### 導入確認・通知設定・訪問記録・共有カードの誤表示を修正
 
 - 初期導入後の自動確認は、install時に許可された私有root symlinkを使えますが、解決先や子フォルダーが所有者・権限の条件を満たさない場合はデータ作成前に失敗します。
-
 - 訪問ルートは地図サービスの不正・重複した訪問割当をルート失敗として扱い、職員を切り替えた後に古い作成結果が画面へ残らないようにしました。
-
 - 訪問開始時刻はHH:MMだけを受け付け、真偽値や改行付きの値を未指定扱いせず入力エラーにします。
-
 - MCS患者を開く操作では、見つからない患者で前の患者を表示したままにせず、遅れて届いた検索結果が後の選択を上書きしません。
-
 - 服薬管理の共有カードと次回抽出の参考情報では、否定・過去・未確認・本人以外の薬の保管情報を現在の本人の値として使いません。否定や未確認は、その値が属する句だけで判定し、後続の別の句にある「なし」で正しい保管場所を隠しません。
-
 - 自動更新のSDC provisionでは、auto用途の鍵IDをv3配布pinと同じ64桁sha256 hexとして検証します。support/restartの既存形式は変わりません。
-
 - 同意が撤回・期限切れになった後は、自動更新のoffer要求を新しく送りません。
-
 - 検査値の引用が全角数字・全角小数点・全角符号の途中で切れている場合は、その数値を確定しません。切れていない全角の値は従来どおり引用根拠付きで確認できます。
 - Slackの詳細設定では、監視通知先の既存チャンネルIDを患者カードの既定へ流用しません。患者用は独立に作成・選択し、監視用の既存IDは監視用に残ります。
 - 訪問ルートの外部応答は、当日範囲・車両の始業時刻・予約時刻の前後15分を満たす到着・待機だけを採用し、満たさない応答はルート失敗として拒否します。
 - MCS患者を開く操作では、以前の一覧cacheに残る古いIDや旧名称を使わず、今回のID検索で見つかった最新の範囲と名称だけを採用します。
 - v1.3.0形式のOCR状態ではsuperseded_acknowledgementsがなくても、現在の件数が0なら旧形式として扱います。件数が増えた場合や原資料・受付証明が変わった場合は従来どおり再確認を要求します。
 - クラウド要約の保存providerは、成功した予約の所有者・経路に加え、予約の価格証明から確認できる提供元と一致するときだけ確定します。不一致や根拠不足はunknownです。
-- 初回導入の事前確認では、MCSと無関係なHermes prompt-only定期jobを競合と误判しません。既知のMCS名はScript行がなくても競合、読取失敗や未知形式は従来どおり不明です。
-- 根拠: mcs/ops/setup/postinstall_watch.py、mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/homecare/core/homecare_route.py、mcs/homecare/core/homecare_visits.py、mcs/views/local_chat/homecare.js、mcs/views/local_chat/app.js、mcs/patients/patient_context.py、mcs/extract/llm/extraction_context.py、adapters/sdc/provision_contract.py、mcs/ops/update/release_auto_owner.py、mcs/extract/clinical/clinical_values.py、mcs/ops/setup/setup_wizard.py、mcs/ops/install_options.py、mcs/ingest/health_report.py、mcs/semantic/semantic_summary_stages.py
+- 初回導入の事前確認では、MCSと無関係なHermes prompt-only定期jobを競合と誤判定しません。既知のMCS名はScript行がなくても競合、読取失敗や未知形式は従来どおり不明です。
+- 初回導入のcron確認は、Hermesの一覧が最後まで読めたprompt-only jobと、出力途中でScript/Promptの有無を判断できないjobを区別します。無関係なprompt-only jobは導入を止めません。
+- 訪問ルートは各訪問の20分の対応時間が前の訪問終了と当日終了の範囲に収まることも確認し、前の訪問より早い時刻へ重なる順路や24:00以降に終わる順路を拒否します。
+- MCS患者を開く操作は、ID検索の結果が複数ページに分かれる場合も許可された範囲の続きを読み、各ページの応答が新しい操作で無効になっていないことを確認します。
+- 空の患者要約を修復済みの候補から再開するときは、通常の要約と同じ入力束・生成・予約証拠で提供元を照合します。証拠が足りないクラウド候補は再開せず、既往課金の再送もしません。
+- 検査値の引用が全角ハイフン（U+FF0D）で続く範囲値の途中で切れている場合も、その数値を確定しません。
+- 提供元設定の一本化後に同じ内容の旧install_optionsが再配置されても、現在の更新journalがその移行を要求している場合だけ退避します。移行完了後の再配置は利用者のデータとして残します。
+- 手動で履歴を取り込むとき、notify_max_age_h に明示した null は設定エラーとして取得前に拒否します。項目を省略した場合は従来どおり取り込めます。
+- 復旧で旧版を再開するときは、実際に旧版へ戻っている場合だけ未送信の新版向け通知を取り消します。取り消しがSQLite busyやI/Oエラーで確認できない場合はworker再開とjournal消去を保留し、通知機構のない旧schemaだけは取消不要として扱います。
+- 更新後確認の台帳検証はlive WALを読む読取り専用接続でMCS台帳の版と必須表を確認し、無関係なSQLiteを変更せず拒否します。対応済みの旧版だけはdone記録より前に通常のLedger移行を完了します。
+- 根拠: mcs/ops/setup/postinstall_watch.py、mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/homecare/core/homecare_route.py、mcs/homecare/core/homecare_visits.py、mcs/views/local_chat/homecare.js、mcs/views/local_chat/app.js、mcs/patients/patient_context.py、mcs/extract/llm/extraction_context.py、adapters/sdc/provision_contract.py、mcs/ops/update/release_auto_owner.py、mcs/extract/clinical/clinical_values.py、mcs/ops/setup/setup_wizard.py、mcs/ops/install_options.py、mcs/ingest/health_report.py、mcs/semantic/semantic_summary_stages.py、mcs/ops/update/update_execution.py、mcs/ops/update/update_restore.py、mcs/ops/update/update_recovery.py、deployment/recovery/mcs_recover.py、mcs/ops/update/update_migrations.py、mcs/ingest/init_data.py、mcs/semantic/semantic_job_processor.py
 
 #### 復元後の保留が親カードの配達確定で外れてしまう問題を修正
 
@@ -568,6 +576,33 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 
 - 手動履歴取込では、config.jsonが読めない場合やnotify_max_age_hが明示の不正値の場合は、期間未指定と区別して履歴を保存する前に停止します。
 - 根拠: mcs/ops/update/update_execution.py、mcs/ops/update/update_preflight.py、mcs/ops/update/update_recovery.py、deployment/recovery/mcs_recover.py、scripts/mcs_upgrade.py、mcs/notify/notify_cards.py、mcs/ingest/init_data.py
+
+#### Discordのスレッド通知に古い返信が混ざる問題を修正
+
+- カードにまとめる返信と添付は、収集時の通知対象と、そのカードで既に配送した投稿に限ります。
+- 根拠: mcs/notify/notify_render.py、mcs/notify/notify_transport.py
+
+#### 薬剤照会で廃止年月日を過ぎた医薬品だけを廃止済みと表示
+
+- info-lookup は医薬品マスターの第31項に記載された廃止年月日を照会日と比較します。99999999 と 0 は従来どおり期限なしとして扱います。
+- 根拠: mcs/medications/drug_info.py
+
+#### 復元に使える日次バックアップを保つ
+
+- SQLite の作業ファイルが残る日次コピーは検証済みとして扱わず、上書きや削除も見合わせます。
+- 根拠: mcs/core/local_backup.py、mcs/ops/mcs_local_backup.py
+
+#### 同じスタンプを続けて押したときの結果通知を修正
+
+- 結果を待っている各操作に同じ確定結果を返します。MCSへのスタンプ送信は一度だけです。
+- 根拠: mcs/stamps/stamp_write.py
+
+#### 導入確認・設定移行・通知workerとOCR状態の確認を修正
+
+- postinstallの確認はinstall.shが許可する私有root symlinkを使えますが、配下のsymlinkは従来どおり拒否します。
+- postinstallのcheckはJevモデル一覧を新しく取得せず、保存済みの結果だけを使います。
+- 独立動作の形式移行では、移行先の更新プログラムを使う明示的な経路だけを許可します。
+- 根拠: mcs/ops/setup/postinstall_watch.py、mcs/ops/update/update_migrations.py、mcs/views/card_worker_status.py、mcs/ingest/health_report.py、scripts/mcs_upgrade.py
 
 </details>
 ## [1.3.0] — 2026-11-26
