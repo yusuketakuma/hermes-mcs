@@ -8,7 +8,7 @@
       ]
     },
     "docs": {
-      "notes": "43件の変更記録を版別の変更一覧と対応付け、公開用の本文とタイトルを生成しました。履歴通知・更新復旧・導入確認の追補も同じ対応表へ記録しました。",
+      "notes": "56件の変更記録の本文と更新時の注意を版別の変更一覧で照合しました。公開用の本文とタイトルを生成し、対応表に各変更記録のファイル名とSHA-256を記録しました。",
       "sources": [
         "CHANGELOG.md",
         "docs/releases/v1.3.1/change-map.json",
@@ -27,13 +27,16 @@
       ]
     },
     "quickstart": {
-      "notes": "OCR導入済みの更新経路、初期設定で1つ前の項目へ戻る操作、導入後の継続確認、AIエージェント向け修正依頼、auto provision経路、standalone移行時のruntime照合を確認しました。",
+      "notes": "OCR導入済みの更新経路、初期設定で1つ前の項目へ戻る操作、導入後の継続確認、AIエージェント向け修正依頼、auto provision経路、standalone移行時のruntime照合を確認しました。 単独接続で設定項目が重複した場合の修正と、意味解析候補の再承認が必要な条件をREADMEに記載しました。",
       "sources": [
         "docs/guides/UPGRADE_AGENT.md",
         "docs/guides/EASY_SETUP.md",
         "mcs/ops/setup/setup_wizard.py",
         "mcs/ops/setup/postinstall_watch.py",
-        "scripts/mcs_upgrade.py"
+        "scripts/mcs_upgrade.py",
+        "README.md",
+        "mcs_standalone/config.py",
+        "changes/archive/1.3.1/standalone-config-parse.json"
       ]
     },
     "safety": {

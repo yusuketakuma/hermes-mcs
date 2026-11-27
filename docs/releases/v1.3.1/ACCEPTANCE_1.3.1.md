@@ -2,17 +2,30 @@
 
 ## 更新元と検証対象
 
-公開済みの直前版は v1.2.1。v1.3.0 のタグが指す `afe1796c75770cc29dfdbf16fffc53612de77db6` と、本番の更新前のコミット `dc6f202861625a1b10b9804c57c5711bd6cf0e1f` は同じファイル一式です。現行 main の `bf3937ec054ad964bee630855b4b80c3cf73a106` と本番の両方を履歴に持つ候補を使います。
+直前の公開版は11月26日公開の [v1.3.0](https://github.com/yusuketakuma/hermes-mcs/releases/tag/v1.3.0) です。タグのコミットは `afe1796c75770cc29dfdbf16fffc53612de77db6`、11月27日に実機で確認したチェックアウトは `e0feeaeb2cfb28f71770a612b90f282080561154` です。
+
+11月27日に製品コードを `90ddc31114ad7ee5c28707fdf5efaae6ddfaedd1` に固定しました。この候補は直前の公開版と実機の両方を履歴に含みます。版別の変更記録は既存の47件に9件を加えた56件です。[変更一覧](changelog-1.3.1.md)・[変更記録の対応表](change-map.json)
 
 v1.3.0 タグのコードで空の台帳を初期化し、SQLite の定義83件を照合しました。v1.2.1から増えた3件は索引です。スキーマの版番号は12のままです。36の更新元からの62経路と、過去の26経路を区別して検査しました。
 
 更新経路、スキーマの移行、導入済みの独立実行環境からの更新を対象に、合成試験655件がすべて通りました。実行時間は19分58秒でした。
 
+## 11月27日の候補の検証
+
+製品コード `90ddc31114ad7ee5c28707fdf5efaae6ddfaedd1` を対象に、新しいmacOS環境で単独接続とHermes接続の初回導入がどちらも成功しました。[新規導入のCI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45975404307)
+
+同じコミットで全体CIを開始しました。この記録の作成時点では結果の確定を待っています。[全体CI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45975400244)
+
 ## 医薬品マスターと料金
 
-2026年11月26日15:24 JSTに厚生労働省の医薬品マスターを再取得しました。11月12日版の19,324件で、配布ZIPとCSVは同梱ファイルのSHA-256と一致しました。[公式一覧](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)・[同梱manifest](../../../resources/drug-master/20261112/manifest.json)
+2026年11月27日18:38 JSTに厚生労働省の一覧と配布ZIPを再確認しました。最新版は11月12日版です。ZIPと中のCSVは同梱ファイルとバイト単位で一致し、CSV全19,324行で各42列を確認しました。オフラインの同梱検査も通りました。辞書の有効化と利用条件の承認は行っていません。[公式一覧](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)・[公式ZIP](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/yFile)・[同梱manifest](../../../resources/drug-master/20261112/manifest.json)
 
-同時刻にAnthropic・OpenAIの4モデルの通常料金、長文料金とキャッシュ料金を公式資料に照合しました。料金表は12月24日まで有効で、11月26日時点の残り28日は公開時に必要な21日を超えています。[Anthropic料金](https://platform.claude.com/docs/en/about-claude/pricing)・[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)・[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+| ファイル | バイト数 | SHA-256 |
+|---|---:|---|
+| 配布ZIP | 872,908 | `5412101070ad7487beed6255abcaa11fe315c589cee2c7d774aae71971dc64b5` |
+| `y_20261112.csv` | 6,098,622 | `835538c20a35c73a24af5bbbecef4b65fac1a7837b9e8a170691f43ff0515550` |
+
+11月26日15:24 JSTにAnthropic・OpenAIの4モデルの通常料金、長文料金とキャッシュ料金を公式資料に照合しました。料金表は12月24日まで有効で、11月26日時点の残り28日は公開時に必要な21日を超えています。[Anthropic料金](https://platform.claude.com/docs/en/about-claude/pricing)・[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)・[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
 
 ## 合成環境の確認
 

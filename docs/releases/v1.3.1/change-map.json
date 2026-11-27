@@ -40,6 +40,16 @@
       "sha256": "a7f71336c35bbad2d29871fa5bf48a8831e23fedd67db20fc1266967d1d8b600",
       "title": "v3自動更新のpin配布形式を追加"
     },
+    "brain-export-message-window-end": {
+      "path": "changes/archive/1.3.1/brain-export-message-window-end.json",
+      "sha256": "eacaf5232ed60ec85068983f7bc7d1796570c540e51093c94b899935460577d8",
+      "title": "知識ストア向けの投稿件数を集計期間内に限定"
+    },
+    "check-current-release-archive": {
+      "path": "changes/archive/1.3.1/check-current-release-archive.json",
+      "sha256": "7d2dd19ff2b59d3ff36d3eba8ecca7ebb1520d0b9a1c807948eec89ad92e216a",
+      "title": "リリース前の検査で最新版の変更記録の不備を検出"
+    },
     "clinical-unitless-electrolyte-prescription": {
       "path": "changes/archive/1.3.1/clinical-unitless-electrolyte-prescription.json",
       "sha256": "ac09751552538ec1607063ae75bedbc3f82cceea723d6a3615a2af2b1af3b041",
@@ -120,6 +130,16 @@
       "sha256": "4430fc16825603370edcdeb31c21421367f4158a0cd91f553baa9a7caa40dd43",
       "title": "通知workerの開始時刻を再確認しOCR受付の旧証明を区別"
     },
+    "initial-activity-probe-rotation": {
+      "path": "changes/archive/1.3.1/initial-activity-probe-rotation.json",
+      "sha256": "35f36f784505e50df9f7372150e4f77288069261acbf9a0aaaddc10bb035ae48",
+      "title": "初回の履歴取込み中に同じ秒の新着を確認する"
+    },
+    "initial-import-new-chat-priority": {
+      "path": "changes/archive/1.3.1/initial-import-new-chat-priority.json",
+      "sha256": "8d37a04aa17d3125abc8ca402794b4b4764ee10bc4a2995d9443b90044c03c61",
+      "title": "初回の履歴取込み中に新着の取得と通知を優先"
+    },
     "install-fresh-conflict-precheck-20261127": {
       "path": "changes/archive/1.3.1/install-fresh-conflict-precheck-20261127.json",
       "sha256": "b9033358602879d811c2b268ee1a44a07da02f24aee3a1dfc69975e59520e96d",
@@ -175,6 +195,16 @@
       "sha256": "a3629f138ea0711e8dfebaf96e0fb22510e44c55bc6dfa278d237ab9cfaa9d68",
       "title": "初期設定後の継続確認とAIエージェント向け修正依頼を追加"
     },
+    "private-previsit-dispatch-window": {
+      "path": "changes/archive/1.3.1/private-previsit-dispatch-window.json",
+      "sha256": "2c039c47f0c8bfc24f34d2de742cfcf08711e1f69f01422faf8f732f3c31d84f",
+      "title": "訪問前メモの配送時に処理の残り時間と訪問日を確認"
+    },
+    "private-previsit-invalid-note-isolation": {
+      "path": "changes/archive/1.3.1/private-previsit-invalid-note-isolation.json",
+      "sha256": "fd3eeb8f08b7e270c01e8b37896b6fae1ab8436d24f4125a2f798b812c71078d",
+      "title": "訪問前メモの保存形式に問題があっても他の通知を送る"
+    },
     "release-auto-closure-state-20261127": {
       "path": "changes/archive/1.3.1/release-auto-closure-state-20261127.json",
       "sha256": "d52ea067c135a5b6b4ef0d409c1aa4ded1b95539f7a6259bb7cfa10c37eab6ad",
@@ -212,8 +242,13 @@
     },
     "semantic-cloud-summary-receipt-settlement-20261126": {
       "path": "changes/archive/1.3.1/semantic-cloud-summary-receipt-settlement-20261126.json",
-      "sha256": "d6ed0bca020a4d2ecd6d5466cbaf8b193fa0d27540ae31fd0ea796889fdfb598",
+      "sha256": "9266c8b9ab15e4705c8e09fda665943b8e108de213ad984453fb02f7c206c7e4",
       "title": "要約の生成元をクラウドの決済記録で確認"
+    },
+    "semantic-summary-paid-resume-compat": {
+      "path": "changes/archive/1.3.1/semantic-summary-paid-resume-compat.json",
+      "sha256": "9620ffee1304ee7a9aca140092cf98aac8336797e5cac8a6c6254da4427ad0e2",
+      "title": "過去の要約を再開するときのクラウド二重送信を防止"
     },
     "setup-wizard-back-review-20261127": {
       "path": "changes/archive/1.3.1/setup-wizard-back-review-20261127.json",
@@ -229,6 +264,16 @@
       "path": "changes/archive/1.3.1/stamp-repeat-click-results.json",
       "sha256": "9d616d6c760dff3789c9000e7f49f22e0f261df664e6df418600058acf410ebf",
       "title": "同じスタンプを続けて押したときの結果通知を修正"
+    },
+    "standalone-config-parse": {
+      "path": "changes/archive/1.3.1/standalone-config-parse.json",
+      "sha256": "5e7ef00ca2b3cea86cceb88e41604272bba55f223b8ec746f2c46e63d2c9163d",
+      "title": "単独接続で不正な設定を読み飛ばす問題を修正"
+    },
+    "update-recovery-notices-and-card-destination": {
+      "path": "changes/archive/1.3.1/update-recovery-notices-and-card-destination.json",
+      "sha256": "4188f732a6859087c26223adcf573fcf907c25a4a393f27c69bc56f0b02d56b3",
+      "title": "患者向けカードの通知先と更新中断後の通知を修正"
     },
     "update-recovery-notify-window-20261127": {
       "path": "changes/archive/1.3.1/update-recovery-notify-window-20261127.json",
