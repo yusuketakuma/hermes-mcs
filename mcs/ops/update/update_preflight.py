@@ -217,7 +217,20 @@ def _provider_migration_needed() -> bool:
     if (first["mode"] not in ("legacy_unverified", "split")
             or second["mode"] != first["mode"] or second["snapshot"] != first["snapshot"]):
         raise ValueError("provider_settings_unverified")
-    return first.get("layout") != "single"
+    if first.get("layout") != "single":
+        return True
+    # A hard stop can leave the one-file settings commit complete while the
+    # legacy install-options record is still present. Recovery must enter the
+    # migration path once more so only an exact matching record is retired.
+    legacy = os.path.join(DATA, "install_options.json")
+    try:
+        central, embedded = install_options._central(mcs_util.CONF_PATH)
+        recorded, _digest = install_options._legacy(legacy)
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
+    # A conflicting or unreadable reappearance is stale evidence, not proof of
+    # the interrupted transition; preserve it without blocking recovery forever.
+    return bool(embedded) and central is not None and recorded == central
 
 
 def _provider_bridge_verified(previous: str, target: str) -> bool:

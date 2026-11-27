@@ -209,6 +209,33 @@ def test_consolidation_cannot_skip_verifying_the_legacy_options(tmp_path, monkey
     assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()
 
 
+def test_single_layout_needs_migration_only_for_the_matching_legacy_record(tmp_path, monkeypatch):
+    import mcs_util
+    import update_preflight
+
+    _provider_root(tmp_path, monkeypatch)
+    config = tmp_path / 'config.json'
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'v': 1, 'install_args': ['--no-llm']})
+    needs_copy, base, _options = update_migrations.plan(config, legacy)
+    assert needs_copy and update_migrations.apply(config, legacy, base, lambda: None)
+    assert update_migrations.migrate_provider_settings(tmp_path) is True
+
+    monkeypatch.setattr(update_preflight, 'HOME', str(tmp_path))
+    monkeypatch.setattr(update_preflight, 'DATA', str(tmp_path / 'data'))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(config))
+    assert update_preflight._provider_migration_needed() is False
+
+    put(legacy, {'v': 1, 'install_args': ['--no-llm']})
+    assert update_preflight._provider_migration_needed() is True
+    assert update_migrations.migrate_provider_settings(tmp_path) is True
+    assert not legacy.exists()
+
+    put(legacy, {'v': 1, 'install_args': ['--no-brew']})
+    assert update_preflight._provider_migration_needed() is False
+    assert json.loads(legacy.read_text())['install_args'] == ['--no-brew']
+
+
 def test_interruption_after_single_commit_retires_only_the_matching_legacy_record(tmp_path, monkeypatch):
     _provider_root(tmp_path, monkeypatch)
     legacy = tmp_path / 'data' / 'install_options.json'

@@ -467,7 +467,7 @@ def interactive_update(cmd, env, repo, *, installed=False):
         apply_cmd.extend(_installed_plan_pins(report, cmd, repo))
     # Keep the approved record separate from temporary repair/install flags.
     apply_env = dict(env)
-    if installed:
+    if installed or apply_env.get('MCS_UPDATE_TARGET_STANDALONE') == '1':
         apply_env['MCS_UPDATE_RUNTIME_EXPECTED'] = 'standalone'
     if route == "reinstall":
         apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))

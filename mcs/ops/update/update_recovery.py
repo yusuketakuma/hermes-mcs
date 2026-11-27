@@ -72,6 +72,7 @@ from update_repository import (
 from update_restore import (
     _adopted_marker,
     _consent_hold,
+    _cancel_unsent_notices,
     _restore_db,
     _restore_entered,
     _rollback_applying,
@@ -592,6 +593,10 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if "restore_staging" in applying:
                     _report("restore_consent_blocked", "rollback restore staging remains unverified")
                     return 1
+                # Recovery can resume after the tree was rolled back but before
+                # the normal rollback path cancelled never-attempted new-code notices.
+                if rollback_shaped:
+                    _cancel_unsent_notices()
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)

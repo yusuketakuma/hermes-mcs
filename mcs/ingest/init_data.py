@@ -31,7 +31,8 @@ from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired
 from ledger import Ledger
 from job_ops import merge_full_replies
-from mcs_util import CACHE, CHROME_BIN, CHROME_PROFILE, DB
+from mcs_config import positive_number_problem
+from mcs_util import CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB, load_config
 import notify_spool
 from writer_lock import (RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
                          code_stamp)
@@ -41,7 +42,8 @@ from writer_lock import (RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
 LOCKFILE = RUN_LOCK
 
 
-def _walk_patient_history(adapter, ledger, p, since, args, deadline, stats, result) -> tuple:
+def _walk_patient_history(adapter, ledger, p, since, args, deadline, stats, result,
+                         notify_max_age_s=None) -> tuple:
     """One patient's incremental timeline walk: fetch→replies→save→cursor
     advances per chunk, so a deadline or crash resumes from the last stored
     page. Returns (total_new, cursor) for the caller's progress print."""
@@ -88,7 +90,8 @@ def _walk_patient_history(adapter, ledger, p, since, args, deadline, stats, resu
             adapter, hist, args.delay, deadline, stats, ledger=ledger)
         try:
             ledger.upsert_patient_info(p)
-            new_ids = ledger.save_messages(hist)
+            new_ids = ledger.save_messages(
+                hist, notify_max_age_s=notify_max_age_s)
         except Exception as exc:
             import semantic_intake_hold
             recorded = semantic_intake_hold.report_write_failure(
@@ -216,6 +219,13 @@ def main() -> int:
         ledger = Ledger(DB)
         resources.callback(ledger.close)
         stats = {"errors": [], "threads": 0, "deadline": False}
+        notify_hours = load_config(CONF_PATH).get("notify_max_age_h")
+        notify_max_age_s = None
+        if notify_hours is not None:
+            if positive_number_problem(notify_hours) is None:
+                notify_max_age_s = notify_hours * 3600
+            else:
+                stats["errors"].append("config: notify_max_age_h_invalid")
 
         try:
             projects = adapter.list_projects()
@@ -260,7 +270,8 @@ def main() -> int:
                 result["skipped_floored"] += 1
                 continue
             total_new, cursor = _walk_patient_history(
-                adapter, ledger, p, since, args, deadline, stats, result)
+                adapter, ledger, p, since, args, deadline, stats, result,
+                notify_max_age_s=notify_max_age_s)
             result["messages_new"] += total_new
             result["threads_fetched"] = stats["threads"]
             result["done"] += 1

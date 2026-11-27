@@ -400,8 +400,13 @@ def _link_intent_card(db, event_id, target, scope, now):
 
 
 def _reroute_unsent_history_threads(db, event, scope, cfg, now, specs):
-    """Replace a sealed Slack thread whose historical parent never reached the wire."""
-    if event["state"] != "pending" or not scope or scope.get("transport") != "slack":
+    """Replace a sealed thread whose historical parent never reached the wire."""
+    if event["state"] != "pending" or not scope:
+        return
+    transport = scope.get("transport") or notify_scope.active_transport(cfg)
+    if transport not in ("slack", "discord", "lineworks"):
+        return
+    if transport in ("discord", "lineworks")             and notify_scope.notify_cfg(cfg).get("card_thread") is True:
         return
     event_id = event["event_id"]
     families = {}

@@ -184,10 +184,20 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
     if not _tree_clean():
         errors.append("tree_dirty_after_merge")
     try:
-        db = ledger.Ledger(LEDGER)
-        db.db.close()
-    except Exception:
-        errors.append("ledger_open_failed")
+        stat_result = os.stat(LEDGER)
+    except OSError:
+        errors.append("ledger_missing")
+    else:
+        # A zero-byte file is not a valid empty ledger: it is what a failed
+        # creation leaves behind, and SQLite would silently adopt it.
+        if not os.path.isfile(LEDGER) or stat_result.st_size == 0:
+            errors.append("ledger_invalid")
+        else:
+            try:
+                db = ledger.Ledger(LEDGER)
+                db.db.close()
+            except Exception:
+                errors.append("ledger_open_failed")
     try:
         cfg = mcs_util.load_config()
         errs, _ = _check_environment(cfg)

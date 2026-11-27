@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "更新復旧と履歴通知の取りこぼしを修正",
+  "summary": "更新後の確認で台帳が無いのに空の台帳を作って成功扱いしません。復旧では未送信の新しい版向け通知だけを取り消し、履歴の親を含む未送信カードでは新しい返信だけを一度通知できます。手動履歴でも通知期間外の投稿は保存だけ行い、通知対象とLINE WORKS表示は新しい投稿に限ります。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "更新後確認は台帳が存在しない場合や0バイトの不正な空ファイルの場合に、新しい空台帳を作らず失敗として扱います。既存の正当な空台帳と必要なschema migrationは従来どおり通ります。",
+    "provider設定の一ファイル化が完了した後に旧導入記録だけ残った中断では、内容が一致する記録だけを一度退避し、不一致の記録は削除せず保全します。",
+    "standalone向け更新の対話経路でも、計画時と適用時のruntime_modeが変わっていないことを更新プログラムへ伝えます。",
+    "rollbackの中断復旧では、送信していない新しい版向け通知だけを通常のrollbackと同じく取り消し、送信済み・送信中・送信結果不明の通知はそのまま保全します。",
+    "card_threadを使わないDiscordとLINE WORKSでは、履歴の親を含んで送信前だったカードから新しい返信だけを分離し、送信結果不明の親は再送しません。",
+    "手動履歴取込ではnotify_max_age_hの通知期間を保存時の判定へ伝え、期間外の親と返信は表示対象から外しつつ、後から届いた新しい返信だけを通知します。"
+  ],
+  "refs": [
+    "mcs/ops/update/update_execution.py",
+    "mcs/ops/update/update_preflight.py",
+    "mcs/ops/update/update_recovery.py",
+    "scripts/mcs_upgrade.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/ingest/init_data.py"
+  ]
+}
