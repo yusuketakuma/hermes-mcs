@@ -1315,10 +1315,10 @@ def flush(ledger, limit: int = 10, deadline: float | None = None, *, arrivals_af
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
-    if arrivals_after is None:
+    if arrivals_after is None and (deadline is None or time.monotonic() < deadline):
         from private_previsit import dispatch_due, prepare_night
         prepare_night(ledger, cfg)
-        for outcome in dispatch_due(ledger, cfg, limit=max(1, min(limit, 20))):
+        for outcome in dispatch_due(ledger, cfg, limit=max(1, min(limit, 20)), deadline=deadline):
             if outcome["state"] == "accepted":
                 res["sent"] += 1
             elif outcome["state"] == "retry":

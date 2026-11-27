@@ -7,6 +7,7 @@ import json
 import math
 import re
 import sqlite3
+import time as clock
 from zoneinfo import ZoneInfo
 
 import notify_views
@@ -717,7 +718,7 @@ def dispatch_event(ledger, event, cfg, sender=None, now=None) -> dict:
     return {"state": state, "event_id": event_id}
 
 
-def dispatch_due(ledger, cfg, sender=None, now=None, limit=20) -> list[dict]:
+def dispatch_due(ledger, cfg, sender=None, now=None, limit=20, *, deadline=None) -> list[dict]:
     if type(limit) is not int or not 1 <= limit <= 20:
         raise ValueError("invalid_previsit_limit")
     current = _instant(now)
@@ -726,4 +727,10 @@ def dispatch_due(ledger, cfg, sender=None, now=None, limit=20) -> list[dict]:
         "FROM notify_outbox WHERE (kind=? OR route=?) AND state IN ('pending','failed') "
         "AND next_try<=? ORDER BY event_id LIMIT ?",
         (KIND, PRIVATE_ROUTE_MARKER, current, limit)).fetchall()
-    return [dispatch_event(ledger, dict(row), cfg, sender=sender, now=current) for row in rows]
+    outcomes = []
+    for row in rows:
+        if deadline is not None and clock.monotonic() >= deadline:
+            break
+        # A preceding send may have crossed midnight since the queue was read.
+        outcomes.append(dispatch_event(ledger, dict(row), cfg, sender=sender, now=now))
+    return outcomes

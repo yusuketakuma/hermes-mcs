@@ -463,6 +463,59 @@ def test_concurrent_dispatch_has_one_private_send(ctx, monkeypatch):
         second.close()
 
 
+def test_expired_flush_leaves_private_note_due_until_next_tick(ctx, monkeypatch):
+    _prepare(ctx, monkeypatch)
+    current = _at_jst(VISIT_DAY, 8)
+    monkeypatch.setattr(private_previsit, "_instant", lambda now=None: current if now is None else now)
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    sender = StubPrivateSender()
+    monkeypatch.setattr(private_previsit, "_provider", lambda root: sender)
+    monkeypatch.setattr(notify_flush.time, "monotonic", lambda: 10.0)
+    before = _event(ctx.db)
+    assert notify_flush.flush(ctx.db, deadline=10.0)["sent"] == 0
+    assert sender.calls == [] and _event(ctx.db) == before
+    assert notify_flush.flush(ctx.db, deadline=20.0)["sent"] == 1
+    assert notify_flush.flush(ctx.db, deadline=20.0)["sent"] == 0
+    assert len(sender.calls) == 1
+
+
+def test_slow_private_send_leaves_later_event_for_next_flush(ctx, monkeypatch):
+    _prepare(ctx, monkeypatch)
+    current = _at_jst(VISIT_DAY, 8)
+    # A second due event also requires private dispatch, even if its saved payload is unreadable.
+    ctx.db.outbox_add(private_previsit.KIND, 1, {}, next_try=current)
+    monkeypatch.setattr(private_previsit, "_instant", lambda now=None: current if now is None else now)
+    monkeypatch.setattr(notify_flush, "_config", lambda: CFG)
+    clock = [9.0]
+    monkeypatch.setattr(notify_flush.time, "monotonic", lambda: clock[0])
+
+    class SlowSender(StubPrivateSender):
+        def send(self, *args, **kwargs):
+            clock[0] = 10.0
+            return super().send(*args, **kwargs)
+
+    sender = SlowSender()
+    monkeypatch.setattr(private_previsit, "_provider", lambda root: sender)
+    assert notify_flush.flush(ctx.db, deadline=10.0)["sent"] == 1
+    row = ctx.db.db.execute("SELECT state,attempts,progress FROM notify_outbox "
+                            "WHERE kind=? ORDER BY event_id DESC LIMIT 1", (private_previsit.KIND,)).fetchone()
+    assert tuple(row) == ("pending", 0, None)
+    assert notify_flush.flush(ctx.db, deadline=20.0)["parked"] == 1
+    assert len(sender.calls) == 1
+
+
+def test_private_note_expired_after_due_selection_is_suppressed(ctx, monkeypatch):
+    _prepare(ctx, monkeypatch)
+    midnight = _at_jst(VISIT_DAY + timedelta(days=1), 0)
+    ticks = iter((midnight - 1, midnight))
+    monkeypatch.setattr(private_previsit, "_instant",
+                        lambda now=None: next(ticks, midnight) if now is None else now)
+    sender = StubPrivateSender()
+    outcome = private_previsit.dispatch_due(ctx.db, CFG, sender=sender)
+    assert outcome[0]["state"] == "suppressed"
+    assert sender.calls == []
+
+
 def test_normal_flush_intercepts_private_kind_before_shared_routing(ctx, monkeypatch):
     _prepare(ctx, monkeypatch)
     now = _at_jst(VISIT_DAY, 8)
