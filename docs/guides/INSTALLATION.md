@@ -711,7 +711,7 @@ Hermes cronは定期8件を実行します。`backup.enabled=true` の場合は�
 
 | 症状 | 原因・対処 |
 |---|---|
-| `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` を確認。`manual_required`/`keychain_locked` は上記 Keychain 節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
+| `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` の意味と対処は次節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
 | カードだけ届きスレッド本文が無い | gateway が旧 plugin を保持 — `hermes gateway restart`（§A-6） |
 
 ### セッション失効・Keychain 状態の読み方
@@ -729,8 +729,8 @@ README「導入方法」から移設（文言は同じ。段落を項目に分�
   フォールバック(`mcs_setup init` が Keychain と併記する; 平文のため
   FileVault/物理セキュリティ前提)。頻発する場合はログイン状態と Keychain の
   読み取り可否を確認し、自動ロックを収集失敗の回避策として無条件に解除しない。
-- `manual_required` はエントリ未登録かつ .env 未設定、またはフォーム非検出
-  — `mcs_setup init` で再登録する。
+- `manual_required:no_form` は、ログイン画面にパスワード欄が見つからず、既存のセッションも確認できなかったときに表示される。[専用Chromeとセッション確認の手順](#初回の専用chromeとセッション確認両モード共通)に沿って本人がログインし、端末でEnterを押す。
+- `manual_required` は、自動ログインでパスワードを取得できなかったときや、フォームの送信後にログインを確認できなかったときに表示される。パスワードが未登録と確認できた場合だけ、A-3の設定ウィザード（`mcs setup`）で登録する。
 
 ## 付録A: Discord 接続設定（hermes-agent リポジトリより転記）
 
