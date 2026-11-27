@@ -168,10 +168,9 @@ def _health_md(view) -> str:
 def _metrics(db, snap_ts: float, open_signals: int) -> list[tuple]:
     # windows are snapshot-relative — output stays deterministic per snapshot
     total = _count(db, "SELECT COUNT(*) FROM messages")
-    day = _count(db, "SELECT COUNT(*) FROM messages WHERE posted_at_ts>=?",
-                 snap_ts - 86400)
-    week = _count(db, "SELECT COUNT(*) FROM messages WHERE posted_at_ts>=?",
-                  snap_ts - 7 * 86400)
+    window = "SELECT COUNT(*) FROM messages WHERE posted_at_ts BETWEEN ? AND ?"
+    day = _count(db, window, snap_ts - 86400, snap_ts)
+    week = _count(db, window, snap_ts - 7 * 86400, snap_ts)
     pats = _count(db, "SELECT COUNT(*) FROM patients")
     return [("mcs.patients.total", pats), ("mcs.messages.total", total),
             ("mcs.messages.24h", day), ("mcs.messages.7d", week),

@@ -544,6 +544,21 @@ def test_stats_facts_and_honesty(env):
     assert "fetch_jobs: 1" in health
 
 
+def test_stats_message_windows_end_at_snapshot(env):
+    snap, out = env
+    with sqlite3.connect(snap) as db:
+        db.executemany(
+            "INSERT INTO messages(message_id,project_id,posted_at_ts) VALUES (?,1,?)",
+            [(101, SNAP_TS), (102, SNAP_TS + 1), (103, SNAP_TS - 86400),
+             (104, SNAP_TS - 7 * 86400), (105, SNAP_TS - 7 * 86400 - 1)],
+        )
+    brain_export.run(out, snap)
+    stats = (out / "stats" / "latest.md").read_text().splitlines()
+    for metric, expected in (("total", 6), ("24h", 3), ("7d", 4)):
+        row, = (line for line in stats if f"| mcs.messages.{metric} |" in line)
+        assert f"| {expected} | count |" in row
+
+
 def test_idempotent(env):
     snap, out = env
     brain_export.run(out, snap)
