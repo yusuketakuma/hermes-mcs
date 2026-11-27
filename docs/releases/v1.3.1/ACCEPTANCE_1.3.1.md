@@ -14,7 +14,13 @@ v1.3.0 タグのコードで空の台帳を初期化し、SQLite の定義83件�
 
 製品コード `90ddc31114ad7ee5c28707fdf5efaae6ddfaedd1` を対象に、新しいmacOS環境で単独接続とHermes接続の初回導入がどちらも成功しました。[新規導入のCI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45975404307)
 
-同じコミットで全体CIを開始しました。この記録の作成時点では結果の確定を待っています。[全体CI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45975400244)
+同じコミットの全体CIでは、Linuxの第4分割で意味解析のテスト2件が失敗し、Linux全体の判定も失敗しました。Linuxの残り3分割、macOSの両分割と全体判定、リント、リポジトリの衛生検査、障害対策の検査、単独接続SDK、Hermes統合の各ジョブは成功しました。[全体CI](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45975400244)
+
+失敗した2件は、保存済みの要約を読む際にモデル名も求めると、古いテスト用の読み取り処理が例外を返していました。`3f6e51c3c` で要約と監査記録を合成台帳から読むようにテストを修正し、ローカルの隔離環境で対象ファイルの62件がすべて成功しました。[テストの修正と再検証](https://github.com/yusuketakuma/hermes-mcs/commit/3f6e51c3c064dac4967488e54ad523ca5482ef9a)
+
+PRの変更記録検査は、比較元にすでにあった未公開のv1.3.1へ追加した変更票を認識できず失敗しました。`639d6f329` で、追加した票を同版の変更一覧と照合するように修正しました。版別の変更票56件と対応表を照合し、`397b1d68b` のGitHub Actionsでも文書検査が成功しました。[変更票検査の修正](https://github.com/yusuketakuma/hermes-mcs/commit/639d6f329dc96602f7bdd14a53f5d6bdd581fe2b)・[Japanese release notes の実行結果](https://github.com/yusuketakuma/hermes-mcs/actions/runs/45978750933)
+
+統合時の最終判定は、[PR #397 のチェック結果](https://github.com/yusuketakuma/hermes-mcs/pull/397/checks)で確認できます。
 
 ## 医薬品マスターと料金
 
