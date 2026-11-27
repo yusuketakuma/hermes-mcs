@@ -420,6 +420,17 @@ def wizard(cfg: dict):
     basic = {"mcs_login_id", "notify_target", "notify_system_target",
              "notify.interactive", "self_posts", "deep_history",
              "notify.card_thread", "signals.digest"}
+    # A standalone secondary transport also needs a channel for system notices.
+    # Enabling patient cards later gives that same setting a different purpose.
+    previous_system_key = None
+    previous_system = cfg.get("notify_system_target")
+    if isinstance(previous_system, str) and previous_system != cfg.get("notify_target"):
+        transport, _, channel = previous_system.partition(":")
+        if transport in ("slack", "discord") and channel and get_key(cfg, "notify.interactive") != transport:
+            key = f"notify.{transport}.channel_id"
+            if get_key(cfg, key) == channel:
+                previous_system_key = key
+                basic.add(key)
     if not detailed and cfg.get("runtime_mode") in ("hermes", "standalone"):
         # the installer already built this runtime; switching it here alone
         # would leave the jobs and connections on the other one
@@ -454,12 +465,16 @@ def wizard(cfg: dict):
             last_title = title
         if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
             kind = "reqintlist"
-        if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
-                and get_key(cfg, key) is None:
+        old_present = has_key(cfg, key)
+        old_value = copy.deepcopy(get_key(cfg, key))
+        current, present = old_value, old_present
+        if key == previous_system_key and key == f"notify.{get_key(cfg, 'notify.interactive')}.channel_id":
+            current, present = None, False
+        if key in ("notify.slack.channel_id", "notify.discord.channel_id") and current is None:
             transport = key.split(".")[1]
             patient_target = cfg.get("notify_target")
             targets = [patient_target]
-            if patient_target not in (None, "", "slack:new"):
+            if get_key(cfg, "notify.interactive") != transport and patient_target not in (None, "", "slack:new"):
                 targets.append(cfg.get("notify_system_target"))
             for target in targets:
                 if isinstance(target, str) and target.startswith(transport + ":"):
@@ -469,11 +484,8 @@ def wizard(cfg: dict):
                                 and any(c != "0" for c in channel))):
                         default = channel
                         break
-        old_present = has_key(cfg, key)
-        old_value = copy.deepcopy(get_key(cfg, key))
         while True:
-            answer = ask(key, kind, default, desc, get_key(cfg, key),
-                         old_present, allow_back=True)
+            answer = ask(key, kind, default, desc, current, present, allow_back=True)
             if answer is BACK:
                 if not history:
                     print("    これ以上前の項目はありません。")

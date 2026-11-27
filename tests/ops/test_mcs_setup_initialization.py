@@ -358,12 +358,13 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     assert any("notify.card_thread" in p for p in prompts)
 
 
-def test_detailed_wizard_slack_new_patient_does_not_borrow_system_channel(monkeypatch):
+@pytest.mark.parametrize("patient_target", ["slack:new", "discord:1234567890", "local"])
+def test_detailed_wizard_slack_new_patient_does_not_borrow_system_channel(monkeypatch, patient_target):
     import setup_wizard
     import slack_channel_setup
 
     cfg = {"runtime_mode": "hermes", "mcs_login_id": "synthetic",
-           "notify_target": "slack:new", "notify_system_target": "slack:C99999999",
+           "notify_target": patient_target, "notify_system_target": "slack:C99999999",
            "notify": {"interactive": "slack", "slack": {
                "profile": "synthetic", "application_id": "A000000001", "team_id": "T000000001"}}}
     group = next(group for group in setup_wizard.WIZARD if group[0] == "Slackの接続先と操作できる人")
@@ -577,3 +578,28 @@ def test_init_replaces_malformed_signal_and_semantic_sections(capsys):
     assert out.count("既存の意味解析設定（semantic）の形式が不正です。この設定項目を空にして設定し直します") == 1
     assert cfg == {"signals": {"notify": False, "self_organizations": ["合成事業所"]},
                    "semantic": {"mode": "off"}, "keep": 1}
+
+
+@pytest.mark.parametrize("detailed", [False, True])
+def test_enable_patient_cards_after_system_only_slack_scope(monkeypatch, detailed):
+    cfg = {"notify_target": "discord:1234567890", "notify_system_target": "slack:C99999999",
+           "notify": {"interactive": "off", "slack": {"channel_id": "C99999999"}}}
+    seen = []
+    keys = {"notify.interactive", "notify.slack.channel_id"}
+    groups = [(title, [item for item in items if item[0] in keys])
+              for title, items in setup_wizard.WIZARD]
+    monkeypatch.setattr(setup_wizard, "WIZARD", groups)
+
+    def answer(key, kind, default, desc, cur, present=False, *, allow_back=False):
+        if key == "setup_detail":
+            return "detailed" if detailed else "recommended"
+        if key == "notify.interactive":
+            return "slack"
+        seen.append((default, cur, present))
+        return cur if present else setup_wizard.UNSET
+
+    monkeypatch.setattr(setup_wizard, "ask", answer)
+    setup_wizard.wizard(cfg)
+    assert seen == [(None, None, False)]
+    assert "channel_id" not in cfg["notify"]["slack"]
+    assert cfg["notify_system_target"] == "slack:C99999999"

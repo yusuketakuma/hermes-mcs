@@ -27,7 +27,7 @@ def test_foreign_messages_is_untouched(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])
-@pytest.mark.parametrize("phase", ["forward_reverted", "rollback_not_switched", "rollback_busy"])
+@pytest.mark.parametrize("phase", ["forward_reverted", "forward_pre_merge", "rollback_not_switched", "rollback_busy", "rollback_missing_attempts"])
 def test_rollback_render_before_restart(updater, tmp_path, monkeypatch, engine, phase):
     tool, recover, repo, db, _backup, old, _restarts = _synthetic_flagless_rollback(updater, tmp_path, monkeypatch, engine)
     state = updater.journal_store.load_state(updater.STATE_PATH)
@@ -35,10 +35,12 @@ def test_rollback_render_before_restart(updater, tmp_path, monkeypatch, engine, 
     entry = state["applying"]
     entry.pop("backup_path")
     entry["schema_bump"] = False
-    if phase == "forward_reverted":
+    if phase in ("forward_reverted", "forward_pre_merge"):
         entry.update(sha=new, prev_sha=old, tag="v1.1.0")
         entry.pop("rollback")
         state["stages"] = [{"stage": s, "at": 1} for s in ("quiesce", "merge", "post_merge")]
+        if phase == "forward_pre_merge":
+            state["stages"] = [{"stage": "quiesce", "at": 1}]
     elif phase == "rollback_not_switched":
         _git(repo, "reset", "-q", "--hard", new)
     updater.journal_store.save_state(updater.STATE_PATH, state)
@@ -86,6 +88,14 @@ def test_rollback_render_before_restart(updater, tmp_path, monkeypatch, engine, 
 
     queued = {"fresh": "queued", "attempted": "queued"}
     cancelled = {"fresh": "cancelled", "attempted": "queued"}
+    if phase == "rollback_missing_attempts":
+        with connect(path) as con:
+            con.execute("DROP TABLE notification_delivery_attempts")
+        assert recover() != 0
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]
+        assert Path(updater.MARKER_PATH).is_file()
+        assert not starts and states() == queued
+        return
     if phase == "rollback_busy":
         locker = connect(path)
         try:
@@ -97,5 +107,47 @@ def test_rollback_render_before_restart(updater, tmp_path, monkeypatch, engine, 
             locker.close()
     rc = recover()
     finished = updater.journal_store.load_state(updater.STATE_PATH)
-    expected = queued if phase == "rollback_not_switched" else cancelled
+    expected = queued if phase in ("rollback_not_switched", "forward_pre_merge") else cancelled
     assert rc == 0 and finished["applying"] is None and starts and all(s == expected for s in starts) and states() == expected, (rc, starts, states(), finished["applying"])
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("shape", [1, 2, 3, 4, 6])
+def test_recovery_preserves_historical_render_contract(tmp_path, monkeypatch, engine, shape):
+    import update_restore
+    from ops_testkit import _load
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures" / "schema_upgrade"
+    ledger = tmp_path / "historical.db"
+    if engine == "updater":
+        module = update_restore
+        owner = module
+        error = module.UpdateError
+    else:
+        module = _load()
+        owner = module.mcs_recovery_core
+        error = ValueError
+    monkeypatch.setattr(owner, "LEDGER", str(ledger))
+    with sqlite3.connect(ledger) as con:
+        con.executescript((fixtures / f"shape-{shape}.sql").read_text())
+        if shape in (1, 6):
+            assert module._cancel_unsent_notices() == 0
+            return
+        con.executescript((fixtures / "notification-seed.sql").read_text())
+        con.execute("UPDATE notification_renders SET state='queued'")
+    # No intent_event_id exists in schema 7. An uncertain attempt still protects its render.
+    assert module._cancel_unsent_notices() == 0
+    with sqlite3.connect(ledger) as con:
+        con.execute("DELETE FROM notification_delivery_attempts")
+        con.execute("INSERT INTO notification_renders(delivery_id,op,render_rev,route_epoch,"
+                    "payload_hash,correlation,created_at,updated_at) VALUES('unbound','notice',"
+                    "2,1,'hash','unbound',120,130)")
+    with pytest.raises(error, match="notice_cancel_failed"):
+        module._cancel_unsent_notices()
+    with sqlite3.connect(ledger) as con:
+        assert con.execute("SELECT count(*) FROM notification_renders WHERE state='queued'").fetchone() == (2,)
+        con.execute("DELETE FROM notification_renders WHERE delivery_id='unbound'")
+    assert module._cancel_unsent_notices() == 1
+    with sqlite3.connect(ledger) as con:
+        assert con.execute("SELECT state FROM notification_renders").fetchone() == ("cancelled",)
+        assert con.execute("SELECT delivery_id,required_render_rev FROM notification_intent_cards").fetchone() == (None, 0)

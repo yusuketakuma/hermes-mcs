@@ -313,16 +313,29 @@ def _cancel_unsent_notices():
         con = sqlite3.connect(Path(mcs_recovery_core.LEDGER).resolve().as_uri() + "?mode=rw", uri=True, timeout=30)
         try:
             with con:
+                con.execute("BEGIN IMMEDIATE")
                 now = time.time()
                 tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 if "notification_renders" not in tables:
+                    if {"notification_delivery_attempts", "notification_intent_cards"} & tables:
+                        raise sqlite3.DatabaseError("notice_renders_unverified")
                     return 0
+                if not con.execute("SELECT 1 FROM notification_renders WHERE state='queued' LIMIT 1").fetchone():
+                    return 0
+                columns = {row[1] for row in con.execute("PRAGMA table_info(notification_renders)")}
+                # Schema 7 predates outbox-linked notice renders. Only its card renders
+                # have a verifiable reissue path without an intent_event_id.
+                event_column = "intent_event_id"
+                if "intent_event_id" not in columns and con.execute("PRAGMA user_version").fetchone()[0] == 7:
+                    event_column = "NULL"
                 rows = con.execute(
-                    "SELECT delivery_id,card_id,intent_event_id FROM notification_renders r "
+                    f"SELECT delivery_id,card_id,{event_column} FROM notification_renders r "
                     "WHERE state='queued' AND NOT EXISTS ("
                     "SELECT 1 FROM notification_delivery_attempts a "
                     "WHERE a.delivery_id=r.delivery_id AND a.state IN ('granted','unknown'))").fetchall()
                 for delivery_id, card_id, event_id in rows:
+                    if card_id is None and event_id is None:
+                        raise sqlite3.DatabaseError("notice_event_unverified")
                     con.execute("UPDATE notification_renders SET state='cancelled',updated_at=? "
                                 "WHERE delivery_id=? AND state='queued'", (now, delivery_id))
                     if card_id is None:
@@ -337,10 +350,6 @@ def _cancel_unsent_notices():
     except sqlite3.Error as exc:
         raise ValueError("notice_cancel_failed") from exc
 
-
-def _rollback_notice_cancel_needed(applying, head):
-    target = applying.get("sha") if applying.get("rollback") else applying.get("prev_sha")
-    return bool(target and head == target)
 
 def recover(if_stale=False):
     root = None
@@ -1250,7 +1259,7 @@ def _recover_legacy(if_stale=False):
                 # install.sh is never re-run unattended; the operator
                 # finishes it and acknowledges (mcs_update reinstall-done)
                 return escalate("reinstall_incomplete")
-            if _rollback_notice_cancel_needed(applying, head):
+            if applying.get("rollback"):
                 _cancel_unsent_notices()
             problems = mcs_recovery_services._reconcile_membership(
                 applying.get("manifest_snapshot")
@@ -1310,6 +1319,7 @@ def _recover_legacy(if_stale=False):
             if not applying.get("rollback") and "post_merge" in stages:
                 # = mcs_update: the new code ran and its failed rollback may have
                 # reset the tree without re-rendering services; redo them here.
+                _cancel_unsent_notices()
                 problems = mcs_recovery_services._reconcile_membership(
                     applying.get("manifest_snapshot") or state.get("manifest_snapshot"))
                 if problems:
@@ -1330,8 +1340,6 @@ def _finish(state, result, removed):
     # Keep the interrupted journal until its stopped workers are verified live.
     mcs_recovery_core._remove_marker()
     applying = state.get("applying") or {}
-    if _rollback_notice_cancel_needed(applying, mcs_recovery_core._head()):
-        _cancel_unsent_notices()
     dkey = mcs_recovery_core._drainers_key(state, mcs_recovery_core._head())
     if mcs_recovery_core._last_report().get("drainers_key") == dkey:
         problems = mcs_recovery_services._restart_drainers(bounce=False)

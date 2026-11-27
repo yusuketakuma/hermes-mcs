@@ -147,11 +147,11 @@ update._postcheck=migration._postcheck=lambda *_a,**_k:[]
 update._enqueue_notice=migration._enqueue_notice=lambda *_a,**_k:None
 if case.startswith('mode_before_publication_'):
     original_migrate=update.update_migrations.migrate_provider_settings
-    def change_before_publication(root,*,before_publication=None):
+    def change_before_publication(root,*,before_publication=None,allow_legacy_retire=False):
         def changed_callback():
             change_mode()
             before_publication()
-        return original_migrate(root,before_publication=changed_callback)
+        return original_migrate(root,before_publication=changed_callback,allow_legacy_retire=allow_legacy_retire)
     update.update_migrations.migrate_provider_settings=change_before_publication
 if case.startswith('mode_after_publication_'):
     import provider_settings
