@@ -564,9 +564,16 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             if not isinstance(cand_content, dict) or not isinstance(cand_meta, dict):
                 return None, 'empty_repair_candidate_invalid'
             proof = cand_meta.get('provider_provenance')
-            producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision,
-                                         db=db, bundle=bundle, project_id=pid, message_id=mid,
-                                         generation=generation)
+            import extraction_provenance
+            cloud_proof = extraction_provenance.cloud_produced(proof)
+            if cloud_proof and (bundle is None or generation is None):
+                producer = {'providers': [], 'complete': False}
+            elif bundle is not None or generation is not None:
+                producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision,
+                                             db=db, bundle=bundle, project_id=pid, message_id=mid,
+                                             generation=generation)
+            else:
+                producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision)
             # Keep the original predicate order and short-circuiting; these labels
             # only describe the first failed gate, never weaken a recovery gate.
             if not is_current(cand_meta) or cand_meta.get('invalidated') or cand_meta.get('stale'):
@@ -659,7 +666,8 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
 
 
 def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
-                        summary, producer, repair_id, prior, guard, *, partial_answers=None, audit_state='ready'):
+                        summary, producer, repair_id, prior, guard, *, partial_answers=None, audit_state='ready',
+                        inference_requests=None):
     """Persist a bounded repair result without modifying the previous audit."""
     content = {key: value for key, value in summary.items() if not key.startswith('_')}
     guard('empty_repair_candidate')
@@ -672,7 +680,10 @@ def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
         ledger.artifact_add_tx(
             KIND_CANDIDATE, json.dumps(content, ensure_ascii=False), project_id=pid, message_id=mid,
             model=semantic_transport.llm_model(),
-            meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy,
+            meta={VERSION_KEY: CURRENT_VERSION,
+                  'inference_requests': (semantic_transport.inference_requests() if inference_requests is None
+                                         else inference_requests),
+                  'fingerprint': fp, 'policy_fingerprint': policy,
                   'schema': SCHEMA_VERSION, 'stage': 'empty_repair', 'publication_mode': mode,
                   'target_revision': revision, 'repair_artifact_id': repair_id, 'prior': prior,
                   'claim_input_binding': _claim_input_binding(pid, mid, fp, policy, revision, content, facts),

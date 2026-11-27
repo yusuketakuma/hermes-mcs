@@ -38,7 +38,18 @@ def apply(config_path, legacy_path, expected_base, before_publication):
         raise MigrationError('settings_unverified') from None
 
 
-def migrate_provider_settings(root, *, before_publication=None, allow_legacy_retire=False):
+def _provider_migration_journal_requires_retire(root):
+    """Whether the active update journal proves this post-merge migration may retire legacy options."""
+    try:
+        import update_journal
+        state = update_journal.load_state(Path(root) / "data" / "update_state.json")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+        return False
+    applying = state.get("applying")
+    return isinstance(applying, dict) and applying.get("provider_settings_migration_required") is True
+
+
+def migrate_provider_settings(root, *, before_publication=None):
     """Consolidate legacy or split provider settings after the updater has quiesced writers."""
     try:
         import config_edit
@@ -63,7 +74,7 @@ def migrate_provider_settings(root, *, before_publication=None, allow_legacy_ret
                 recorded, legacy_digest = install_options._legacy(legacy)
             except (OSError, ValueError, TypeError, RecursionError):
                 recorded, legacy_digest = None, None
-            if allow_legacy_retire and embedded and recorded is not None and central == recorded:
+            if embedded and recorded is not None and central == recorded and _provider_migration_journal_requires_retire(root):
                 install_options.retire_legacy(legacy, legacy_digest)
                 return True
             return False

@@ -603,7 +603,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if applying.pop("restore_incomplete", None) or held_before:
                     journal_store.save_state(STATE_PATH, state)
             try:
-                if rollback_notice_cancel_needed(applying):
+                if applying.get("rollback"):
                     _cancel_unsent_notices()
             except UpdateError:
                 _report("notice_cancel_failed", "rollback notice cancellation unverified — restart held")
@@ -639,8 +639,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         with _legacy_provider_migration_guard(
                                 state, recovery_fds=(upd_fd, run_fd),
                                 expected_mode=provider_recovery_mode) as before_publication:
-                            update_migrations.migrate_provider_settings(
-                                HOME, before_publication=before_publication, allow_legacy_retire=True)
+                            update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
                         if _provider_migration_needed():
                             raise ValueError("provider_migration_incomplete")
                     except (update_migrations.MigrationError, UpdateError, OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):

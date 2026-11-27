@@ -102,7 +102,7 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     led, cfg, _job, _calls = cloud
     bundle = semantic_store.thread_bundle(led.db, 1, 1)
     member = bundle["members"][0]
-    generation = semantic_runtime.execution_generation(semantic_drain.runtime_config(cfg)[0])
+    generation = semantic_runtime.interpretation_generation(semantic_drain.runtime_config(cfg)[0])
     binding = inference_dependency_loss.source_binding(led.db, 1, member["message_id"])
     owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
              "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),

@@ -271,7 +271,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         summary = existing["content"]
         producer = _summary_producer(existing, fp, policy, revision, db=ledger.db, bundle=bundle,
                                      project_id=pid, message_id=mid,
-                                     generation=runtime.execution_generation(scfg))
+                                     generation=runtime.interpretation_generation(scfg))
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
@@ -280,7 +280,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
             summary = candidate["content"]
             producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle,
                                          project_id=pid, message_id=mid,
-                                         generation=runtime.execution_generation(scfg))
+                                         generation=runtime.interpretation_generation(scfg))
         else:
             format_repair_id = None
             try:
@@ -784,7 +784,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         recovered, empty_reserved = _empty_repair_candidate(
             ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
             reason_out=empty_reason, fact_kind=_fact_kind(scfg), bundle=bundle,
-            generation=runtime.execution_generation(scfg))
+            generation=runtime.interpretation_generation(scfg))
         if empty_reserved and recovered is None:
             _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)
@@ -925,7 +925,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 if empty_repair and jev_client is not None and recorded is None:
                     _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
                         scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
-                        guard, audit_state='inflight')
+                        guard, audit_state='inflight',
+                        inference_requests=(recovered or {}).get('meta', {}).get('inference_requests'))
                 def record_empty_repair_audit(findings, verdict=False):
                     # What the audit observed is recorded before anything can
                     # stop the pass, and survives any stop while this worker
@@ -943,7 +944,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 **({'evaluated': True} if verdict else {})} if adverse else {})
                     _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
                         scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
-                        owner_guard, partial_answers=partial, audit_state='held' if partial else 'ready')
+                        owner_guard, partial_answers=partial, audit_state='held' if partial else 'ready',
+                        inference_requests=(recovered or {}).get('meta', {}).get('inference_requests'))
 
                 try:
                     if recorded is not None:
@@ -1432,7 +1434,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
 
     try:
         with ExitStack() as stack:
-            stack.enter_context(semantic_transport.inference_targets(runtime.execution_generation(scfg)))
+            stack.enter_context(semantic_transport.inference_targets(runtime.interpretation_generation(scfg)))
             if cloud_transport is not None and lane == "backlog":
                 token = runtime.JobToken.from_row(job)
                 payload = runtime.parse_payload(job)
