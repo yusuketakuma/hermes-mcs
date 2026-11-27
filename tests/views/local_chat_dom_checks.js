@@ -683,6 +683,46 @@ async function checkOpenMcsPatientSelection() {
   await stale;
   assert.equal(byId("error").hidden, true);
   assert.match(content(byId("patients")), /合成 三十三/);
+
+  // The first-page request can fail while the individually authorized linked patient opens.
+  let rejectList;
+  sandbox.api = async (kind, params) => {
+    if (params.q === "") return new Promise((resolve, reject) => {rejectList = reject;});
+    return {items: params.q === "22" ? [p22] : [filtered], next_cursor: params.q === "22" ? null : "old-search-page"};
+  };
+  byId("patient-search").value = "旧検索";
+  await run("loadPatients()");
+  const linked = button(card, "タイムラインを開く").onclick();
+  rejectList(new Error("合成 一覧エラー"));
+  await linked;
+  assert.equal(run("state.project"), 22);
+  assert.equal(byId("patient-name").textContent, p22.heading);
+  assert.notEqual(byId("patient-count").textContent, "0");
+  assert.match(content(byId("patients")), /患者一覧を取得できません/);
+  assert.match(content(byId("patients")), /合成 二十二/);
+  assert.doesNotMatch(content(byId("patients")), /旧検索|該当する患者はいません/);
+  assert.equal(byId("more-patients").hidden, true);
+
+  // A newer successful search replaces both the error and cursor, even if an earlier list fails late.
+  const obsolete = button(card, "タイムラインを開く").onclick();
+  byId("patient-search").value = "三十三";
+  sandbox.api = async (kind, params) => {
+    assert.equal(params.q, "三十三"); assert.equal(params.cursor, null);
+    return {items: [p33], next_cursor: null};
+  };
+  byId("patient-form").onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && run("state.project") !== 33; i++) await Promise.resolve();
+  rejectList(new Error("合成 古い一覧エラー"));
+  await obsolete;
+  assert.equal(run("state.project"), 33);
+  assert.equal(byId("patient-count").textContent, "1");
+  assert.match(content(byId("patients")), /合成 三十三/);
+  assert.doesNotMatch(content(byId("patients")), /取得できません|旧検索|一覧エラー/);
+  assert.equal(byId("error").hidden, true);
+  sandbox.api = async () => ({items: [], next_cursor: null});
+  await run("loadPatients()");
+  assert.equal(byId("patient-count").textContent, "0");
+  assert.match(content(byId("patients")), /該当する患者はいません/);
 }
 
 

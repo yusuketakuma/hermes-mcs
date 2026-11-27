@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, countRequest: 0, countBox: null, openPatient: null, listOpener: null, detailOpener: null, onSelect: null, onSearch: null};
+const state = {patients: [], patientCursor: null, patientListError: "", project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, countRequest: 0, countBox: null, openPatient: null, listOpener: null, detailOpener: null, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 // A date without the year when it falls in the current JST year: 11/18, otherwise 2025/11/18.
@@ -176,8 +176,11 @@ function patientList() {
   }
   // The list is ordered by latest activity, so the open patient may move: keep its row in view.
   selected?.scrollIntoView({block: "nearest"});
-  if (!rows.length) $("patients").append(el("p", "該当する患者はいません", "empty"));
-  $("patient-count").textContent = `${state.patients.length}${state.patientCursor ? "+" : ""}`;
+  if (state.patientListError) {
+    const note = el("p", state.patientListError, "state-note"); note.setAttribute("role", "status");
+    $("patients").append(note);
+  } else if (!rows.length) $("patients").append(el("p", "該当する患者はいません", "empty"));
+  $("patient-count").textContent = state.patientListError ? "" : `${state.patients.length}${state.patientCursor ? "+" : ""}`;
   $("more-patients").hidden = !state.patientCursor;
 }
 // The open patient survives 「更新」 (a page reload) through the address's #project=N, not browser storage.
@@ -191,9 +194,19 @@ async function rememberedPatient() {
 async function loadPatients(more = false, {deferSelection = false} = {}) {
   const request = ++state.patientRequest;
   if (!state.project) loadSideStatus();
+  let data;
   try {
-    const data = await api("patients", {q: $("patient-search").value.trim(), cursor: more ? state.patientCursor : null});
+    data = await api("patients", {q: $("patient-search").value.trim(), cursor: more ? state.patientCursor : null});
+  } catch (error) {
     if (request !== state.patientRequest) return;
+    if (more) {fail(error); return;}
+    state.patients = []; state.patientCursor = null;
+    state.patientListError = "患者一覧を取得できませんでした。" + (error.message || "");
+    patientList(); return;
+  }
+  if (request !== state.patientRequest) return;
+  try {
+    state.patientListError = "";
     state.patients = more ? state.patients.concat(data.items) : data.items;
     state.patientCursor = data.next_cursor;
     // A linked navigation draws this page when it selects its patient.
