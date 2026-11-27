@@ -1,7 +1,9 @@
 """Local backups of the home-care records database: daily, pre-update, list/verify and plain restore — synthetic files only."""
 import json
 import os
+import shutil
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -77,6 +79,91 @@ def test_daily_copy_includes_wal_writes_and_rotates_only_its_own_files(world, mo
     assert "ledger-20261101.db" in names and "homecare-20261105.db.ok" in names
     assert _notes(backups / "homecare-20261105.db") == ["合成メモ"]
     assert oct(os.stat(backups / "homecare-20261105.db").st_mode & 0o777) == "0o600"
+
+
+def _orphan(path):
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute("INSERT INTO care_team(patient_id, staff_id, role, started_at, started_by) "
+                   "VALUES(999, 888, 'pharmacy.x', 1, 888)")
+        db.commit()
+
+
+def _legacy_marker(path):
+    st = path.stat()
+    path.with_suffix(".db.ok").write_text(f"{st.st_size} {st.st_mtime_ns}")
+
+
+def test_broken_references_never_replace_or_rotate_a_restorable_backup(world, monkeypatch):
+    homecare, backups, parent = world
+    _records(homecare, "合成").close()
+    _stamp(monkeypatch, "20261101")
+    local_backup.daily_homecare_backup()
+    good = backups / "homecare-20261101.db"
+    _orphan(homecare)
+    for day in ("20261102", "20261103", "20261104"):
+        _stamp(monkeypatch, day)
+        with pytest.raises(local_backup.MaintenanceError, match="backup_verify_failed"):
+            local_backup.daily_homecare_backup()
+    with pytest.raises(local_backup.MaintenanceError, match="backup_verify_failed"):
+        local_backup.preupdate_homecare_backup()
+    assert list(backups.glob("*.db")) == [good]
+    target = parent / "data"
+    mcs_local_backup.restore(good.name, destination=str(target))
+    assert _notes(target / "homecare.db") == ["合成"]
+
+
+def test_old_daily_marker_requires_current_verification_before_reuse(world, monkeypatch):
+    homecare, backups, _ = world
+    _records(homecare, "合成").close()
+    _stamp(monkeypatch, "20261101")
+    local_backup.daily_homecare_backup()
+    today = backups / "homecare-20261101.db"
+    _orphan(today)
+    _legacy_marker(today)
+    [old] = mcs_local_backup.list_backups(verify=True)
+    assert (old["marker"], old["check"]) == ("unverified", "backup_integrity_failed")
+
+    local_backup.daily_homecare_backup()
+    [fixed] = mcs_local_backup.list_backups(verify=True)
+    assert (fixed["marker"], fixed["check"]) == ("verified", "ok")
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: pytest.fail("reopened verified backup"))
+    assert local_backup.daily_homecare_backup() is None
+
+
+def test_intact_legacy_copy_is_revalidated_in_place(world, monkeypatch):
+    homecare, backups, _ = world
+    _records(homecare, "合成 A").close()
+    _stamp(monkeypatch, "20261101")
+    local_backup.daily_homecare_backup()
+    today = backups / "homecare-20261101.db"
+    _legacy_marker(today)
+    _records(homecare, "合成 B").close()
+    local_backup.daily_homecare_backup()
+    assert _notes(today) == ["合成 A"]
+    [row] = mcs_local_backup.list_backups(verify=True)
+    assert (row["marker"], row["check"]) == ("verified", "ok")
+
+
+def test_rotation_waits_for_three_current_markers_before_pruning_older_copies(world, monkeypatch):
+    homecare, backups, _ = world
+    _records(homecare, "合成").close()
+    _stamp(monkeypatch, "20261101")
+    local_backup.daily_homecare_backup()
+    good = backups / "homecare-20261101.db"
+    for day in ("20261102", "20261103"):
+        legacy = backups / f"homecare-{day}.db"
+        shutil.copyfile(good, legacy)
+        _orphan(legacy)
+        _legacy_marker(legacy)
+    for day in ("20261104", "20261105"):
+        _stamp(monkeypatch, day)
+        local_backup.daily_homecare_backup()
+        assert good.is_file()
+    _stamp(monkeypatch, "20261106")
+    local_backup.daily_homecare_backup()
+    assert {p.name for p in backups.glob("*.db")} == {
+        "homecare-20261104.db", "homecare-20261105.db", "homecare-20261106.db"}
 
 
 def test_a_file_that_is_not_home_care_records_is_refused(world):

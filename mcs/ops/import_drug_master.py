@@ -36,6 +36,7 @@ EDITION_DATE = date(int(EDITION[:4]), int(EDITION[4:6]), int(EDITION[6:]))  # pi
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_CSV_BYTES = 32 * 1024 * 1024
 MAX_ROWS = 100000
+BUNDLED_ABSENT_DATES = ("0", "99999999")
 BUNDLE = Path(__file__).resolve().parents[2] / "resources" / "drug-master"
 # Official pp222/223: character/byte bounds and numeric leading-zero omission.
 WIDTHS = (1, 1, 9, 2, 64, 2, 20, 3, 1, 12, 1, 13, 2, 1, 1, 1, 1,
@@ -101,6 +102,15 @@ def _iso(value: JSON) -> date:
         return date.fromisoformat(value)
     except (ValueError, TypeError):
         raise MasterError("pin_date_invalid") from None
+
+
+def master_date(value: str, absent=BUNDLED_ABSENT_DATES) -> date | None:
+    """Decode a compact master date with the edition's declared absent values."""
+    if value in absent:
+        return None
+    if len(value) != 8:
+        raise MasterError("unconfirmed_date_or_sentinel")
+    return date(int(value[:4]), int(value[4:6]), int(value[6:]))
 
 
 def _check_pin(pin: dict[str, JSON]):
@@ -228,16 +238,10 @@ def convert(path: Path, pin: dict[str, JSON]) -> Conversion:
             seen.add(medicine)
             dates, unknown_date = {}, False
             for column in (29, 30, 33, 35):
-                value = row[column]
-                if value in absent:
-                    dates[column] = None
-                else:
-                    try:
-                        if len(value) != 8:
-                            raise ValueError
-                        dates[column] = date(int(value[:4]), int(value[4:6]), int(value[6:]))
-                    except ValueError:
-                        unknown_date = True
+                try:
+                    dates[column] = master_date(row[column], absent)
+                except ValueError:
+                    unknown_date = True
             # These are dates for this converter's candidate policy, not a
             # claim that a medication is clinically valid. Count each row's
             # effective start/end once; a later start or earlier end wins.

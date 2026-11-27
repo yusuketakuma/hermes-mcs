@@ -6,6 +6,7 @@ import update_runtime_migration
 import update_services
 import json
 import os
+from datetime import date
 
 import pytest
 
@@ -65,6 +66,27 @@ def test_only_exact_unique_master_names_resolve():
     entries, suggestions = drug_info.resolve("架空アオ", ROWS)
     assert entries == [] and suggestions
     assert len(drug_info.resolve("【般】架空錠", ROWS)[0]) == 2  # shared generic label stays ambiguous
+
+
+@pytest.mark.parametrize(("end", "change", "abolished"), [
+    ("20261125", "9", True),
+    ("20261126", "9", False),
+    ("20261127", "9", False),
+    ("99999999", "0", False),
+    ("0", "0", False),
+])
+def test_lookup_abolished_only_after_the_last_usable_day(end, change, abolished, monkeypatch, capsys, gateway):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 26)
+
+    product = dict(ROWS[0], abolished_on=end, change=change)
+    monkeypatch.setattr(drug_info, "date", FixedDate)
+    monkeypatch.setattr(drug_info, "master_rows", lambda: ({"edition": "20261112"}, [product]))
+    gateway(results=[])
+    assert mcs_drug.main(["info-lookup", product["name"]]) == 0
+    assert json.loads(capsys.readouterr().out)["product"]["abolished"] is abolished
 
 
 def test_bundled_public_rows_do_not_import_the_drug_cli(tmp_path, monkeypatch):
