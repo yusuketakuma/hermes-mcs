@@ -697,7 +697,7 @@ async function checkOpenMcsPatientSelection() {
   await linked;
   assert.equal(run("state.project"), 22);
   assert.equal(byId("patient-name").textContent, p22.heading);
-  assert.notEqual(byId("patient-count").textContent, "0");
+  assert.equal(byId("patient-count").textContent, "");
   assert.match(content(byId("patients")), /患者一覧を取得できません/);
   assert.match(content(byId("patients")), /合成 二十二/);
   assert.doesNotMatch(content(byId("patients")), /旧検索|該当する患者はいません/);
