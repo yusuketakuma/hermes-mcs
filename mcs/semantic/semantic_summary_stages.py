@@ -148,12 +148,21 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None,
             or (proof["complete"] and not proof["providers"])):
         return unknown
     import extraction_provenance
-    if (db is not None and bundle is not None and project_id is not None and message_id is not None
-            and extraction_provenance.cloud_produced(proof) and 'repair_evidence' not in proof
-            and not _summary_cloud_producer_verified(db, bundle, project_id, message_id,
-                                                     generation, artifact["meta"])):
-        return unknown
     producer = {"providers": proof["providers"], "complete": proof["complete"]}
+    if (db is not None and bundle is not None and project_id is not None and message_id is not None
+            and extraction_provenance.cloud_produced(proof) and 'repair_evidence' not in proof):
+        # The accounting writer used the local model configured at dispatch.
+        # Reconstruct this generation from the original artifact on a later pass.
+        row_model = artifact.get("model")
+        if row_model is not None and (not isinstance(row_model, str) or not row_model):
+            return unknown
+        receipt_generation = generation(local_model=row_model) if callable(generation) else generation
+        if not _summary_cloud_producer_verified(db, bundle, project_id, message_id,
+                                                receipt_generation, artifact["meta"]):
+            return unknown
+        if callable(generation):
+            producer["source_receipt"] = {"model": row_model or semantic_transport.llm_model(),
+                                          "requests": artifact["meta"]["inference_requests"]}
     if 'repair_evidence' in proof:
         reference = proof['repair_evidence']
         if (not isinstance(reference, dict) or set(reference) != {'artifact_id', 'hash'}
@@ -196,6 +205,13 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None,
     return producer
 
 
+def _summary_row_receipt(producer):
+    """Keep the generating attempt's accounting references on every copy of its summary."""
+    if "source_receipt" in producer:
+        return producer["source_receipt"]
+    return {"model": semantic_transport.llm_model(), "requests": semantic_transport.inference_requests()}
+
+
 def _summarize_observed(*args, **kwargs):
     with semantic_transport.trace_inference() as observed:
         value = summarize(*args, **kwargs)
@@ -203,6 +219,11 @@ def _summarize_observed(*args, **kwargs):
     producer = {"providers": [observed[-1]] if observed and isinstance(result, dict)
                 and not result.get("_input_oversize") else [],
                 "complete": bool(observed and isinstance(result, dict) and not result.get("_input_oversize"))}
+    if producer["complete"] and producer["providers"][0] in provider_registry.CLOUD_PROVIDERS:
+        receipt = semantic_transport.inference_receipt()
+        if receipt is not None:
+            producer["source_receipt"] = {"model": semantic_transport.llm_model(),
+                                          "requests": [receipt["reservation_id"]]}
     return value, producer
 
 
@@ -560,7 +581,7 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
-        def _validate_candidate(cand_content, cand_meta):
+        def _validate_candidate(cand_content, cand_meta, candidate_row):
             if not isinstance(cand_content, dict) or not isinstance(cand_meta, dict):
                 return None, 'empty_repair_candidate_invalid'
             proof = cand_meta.get('provider_provenance')
@@ -569,7 +590,8 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             if cloud_proof and (bundle is None or generation is None):
                 producer = {'providers': [], 'complete': False}
             elif bundle is not None or generation is not None:
-                producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision,
+                model = candidate_row['model'] if 'model' in candidate_row.keys() else None
+                producer = _summary_producer({'content': cand_content, 'meta': cand_meta, 'model': model}, fp, policy, revision,
                                              db=db, bundle=bundle, project_id=pid, message_id=mid,
                                              generation=generation)
             else:
@@ -634,7 +656,7 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
                 if not semantic_store.producer_current(
                         KIND_CANDIDATE, repair_row['model'] if 'model' in repair_row.keys() else None,
                         repair_meta):
-                    validated, fail_reason = _validate_candidate(repair_content, repair_meta)
+                    validated, fail_reason = _validate_candidate(repair_content, repair_meta, repair_row)
                     if validated is not None and validated['recorded_audit'] is None:
                         return held('empty_repair_candidate_producer', False)
                     if repair_row is row:
@@ -650,7 +672,7 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_candidate_missing')
         if repair_checked is not None:
             return held(repair_checked)
-        validated, fail_reason = _validate_candidate(content, meta)
+        validated, fail_reason = _validate_candidate(content, meta, row)
         if fail_reason is not None:
             return held(fail_reason)
         # A superseded prior pair frees only a candidate the gates above
@@ -666,10 +688,10 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
 
 
 def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
-                        summary, producer, repair_id, prior, guard, *, partial_answers=None, audit_state='ready',
-                        inference_requests=None):
+                        summary, producer, repair_id, prior, guard, *, partial_answers=None, audit_state='ready'):
     """Persist a bounded repair result without modifying the previous audit."""
     content = {key: value for key, value in summary.items() if not key.startswith('_')}
+    source_receipt = _summary_row_receipt(producer)
     guard('empty_repair_candidate')
     with ledger.db:
         if not ledger.db.in_transaction:
@@ -679,10 +701,8 @@ def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
             raise runtime.RuntimeStale('empty_repair_prior')
         ledger.artifact_add_tx(
             KIND_CANDIDATE, json.dumps(content, ensure_ascii=False), project_id=pid, message_id=mid,
-            model=semantic_transport.llm_model(),
-            meta={VERSION_KEY: CURRENT_VERSION,
-                  'inference_requests': (semantic_transport.inference_requests() if inference_requests is None
-                                         else inference_requests),
+            model=source_receipt['model'],
+            meta={VERSION_KEY: CURRENT_VERSION, 'inference_requests': source_receipt['requests'],
                   'fingerprint': fp, 'policy_fingerprint': policy,
                   'schema': SCHEMA_VERSION, 'stage': 'empty_repair', 'publication_mode': mode,
                   'target_revision': revision, 'repair_artifact_id': repair_id, 'prior': prior,
@@ -814,7 +834,8 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
             raise ValueError("semantic_skip_reason_invalid")
         skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
                      "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}
-    summary_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+    source_receipt = _summary_row_receipt(r.get("producer", {}))
+    summary_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": source_receipt["requests"], "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                     "audit_status": final_status, "publication_mode": publication_mode,
                     "stale": final_status == "STALE",
                     "target_revision": members[mid]["revision"],
@@ -844,7 +865,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     # (hashes, binding, revision, mode, schema; the summary id is checked
     # above), so a pair the send gate
     # cannot verify is written again, never kept as a duplicate.
-    prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+    prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy, include_model=True)
     prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     if (prev_sum is not None and prev_sum["content"] == summary
             and isinstance(provenance, dict) and not provenance.get("providers")):
@@ -857,6 +878,8 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
             # how they were produced, and the empty proof would otherwise
             # rewrite the pair into a verification-exempt copy (FIX-SD1).
             summary_meta["provider_provenance"] = stored_proof
+            summary_meta["inference_requests"] = prev_sum["meta"].get("inference_requests", [])
+            source_receipt = {**source_receipt, "model": prev_sum["model"]}
     if (prev_sum is not None and prev_aud is not None
             and _current_pair_newest(ledger.db, pid, mid, fp, policy, prev_aud)
             and prev_sum["content"] == summary and prev_aud["content"] == audit_content
@@ -866,7 +889,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     summary_id = ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
-        project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
+        project_id=pid, message_id=mid, model=source_receipt["model"],
         meta=summary_meta)
     ledger.artifact_add_tx(
         KIND_AUDIT,

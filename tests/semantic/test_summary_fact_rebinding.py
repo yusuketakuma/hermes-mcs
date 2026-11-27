@@ -108,7 +108,6 @@ def _prove_cloud_summaries(db):
     import mcs_util
     from semantic_cloud_testkit import summary_receipt
     scfg = semantic_policy.runtime_config(_canonical_cfg())[0]
-    generation = runtime.interpretation_generation(scfg)
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     roots = [m["message_id"] for m in bundle["members"] if m.get("parent_id") is None]
     assert len(roots) == 1
@@ -128,6 +127,7 @@ def _prove_cloud_summaries(db):
         meta = json.loads(row["meta"])
         if meta.get("inference_requests"):
             continue
+        generation = runtime.execution_generation(scfg, local_model=row["model"])
         owner = {"semantic_target_id": row["message_id"], "semantic_thread_root": roots[0],
                  "semantic_source": source, "semantic_generation": generation,
                  "semantic_phase": "summary"}

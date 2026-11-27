@@ -211,7 +211,7 @@ def _latest_matching(db, kind: str, message_id: int, fp: str, policy=None):
     return None
 
 
-def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
+def current_artifact(db, kind: str, message_id: int, fp: str, policy=None, *, include_model=False):
     """Latest artifact of `kind` for `message_id` whose meta fingerprint
     still matches the live input — older generations stay recorded as
     history but are never 'current' (AT-035/056). An interpretation result
@@ -226,7 +226,10 @@ def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
     content = loads_dict(r["content"])
     if content is None:
         return None
-    return {"content": content, "meta": meta}
+    artifact = {"content": content, "meta": meta}
+    if include_model:
+        artifact["model"] = r["model"] if "model" in r.keys() else None
+    return artifact
 
 
 def local_redo_pending(db, message_id: int, fp: str, policy) -> bool:
