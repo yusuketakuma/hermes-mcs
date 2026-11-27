@@ -258,6 +258,54 @@ def test_unconfirmed_storage_is_private_with_its_original_evidence(led, key, val
     assert "服薬管理（" not in _card_text(led, SLACK)
 
 
+@pytest.mark.parametrize("drug,shown", [("合成薬A", False), ("現在は合成薬A", False), ("合成薬B", True),
+                                       ("薬", False), ("本人の処方薬", False), ("保管中のもの", False)])
+def test_storage_withdrawal_is_bound_to_the_written_medicine(led, drug, shown):
+    first = "合成薬Aは冷蔵庫で保管しています。"
+    body = first + f"{drug}の冷蔵庫での保管は中止しました。"
+    detail = {"key": "storage_place", "value": "冷蔵庫", "evidence": first}
+    _seed(led, [_item("medication_management", body, [detail])], body=body)
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    item = read_model.message_patient_context(led.db, row)[0]
+    assert item["evidence"] == body and item["details"] == [detail]
+    assert ("服薬管理（保管場所）: 「冷蔵庫」" in _card_text(led, SLACK)) is shown
+
+
+@pytest.mark.parametrize("body,shown", [
+    ("薬の置き場所：台所の棚", True),
+    ("薬の置き場所：台所の棚です。", True),
+    ("薬の保管場所：\n冷蔵庫。", True),
+    ("薬の保管場所：以前は冷蔵庫。", False),
+    ("薬の置き場所：台所の棚を検討中。", False),
+    ("薬の保管場所：\n未定。", False),
+    ("薬の保管状況：冷蔵保管。", True),
+    ("薬の保管状況：先月は冷蔵保管。", False),
+    ("薬の保管状況：冷蔵保管は中止。", False),
+])
+def test_storage_heading_shares_only_the_current_written_value(led, body, shown):
+    from patient_context import extract_context
+    items = extract_context(body)
+    _seed(led, items, body=body, kind="extract_v1")
+    detail = items[0]["details"][0]
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    assert detail in read_model.message_patient_context(led.db, row)[0]["details"]
+    label = "保管場所" if detail["key"] == "storage_place" else "保管状況"
+    assert (f"服薬管理（{label}）: 「{detail['value']}」" in _card_text(led, SLACK)) is shown
+
+
+@pytest.mark.parametrize("body,value,shown", [
+    ("薬を冷蔵庫で保管しており、残薬は4錠です。", "冷蔵庫", True),
+    ("薬を冷蔵庫で保管しており、残薬は4錠ですが、実際には保管していません。", "冷蔵庫", False),
+    ("薬は保管棚で保管しています。", "保管棚", True),
+    ("薬は保管棚で保管していません。", "保管棚", False),
+    ("保管棚の写真です。", "保管棚", False),
+])
+def test_storage_place_attaches_to_its_own_predicate(led, body, value, shown):
+    detail = {"key": "storage_place", "value": value, "evidence": body}
+    _seed(led, [_item("medication_management", body, [detail])], body=body)
+    assert (f"服薬管理（保管場所）: 「{value}」" in _card_text(led, SLACK)) is shown
+
+
 def test_other_allowed_details_keep_their_existing_card_projection(led):
     body = "薬の管理者は合成家族、照会の結果は処方継続、相互作用の確認は薬局へ連絡。"
     values = [("medication_manager", "管理者", "合成家族"), ("inquiry_result", "照会・提案の結果", "処方継続"),

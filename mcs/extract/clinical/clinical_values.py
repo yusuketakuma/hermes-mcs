@@ -102,6 +102,38 @@ class MedicationSurface(TypedDict):
     method: Literal["surface"]
 
 
+# A clause naming a medication the model did not list still bounds one
+# drug's attribute region: the name carries a drug morpheme and stands
+# in subject/object position (は/が/を/の). Tokens that merely end in a
+# person/place noun (薬剤師・薬局・医薬品…) never qualify.
+_OTHER_MED_MENTION = re.compile(
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}"
+    r"(?:薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|"
+    r"内服薬|経口薬|外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|"
+    r"トローチ|目薬|うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)"
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをのも])")
+_OTHER_MED_NONDRUG_END = re.compile(r"[師局品袋缶味箱代瓶器店価]$")
+# Katakana or alphanumeric drug names carry no drug morpheme
+# (テストミン・ワルファリン), so a name-shaped token in
+# subject/object position bounds the region the same way.
+_OTHER_MED_KATAKANA = re.compile(r"[ァ-ヶーA-Za-z0-9]{3,16}(?=[はがをのも])")
+# A bare dose count (3錠) or a generic form word (内服薬・坐薬) names no
+# particular drug, so it never bounds an attribute region either.
+GENERIC_MEDICATION_FORM = re.compile(
+    r"(?:[0-9０-９.]+(?:錠|包|カプセル|錠剤)?|"
+    r"薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|内服薬|経口薬|"
+    r"外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|トローチ|目薬|"
+    r"うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)")
+
+
+def written_medication_mentions(clause: str):
+    """Yield source spans of medication-shaped subjects or objects; these are literal name candidates."""
+    for match in _OTHER_MED_MENTION.finditer(clause):
+        if not (_OTHER_MED_NONDRUG_END.search(match[0]) or GENERIC_MEDICATION_FORM.fullmatch(match[0])):
+            yield match
+    yield from _OTHER_MED_KATAKANA.finditer(clause)
+
+
 # dosage forms written right after a medicine name (shared with signal matching)
 MED_FORMS = r"od錠|錠|カプセル|顆粒|細粒|散|シロップ|テープ|パップ|軟膏|点眼液|注射液|坐剤"
 _MED_STRENGTH = r"[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|%)"

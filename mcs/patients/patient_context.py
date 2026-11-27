@@ -1,5 +1,6 @@
 """Extract and read source-bound patient context without inferring current clinical state."""
 import clinical_scope
+import clinical_values
 import hashlib
 import json
 import math
@@ -294,7 +295,9 @@ _STORAGE_ONSET = r"(?:以前|昨[日年]|先[日週月])(?:から|より)"
 _STORAGE_ARGUMENT = re.compile(
     rf"(?:{_STORAGE_ONSET})?(?:(?:{'|'.join(_PATIENT_OWNERS)})[がは])?(?:(?:{_DRUG_OWNER.pattern}|{_DRUG_NOUN})[はをがも])?")
 _ATTRIBUTIVE_ARGUMENT = re.compile(r"[^、，,。！？!?]*た[一-龥々ァ-ヶーA-Za-z0-9]+[はをがも]")
-_STORAGE_LABEL = re.compile(r"(?:保管|保存)(?:場所|先|状況)(?:は|[:：])\s*$")
+_STORAGE_LABEL = re.compile(r"(?:保管|保存)(?:場所|先|状況)は\s*$")
+_PLACE_NOUN = r"[一-龥々ァ-ヶーA-Za-z0-9]{0,20}(?:庫|棚|箱|室|台所|居間|引き出し|ボックス|カレンダー)"
+_HEADING_PLACE = re.compile(rf"{_PLACE_NOUN}(?:の{_PLACE_NOUN})*")
 _ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
                     r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
                     r"|せん妄|不眠|振戦|発熱")
@@ -307,8 +310,9 @@ _STORAGE_ACTION = re.compile(
 _STORAGE_RESTART = re.compile(
     r"(?:が|後に?)?[、，, ]*(?:その後|(?P<now>現在は|今は))?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
 _OTHER_PHARMACY_REPORT = re.compile(
-    rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:なし|(?:について)?[はがも]"
-    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern}|あり(?:ます|ました)))"
+    r"(?:残薬量?(?:について)?[はがも]\d+(?:[.．]\d+)?\s*(?:錠|包|枚|本|カプセル)"
+    rf"|(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:なし|(?:について)?[はがも]"
+    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern}|あり(?:ます|ました))))"
     r"(?:でした|です)?(?:とのこと(?:でした|です)?)?")
 _STORAGE_REPORT = re.compile(r"(?:とのこと(?:です)?|ことを確認(?:しました|しています)|と(?:聞き|伺い)ました)")
 
@@ -360,19 +364,23 @@ def _storage_observation_period(before: str) -> str:
     return 'historical' if frame and frame['past'] else 'current'
 
 
-def _storage_assertion(before: str, value: str, tail: str) -> str:
+def _storage_assertion(before: str, value: str, tail: str, heading_key=None) -> str:
     """Classify one source occurrence, requiring a complete affirmative assertion for a shared card."""
     if _DETAIL_NEGATIVE.search(value) or _DETAIL_UNCERTAIN.search(value) or _DETAIL_CLAUSE_BREAK.search(value):
         return 'unknown'
     source = value + tail
     label = _STORAGE_LABEL.search(before)
-    if label:
+    if heading_key == 'storage_place' and (not _HEADING_PLACE.fullmatch(value.removesuffix('です'))
+                                           or _STORAGE_OBSERVATION.search(value)):
+        return 'unknown'
+    if label or heading_key == 'storage_place':
         end = len(value) + (2 if tail.startswith('です') else 0)
         if _complete_storage_report(source, end):
-            return _storage_observation_period(before[:label.start()])
+            return _storage_observation_period(before[:label.start()] if label else before)
         return 'unknown'
-    action = _STORAGE_ACTION.search(source)
-    if action is None or not action.start() <= len(value) <= action.end():
+    action = next((action for action in _STORAGE_ACTION.finditer(source)
+                   if action.start() <= len(value) <= action.end()), None)
+    if action is None or (heading_key == 'storage_status' and action.start() != 0):
         return 'unrelated'
     period = _storage_observation_period(before)
     if action['former'] is not None or action['stopped'] is not None:
@@ -388,13 +396,46 @@ def _storage_assertion(before: str, value: str, tail: str) -> str:
     return 'planned' if period == 'planned' else 'unknown'
 
 
-def _current_storage_in_quote(body: str, span, value: str, subject) -> bool:
+def _storage_drug_argument(before: str) -> str | None:
+    """A specific written medicine can distinguish a withdrawal; a generic or ambiguous argument cannot."""
+    clause = _DETAIL_CLAUSE_BREAK.split(_STORAGE_LABEL.sub('', before).rstrip('、，, '))[-1].strip()
+    frame = _STORAGE_OBSERVATION.match(clause)
+    if frame:
+        clause = clause[frame.end():]
+    for match in clinical_values.written_medication_mentions(clause):
+        name = match[0]
+        if (match.end() == len(clause) - 1 and clause[:match.start()] in ('', *(who + 'の' for who in _PATIENT_OWNERS))
+                and re.fullmatch(_THING, name) and not clinical_values.GENERIC_MEDICATION_FORM.fullmatch(name)):
+            return clinical_values.medication_surface(name)['base']
+    return None
+
+
+def _storage_heading_key(body: str, at: int):
+    """Use the same source-line heading and aliases as the rule extractor, including next-line values."""
+    end = at
+    while end and body[end - 1].isspace():
+        end -= 1
+    start = body.rfind('\n', 0, end) + 1
+    newline = body.find('\n', end)
+    header = _HEADING.match(body[start:newline if newline >= 0 else len(body)].rstrip('\r'))
+    if header and start + header.end() <= at and not body[start + header.end():at].strip():
+        return _DETAIL_FOLD.get(header['label'].casefold())
+    return None
+
+
+def _current_storage_in_quote(body: str, span, value: str, subject, key) -> bool:
     """Only quoted evidence establishes storage; a later assertion about the same subject can withdraw it."""
     if not isinstance(value, str) or not value or value not in body[span[0]:span[1]]:
         return False
-    active_owner = None
+    value = value.removesuffix('。')
+    if not value:
+        return False
+    active = set()
     for start, at, end in _quoted_value_positions(body, (span[0], len(body)), value):
-        state = _storage_assertion(body[start:at], value, body[at + len(value):end])
+        before = body[start:at]
+        heading_key = _storage_heading_key(body, at)
+        state = _storage_assertion(before, value, body[at + len(value):end],
+                                   heading_key if heading_key == key else None)
         if state in ('unrelated', 'historical', 'planned'):
             continue
         if body[end:end + 1] in ('?', '？'):
@@ -405,11 +446,13 @@ def _current_storage_in_quote(body: str, span, value: str, subject) -> bool:
             who = 'patient'
         if subject in ('patient', 'unspecified') and who != 'patient':
             continue
+        drug = _storage_drug_argument(before)
         if state == 'current' and at + len(value) <= span[1]:
-            active_owner = who
-        elif state != 'current' and who == active_owner:
-            active_owner = None
-    return active_owner is not None
+            active.add((who, drug))
+        elif state != 'current':
+            active = {(holder, name) for holder, name in active
+                      if holder != who or (drug is not None and name is not None and drug != name)}
+    return bool(active)
 
 
 def noncurrent_detail(body: str, evidence: str, value: str, *, key=None, subject=None) -> bool:
@@ -420,7 +463,7 @@ def noncurrent_detail(body: str, evidence: str, value: str, *, key=None, subject
     if span is None:
         return True
     if key in ('storage_place', 'storage_status') or (key is None and ('保管' in body or '保存' in body)):
-        return not _current_storage_in_quote(body, span, value, subject)
+        return not _current_storage_in_quote(body, span, value, subject, key)
     verdicts = []
     for start, at, end in _quoted_value_positions(body, span, value):
         before, tail = body[start:at], body[at + len(value):end]
