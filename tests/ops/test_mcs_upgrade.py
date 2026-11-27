@@ -1749,6 +1749,31 @@ def test_target_standalone_launcher_marks_extracted_updater_without_old_parent(u
     assert updater.journal_store.load_state(updater.STATE_PATH)['applying'] is None
 
 
+def test_target_standalone_guide_rechecks_runtime_before_apply(updater, prepared_run_log,
+                                                                monkeypatch, tmp_path):
+    from test_installed_standalone_update import _guide_world
+
+    launcher, repo, base, _target, config, installs, seen = _guide_world(
+        updater, monkeypatch, tmp_path, False)
+    monkeypatch.setenv('MCS_UPDATE_TARGET_STANDALONE', '1')
+    monkeypatch.delenv('MCS_UPDATE_RUNTIME_EXPECTED', raising=False)
+
+    def choose(_):
+        value = json.loads(config.read_text())
+        assert value['runtime_mode'] == 'standalone'
+        value['runtime_mode'] = 'hermes'
+        config.write_text(json.dumps(value))
+        return '2'
+    monkeypatch.setattr('builtins.input', choose)
+    command = [sys.executable, str(repo / 'mcs/ops/mcs_update.py'), 'plan', '--tag', 'v1.2.0']
+    rc = launcher.interactive_update(command, dict(os.environ), str(repo), installed=False)
+    assert rc == 2
+    assert [argv[2] for argv in seen] == ['plan', 'apply']
+    assert installs == [] and _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state['applied'] == [] and state['applying'] is None
+
+
 def test_target_standalone_cannot_be_combined_with_installed_entry(monkeypatch):
     launcher = _launcher()
     monkeypatch.setattr(launcher, '_git', lambda *_a, **_k: pytest.fail('invalid entry called Git'))
