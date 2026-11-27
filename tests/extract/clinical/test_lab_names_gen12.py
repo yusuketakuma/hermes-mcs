@@ -1295,6 +1295,7 @@ def test_a_firm_result_ends_a_specimen_section_at_a_blank_line(body):
 
 @pytest.mark.parametrize("body,evidence,name,value,unit", [
     ("採血 クレアチニン 12.7", "クレアチニン 1", "クレアチニン", "1", None),
+    ("採血 クレアチニン １－２", "クレアチニン １", "クレアチニン", "1", None),
     ("尿検査 蛋白 1+", "蛋白 1", "蛋白", "1", None),
     ("塩化カリウム 4.5mEq/L", "カリウム 4.5mEq/L", "カリウム", "4.5", "mEq/L"),
 ])
