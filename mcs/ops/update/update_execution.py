@@ -176,6 +176,33 @@ def _migrate_log_tail() -> None:
             ': ' + error.helper_code if error.helper_code else '')) from None
 
 
+def _live_ledger_compatible(path: str) -> bool:
+    """Read live WAL state without creating or migrating an unrelated database."""
+    try:
+        probe = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+        try:
+            if probe.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                return False
+            version = probe.execute("PRAGMA user_version").fetchone()[0]
+            if not 1 <= version <= ledger.SCHEMA_VERSION:
+                return False
+            tables = {row[0] for row in probe.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            import ledger_schema
+            if ({"attachments_v1", "read_marks_v1"} & tables
+                    or not ledger_schema.static_required_tables(version) <= tables):
+                return False
+            for table in ledger_schema.static_required_tables(version):
+                columns = {row[1] for row in probe.execute(f'PRAGMA table_info("{table}")')}
+                if not ledger_schema.static_required_columns(table, columns, version=version) <= columns:
+                    return False
+            return True
+        finally:
+            probe.close()
+    except (OSError, sqlite3.DatabaseError, ValueError):
+        return False
+
+
 def _postcheck(state: dict, expect_sha: str) -> list[str]:
     """Positive verification — 'no new error' alone is never success."""
     errors = []
@@ -192,8 +219,14 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
         # creation leaves behind, and SQLite would silently adopt it.
         if not os.path.isfile(LEDGER) or stat_result.st_size == 0:
             errors.append("ledger_invalid")
-        elif not ledger.valid_mcs_db(LEDGER):
+        elif not _live_ledger_compatible(LEDGER):
             errors.append("ledger_invalid")
+        else:
+            try:
+                db = ledger.Ledger(LEDGER)
+                db.db.close()
+            except Exception:
+                errors.append("ledger_open_failed")
     try:
         cfg = mcs_util.load_config()
         errs, _ = _check_environment(cfg)

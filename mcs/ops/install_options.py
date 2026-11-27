@@ -300,11 +300,14 @@ def _fresh_cron_state():
             if script is not None and not isinstance(script, str):
                 unknown = True
                 continue
-            if script is None and not isinstance(entry.get('prompt'), str):
-                unknown = True
-                continue
-            if (isinstance(script, str) and Path(script).name in scripts) or entry['name'] in names:
+            if entry['name'] in names or (isinstance(script, str) and Path(script).name in scripts):
                 return 'conflict'
+            if script is None and not isinstance(entry.get('prompt'), str):
+                complete = all(isinstance(entry.get(key), str)
+                               for key in ('repeat', 'next_run', 'deliver'))
+                if not complete:
+                    unknown = True
+                continue
     return 'unknown' if unknown else 'clear'
 
 

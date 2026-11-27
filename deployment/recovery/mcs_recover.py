@@ -314,6 +314,9 @@ def _cancel_unsent_notices():
         try:
             with con:
                 now = time.time()
+                tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if "notification_renders" not in tables:
+                    return 0
                 rows = con.execute(
                     "SELECT delivery_id,card_id,intent_event_id FROM notification_renders r "
                     "WHERE state='queued' AND NOT EXISTS ("
@@ -331,8 +334,13 @@ def _cancel_unsent_notices():
             return len(rows)
         finally:
             con.close()
-    except sqlite3.Error:
-        return 0
+    except sqlite3.Error as exc:
+        raise ValueError("notice_cancel_failed") from exc
+
+
+def _rollback_notice_cancel_needed(applying, head):
+    target = applying.get("sha") if applying.get("rollback") else applying.get("prev_sha")
+    return bool(target and head == target)
 
 def recover(if_stale=False):
     root = None
@@ -1242,7 +1250,7 @@ def _recover_legacy(if_stale=False):
                 # install.sh is never re-run unattended; the operator
                 # finishes it and acknowledges (mcs_update reinstall-done)
                 return escalate("reinstall_incomplete")
-            if applying.get("rollback"):
+            if _rollback_notice_cancel_needed(applying, head):
                 _cancel_unsent_notices()
             problems = mcs_recovery_services._reconcile_membership(
                 applying.get("manifest_snapshot")
@@ -1321,6 +1329,9 @@ def _finish(state, result, removed):
     mcs_recovery_core._check_recovery_root()
     # Keep the interrupted journal until its stopped workers are verified live.
     mcs_recovery_core._remove_marker()
+    applying = state.get("applying") or {}
+    if _rollback_notice_cancel_needed(applying, mcs_recovery_core._head()):
+        _cancel_unsent_notices()
     dkey = mcs_recovery_core._drainers_key(state, mcs_recovery_core._head())
     if mcs_recovery_core._last_report().get("drainers_key") == dkey:
         problems = mcs_recovery_services._restart_drainers(bounce=False)
@@ -1330,7 +1341,6 @@ def _finish(state, result, removed):
         mcs_recovery_core._report("recovery_incomplete", "restart:" + ",".join(problems),
                 drainers_key=dkey)
         return 1
-    applying = state.get("applying") or {}
     cid = applying.get("command_id")
     if cid:
         # consume the receipt — otherwise the next check re-applies the

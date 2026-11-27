@@ -282,6 +282,16 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
         raise UpdateError("membership: " + ",".join(problems))
 
 
+def rollback_notice_cancel_needed(applying: dict) -> bool:
+    """True only when the tree actually carries the pre-update code that will restart."""
+    try:
+        head = _head_sha()
+    except (UpdateError, OSError):
+        return False
+    target = applying.get("sha") if applying.get("rollback") else applying.get("prev_sha")
+    return bool(target and head == target)
+
+
 def _cancel_unsent_notices() -> int:
     """After a tree rollback, a queued never-attempted render still
     carries the newer renderer's spec (e.g. preview_text, post_actions),
@@ -297,6 +307,10 @@ def _cancel_unsent_notices() -> int:
         try:
             with con:
                 now = time.time()
+                tables = {row[0] for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if "notification_renders" not in tables:
+                    return 0
                 rows = con.execute(
                     "SELECT delivery_id,card_id,intent_event_id "
                     "FROM notification_renders r WHERE state='queued' "
@@ -322,8 +336,8 @@ def _cancel_unsent_notices() -> int:
             return len(rows)
         finally:
             con.close()
-    except sqlite3.Error:
-        return 0
+    except sqlite3.Error as exc:
+        raise UpdateError("notice_cancel_failed") from exc
 
 
 def _reconcile_restored() -> None:
