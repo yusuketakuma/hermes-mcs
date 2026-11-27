@@ -36,13 +36,13 @@ def test_plan_classification_keeps_observations(state, tag_errors, automatic, no
     assert (state, tag_errors) == before
 
 
-@pytest.mark.parametrize('context', ['external', 'installed_standalone', 'unverified'])
+@pytest.mark.parametrize('context', ['external', 'installed_standalone', 'target_standalone', 'unverified'])
 @pytest.mark.parametrize('errors,expected', [([], 'apply'), (['install_sh_changed'], 'reinstall')])
 def test_standalone_entry_context_is_explicit_and_preserves_other_holds(context, errors, expected):
     kwargs = dict(restore_pending=False, legacy_source=False, standalone=True,
                   automatic=False, noop=False, entry_context=context)
     result = preflight_decision([], errors, {}, **kwargs)
-    if context == 'installed_standalone':
+    if context in ('installed_standalone', 'target_standalone'):
         assert result['route'] == expected and result['blockers'] == []
     else:
         assert result['route'] == 'blocked' and result['blockers'] == ['standalone_external_apply']

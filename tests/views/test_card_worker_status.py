@@ -94,6 +94,43 @@ def test_unavailable_recorded_birth_is_reacquired_for_the_same_live_pid(tmp_path
     assert workers.status(tmp_path, 'lineworks', 'default')['state'] == 'started'
 
 
+def test_existing_birth_after_the_record_is_a_reused_pid_not_start_proof(tmp_path, process_birth):
+    workers.record(tmp_path, 'slack', 'primary', 'worker_started')
+    path = workers._path(tmp_path, 'slack', 'primary')
+    data = json.loads(path.read_text())
+    data['at'] = process_birth[0] - 1
+    data['started_at'] = process_birth[0]
+    path.write_text(json.dumps(data))
+    assert workers.status(tmp_path, 'slack', 'primary') == {
+        'state': 'unknown', 'reason': 'worker_start_unverified'}
+
+
+def test_normal_status_probes_process_birth_once(tmp_path, monkeypatch):
+    workers.record(tmp_path, 'slack', 'primary', 'worker_started')
+    calls = []
+
+    def probe(pid, *, deadline):
+        calls.append((pid, deadline))
+        return 1_790_000_000.0
+
+    monkeypatch.setattr(environment_diagnostics, 'process_started_at', probe)
+    assert workers.status(tmp_path, 'slack', 'primary')['state'] == 'started'
+    assert len(calls) == 1
+
+
+def test_status_rejects_a_probe_that_returns_after_its_deadline(tmp_path, monkeypatch):
+    workers.record(tmp_path, 'slack', 'primary', 'worker_started')
+    now = [10.0]
+    monkeypatch.setattr(workers.time, 'monotonic', lambda: now[0])
+
+    def slow(pid, *, deadline):
+        now[0] = deadline + 1
+        return 1_790_000_000.0
+
+    monkeypatch.setattr(environment_diagnostics, 'process_started_at', slow)
+    assert workers.status(tmp_path, 'slack', 'primary')['state'] == 'unknown'
+
+
 @pytest.mark.parametrize('failure', [None, OSError, ValueError])
 def test_current_birth_probe_failure_is_unknown(tmp_path, monkeypatch, process_birth, failure):
     workers.record(tmp_path, 'slack', 'primary', 'worker_started')

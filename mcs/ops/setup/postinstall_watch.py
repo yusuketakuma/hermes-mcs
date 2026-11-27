@@ -56,7 +56,7 @@ def _doctor_result(raw: bytes) -> dict:
 def _probe_commands(repo: Path) -> list[tuple[str, list[str]]]:
     setup = str(repo / "mcs" / "ops" / "mcs_setup.py")
     return [
-        ("check", [sys.executable, setup, "check"]),
+        ("check", [sys.executable, setup, "check", "--offline"]),
         ("doctor", [sys.executable, setup, "doctor", "--probe", "services", "--probe", "data", "--share"]),
     ]
 
@@ -75,10 +75,19 @@ def _write_at(directory: int, name: str, text: str) -> None:
             os.unlink(tmp, dir_fd=directory)
 
 
+def _open_home(home: str, flags: int) -> int:
+    """Open the install root; the installer permits one owned root alias."""
+    if os.path.islink(home):
+        if os.lstat(home).st_uid != os.getuid():
+            raise PermissionError("unsafe root link")
+        home = os.path.realpath(home)
+    return os.open(home, flags)
+
+
 def _publish(home: str, status: dict, brief: str | None) -> None:
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
     with ExitStack() as stack:
-        directory = os.open(home, flags)
+        directory = _open_home(home, flags)
         stack.callback(os.close, directory)
         for name in ("data", "postinstall-watch"):
             with suppress(FileExistsError):
@@ -178,10 +187,18 @@ def run(*, home: str, repo: str, duration: float = 600.0, interval: float = 60.0
         if once:
             return 1
         now = clock()
-        if now >= deadline:
-            out("導入後の動作確認: 正常終了を確認できませんでした。修正後に `mcs setup postinstall` を再実行してください")
-            return 1
-        sleep(min(interval, max(0.0, deadline - now)))
+        if now < deadline:
+            sleep(min(interval, max(0.0, deadline - now)))
         if clock() >= deadline:
+            expired = {"name": "deadline", "rc": 1, "reason": "deadline"}
+            status = {"version": 1, "cycle": cycle, "healthy": False,
+                      "healthy_streak": healthy_streak, "complete": False, "reason": "deadline",
+                      "checks": [{"name": p["name"], "rc": p["rc"]} for p in probes],
+                      "updated_at": time.time()}
+            try:
+                _publish(home, status, _agent_brief(cycle, [*probes, expired]))
+            except OSError:
+                out("確認結果の保存先を準備できませんでした。保存先の権限と空き容量を確認してください")
+                return 1
             out("導入後の動作確認: 正常終了を確認できませんでした。修正後に `mcs setup postinstall` を再実行してください")
             return 1

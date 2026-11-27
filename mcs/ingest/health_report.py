@@ -180,7 +180,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
             rejected = value.get('policy_rejected_failed')
             rejected_exhausted = value.get('policy_rejected_exhausted')
             unack_rejected = value.get('policy_rejected_unacknowledged')
-            if (len(policy_detail) != len(policy_fields) or not ack_detail
+            if (len(policy_detail) != len(policy_fields) or any(key not in value for key in ack_fields)
                     or value.get('policy_binding') != attachment_ocr.rejection_policy(cfg)
                     or not valid_hash(value.get('policy_binding'))
                     or any(type(n) is not int for n in (rejected, rejected_exhausted, unack_rejected))

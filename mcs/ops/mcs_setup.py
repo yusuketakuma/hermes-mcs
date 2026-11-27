@@ -956,7 +956,9 @@ def cmd_check(args) -> int:
     if progress_warning is not None:
         warnings.append(progress_warning)
     import jev_model_updates
-    for notice in (environment_diagnostics.jev_notice(cfg, HOME), jev_model_updates.check(cfg, HOME)):
+    jev_update_notice = (jev_model_updates.cached_notice(cfg, HOME)
+                         if getattr(args, "offline", False) else jev_model_updates.check(cfg, HOME))
+    for notice in (environment_diagnostics.jev_notice(cfg, HOME), jev_update_notice):
         if notice is not None:
             print(f"  情報: {notice}")
     for w in warnings:
@@ -1625,6 +1627,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("browser", help='専用Chromeを開き、本人がMCSへログインしたことを確認します')
     p.set_defaults(fn=cmd_browser, yes=True)
     p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')
+    p.add_argument("--offline", action="store_true", help='外部サービスへ新しく問い合わせず、保存済みの結果だけで確認します')
     p.set_defaults(fn=cmd_check, yes=True)
     p = sub.add_parser("postinstall", help='初期設定後の動作確認を繰り返し、問題時はAIエージェント向け修正依頼を作ります')
     p.add_argument("--duration", type=float, default=600.0, help='確認を続ける最長時間（秒、既定600）')

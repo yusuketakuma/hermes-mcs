@@ -289,7 +289,8 @@ def _apply_validate_args(tag: str | None, sha: str | None,
     if sha is not None and not update_discovery.COMMIT_SHA_RE.fullmatch(sha):
         print("更新先のコミット識別子が正しくありません:", sha)
         return 2
-    if os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(mcs_util.load_config()):
+    if (os.environ.get("MCS_UPDATE_REPO") and mcs_runtime.standalone(mcs_util.load_config())
+            and os.environ.get("MCS_UPDATE_TARGET_STANDALONE") != "1"):
         # the launcher's temp copy cannot drive the standalone host's
         # cooperative quiesce — standalone updates go through the host
         print("独立動作中のため、この方法では更新できません。UPGRADE_AGENT.mdの独立動作向け手順を確認してください（standalone_external_apply）")

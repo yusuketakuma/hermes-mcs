@@ -158,3 +158,46 @@ def test_public_setup_route_reaches_postinstall(monkeypatch):
     monkeypatch.setattr(postinstall_watch, "run", lambda **kwargs: seen.append(kwargs) or 0)
     assert mcs_cli.main(["setup", "postinstall", "--once"]) == 0
     assert seen and seen[0]["once"] is True
+
+
+def test_installer_accepted_private_root_symlink_is_used_but_child_symlink_stays_rejected(tmp_path):
+    target = tmp_path / "target-home"
+    target.mkdir(mode=0o700)
+    alias = tmp_path / "alias-home"
+    alias.symlink_to(target, target_is_directory=True)
+    runner, _ = _runner([(0, ""), (0, "")])
+    assert postinstall_watch.run(home=str(alias), repo="/synthetic", once=True, runner=runner) == 0
+    assert json.loads((target / "data/postinstall-watch/status.json").read_text())["healthy"] is True
+
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    (target / "data/postinstall-watch").rename(target / "data/postinstall-watch.saved")
+    (target / "data/postinstall-watch").symlink_to(outside, target_is_directory=True)
+    def always_ok(*_args):
+        return {"rc": 0}
+    assert postinstall_watch.run(home=str(alias), repo="/synthetic", once=True, runner=always_ok) == 1
+    assert list(outside.iterdir()) == []
+
+
+def test_deadline_before_required_streak_publishes_failed_status_and_brief(tmp_path):
+    now = [0.0]
+    runner, _ = _runner([(0, ""), (0, "")])
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    assert postinstall_watch.run(home=str(tmp_path), repo="/synthetic", duration=5, interval=5,
+                                 stable=2, runner=runner, sleep=sleep, clock=clock,
+                                 out=lambda _: None) == 1
+    status = json.loads((tmp_path / "data/postinstall-watch/status.json").read_text())
+    assert status["healthy"] is False and status["complete"] is False and status["reason"] == "deadline"
+    assert status["healthy_streak"] == 1
+    assert "deadline" in (tmp_path / "data/postinstall-watch/agent-repair-brief.md").read_text()
+
+
+def test_probe_check_uses_offline_mode():
+    commands = dict(postinstall_watch._probe_commands(Path("/synthetic/repo")))
+    assert commands["check"][-1] == "--offline"

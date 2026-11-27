@@ -138,7 +138,9 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         legacy_source=_git(["cat-file", "-e", "HEAD:mcs/ops/mcs_update.py"]).returncode != 0,
         standalone=mcs_runtime.standalone(cfg),
         automatic=_update_mode(cfg) == "auto", noop=cur_sha == target_sha,
-        entry_context="installed_standalone" if installed else "external")
+        entry_context=("installed_standalone" if installed else
+                       "target_standalone" if os.environ.get("MCS_UPDATE_TARGET_STANDALONE") == "1"
+                       else "external"))
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
     bridge_needed = False

@@ -573,3 +573,16 @@ def test_reason_guidance_survives_runtime_specific_action_overrides(tmp_path, mo
     report = _local_deferred(tmp_path, local_deferred_reasons={"memory_low": 1})
     rows = health_watch._reason_rows({**report, "attachment_ocr": report, **mode}, [report["reason"]])
     assert rows[1] == "　→ " + health_watch._OCR_LOCAL_DEFER_JA["memory_low"][1] + "。文字起こしの失敗を示すものではありません"
+
+
+def test_policy_with_superseded_but_missing_ack_counts_is_corrupt_not_keyerror(tmp_path):
+    import attachment_ocr
+
+    diagnostic = {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": 1,
+                  "failure_cohort": "0" * 64, "superseded_acknowledgements": 1,
+                  "policy_binding": attachment_ocr.rejection_policy(CFG),
+                  "policy_rejected_failed": 1, "policy_rejected_exhausted": 1,
+                  "policy_rejected_unacknowledged": 0}
+    _status(tmp_path, pending_failed=1, **diagnostic)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}

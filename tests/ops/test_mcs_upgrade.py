@@ -1,6 +1,8 @@
 """Upgrade path — scripts/mcs_upgrade.py launcher + mcs_update plan /
 reinstall. Fully synthetic: temp git repos, stubbed launchctl/install.sh.
 """
+from contextlib import redirect_stdout
+import io
 import update_apply
 import update_cli
 import update_execution
@@ -1699,3 +1701,55 @@ def test_installed_plan_exit_code_reports_blockers(tmp_path, monkeypatch, capfd,
     args = type('Args', (), {'cmd': 'plan'})()
     assert launcher._installed_update(args, str(tmp_path.resolve()), 'v1.2.0') == code
     assert json.loads(capfd.readouterr().out) == report
+
+
+def test_target_standalone_launcher_marks_extracted_updater_without_old_parent(updater, prepared_run_log,
+                                                                                  monkeypatch, tmp_path):
+    from test_installed_standalone_update import _guide_world
+
+    launcher, repo, base, target, config, installs, _seen = _guide_world(
+        updater, monkeypatch, tmp_path, False)
+
+    def extract(_repo, _tag, staged, local_candidate=False):
+        entry = Path(staged) / 'mcs/ops/mcs_update.py'
+        entry.parent.mkdir(parents=True)
+        entry.write_text('# synthetic target updater entry\n')
+
+    seen = []
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        if len(argv) > 2 and argv[0] == sys.executable and argv[1].endswith('mcs/ops/mcs_update.py'):
+            seen.append((list(argv), dict(kwargs['env'])))
+            output = io.StringIO()
+            with redirect_stdout(output), monkeypatch.context() as child:
+                for key in ('MCS_UPDATE_REPO', 'MCS_UPDATE_TARGET_STANDALONE',
+                            'MCS_UPDATE_RUNTIME_EXPECTED'):
+                    if key in kwargs['env']:
+                        child.setenv(key, kwargs['env'][key])
+                    else:
+                        child.delenv(key, raising=False)
+                child.setattr(sys, 'argv', [argv[1], *argv[2:]])
+                rc = updater.main(argv[2:])
+            return subprocess.CompletedProcess(argv, rc, output.getvalue(), '')
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(launcher, 'extract', extract)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, '_run_updater', run)
+    assert launcher.main(['--repo', str(repo), '--no-fetch', '--target-standalone',
+                          'apply', '--to', 'v1.2.0']) == 0
+    assert [argv[2] for argv, _env in seen] == ['apply', 'plan']
+    assert all(env.get('MCS_UPDATE_TARGET_STANDALONE') == '1' for _argv, env in seen)
+    assert seen[0][1].get('MCS_UPDATE_RUNTIME_EXPECTED') == 'standalone'
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state['applied'][-1]['sha'] == target and state['applying'] is None
+    assert updater.main(['recover']) == 0
+    assert updater.journal_store.load_state(updater.STATE_PATH)['applying'] is None
+
+
+def test_target_standalone_cannot_be_combined_with_installed_entry(monkeypatch):
+    launcher = _launcher()
+    monkeypatch.setattr(launcher, '_git', lambda *_a, **_k: pytest.fail('invalid entry called Git'))
+    assert launcher.main(['--installed-standalone', '--target-standalone', 'plan', '--to', 'v1.2.0']) == 2

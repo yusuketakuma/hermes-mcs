@@ -207,3 +207,33 @@ def test_consolidation_cannot_skip_verifying_the_legacy_options(tmp_path, monkey
     assert (config.read_bytes(), legacy.read_bytes()) == before
     assert not list((tmp_path / 'data').glob('.install-options-pre-v3-*'))
     assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()
+
+
+def test_interruption_after_single_commit_retires_only_the_matching_legacy_record(tmp_path, monkeypatch):
+    _provider_root(tmp_path, monkeypatch)
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'v': 1, 'install_args': ['--no-llm'], 'future_option': {'retained': False}})
+    original = legacy.read_bytes()
+    needs_copy, base, _options = update_migrations.plan(tmp_path / 'config.json', legacy)
+    assert needs_copy and update_migrations.apply(tmp_path / 'config.json', legacy, base, lambda: None)
+    retiring = install_options.retire_legacy
+
+    def interrupted(path, digest):
+        raise _Crash('synthetic interruption')
+
+    monkeypatch.setattr(install_options, 'retire_legacy', interrupted)
+    with pytest.raises(_Crash):
+        update_migrations.migrate_provider_settings(tmp_path)
+    assert legacy.read_bytes() == original
+    assert (tmp_path / 'data' / '.provider-settings-authority.json').exists()
+
+    monkeypatch.setattr(install_options, 'retire_legacy', retiring)
+    assert update_migrations.migrate_provider_settings(tmp_path) is True
+    archive, = (tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')
+    assert archive.read_bytes() == original and not legacy.exists()
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+
+    put(legacy, {'v': 1, 'install_args': ['--no-brew']})
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+    assert json.loads(legacy.read_text())['install_args'] == ['--no-brew']
+    assert list((tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')) == [archive]

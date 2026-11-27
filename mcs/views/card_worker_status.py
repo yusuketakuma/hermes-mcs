@@ -1,7 +1,8 @@
 """配送workerの起動証拠を非機密の状態とコード版で照合する。"""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
+import fcntl
 import hashlib
 import json
 import math
@@ -31,6 +32,17 @@ def _path(root, transport, profile):
     return Path(root) / 'worker_status' / f'{transport}-{key}.json'
 
 
+@contextmanager
+def _write_fence(directory):
+    """Serialize every writer of one worker-status directory."""
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def record(root, transport, profile, reason):
     """Write a bounded status witness; never store profile names or identifiers."""
     if reason not in REASONS:
@@ -41,55 +53,72 @@ def record(root, transport, profile, reason):
     target.parent.mkdir(mode=0o700, exist_ok=True)
     if target.parent.is_symlink():
         raise ValueError('worker_status_path_invalid')
-    pid = os.getpid()
-    try:
-        started_at = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1)
-    except (OSError, ValueError, TypeError, OverflowError):
-        started_at = None
-    value = {'version': VERSION, 'reason': reason, 'pid': pid,
-             'at': time.time(), 'started_at': started_at}
-    atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
+    with _write_fence(target.parent):
+        pid = os.getpid()
+        try:
+            started_at = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1)
+        except (OSError, ValueError, TypeError, OverflowError):
+            started_at = None
+        value = {'version': VERSION, 'reason': reason, 'pid': pid,
+                 'at': time.time(), 'started_at': started_at}
+        atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
+
+
+def _read_witness(p):
+    if p.is_symlink() or p.stat().st_size > 2048:
+        raise ValueError('invalid')
+    value = json.loads(p.read_text())
+    if not isinstance(value, dict):
+        raise ValueError('invalid')
+    return value
+
+
+def _valid_identity(value):
+    pid = value.get('pid')
+    recorded_at = value.get('at')
+    return (value.get('version') == VERSION and value.get('reason') in REASONS
+            and type(pid) is int and pid > 0
+            and type(recorded_at) in (int, float) and math.isfinite(recorded_at) and recorded_at > 0)
+
+
+def _birth(pid, deadline):
+    os.kill(pid, 0)
+    birth = environment_diagnostics.process_started_at(pid, deadline=deadline)
+    if type(birth) not in (int, float) or not math.isfinite(birth) or birth <= 0:
+        return None
+    return birth
+
+
+def _repair_missing_started_at(p, deadline):
+    """Repair one missing witness under the writer fence; return (repaired, probed birth)."""
+    value = _read_witness(p)
+    if not _valid_identity(value):
+        return False, None
+    if value.get('started_at') is not None:
+        return False, None
+    birth = _birth(value['pid'], deadline)
+    if birth is None or birth > value['at'] or time.monotonic() >= deadline:
+        return False, birth
+    current = _read_witness(p)
+    if current != value:
+        return False, birth
+    atomic_write(str(p), lambda f: json.dump({**value, 'started_at': birth}, f), mode=0o600)
+    return True, birth
 
 
 def repair_missing_started_at(path):
-    """Re-acquire a missing started_at once for a live record pid.
+    """Re-acquire a missing started_at once for the same live record pid.
 
-    A record written while `ps` exceeded its one-second budget carries
-    started_at=None; that witness can never validate, so the worker stays
-    unverified until the next gateway restart. When the same pid is still
-    alive its start time is provable again — fill exactly that field, leaving
-    every other byte of the evidence untouched. Returns True when the file
-    now carries a verifiable started_at."""
+    A process born after the record cannot be its writer (PID reuse), and a
+    malformed present stamp is evidence rather than a value to overwrite."""
     try:
         p = Path(path)
+        deadline = time.monotonic() + 1
         if p.is_symlink() or p.stat().st_size > 2048:
             return False
-        value = json.loads(p.read_text())
-        if (not isinstance(value, dict) or value.get('version') != VERSION
-                or value.get('reason') not in REASONS):
-            return False
-        pid = value.get('pid')
-        if type(pid) is not int or pid <= 0:
-            return False
-        started_at = value.get('started_at')
-        recorded_at = value.get('at')
-        if type(recorded_at) not in (int, float) or not math.isfinite(recorded_at) or recorded_at <= 0:
-            return False
-        os.kill(pid, 0)
-        birth = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 3)
-        if type(birth) not in (int, float) or not math.isfinite(birth) or birth <= 0:
-            return False
-        if birth > recorded_at:
-            return False  # a pid reused after this record cannot be its writer
-        if type(started_at) in (int, float) and math.isfinite(started_at) and started_at > 0:
-            return started_at == birth  # present evidence is never overwritten
-        if started_at is not None:
-            return False  # a malformed stamp is evidence, never overwritten
-        current = json.loads(p.read_text())
-        if current != value:
-            return False  # rewritten since our read: leave the newer evidence alone
-        atomic_write(str(p), lambda f: json.dump({**value, 'started_at': birth}, f), mode=0o600)
-        return True
+        with _write_fence(p.parent):
+            repaired, _birth_value = _repair_missing_started_at(p, deadline)
+            return repaired
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return False
 
@@ -98,23 +127,26 @@ def status(root, transport, profile):
     """Read startup evidence; missing, old-version and dead-process records fail closed."""
     try:
         p = _path(root, transport, profile)
+        deadline = time.monotonic() + 1
         if p.is_symlink() or p.stat().st_size > 2048:
             raise ValueError('invalid')
-        repair_missing_started_at(p)
-        value = json.loads(p.read_text())
-        if not isinstance(value, dict) or value.get('reason') not in REASONS:
+        birth = None
+        with _write_fence(p.parent):
+            repaired, birth = _repair_missing_started_at(p, deadline)
+            value = _read_witness(p)
+        if value.get('reason') not in REASONS:
             raise ValueError('invalid')
         if value.get('version') != VERSION:
             return {'state': 'unknown', 'reason': 'worker_restart_required'}
-        pid = value.get('pid')
-        if type(pid) is not int or pid <= 0:
+        if not _valid_identity(value):
             raise ValueError('invalid')
         started_at = value.get('started_at')
         if (type(started_at) not in (int, float) or not math.isfinite(started_at)
-                or started_at <= 0):
+                or started_at <= 0 or started_at > value['at']):
             raise ValueError('invalid')
-        os.kill(pid, 0)
-        if environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1) != started_at:
+        if birth is None or not repaired:
+            birth = _birth(value['pid'], deadline)
+        if time.monotonic() >= deadline or birth != started_at:
             raise ValueError('invalid')
         return {'state': 'started' if value['reason'] == 'worker_started' else 'disabled',
                 'reason': value['reason']}
