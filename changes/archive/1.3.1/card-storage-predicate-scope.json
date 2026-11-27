@@ -1,8 +1,8 @@
 {
   "category": "fixed",
   "title": "副作用なしの記載が続くと通知カードから薬の保管場所が消える問題を修正",
-  "summary": "薬の保管場所に続けて副作用や残薬がないと書かれていても、通知カードに保管場所を表示します。「保管しておりません」と書かれた場所は表示しません。",
+  "summary": "薬の保管場所に続けて「副作用なし」「残薬なし」「残薬は未確認」と書かれていても、現在の保管場所を通知カードに表示します。",
   "upgrade": "追加操作は不要です。更新後に作成する通知カードに反映されます。",
-  "details": ["引用が保管場所だけでも、元の投稿で保管を否定していれば、現在の保管場所として表示しません。"],
-  "refs": ["mcs/patients/patient_context.py", "tests/notify/test_pharmacy_card_lines.py"]
+  "details": ["引用が場所名だけでも、元の投稿で保管を否定している場合や、中止して再開していない場合は表示しません。同じ場所での保管再開や、以前から現在までの継続が明記されていれば、その場所を表示します。"],
+  "refs": ["mcs/patients/patient_context.py", "mcs/views/structured_view.py", "tests/notify/test_pharmacy_card_lines.py"]
 }
