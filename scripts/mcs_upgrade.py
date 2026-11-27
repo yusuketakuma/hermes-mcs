@@ -467,7 +467,7 @@ def interactive_update(cmd, env, repo, *, installed=False):
         apply_cmd.extend(_installed_plan_pins(report, cmd, repo))
     # Keep the approved record separate from temporary repair/install flags.
     apply_env = dict(env)
-    if installed:
+    if installed or apply_env.get('MCS_UPDATE_TARGET_STANDALONE') == '1':
         apply_env['MCS_UPDATE_RUNTIME_EXPECTED'] = 'standalone'
     if route == "reinstall":
         apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))
@@ -538,6 +538,8 @@ def _main(argv=None) -> int:
     ap = _JapaneseParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default=".", help="MCSの保存先フォルダ（省略時: 現在のフォルダ）")
     ap.add_argument('--installed-standalone', action='store_true', help=argparse.SUPPRESS)
+    ap.add_argument('--target-standalone', action='store_true',
+                    help='移行先の更新プログラムで独立動作を更新する（提供元設定の保存形式移行でのみ使用）')
     ap.add_argument("--no-fetch", action="store_true",
                     help="版情報の事前取得を省き、取得済みの版情報を使う（apply の版の照合は通信する）")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -568,6 +570,9 @@ def _main(argv=None) -> int:
             or args.cmd not in ('guide', 'plan', 'apply')
             or getattr(args, 'keep_hermes_checkout', None)):
         print('この起動方法では単独実行の更新を確認できません。導入済みの mcs update から実行してください。')
+        return 2
+    if args.target_standalone and (args.installed_standalone or args.cmd not in ('guide', 'plan', 'apply')):
+        print('移行先の更新プログラムによる独立動作の更新は plan・apply・guide でだけ実行できます。')
         return 2
     if candidate_sha is not None:
         if not all(isinstance(value, str) and COMMIT_SHA_RE.fullmatch(value)
@@ -651,6 +656,11 @@ def _main(argv=None) -> int:
             env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
             env.pop("MCS_UPDATE_OPTIONS_EXPECTED", None)
             env.pop('MCS_UPDATE_RUNTIME_EXPECTED', None)
+            env.pop('MCS_UPDATE_TARGET_STANDALONE', None)
+            if args.target_standalone:
+                env['MCS_UPDATE_TARGET_STANDALONE'] = '1'
+                if args.cmd == 'apply':
+                    env['MCS_UPDATE_RUNTIME_EXPECTED'] = 'standalone'
             if getattr(args, 'keep_hermes_checkout', None):
                 env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
             try:

@@ -972,14 +972,16 @@ P0完了条件: 現行経路対応表、実lock DAG、bridge対象、backend int
 |W05|新`mcs/core/runtime_entry.py`＋各launcher|Q寿命gate、prepared fence、世代/boot、quarantine admission|import途中の切替禁止、旧process拒否、全入口coverage|
 |W06|`update_services.py`、service_management、standalone、Hermes/LINE WORKS入口|profile別drain/退役/起動観測、独立owner起動|R外drain、強制kill非流用、自己deadlockなし|
 |W07|新`adapters/sdc/release_auto_transport.py`|固定JSON v2 path＋別artifact stream|16KiB既存上限維持、256MiB stream/hash/timeout/no-redirect|
-|W08|新`mcs/ops/release_auto_owner.py`＋既存owner private dispatch|stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|正常経路が最後まで前進、未知時は証拠保持|
-|W09|`mcs/ops/update_apply.py`、既存repository/journal primitives|private `apply_code_only_v2(capability)`、既存v1bailとは異なるforward-onlypolicy|post-merge失敗でreset/DBrestoreゼロ、v1回帰維持|
-|W10|新`mcs/ops/release_runtime_proof.py`、独立recovery generation|quarantine/activation/proof/観測的終結|HEAD/PIDだけ不可、boot/loadedsource/heartbeatの束縛|
+|W08|新`mcs/ops/update/release_auto_owner.py`＋既存owner private dispatch|stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|正常経路が最後まで前進、未知時は証拠保持|
+|W09|`mcs/ops/update/update_apply.py`、既存repository/journal primitives|private `apply_code_only_v2(capability)`、既存v1bailとは異なるforward-onlypolicy|post-merge失敗でreset/DBrestoreゼロ、v1回帰維持|
+|W10|新`mcs/ops/update/release_runtime_proof.py`、独立recovery generation|quarantine/activation/proof/観測的終結|HEAD/PIDだけ不可、boot/loadedsource/heartbeatの束縛|
 |W11|新`scripts/development/release_publish.py`、`release-publish.yml`|01のidentify/package/authorize/publish/verify-register、正式受入票|publisher fork拒否、samebytesretry、公開後証拠、OIDC/ID検証|
 |W12|`ci.yml`、`release-notes.yml`、既存release generators|request/evidence出力、日本語ノート維持、draft責任移管、event tag限定sync|新旧workflow競合なし、全suite強制方針変更なし|
 |W13|既存SDC backend（実repoを確認して実装）|03のtransaction/table/routes、CAS/cohort/grant/result|clientと共通vector、tenant分離、署名key分離、rate budgets|
 |W14|`update_cli.py`、scheduler、status/doctor表示|顧客v2ルーティング、legacy auto抑止、固定状態/理由、outboxretry|autoモードだけで同意せず、unknownを正常にしない|
 |W15|tests、docs、changes記録|05の受入、既存回帰、現行受入票|実測/再利用/未実行を明示、外部操作未実施|
+
+配備した復旧世代を点検するときは、そのディレクトリで `python -B -m mcs.ops.release_auto_recovery verify --generation-dir "$PWD"` を実行する。`-B` は、照合対象のディレクトリに Python がバイトコードを書き込むのを防ぐ。
 
 新helperは実装が既存責務へ自然に収まる場合統合してよい。ただし別状態正本・別Updater・別認可体系を作らない。pathの変更は本書対応表とtest importを更新し、ファイル名だけ違う重複実装を残さない。
 interfaces.pyiは関数境界の仕様であり、...のまま製品へ入れて完了としない。DTOはschemaからclosedな型へ落とし、実装内部で任意dictが権限を持つ状態を避ける。
@@ -1260,7 +1262,7 @@ GitHub公式の保証と、この製品が独自に定めた同意・予算・�
 |SRC02|mcs/ops/mcs_update.py / update_apply.py|facade分割、borrowed実適用接続、共通bailoutはrollbackを持つ|
 |SRC03|mcs/ops/release_apply_owner.py|TTY、live factory、G/U/R下の通信、successor pending、readiness unknown|
 |SRC04|adapters/sdc/release_state.py / release_apply_contract.py|v1 unknownとself/individual制限、SPENT/署名契約|
-|SRC05|mcs/ops/update_cli.py / mcs/ops/update/update_discovery.py|git tag最大値→delay→auto。公開済み判定とは別|
+|SRC05|mcs/ops/update/update_cli.py / mcs/ops/update/update_discovery.py|git tag最大値→delay→auto。公開済み判定とは別|
 |SRC06|mcs/ops/release_owner_source.py / adapters/sdc/release_artifact.py|広い完全性manifest、全pack検査、target内の実依存lock必須|
 |SRC07|deployment/一覧 / sdc-release-lock.schema.json / sdc-release-owner.json|実依存lockは基準treeにない。source manifestで代替不可|
 |SRC08|deployment/recovery/mcs_recover.pyとSUPPORT_FILES|hash固定4support、generation directory、旧.prev。配備単位は一式|
@@ -1270,7 +1272,7 @@ GitHub公式の保証と、この製品が独自に定めた同意・予算・�
 |SRC12|adapters/sdc/storage.py（590–810）|A→M/O、G/U/Rの別寿命、nonblocking flock、private file境界|
 |SRC13|mcs/ops/install_options.py（1–175）|config_edit._edit_lock、raw snapshot/CAS。config_editの物理pathはP0で解決|
 |SRC14|mcs_standalone/service.py（1–140）/ update_services.py|status TTL/host generation、restart intent、3worker、quiesce/起動|
-|SRC15|mcs/ops/release_apply_checks.py|private backup/preflight、artifact/Git検査、child ticket、control root|
+|SRC15|mcs/ops/update/release_apply_checks.py|private backup/preflight、artifact/Git検査、child ticket、control root|
 |SRC16|tests/ops/test_release_apply_owner.py|既存capability/fork/FD/ticket試験。今回製品としては未実行|
 
 GitHub searchで0件・incomplete_results=trueになった結果を不存在の証拠にしていない。直接pathの404は「そのpathにない」という意味だけで、移動先を未読のまま断定しない。

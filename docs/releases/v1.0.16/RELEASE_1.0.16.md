@@ -65,12 +65,12 @@ release-mcs正本作成済み。元repository-releaseの共通本文と参照2�
 | 確認した実装 | 設計への反映 |
 |---|---|
 | [mcs_drug](../../../mcs/ops/mcs_drug.py)は私有path/SHAを検証してlookup/search/compareを実行 | チャットからCLIや任意pathを呼び出さず、snapshot読取りへ接続する |
-| [drug_map.current_refs](../../../mcs/extract/drug_map.py)は現行source/辞書世代へ束縛したDB注釈を返す | DM-1/3はこの検証を共有し、読取り側で私有辞書を読み直さない |
+| [drug_map.current_refs](../../../mcs/medications/drug_map.py)は現行source/辞書世代へ束縛したDB注釈を返す | DM-1/3はこの検証を共有し、読取り側で私有辞書を読み直さない |
 | [run_check](../../../mcs/ingest/run_check.py)の導出後にrollupを更新する | 新カタログ公開と世代確定をこの書込み側へ配置する |
 | [ledger.publish_snapshot](../../../mcs/core/ledger.py)はbackup・検証・atomic renameで公開する | カタログと候補を同じsnapshotへ入れ、辞書用の独立公開ファイル/DBを増やさない |
 | [semantic_projection](../../../mcs/semantic/semantic_projection.py)には文章中の語から薬名を簡易抽出する処理がある | 未照合の原因を辞書不足と決め付けず、抽出名と根拠を比較する。別名を自動追加しない |
-| [mcs_operations](../../../mcs/ops/mcs_operations.py)のextract_feedbackはextract_llmを対象にする | 他のsource_kindへ報告するときは、対象artifactと再処理先を明示的に対応させる。旧報告を無条件に別世代へ適用しない |
-| [rollup](../../../mcs/extract/rollup.py)は表層名ごとの最新状態をまとめる | DM-3の全履歴をrollupだけから復元せず、現行投稿・抽出結果を読む |
+| [mcs_operations](../../../mcs/ops/commands/mcs_operations.py)のextract_feedbackはextract_llmを対象にする | 他のsource_kindへ報告するときは、対象artifactと再処理先を明示的に対応させる。旧報告を無条件に別世代へ適用しない |
+| [rollup](../../../mcs/patients/rollup.py)は表層名ごとの最新状態をまとめる | DM-3の全履歴をrollupだけから復元せず、現行投稿・抽出結果を読む |
 | 共通[spec](../../../adapters/common/spec.py)はDiscord由来の文字数・部品数予算を持つ | Slackの上限に合わせて共通契約を一律に緩めず、adapterごとに表示量を調整する |
 | [LINE WORKS actions](../../../adapters/lineworks/actions.py)はDM入力・番号選択・actor別sessionを持つ | 入力中の患者切替・取消・期限切れを扱い、古い入力を新しい対象へ適用しない |
 

@@ -48,6 +48,22 @@ def test_interrupted_ocr_ack_read_waits_for_next_check(tmp_path, monkeypatch):
     assert health_report._ocr_ack_current(tmp_path, {}) == "attachment_ocr_ack_recheck_incomplete"
 
 
+def test_legacy_ack_status_missing_superseded_count_is_compatible_only_at_zero(tmp_path, monkeypatch):
+    import sqlite3
+    import attachment_ocr_ack
+
+    sqlite3.connect(tmp_path / "ledger.db").close()
+    current = {"pending_failed": 1, "queue_status": "known", "failure_reason_counts": {"timeout": 1},
+               "exhausted_failed": 1, "acknowledged_exhausted": 1, "unacknowledged_pending_failed": 0,
+               "superseded_acknowledgements": 0, "failure_cohort": "0" * 64}
+    monkeypatch.setattr(attachment_ocr_ack, "database_identity", lambda db: "synthetic-db")
+    monkeypatch.setattr(attachment_ocr_ack, "failure_counts", lambda *a, **k: dict(current))
+    value = {key: item for key, item in current.items() if key != "superseded_acknowledgements"}
+    assert health_report._ocr_ack_current(tmp_path, value, None) is None
+    current["superseded_acknowledgements"] = 1
+    assert health_report._ocr_ack_current(tmp_path, value, None) == "attachment_ocr_ack_reconfirm_required"
+
+
 def test_disabled_never_reads_status_and_unknown_config_is_not_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report.safe_io, "read_private_bytes", lambda *args, **kwargs:
                         pytest.fail("disabled OCR read status"))
@@ -440,7 +456,9 @@ def test_validated_partial_failure_snapshot_reaches_cause_specific_alert(tmp_pat
     lines = health_watch._reason_rows({'attachment_ocr': ocr}, ['attachment_ocr_processing_failed'])
     text = '\n'.join(lines)
     assert '表の行列対応を確定できず未採用' in text
-    assert '観測範囲' in text and '1件' in text and '自動再試行が上限' in text
+    assert '観測範囲' in text and '1件' in text and '自動再試行が上限' not in text
+    assert '再試行を続ける記録' not in text
+    assert '未解消の記録が2件' in text
     assert 'doctor --share' in text and '元の添付' in text
     assert 'OCRの設定・実行環境' not in text
     assert '全件' not in text and 'すべて' not in text
@@ -571,3 +589,16 @@ def test_reason_guidance_survives_runtime_specific_action_overrides(tmp_path, mo
     report = _local_deferred(tmp_path, local_deferred_reasons={"memory_low": 1})
     rows = health_watch._reason_rows({**report, "attachment_ocr": report, **mode}, [report["reason"]])
     assert rows[1] == "　→ " + health_watch._OCR_LOCAL_DEFER_JA["memory_low"][1] + "。文字起こしの失敗を示すものではありません"
+
+
+def test_policy_with_superseded_but_missing_ack_counts_is_corrupt_not_keyerror(tmp_path):
+    import attachment_ocr
+
+    diagnostic = {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": 1,
+                  "failure_cohort": "0" * 64, "superseded_acknowledgements": 1,
+                  "policy_binding": attachment_ocr.rejection_policy(CFG),
+                  "policy_rejected_failed": 1, "policy_rejected_exhausted": 1,
+                  "policy_rejected_unacknowledged": 0}
+    _status(tmp_path, pending_failed=1, **diagnostic)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}

@@ -13,7 +13,7 @@
 | 表示・動作 | 根拠 |
 |---|---|
 | 投稿ごとの要約・スタンプ・原文の順 | [通知の表示モデル](../../../mcs/notify/notify_cards.py)、[Slackカード描画](../../../adapters/slack/cards.py) |
-| 原文の折りたたみと、収まらない投稿のスレッド表示 | [Slackの表示予算](../../../mcs/notify/present_slack.py)、[利用者ガイド](../../guides/USER_GUIDE.md) |
+| 原文の折りたたみと、収まらない投稿のスレッド表示 | [Slackの表示予算](../../../mcs/notify/presentation/present_slack.py)、[利用者ガイド](../../guides/USER_GUIDE.md) |
 | 確認・担当・タスクと操作メニュー | [カードの操作](../../../mcs/notify/notify_cards.py)、[Slackの操作処理](../../../adapters/slack/actions.py) |
 | 完全合成の表示例と描画方法 | [ギャラリーの生成元](../../../scripts/development/generate_slack_gallery.py)、[ギャラリー更新手順](../../screenshots/slack-gallery/README.md) |
 

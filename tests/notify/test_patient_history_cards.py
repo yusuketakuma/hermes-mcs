@@ -230,6 +230,81 @@ def test_pending_legacy_undated_reply_stays_out_of_mixed_live_notification(led, 
 
 
 
+@pytest.mark.parametrize("transport", ["discord", "lineworks"])
+@pytest.mark.parametrize("card_thread", [False, True])
+def test_unsent_history_parent_reroutes_only_the_live_reply(led, transport, card_thread):
+    from notify_testkit import _msg
+
+    cfg = ({**LINEWORKS, "notify": {**LINEWORKS["notify"], "card_thread": card_thread}}
+           if transport == "lineworks" else
+           {**CFG, "notify": {**CFG["notify"], "card_thread": card_thread}})
+    _patient(led)
+    _msg(led, 100, body="合成の履歴親", ts=int(NOW) - 10)
+    _msg(led, 102, parent=100, body="合成の新規返信", ts=int(NOW) + 1)
+    event = _intent(led, payload={"message_ids": [100, 102]})
+    assert _dispatch(led, event, cfg)["cards"] == 1
+    parent_card = _card(led)
+    assert parent_card["root_message_id"] == 100
+    parent_render = _latest_render(led)
+
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+        initial_import_state.classify_tx(led, 1, [100], NOW)
+    if transport == "lineworks":
+        denied = _apply(led, envelopes.transport_begin(_claim(parent_render)), cfg)
+    else:
+        denied = _begin(led, parent_render, cfg=cfg)
+    assert not denied["granted"] and denied["error"] == "denied_history_notification_disabled"
+
+    first = _dispatch(led, event, cfg)
+    second = _dispatch(led, event, cfg)
+    assert first["resealed"] and second["resealed"]
+    cards = led.db.execute(
+        "SELECT * FROM notification_cards WHERE kind='thread' ORDER BY card_id").fetchall()
+    assert len(cards) == 2
+    assert cards[0]["delivery_state"] == "revoked"
+    assert cards[1]["root_message_id"] == 102
+    assert cards[1]["delivery_state"] == "pending"
+    renders = led.db.execute(
+        "SELECT r.* FROM notification_renders r JOIN notification_cards c USING(card_id) "
+        "WHERE c.root_message_id=102 ORDER BY r.render_rev").fetchall()
+    assert len(renders) == 1 and renders[0]["state"] == "queued"
+    shown = json.loads(led.db.execute(
+        "SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+        (renders[0]["manifest_id"],)).fetchone()[0])
+    assert shown == [102]
+    assert not led.db.execute("SELECT 1 FROM notification_delivery_attempts WHERE state IN ('granted','delivered','unknown')").fetchone()
+
+
+@pytest.mark.parametrize("transport", ["discord", "lineworks"])
+@pytest.mark.parametrize("card_thread", [False, True])
+def test_unknown_parent_result_is_never_rerouted_or_resent(led, transport, card_thread):
+    from notify_testkit import _msg
+
+    cfg = ({**LINEWORKS, "notify": {**LINEWORKS["notify"], "card_thread": card_thread}}
+           if transport == "lineworks" else
+           {**CFG, "notify": {**CFG["notify"], "card_thread": card_thread}})
+    _patient(led)
+    _msg(led, 100, body="合成の履歴親", ts=int(NOW) - 10)
+    _msg(led, 102, parent=100, body="合成の新規返信", ts=int(NOW) + 1)
+    event = _intent(led, payload={"message_ids": [100, 102]})
+    assert _dispatch(led, event, cfg)["cards"] == 1
+    render = _latest_render(led)
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+        initial_import_state.classify_tx(led, 1, [100], NOW)
+        led.db.execute("INSERT INTO notification_delivery_attempts(attempt_id,delivery_id,"
+                       "begin_command_id,state,worker_id,created_at) VALUES(?,?,?,'unknown',?,?)",
+                       ("u" * 16, render["delivery_id"],
+                        "11111111-0000-4000-8000-111111111111", "bb" * 8, NOW))
+        led.db.execute("UPDATE notification_renders SET state='unknown' WHERE delivery_id=?",
+                       (render["delivery_id"],))
+    outcome = _dispatch(led, event, cfg)
+    assert not outcome.get("dispatched")
+    assert led.db.execute("SELECT COUNT(*) c FROM notification_cards").fetchone()["c"] == 1
+    assert led.db.execute("SELECT COUNT(*) c FROM notification_renders").fetchone()["c"] == 1
+
+
 def test_queued_pre_join_thread_receives_no_send_grant_after_upgrade(led):
     from notify_testkit import _msg
 

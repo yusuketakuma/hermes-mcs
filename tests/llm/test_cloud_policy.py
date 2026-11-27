@@ -71,22 +71,26 @@ def test_ordered_resolution_prefers_first_unblocked_provider(monkeypatch):
     assert not errors and selection['provider'] == 'anthropic'
 
 
-def test_ordered_resolution_falls_through_to_next_provider_on_budget_block(monkeypatch):
+def test_ordered_resolution_never_adopts_a_fallback_provider_on_budget_block(monkeypatch):
     cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
     monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
     monkeypatch.setattr(c, 'budget_block_reason',
                         lambda db, settings, *, max_tokens=1600, input_bound=None, selection=None:
                         'provider_daily_cap' if selection['provider'] == 'anthropic' else None)
     selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
-    assert not errors and selection['provider'] == 'openai'
+    # the installation's key belongs to the configured provider alone: a
+    # fallback entry could never leave the wire, so the unit keeps the
+    # primary contract beside its own block reason — for history matching,
+    # never as permission for a new reservation or send
+    assert selection['provider'] == 'anthropic' and errors == ['provider_daily_cap']
 
 
-def test_ordered_resolution_reports_last_block_when_every_provider_is_blocked(monkeypatch):
+def test_ordered_resolution_reports_selected_provider_block_when_every_provider_is_blocked(monkeypatch):
     cfg = _cfg(provider='anthropic', provider_order=['anthropic', 'openai'])
     monkeypatch.setattr(c, 'global_block_reason', lambda *a, **kw: None)
     monkeypatch.setattr(c, 'budget_block_reason', lambda *a, **kw: 'provider_daily_cap')
     selection, errors = c.resolve_profile(cfg, ledger=object(), ordered=True, route='reextract', purpose='backlog')
-    # All providers blocked still returns the first resolvable selection: the
+    # The selected provider's block still returns its resolvable selection: the
     # unit keeps the ordered contract it was reserved under, and send-time
     # admission reports the same reason again.
     assert selection['provider'] == 'anthropic' and errors == ['provider_daily_cap']

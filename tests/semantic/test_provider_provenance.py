@@ -681,3 +681,41 @@ def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path, monkeypatc
         assert provenance()['jev'] == 'unknown'
     finally:
         ledger.close()
+
+
+def test_summary_cloud_producer_requires_reservation_provider_to_match(tmp_path, monkeypatch):
+    import anthropic_client
+    import cloud_policy
+    import inference_dependency_loss
+    import mcs_util
+    import semantic_summary_stages
+    from semantic_testkit import _seeded
+
+    ledger = _seeded(tmp_path)
+    try:
+        rid = "a" * 32
+        ledger.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=1,
+                            meta={"reservation_id": rid})
+        definition = cloud_policy._price_definition(anthropic_client.SONNET_MODEL)
+        owner = {"semantic_target_id": 1, "semantic_thread_root": 1,
+                 "semantic_source": mcs_util.payload_hash([(1, "synthetic-binding")]),
+                 "semantic_generation": "synthetic-generation", "semantic_phase": "summary"}
+        reservation = {"route": "semantic_backlog", "owner": owner,
+                       "model": definition["model"], "price_version": definition["price_version"]}
+        monkeypatch.setattr(cloud_policy, "reservation_evidence",
+                            lambda db, row: {"reservation": reservation})
+        monkeypatch.setattr(inference_dependency_loss, "source_binding", lambda *a: "synthetic-binding")
+        bundle = {"members": [{"message_id": 1, "parent_id": None}]}
+
+        def provenance(provider):
+            return {"inference_requests": [rid],
+                    "provider_provenance": {"providers": [provider], "complete": True}}
+
+        args = (ledger.db, bundle, 1, 1, "synthetic-generation")
+        assert semantic_summary_stages._summary_cloud_producer_verified(*args, provenance("anthropic")) is True
+        assert semantic_summary_stages._summary_cloud_producer_verified(*args, provenance("openai")) is False
+        monkeypatch.setattr(cloud_policy, "reservation_evidence",
+                            lambda db, row: (_ for _ in ()).throw(ValueError("synthetic-unsettled")))
+        assert semantic_summary_stages._summary_cloud_producer_verified(*args, provenance("anthropic")) is False
+    finally:
+        ledger.close()

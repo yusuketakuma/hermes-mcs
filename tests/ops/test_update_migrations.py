@@ -207,3 +207,81 @@ def test_consolidation_cannot_skip_verifying_the_legacy_options(tmp_path, monkey
     assert (config.read_bytes(), legacy.read_bytes()) == before
     assert not list((tmp_path / 'data').glob('.install-options-pre-v3-*'))
     assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()
+
+
+def test_single_layout_needs_migration_only_for_the_matching_legacy_record(tmp_path, monkeypatch):
+    import mcs_util
+    import update_preflight
+
+    _provider_root(tmp_path, monkeypatch)
+    config = tmp_path / 'config.json'
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'v': 1, 'install_args': ['--no-llm']})
+    needs_copy, base, _options = update_migrations.plan(config, legacy)
+    assert needs_copy and update_migrations.apply(config, legacy, base, lambda: None)
+    assert update_migrations.migrate_provider_settings(tmp_path) is True
+
+    monkeypatch.setattr(update_preflight, 'HOME', str(tmp_path))
+    monkeypatch.setattr(update_preflight, 'DATA', str(tmp_path / 'data'))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(config))
+    assert update_preflight._provider_migration_needed() is False
+
+    put(legacy, {'v': 1, 'install_args': ['--no-llm']})
+    assert update_preflight._provider_migration_needed() is False
+
+    state_path = tmp_path / 'data' / 'update_state.json'
+    monkeypatch.setattr(update_preflight, 'STATE_PATH', str(state_path))
+    journal = {'v': 1, 'stages': [], 'applied': [], 'attempts': {}, 'executed': {}, 'applying': {'provider_settings_migration_required': True}}
+    import update_journal
+    update_journal.save_state(str(state_path), journal)
+    assert update_preflight._provider_migration_needed() is True
+    assert update_migrations.migrate_provider_settings(tmp_path, allow_legacy_retire=True) is True
+    assert not legacy.exists()
+
+    put(legacy, {'v': 1, 'install_args': ['--no-brew']})
+    assert update_preflight._provider_migration_needed() is False
+    assert json.loads(legacy.read_text())['install_args'] == ['--no-brew']
+
+
+def test_interruption_after_single_commit_retires_only_the_matching_legacy_record(tmp_path, monkeypatch):
+    _provider_root(tmp_path, monkeypatch)
+    legacy = tmp_path / 'data' / 'install_options.json'
+    put(legacy, {'v': 1, 'install_args': ['--no-llm'], 'future_option': {'retained': False}})
+    original = legacy.read_bytes()
+    needs_copy, base, _options = update_migrations.plan(tmp_path / 'config.json', legacy)
+    assert needs_copy and update_migrations.apply(tmp_path / 'config.json', legacy, base, lambda: None)
+    retiring = install_options.retire_legacy
+
+    def interrupted(path, digest):
+        raise _Crash('synthetic interruption')
+
+    monkeypatch.setattr(install_options, 'retire_legacy', interrupted)
+    with pytest.raises(_Crash):
+        update_migrations.migrate_provider_settings(tmp_path)
+    assert legacy.read_bytes() == original
+    assert (tmp_path / 'data' / '.provider-settings-authority.json').exists()
+
+    monkeypatch.setattr(install_options, 'retire_legacy', retiring)
+    import update_journal
+    journal = update_journal.default_state()
+    journal["applying"] = {"provider_settings_migration_required": True}
+    update_journal.save_state(tmp_path / "data" / "update_state.json", journal)
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+    assert legacy.read_bytes() == original
+
+    def authority_lost():
+        raise ValueError("synthetic changed mode")
+
+    with pytest.raises(update_migrations.MigrationError):
+        update_migrations.migrate_provider_settings(tmp_path, before_publication=authority_lost,
+                                                   allow_legacy_retire=True)
+    assert legacy.read_bytes() == original
+    assert update_migrations.migrate_provider_settings(tmp_path, allow_legacy_retire=True) is True
+    archive, = (tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')
+    assert archive.read_bytes() == original and not legacy.exists()
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+
+    put(legacy, {'v': 1, 'install_args': ['--no-brew']})
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+    assert json.loads(legacy.read_text())['install_args'] == ['--no-brew']
+    assert list((tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')) == [archive]

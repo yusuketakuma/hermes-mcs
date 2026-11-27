@@ -16,6 +16,7 @@ on:
       - scripts/mcs
       - scripts/install_local.py
       - mcs/ops/**
+      - mcs/core/scheduled_jobs.py
       - mcs_standalone/**
       - mcs/core/mcs_config.py
       - .github/workflows/fresh-install.yml
@@ -69,6 +70,22 @@ jobs:
           ls ~/Library/LaunchAgents 2>/dev/null || true
       - name: preflight
         run: ./install.sh --mode "$MODE" --no-llm --preflight 2>&1 | tee "$LOG/preflight.txt"
+      - name: existing registration blocks install before any config write
+        run: |
+          # 既存の MCS 登録がある環境では、初回導入は設定を作る前に止まらなければならない。
+          # 止まったあと競合を取り除けば、同じ --mode での再実行(後続の install ステップ)が成功する。
+          mkdir -p ~/Library/LaunchAgents
+          touch ~/Library/LaunchAgents/ai.mcs.synthetic-conflict.plist
+          set +e
+          ./install.sh --mode "$MODE" --no-llm </dev/null >"$LOG/conflict-install.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$LOG/conflict-install.txt"
+          if [ "$rc" -eq 0 ]; then echo "install unexpectedly succeeded with a conflicting registration"; exit 1; fi
+          if [ -e ~/.mcs/config.json ]; then echo "config.json was created despite the conflict"; exit 1; fi
+          grep -q '既存の MCS の処理または登録を検出しました' "$LOG/conflict-install.txt" \
+            || { echo "conflict wording missing"; exit 1; }
+          rm -f ~/Library/LaunchAgents/ai.mcs.synthetic-conflict.plist
       - name: install
         run: |
           # ローカル AI（約5.7 GBのモデル）は取得しない。それ以外は既定どおり。

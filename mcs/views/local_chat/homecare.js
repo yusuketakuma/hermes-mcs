@@ -615,12 +615,15 @@ function dayBoard(date, data) {
 function routeCard(date) {
   if (!hc.routes) return {card: card("訪問ルート", [el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。", "hc-quiet")]), pick() {}};
   const form = el("form", null, "hc-inline route-form"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div", null, "route-result"), hint = el("p", null, "hc-quiet");
+  let request = 0;
   hint.hidden = true;
   form.append(staffPick, el("button", "ルートを作る（住所を地図サービスへ送ります）", "button button-primary"));
   form.onsubmit = async event => {
     event.preventDefault(); result.replaceChildren(el("p", "作成中…", "hc-quiet"));
+    const current = ++request;
     try {
       const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
+      if (current !== request) return;
       result.replaceChildren();
       if (plan.stops.length) {
         const stops = el("ol", null, "route-list");
@@ -636,12 +639,12 @@ function routeCard(date) {
       if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
       if (plan.unscheduled.length) result.append(el("p", `予定の時刻の前後15分に着けない訪問が${plan.unscheduled.length}件あり、ルートに入れていません。時刻か担当を見直してください。`, "state-note"));
       if (plan.unlocated.length) result.append(el("p", `住所から場所を1か所に決められなかった訪問が${plan.unlocated.length}件あり、ルートに入れていません。台帳の住所を番地まで確かめてください。`, "state-note"));
-    } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
+    } catch (error) {if (current === request) result.replaceChildren(el("p", error.message, "state-note"));}
   };
   const select = staffPick.querySelector("select");
   select.options[0].textContent = "全員";  // no staff filter on a route means every visit of the day, not 未定
   // A route belongs to the staff it was built for: any change of staff clears the shown result.
-  select.addEventListener("change", () => result.replaceChildren());
+  select.addEventListener("change", () => {++request; result.replaceChildren();});
   return {card: card("訪問ルート", [form, hint, result]), pick(key) {
     // The day's staff filter carries over: 全員 → every visit, a staff member → that person; 未定 has no route of its own.
     hint.hidden = key !== "none";
@@ -649,7 +652,7 @@ function routeCard(date) {
     if (key === "none") return;
     const value = key === "all" ? "" : String(key);
     if (![...select.options].some(option => option.value === value) || select.value === value) return;
-    select.value = value; result.replaceChildren();
+    ++request; select.value = value; result.replaceChildren();
   }};
 }
 
@@ -657,10 +660,38 @@ function routeCard(date) {
 async function openMcs(projectId) {
   // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
   $("patient-search").value = ""; state.panel = "";
-  await setMode("mcs");
-  const patient = state.patients.find(row => row.project_id === projectId)
-    || (await api("patients", {q: String(projectId)})).items.find(row => row.project_id === projectId);
-  if (patient) selectPatient(patient);
+  state.openPatient = null; state.patients = [];
+  $("patients").replaceChildren(el("p", "患者一覧を読み込んでいます。", "empty"));
+  $("patient-count").textContent = "";
+  // Refresh the unfiltered sidebar without opening the first or remembered patient.
+  const loading = setMode("mcs", {deferSelection: true});
+  const request = state.patientRequest;
+  const current = () => request === state.patientRequest && state.project === null;
+  await loading;
+  if (!current()) return;
+  let cursor = null, patient = null;
+  do {
+    const query = {q: String(projectId)};
+    if (cursor) query.cursor = cursor;
+    let data;
+    try {data = await api("patients", query);}
+    catch (error) {
+      if (!current()) return;
+      patientList(); throw error;
+    }
+    if (!current()) return;
+    patient = data.items.find(row => row.project_id === projectId) || patient;
+    cursor = data.next_cursor;
+  } while (!patient && cursor);
+  if (patient) {
+    selectPatient(patient);
+    return;
+  }
+  state.project = null; state.openPatient = null;
+  shell.heading("患者が見つかりません", `ID ${projectId}`);
+  $("timeline-status").textContent = "指定された患者は閲覧範囲に見つかりませんでした。";
+  $("timeline-status").hidden = false;
+  patientList();
 }
 // Opening a patient from elsewhere (the day board, the MCS heading) moves to the register with that patient selected.
 function openPatient(patientId) {
@@ -674,7 +705,7 @@ function markMode(mode) {
     button.classList.toggle("selected", picked); button.setAttribute("aria-pressed", String(picked));
   }
 }
-function setMode(mode) {
+function setMode(mode, listOptions) {
   hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
   markMode(mode);
   shell.setMode(mode);
@@ -684,7 +715,7 @@ function setMode(mode) {
     $("timeline").replaceChildren(); $("panel-view").replaceChildren();
     $("timeline-status").textContent = "患者を選ぶと投稿を表示します。";
     $("panel-view").hidden = !state.panel; $("timeline").hidden = false; $("timeline-status").hidden = false;
-    return loadPatients();
+    return loadPatients(false, listOptions);
   }
   const listed = loadHcPatients().catch(fail);
   if (mode === "day") showDay(hc.day || siteToday());

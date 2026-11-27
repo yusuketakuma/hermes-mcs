@@ -196,12 +196,18 @@ def master_rows():
 
 def resolve(name, rows):
     """Exact NFKC match on the sales name or the standard generic label; (entries, local suggestions)."""
+    from import_drug_master import master_date
+
     key = norm(name)
     if not 2 <= len(key) <= 80:
         return [], []
-    hits = [r for r in rows if key in (norm(r["name"]), norm(r.get("general_name")))]
-    entries = [{"name": r["name"], "code": r["medicine"], "generic": r.get("general_name") or None,
-                "abolished": r.get("abolished_on") not in ("0", "99999999")} for r in hits]
+    today = date.today()
+    entries = []
+    for row in rows:
+        if key in (norm(row["name"]), norm(row.get("general_name"))):
+            last_usable = master_date(row["abolished_on"])
+            entries.append({"name": row["name"], "code": row["medicine"], "generic": row.get("general_name") or None,
+                            "abolished": last_usable is not None and last_usable < today})
     suggestions = [] if entries else sorted({r["name"] for r in rows if key in norm(r["name"])})[:5]
     return entries, suggestions
 

@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "semantic.extra_propositions 設定時に患者コンテキストのsource PASS検証が恒久的に失敗する構造を修正",
+  "summary": "semantic.extra_propositionsを設定すると、解釈ポリシーのfingerprintには命題集合が含まれる一方、患者コンテキスト品質のsource PASSを再検証するdescriptorに引き継がれず、fingerprintが永久に一致しない構造でした。descriptorは命題集合が有効なときだけそれを含め、fingerprintの条件付き包含と一致するようになりました。",
+  "upgrade": "追加操作は不要です。extra_propositionsを使っていない導入のdescriptorは従来と同一で、既存のPASS記録は無効化されません。",
+  "details": [
+    "descriptorのpolicyは、extra_propositionsが非空のときだけそのキーを持ちます。空・未設定なら従来どおりの6キーです。",
+    "検証側は余分なキーを引き続き拒否し、extra_propositionsがある場合は有効な命題idの重複なしリストであることを検査します。"
+  ],
+  "refs": ["mcs/semantic/semantic_usage_receipts.py"]
+}

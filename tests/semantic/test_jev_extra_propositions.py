@@ -155,3 +155,47 @@ def test_proposition_quality_report_excludes_changed_source(runtime):
     assert semantic_drain.proposition_quality_report(led, 1, cfg)['messages'] == 1
     led.db.execute("UPDATE messages SET body_text='異なる合成本文' WHERE message_id=1")
     assert semantic_drain.proposition_quality_report(led, 1, cfg)['messages'] == 0
+
+
+@pytest.mark.parametrize('extra', [[{}], [[]], ['E99'], ['E01', 'E01'], 'E01', [1]])
+def test_source_pass_content_rejects_malformed_extra_propositions_as_invalid_descriptor(extra):
+    """A corrupted persisted descriptor classifies as invalid, never an unhandled error."""
+    import sqlite3
+    import semantic_usage_receipts
+    scfg = semantic_policy.runtime_config(_cfg('assist', extra_propositions=['E01']))[0]
+    assessment = {'code': 'synthetic', 'policy': semantic_policy.policy_fingerprint(scfg)}
+    descriptor = semantic_usage_receipts.patient_source_assessment_descriptor(assessment, scfg)
+    descriptor['policy']['extra_propositions'] = extra
+    identity = {key: str(number) * 64 for number, key in enumerate(
+        ('input_key', 'candidate_key', 'failure_key', 'audit_key', 'source_input_key'), 1)}
+    identity['assessment'] = {'code': 'c' * 64, 'policy': 'd' * 64}
+    identity['question_keys'] = {'e' * 64: 'f' * 64}
+    identity['passing_choices'] = {'e' * 64: 'supports'}
+    db = sqlite3.connect(':memory:')
+    db.execute('BEGIN')
+    try:
+        with pytest.raises(ValueError, match='patient_source_descriptor_invalid'):
+            semantic_usage_receipts.patient_source_pass_content(db, 1, identity, descriptor)
+    finally:
+        db.rollback()
+        db.close()
+
+
+
+def test_source_pass_descriptor_refingerprints_with_extra_propositions():
+    import semantic_usage_receipts
+    scfg = semantic_policy.runtime_config(_cfg('assist', extra_propositions=['E01', 'E06']))[0]
+    assessment = {'code': 'synthetic', 'policy': semantic_policy.policy_fingerprint(scfg)}
+    descriptor = semantic_usage_receipts.patient_source_assessment_descriptor(assessment, scfg)
+    # the descriptor's policy must refingerprint to the original, or no source
+    # pass can ever verify while extra propositions are configured
+    assert semantic_policy.policy_fingerprint(descriptor['policy']) == assessment['policy']
+
+
+def test_source_pass_descriptor_refingerprints_without_extra_propositions():
+    import semantic_usage_receipts
+    scfg = semantic_policy.runtime_config(_cfg('assist'))[0]
+    assessment = {'code': 'synthetic', 'policy': semantic_policy.policy_fingerprint(scfg)}
+    descriptor = semantic_usage_receipts.patient_source_assessment_descriptor(assessment, scfg)
+    assert 'extra_propositions' not in descriptor['policy']
+    assert semantic_policy.policy_fingerprint(descriptor['policy']) == assessment['policy']

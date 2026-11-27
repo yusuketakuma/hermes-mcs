@@ -108,7 +108,6 @@ def _prove_cloud_summaries(db):
     import mcs_util
     from semantic_cloud_testkit import summary_receipt
     scfg = semantic_policy.runtime_config(_canonical_cfg())[0]
-    generation = runtime.execution_generation(scfg)
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     roots = [m["message_id"] for m in bundle["members"] if m.get("parent_id") is None]
     assert len(roots) == 1
@@ -118,9 +117,17 @@ def _prove_cloud_summaries(db):
         assert binding is not None
         occurrences.append((member["message_id"], binding))
     source = mcs_util.payload_hash(occurrences)
-    for row in (_kind_rows(db, semantic_policy.KIND_SUMMARY)
-                 + _kind_rows(db, semantic_policy.KIND_CANDIDATE)):
+    latest = {}
+    for kind in (semantic_policy.KIND_SUMMARY, semantic_policy.KIND_CANDIDATE):
+        for row in _kind_rows(db, kind):
+            key = (kind, row["message_id"])
+            if key not in latest or row["artifact_id"] > latest[key]["artifact_id"]:
+                latest[key] = row
+    for row in latest.values():
         meta = json.loads(row["meta"])
+        if meta.get("inference_requests"):
+            continue
+        generation = runtime.execution_generation(scfg, local_model=row["model"])
         owner = {"semantic_target_id": row["message_id"], "semantic_thread_root": roots[0],
                  "semantic_source": source, "semantic_generation": generation,
                  "semantic_phase": "summary"}
@@ -407,8 +414,15 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
         if variant == "local_summary":
             return _LocalSummaryModel()
         return _ActionModel() if variant == "action" else _Model(reword=variant == "reword")
+    def run_proved(run_model, rounds):
+        for index in range(rounds):
+            _run(db, run_model, rounds=1)
+            if index + 1 < rounds:
+                _prove_cloud_summaries(db)
+
     try:
-        _run(db, model(), rounds=2)
+        first_model = model()
+        run_proved(first_model, 2)
         if stage == "interrupted":
             assert calls == [(1, False), (1, True)] and _state(db) == "pending"
         else:
@@ -420,7 +434,7 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
             _change_local_model(db, monkeypatch)
         reasons = _reasons(monkeypatch)
         del calls[:]
-        _run(db, model(), rounds=1 if stage == "completed" else 3)
+        run_proved(model(), 1 if stage == "completed" else 3)
         assert _state(db) == "done" and _summary(db, 1)
         assert "empty_repair_candidate_binding" not in reasons and (restop or not reasons)
         # reworded facts or a redone local summary: summarized once more,

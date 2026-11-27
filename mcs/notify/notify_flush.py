@@ -1311,31 +1311,38 @@ def _archive_close_unsent(ledger, ev) -> bool:
     return True
 
 
-def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
+def flush(ledger, limit: int = 10, deadline: float | None = None, *, arrivals_after: int | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
-    from private_previsit import dispatch_due, prepare_night
-    prepare_night(ledger, cfg)
-    for outcome in dispatch_due(ledger, cfg, limit=max(1, min(limit, 20))):
-        if outcome["state"] == "accepted":
-            res["sent"] += 1
-        elif outcome["state"] == "retry":
-            res["failed"] += 1
-        elif outcome["state"] == "suppressed":
-            res["suppressed"] += 1
-        elif outcome["state"] == "held":
-            res["failed"] += 1
-            res["parked"] += 1
-        else:
-            res["skipped"] += 1
+    if arrivals_after is None and (deadline is None or time.monotonic() < deadline):
+        from private_previsit import dispatch_due, prepare_night
+        prepare_night(ledger, cfg)
+        for outcome in dispatch_due(ledger, cfg, limit=max(1, min(limit, 20)), deadline=deadline):
+            if outcome["state"] == "accepted":
+                res["sent"] += 1
+            elif outcome["state"] == "retry":
+                res["failed"] += 1
+            elif outcome["state"] == "suppressed":
+                res["suppressed"] += 1
+            elif outcome["state"] == "held":
+                res["failed"] += 1
+                res["parked"] += 1
+            else:
+                res["skipped"] += 1
     # a reply parked on its parent's thread resumes once that thread exists
     import notify_cards
     with ledger.db:
         woken = notify_cards.wake_ready_reply_holds(ledger.db, time.time())
     if woken:
         res["reply_woken"] = woken
-    due = [event for event in ledger.outbox_due(limit, history_fair=True)
+    exe = mcs_util.hermes_exe(cfg)
+    exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
+    # Unsendable legacy text must not fill the arrival window ahead of native cards.
+    native_only = (arrivals_after is not None and not exe_ok
+                   and not notify_sender.hermes_free(cfg, notify_sender.target(cfg, "new_messages")))
+    due = [event for event in ledger.outbox_due(
+               limit, history_fair=True, arrivals_after=arrivals_after, interactive_arrivals_only=native_only)
            if event["kind"] != "private_previsit_note"
            and event["route"] != "private_previsit"]
     import notify_parts
@@ -1375,8 +1382,6 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             else:
                 _record_dispatch_outcome(ledger, event, res, outcome)
 
-    exe = mcs_util.hermes_exe(cfg)
-    exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
             card_route(e)
             or notify_sender.hermes_free(cfg, notify_sender.target(cfg, e["kind"])) for e in due):

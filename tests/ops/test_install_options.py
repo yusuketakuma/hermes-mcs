@@ -546,6 +546,7 @@ def test_fresh_worker_inventory_requires_a_readable_empty_owned_set(tmp_path, mo
     ([{'name': 'MCS unread check', 'script': 'mcs_check.sh'}], False),
     ([{'name': 'synthetic', 'script': '/synthetic/mcs_deep.sh'}], False),
     ([{'name': 'synthetic', 'script': 'other.sh'}], True),
+    ([{'name': 'synthetic', 'prompt': 'synthetic prompt'}], True),
     ([{'name': 'synthetic'}], False),
     (None, False),
 ])
@@ -568,6 +569,122 @@ def test_fresh_hermes_cron_inventory_requires_proven_absence(tmp_path, monkeypat
     monkeypatch.setattr(service_management, 'inspect_cron', inspect)
     assert install_options._fresh_cron_absent() is expected
     assert inspected == [str(executable)]
+
+
+@pytest.mark.parametrize('entries,state', [
+    ([], 'clear'),
+    ([{'name': 'MCS unread check', 'script': 'mcs_check.sh'}], 'conflict'),
+    ([{'name': 'synthetic', 'script': '/synthetic/mcs_deep.sh'}], 'conflict'),
+    ([{'name': 'synthetic', 'script': 'other.sh'}], 'clear'),
+    ([{'name': 'synthetic', 'prompt': 'synthetic prompt'}], 'clear'),
+    ([{'name': 'synthetic', 'repeat': '∞', 'next_run': '?', 'deliver': 'local'}], 'clear'),
+    ([{'name': 'MCS unread check', 'prompt': 'synthetic prompt'}], 'conflict'),
+    ([{'name': 'MCS unread check', 'repeat': '∞', 'next_run': '?', 'deliver': 'local'}], 'conflict'),
+    ([{'name': 'synthetic'}], 'unknown'),
+    (None, 'unknown'),
+])
+def test_fresh_cron_state_distinguishes_conflict_from_unknown(tmp_path, monkeypatch, entries, state):
+    """The precheck wording depends on the distinction: a valid listing that
+    observes a known MCS registration is a conflict, while an unreadable or
+    malformed inventory only proves the question cannot be confirmed."""
+    import service_management
+    home = tmp_path / 'synthetic-home'
+    home.mkdir()
+    hermes_home = home / '.hermes'
+    hermes_home.mkdir()
+    executable = hermes_home / 'synthetic-hermes'
+    executable.touch()
+    monkeypatch.setattr(Path, 'home', lambda: home)
+    monkeypatch.setenv('MCS_FRESH_RUNTIME_MODE', 'hermes')
+    monkeypatch.setenv('MCS_FRESH_HERMES_HOME', str(hermes_home))
+    monkeypatch.setenv('MCS_FRESH_HERMES_EXE', str(executable))
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda path: entries)
+    assert install_options._fresh_cron_state() == state
+    # the boolean bootstrap contract is preserved: only clear proves absence
+    assert install_options._fresh_cron_absent() is (state == 'clear')
+
+
+def test_fresh_cron_state_nonempty_profiles_is_unknown_not_conflict(tmp_path, monkeypatch):
+    home = tmp_path / 'synthetic-home'
+    home.mkdir()
+    hermes_home = home / '.hermes'
+    (hermes_home / 'profiles').mkdir(parents=True)
+    (hermes_home / 'profiles' / 'synthetic').touch()
+    monkeypatch.setattr(Path, 'home', lambda: home)
+    monkeypatch.setenv('MCS_FRESH_RUNTIME_MODE', 'hermes')
+    monkeypatch.setenv('MCS_FRESH_HERMES_HOME', str(hermes_home))
+    monkeypatch.setenv('MCS_FRESH_HERMES_EXE', '')
+    assert install_options._fresh_cron_state() == 'unknown'
+    assert not install_options._fresh_cron_absent()
+
+
+@pytest.mark.parametrize('kind,state', [
+    ('clear', 'clear'), ('owned_process', 'conflict'), ('owned_service', 'conflict'),
+    ('inventory_error', 'unknown'),
+])
+def test_fresh_workers_state_distinguishes_conflict_from_unknown(tmp_path, monkeypatch, kind, state):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(install_options.sys, 'platform', 'darwin')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    def run(argv, **kwargs):
+        if argv[0] == '/bin/ps':
+            output = f'{os.getpid()} python synthetic\n'
+            if kind == 'owned_process':
+                output += '123456 python -m mcs_standalone\n'
+            return SimpleNamespace(returncode=0, stdout=output)
+        output = 'PID\tStatus\tLabel\n'
+        if kind == 'owned_service':
+            output += '-\t0\tai.mcs.standalone\n'
+        return SimpleNamespace(returncode=1 if kind == 'inventory_error' else 0, stdout=output)
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert install_options._fresh_workers_state() == state
+    assert install_options._fresh_workers_absent() is (state == 'clear')
+
+
+def test_fresh_precheck_confirmed_worker_conflict_never_calls_cron(monkeypatch, capsys):
+    """Review regression: a proven worker conflict decides the rejection alone;
+    the cron inventory must not run at all, so its failure can never overwrite
+    the conflict with a mere unknown."""
+    monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'conflict')
+    def exploding_cron():
+        raise PermissionError('synthetic cron inventory failure')
+    monkeypatch.setattr(install_options, '_fresh_cron_state', exploding_cron)
+    assert install_options._fresh_precheck() == 0
+    assert capsys.readouterr().out.strip() == 'conflict'
+
+
+def test_fresh_workers_state_systemctl_bullet_only_line_is_unknown(tmp_path, monkeypatch):
+    """A systemctl line that is only the bullet carries no unit name: malformed
+    inventory proves nothing, and only an actual known label is a conflict."""
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(install_options.sys, 'platform', 'linux')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    def run(argv, **kwargs):
+        if argv[0] == '/bin/ps':
+            return SimpleNamespace(returncode=0, stdout=f'{os.getpid()} python synthetic\n')
+        return SimpleNamespace(returncode=0, stdout='●\n')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert install_options._fresh_workers_state() == 'unknown'
+    assert not install_options._fresh_workers_absent()
+
+
+def test_fresh_precheck_reports_the_worst_state_without_mutating(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'clear')
+    monkeypatch.setattr(install_options, '_fresh_cron_state', lambda: 'unknown')
+    assert install_options._fresh_precheck() == 0
+    assert capsys.readouterr().out.strip() == 'unknown'
+    monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'conflict')
+    assert install_options._fresh_precheck() == 0
+    # conflict dominates unknown: it is the more actionable rejection
+    assert capsys.readouterr().out.strip() == 'conflict'
+    monkeypatch.setattr(install_options, '_fresh_cron_state', lambda: 'clear')
+    monkeypatch.setattr(install_options, '_fresh_workers_state', lambda: 'clear')
+    assert install_options._fresh_precheck() == 0
+    assert capsys.readouterr().out.strip() == 'clear'
 
 
 @pytest.mark.parametrize(('mode', 'home'), [('hermes', ''), ('invalid', '/synthetic')])

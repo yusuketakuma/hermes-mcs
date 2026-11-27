@@ -291,7 +291,8 @@ def test_browser_dom_contracts():
     if node is None:
         pytest.skip("Node is optional; browser DOM contract checks require it")
     subprocess.run([node, str(Path(__file__).with_name("local_chat_dom_checks.js")),
-                    str(chat.ASSETS / "app.js")], check=True, capture_output=True, text=True)
+                    str(chat.ASSETS / "app.js"), str(chat.ASSETS / "homecare.js")],
+                   check=True, capture_output=True, text=True)
 
 
 def test_patient_header_context_is_scoped_grounded_and_readonly(snapshot):

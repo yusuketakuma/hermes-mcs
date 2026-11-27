@@ -145,8 +145,8 @@ def _source_root(tmp_path):
     (root / 'mcs').mkdir(parents=True)
     (root / 'mcs' / 'core').mkdir()
     (root / 'mcs' / 'core' / 'runtime_entry.py').write_text('# stub\n')
-    (root / 'mcs' / 'ops').mkdir()
-    (root / 'mcs' / 'ops' / 'release_quarantine.py').write_text('# stub\n')
+    (root / 'mcs' / 'ops' / 'update').mkdir(parents=True)
+    (root / 'mcs' / 'ops' / 'update' / 'release_quarantine.py').write_text('# stub\n')
     (root / 'mcs' / '_mcs_path.py').write_text('# stub\n')
     (root / 'app.py').write_text('x=1\n')
     return root

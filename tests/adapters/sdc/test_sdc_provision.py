@@ -132,6 +132,7 @@ def test_root_identity_is_local_durable_and_not_inferred_from_empty_or_existing_
         result = setup_root(store)
         assert result['state'] == 'prepared' and result['root_id'] == record(store)['root_id']
         assert record(store)['root_fingerprint'] == store.root_fingerprint()
+        # raw recordはauto未使用の間auto keyを持たない（rollback互換）。read viewはauto=Noneで補完される
         assert record(store)['profiles'] == {'monitor': None, 'support': None, 'restart': None}
         failure(lambda: setup_root(store), 'CONFLICT')
     with Store(tmp_path / 'fresh') as reopened:

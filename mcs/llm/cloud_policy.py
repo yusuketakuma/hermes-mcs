@@ -436,36 +436,21 @@ def select_settings(cfg, key_present, transfer_status, *, pinned=None):
 def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=False):
     """Resolve one explicit use to a bounded, immutable provider selection.
 
-    With ``ordered`` the first provider in ``provider_order`` that may actually
-    send wins: provider identity is not the inference generation, so the same
-    unit answers to whichever configured provider can pay for it. A provider
-    whose model is globally stopped or over budget falls through to the next
-    entry. When every provider is blocked the first resolvable selection is
-    still returned beside the block reason: a unit keeps the ordered contract
-    it was reserved under, and send-time admission reports the reason."""
+    Ordered selection keeps an unpinned request on its selected provider.
+    Its selection remains available for history matching while sends are
+    blocked. Already pinned QC requests use resolve_contract independently."""
     settings, errors = resolve_settings(cfg, root)
     if errors:
         return None, errors
     if not ordered:
         return profile_for_settings(cfg, settings, route=route, purpose=purpose)
-    reason = None
-    first = None
-    for provider in settings["provider_order"]:
-        selection, provider_errors = profile_for_settings(
-            cfg, settings, route=route, purpose=purpose, provider=provider)
-        if provider_errors or selection is None:
-            errors = provider_errors or errors
-            continue
-        if first is None:
-            first = selection
-        limit = selection_max_tokens(selection)
-        reason = ledger is not None and (
-            global_block_reason(ledger, model=selection["model"])
-            or budget_block_reason(ledger, settings, max_tokens=limit, selection=selection))
-        if reason:
-            continue
-        return selection, []
-    return first, ([reason] if reason else []) + errors
+    selection, errors = profile_for_settings(cfg, settings, route=route, purpose=purpose)
+    if errors or selection is None or ledger is None:
+        return selection, errors
+    reason = (global_block_reason(ledger, model=selection["model"])
+              or budget_block_reason(ledger, settings, max_tokens=selection_max_tokens(selection),
+                                     selection=selection))
+    return selection, [reason] if reason else []
 
 
 def _profile_map_valid(module, mapping):
@@ -1320,7 +1305,14 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 old_identity = _semantic_generation_identity(previous)
                 new_identity = _semantic_generation_identity(candidate)
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
-                    continue
+                    # A worker can resume the very same job after its local model
+                    # changes. The generation alone cannot make its identical
+                    # paid cloud prompt a new request of that attempt.
+                    same_attempt = (previous['unit_key'] == candidate['unit_key']
+                                    and old_identity[:2] == new_identity[:2]
+                                    and old_identity[3] == new_identity[3])
+                    if not same_attempt:
+                        continue
                 if new_identity is not None and _prebinding_semantic_reservation(previous, row):
                     # The first target-aware rollout made interpretation generation part of
                     # the semantic unit. Earlier receipts can neither be reused for a reprocess

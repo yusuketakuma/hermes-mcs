@@ -18,7 +18,7 @@ KIND = "extract_llm_context_v1"
 STATE_MAX = 600
 TOTAL_MAX = 1200
 _NONCURRENT = re.compile(
-    r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|計画|今後|以前|過去|前回|中止|否定|ありません|ではない|なし|なかった")
+    r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|計画|今後|以前|過去|前回|中止|否定|ありません|ではない|なし|なかった|していない|していません|しない|しません")
 
 
 def _canonical_report(document, report):

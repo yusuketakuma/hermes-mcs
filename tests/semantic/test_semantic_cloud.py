@@ -93,6 +93,62 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+def test_recovered_earlier_answer_exposes_its_own_receipt(cloud):
+    led, cfg, job, calls = cloud
+    with legacy_cloud_routes(), transport.inference_targets("synthetic-generation"):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+            transport.set_inference_target(1, "summary")
+            chat("synthetic first")
+            first = transport.inference_receipt()
+            chat("synthetic second")
+            second = transport.inference_receipt()
+            assert first["reservation_id"] != second["reservation_id"]
+            chat("synthetic first")
+            assert transport.inference_receipt() == first
+            assert transport.inference_requests() == [second["reservation_id"], first["reservation_id"]]
+    assert len(calls) == len(rows(led, "cloud_usage_reserve")) == 2
+
+
+@pytest.mark.parametrize("settled", [True, False])
+@pytest.mark.parametrize("model_changed", [False, True])
+def test_semantic_retry_preserves_existing_financial_generation(cloud, monkeypatch, settled, model_changed):
+    import semantic_runtime
+    led, cfg, job, calls = cloud
+    monkeypatch.setattr(transport, "LLM_MODEL", "synthetic-local-custom")
+    scfg = semantic_drain.runtime_config(cfg)[0]
+    generation = semantic_runtime.execution_generation(scfg)
+    assert generation != semantic_runtime.interpretation_generation(scfg)
+    prompt = "Synthetic unchanged request"
+    with legacy_cloud_routes():
+        # The original writer entered inference_targets with execution_generation.
+        with transport.inference_targets(generation), transport.backlog_inference(
+                led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+            transport.set_inference_target(1, "summary")
+            answer = chat(prompt)
+            assert json.loads(answer) == {"facts": []}
+        reservation = json.loads(rows(led, "cloud_usage_reserve")[0]["meta"])
+        assert reservation["owner"]["semantic_generation"] == generation
+        if not settled:
+            with led.db:
+                led.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_result'")
+
+        if model_changed:
+            monkeypatch.setattr(transport, "LLM_MODEL", "synthetic-local-next")
+
+        def repeat(ledger, config, selected, jev, llm, deadline, **kwargs):
+            transport.set_inference_target(1, "summary")
+            assert llm(prompt) == answer
+            return "done"
+
+        monkeypatch.setattr(semantic_job_processor, "_process_job_inner", repeat)
+        monkeypatch.setattr(semantic_runtime, "guard", lambda *a, **kw: None)
+        outcome = semantic_job_processor._process_job(
+            led, scfg, job, None, None, time.monotonic() + 120, lane="backlog",
+            cloud_transport=direct, cloud_only=True, diagnostics={})
+    assert len(calls) == len(rows(led, "cloud_usage_reserve")) == 1
+    assert outcome == ("done" if settled and not model_changed else "deferred")
+
+
 def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     import mcs_util
     import semantic_runtime
@@ -102,7 +158,7 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     led, cfg, _job, _calls = cloud
     bundle = semantic_store.thread_bundle(led.db, 1, 1)
     member = bundle["members"][0]
-    generation = semantic_runtime.execution_generation(semantic_drain.runtime_config(cfg)[0])
+    generation = semantic_runtime.interpretation_generation(semantic_drain.runtime_config(cfg)[0])
     binding = inference_dependency_loss.source_binding(led.db, 1, member["message_id"])
     owner = {"semantic_target_id": member["message_id"], "semantic_thread_root": member["message_id"],
              "semantic_source": mcs_util.payload_hash([(member["message_id"], binding)]),
@@ -135,17 +191,28 @@ def test_cloud_summary_producer_requires_matching_settled_receipt(cloud):
     assert producer([failed_id, reservation_id]) == unknown
 
 
-def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch):
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, monkeypatch, interrupted):
+    import semantic_audit
+    import semantic_runtime
     import semantic_store
     from candidate_testkit import approved_config
     from semantic_testkit import _canonical_cfg, _llm_v2, _PassJev
     led, cfg, _, calls = cloud
 
+    emitted_empty = False
+
     def request(self, method, body, timeout, **kw):
+        nonlocal emitted_empty
         calls.append(body)
+        prompt = body["messages"][0]["content"]
+        response = _llm_v2(prompt)
+        if interrupted and not emitted_empty and "要約器" in prompt:
+            response = '{"claims":[],"limitations":[]}'
+            emitted_empty = True
         return 200, {}, json.dumps({
             "model": anthropic_client.MODEL, "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": _llm_v2(body["messages"][0]["content"])}],
+            "content": [{"type": "text", "text": response}],
             "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
@@ -157,14 +224,42 @@ def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, 
         led.semantic_seed(1, [1], {"source": "history_import"})
         snapshot(led)
         result = {"errors": []}
+        if interrupted:
+            monkeypatch.setattr(transport, "LLM_MODEL", "synthetic-original-model")
+
+            def stop(*args, **kwargs):
+                raise semantic_runtime.RuntimeBudgetShort("synthetic_audit_cutoff")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(semantic_audit, "audit_claims", stop)
+                first = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
+                                               jev_client=_PassJev(), lane="backlog", max_jobs=1,
+                                               cloud_only=True)
+            assert first["done"] == 0 and emitted_empty
+            candidate = rows(led, "semantic_candidate")[-1]
+            candidate_meta = json.loads(candidate["meta"])
+            assert candidate_meta["stage"] == "empty_repair"
+            original_requests = candidate_meta["inference_requests"]
+            assert len(original_requests) == 1
+            matches = [r for r in rows(led, "cloud_usage_reserve")
+                       if json.loads(r["meta"])["reservation_id"] in original_requests]
+            paid = cloud_policy.reservation_evidence(led.db, matches[0]["artifact_id"])["reservation"]
+            assert paid["owner"]["semantic_phase"] == "summary"
+            before_resume = len(calls)
+            with led.db:
+                led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
         out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
-                                    jev_client=_PassJev(), lane="backlog", max_jobs=1,
-                                    cloud_only=True)
-        assert out["done"] == 1 and not result["errors"], (out, result)
+                                     jev_client=_PassJev(), max_jobs=1, lane="backlog", cloud_only=True)
+        assert out["done"] == 1 and not result["errors"], out.get("defer_reasons")
         bundle = semantic_store.thread_bundle(led.db, 1, 1)
         fp = bundle["source_fingerprint"]
-        existing = semantic_store.current_artifact(led.db, "semantic_summary", 1, fp)
+        existing = semantic_store.current_artifact(led.db, "semantic_summary", 1, fp, include_model=True)
         assert existing is not None
+        if interrupted:
+            assert len(calls) == before_resume
+            assert existing["meta"]["inference_requests"] == original_requests
+            assert existing["model"] == candidate["model"] == "synthetic-original-model"
+            monkeypatch.setattr(transport, "LLM_MODEL", "synthetic-next-model")
         before = len(calls)
         scfg = semantic_drain.runtime_config(cfg)[0]
         summary, reason, error, sent_error, producer = semantic_drain._obtain_summary(
@@ -172,7 +267,8 @@ def test_completed_cloud_summary_is_reused_from_receipt_without_new_send(cloud, 
             lambda *args: None, 1, 1, fp, existing["meta"]["policy_fingerprint"],
             [], {}, existing, time.monotonic() + 120, diagnostics={})
         assert summary == existing["content"] and reason is None and not error and sent_error is None
-        assert producer == {"providers": ["anthropic"], "complete": True}
+        assert producer["providers"] == ["anthropic"] and producer["complete"] is True
+        assert producer["source_receipt"]["requests"] == existing["meta"]["inference_requests"]
         assert len(calls) == before
 
 

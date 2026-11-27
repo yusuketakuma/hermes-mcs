@@ -13,7 +13,7 @@ FIELDS = ("patient_id", "staff_id", "kind", "visit_date", "start_time", "status"
 STATUSES = ("planned", "done", "cancelled")
 # Visit dates and times are wall-clock times at the site, which is in Japan.
 SITE_TIME = timezone(timedelta(hours=9))
-_TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_TIME = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 # Soonest first within a day: timed visits in time order, then untimed ones.
 _IN_DAY = "v.start_time IS NULL, v.start_time, v.visit_id"
 
@@ -33,8 +33,10 @@ def _clean(db, registry, values, held_kind=None, held_staff=None):
     row["visit_date"] = values.get("visit_date")
     if not calendar_date(row["visit_date"]):
         bad.append("visit_date")
-    row["start_time"] = values.get("start_time") or None
-    if row["start_time"] is not None and (not isinstance(row["start_time"], str) or not _TIME.match(row["start_time"])):
+    row["start_time"] = values.get("start_time")
+    if row["start_time"] == "":
+        row["start_time"] = None
+    if row["start_time"] is not None and (not isinstance(row["start_time"], str) or not _TIME.fullmatch(row["start_time"])):
         bad.append("start_time")
     row["status"] = values.get("status", "planned")
     if row["status"] not in STATUSES:

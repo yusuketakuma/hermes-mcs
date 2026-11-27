@@ -60,7 +60,7 @@ def test_standalone_slack_wizard_reprompts_project_ids_when_auto_off(monkeypatch
            'notify': {'interactive': 'slack', 'slack': {'channel_id': 'C1234567890'}}}
     project_answers = []
 
-    def answer(key, kind, default, desc, cur, present=False):
+    def answer(key, kind, default, desc, cur, present=False, *, allow_back=False):
         if key == 'setup_detail':
             return 'recommended'
         if key == 'notify.slack.project_ids_auto':
@@ -262,3 +262,36 @@ def test_notification_target_help_explains_where_to_find_id(monkeypatch, capsys)
     assert 'チャンネル名 → 詳細の最下部' in output
     assert 'docs/guides/EASY_SETUP.md' in output
     assert 'docs/guides/INSTALLATION.md' in output
+
+
+def test_wizard_back_returns_one_item_and_restores_prior_value(monkeypatch, capsys):
+    monkeypatch.setattr(setup_wizard, "WIZARD", [("確認対象", [
+        ("first", "opt", None, "最初", None),
+        ("second", "opt", None, "次", None),
+    ])])
+    answers = iter(["detailed", "wrong", "b", "", "done"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    cfg = {"first": "original"}
+    assert setup_wizard.wizard(cfg) == 2
+    assert cfg == {"first": "original", "second": "done"}
+    assert "1つ前の項目へ戻るときは b" in capsys.readouterr().out
+
+
+def test_back_at_confirmation_requires_a_boolean_answer(monkeypatch):
+    answers = iter(["b", "2"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    assert setup_wizard.ask("reuse", "bool", True, "再利用", None) is False
+
+
+def test_back_recounts_sections_when_answer_disables_one(monkeypatch, capsys):
+    monkeypatch.setattr(setup_wizard, "WIZARD", [
+        ("選択", [("enable", "bool", False, "有効", None)]),
+        ("詳細", [("detail", "opt", None, "詳細", lambda cfg: cfg.get("enable"))]),
+        ("終了", [("last", "opt", None, "終了", None)]),
+    ])
+    answers = iter(["detailed", "1", "b", "2", "done"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    cfg = {}
+    assert setup_wizard.wizard(cfg) == 3
+    assert cfg == {"enable": False, "last": "done"}
+    assert "【手順 2】終了（現在の選択では全2段階）" in capsys.readouterr().out

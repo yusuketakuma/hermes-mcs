@@ -605,8 +605,13 @@ _SOURCE_PASS_POLICY_KEYS = ('model', 'match_threshold', 'nomatch_threshold',
 
 def patient_source_assessment_descriptor(assessment, policy):
     """Describe the interpretation policy without credentials, scope lists or spending settings."""
-    return {'v': 1, 'assessment': dict(assessment),
-            'policy': {key: policy.get(key) for key in _SOURCE_PASS_POLICY_KEYS}}
+    described = {key: policy.get(key) for key in _SOURCE_PASS_POLICY_KEYS}
+    extra = policy.get('extra_propositions')
+    # the fingerprint includes the set only when enabled: mirror that exactly,
+    # so descriptors without it stay byte-compatible with existing passes
+    if isinstance(extra, list) and extra:
+        described['extra_propositions'] = list(extra)
+    return {'v': 1, 'assessment': dict(assessment), 'policy': described}
 
 
 def patient_source_pass_content(db, pid, identity, descriptor):
@@ -622,9 +627,21 @@ def patient_source_pass_content(db, pid, identity, descriptor):
     if (type(pid) is not int or pid <= 0 or not isinstance(descriptor, dict)
             or set(descriptor) != {'v', 'assessment', 'policy'} or type(descriptor['v']) is not int
             or descriptor['v'] != 1 or not isinstance(descriptor['policy'], dict)
-            or set(descriptor['policy']) != set(_SOURCE_PASS_POLICY_KEYS)):
+            or not set(_SOURCE_PASS_POLICY_KEYS) <= set(descriptor['policy'])
+            or not set(descriptor['policy']) <= set(_SOURCE_PASS_POLICY_KEYS) | {'extra_propositions'}):
         raise ValueError('patient_source_descriptor_invalid')
     policy = descriptor['policy']
+    extra = policy.get('extra_propositions')
+    if 'extra_propositions' in policy:
+        import semantic_jev
+        # element shape before the duplicate count: unhashable members
+        # (a corrupted persisted row) must classify as the same invalid
+        # descriptor, never an unhandled TypeError
+        if (not isinstance(extra, list)
+                or any(type(member) is not str or member not in semantic_jev.OPTIONAL_PROPOSITIONS
+                       for member in extra)
+                or len(extra) != len(set(extra))):
+            raise ValueError('patient_source_descriptor_invalid')
     lo, hi = policy['nomatch_threshold'], policy['match_threshold']
     if (resolve_model(policy['model']) != policy['model'] or type(lo) not in (int, float) or type(hi) not in (int, float)
             or not math.isfinite(lo) or not math.isfinite(hi) or not 0 <= lo < hi <= 1

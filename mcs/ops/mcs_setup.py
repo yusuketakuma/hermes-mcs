@@ -956,7 +956,9 @@ def cmd_check(args) -> int:
     if progress_warning is not None:
         warnings.append(progress_warning)
     import jev_model_updates
-    for notice in (environment_diagnostics.jev_notice(cfg, HOME), jev_model_updates.check(cfg, HOME)):
+    jev_update_notice = (jev_model_updates.cached_notice(cfg, HOME)
+                         if getattr(args, "offline", False) else jev_model_updates.check(cfg, HOME))
+    for notice in (environment_diagnostics.jev_notice(cfg, HOME), jev_update_notice):
         if notice is not None:
             print(f"  情報: {notice}")
     for w in warnings:
@@ -1625,7 +1627,18 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("browser", help='専用Chromeを開き、本人がMCSへログインしたことを確認します')
     p.set_defaults(fn=cmd_browser, yes=True)
     p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')
+    p.add_argument("--offline", action="store_true", help='外部サービスへ新しく問い合わせず、保存済みの結果だけで確認します')
     p.set_defaults(fn=cmd_check, yes=True)
+    p = sub.add_parser("postinstall", help='初期設定後の動作確認を繰り返し、問題時はAIエージェント向け修正依頼を作ります')
+    p.add_argument("--duration", type=float, default=600.0, help='確認を続ける最長時間（秒、既定600）')
+    p.add_argument("--interval", type=float, default=60.0, help='確認の間隔（秒、既定60）')
+    p.add_argument("--stable", type=int, default=2, help='正常終了に必要な連続正常回数（既定2）')
+    p.add_argument("--once", action="store_true", help='1回だけ確認します')
+    def postinstall(args):
+        import postinstall_watch
+        return postinstall_watch.run(home=HOME, repo=REPO_ROOT, duration=args.duration,
+                                     interval=args.interval, stable=args.stable, once=args.once)
+    p.set_defaults(fn=postinstall, yes=True)
     p = sub.add_parser("doctor", help='状態を読取り専用で診断します。未確認は正常扱いしません。設定の修正方法はcheckで確認')
     p.add_argument("--json", action="store_true", help='診断結果を機械処理用のJSONで表示します')
     p.add_argument("--share", action="store_true", help='設定値・患者件数を除いた共有用JSONを表示します。送信はしません')

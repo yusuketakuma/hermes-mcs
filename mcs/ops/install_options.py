@@ -258,8 +258,11 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
     return 0
 
 
-def _fresh_cron_absent():
-    """Unknown or matching Hermes schedules never prove a fresh install."""
+def _fresh_cron_state():
+    """Tri-state schedule inventory: 'clear' proves no known MCS job is
+    registered, 'conflict' observes one in a valid listing, and 'unknown'
+    means the presence or absence cannot be confirmed. Unknown or matching
+    schedules never prove a fresh install."""
     import service_management
     import scheduled_jobs
 
@@ -267,42 +270,63 @@ def _fresh_cron_absent():
     home_name = os.environ.get('MCS_FRESH_HERMES_HOME', '')
     executable = os.environ.get('MCS_FRESH_HERMES_EXE', '')
     if mode not in ('hermes', 'standalone') or not os.path.isabs(home_name):
-        return False
+        return 'unknown'
     home = Path(home_name)
     profiles = home / 'profiles'
     if os.path.lexists(profiles):
         if profiles.is_symlink() or not profiles.is_dir() or any(os.scandir(profiles)):
-            return False  # Existing contract inventories only the default profile.
+            return 'unknown'  # Existing contract inventories only the default profile.
     candidates = [home / 'hermes-agent' / 'venv' / 'bin' / 'hermes', Path.home() / '.local' / 'bin' / 'hermes']
     if executable and os.path.isabs(executable) and mode == 'hermes':
         candidates.insert(0, Path(executable))
     present = list(dict.fromkeys(path for path in candidates if os.path.lexists(path)))
     if not present:
-        return mode == 'standalone' and not os.path.lexists(home)
+        if mode == 'standalone' and not os.path.lexists(home):
+            return 'clear'
+        return 'unknown'
     scripts = service_management._known_cron_scripts()
     names = {name for name, _, _ in scheduled_jobs.CRON_JOBS} | {'MCS offsite backup'}
+    unknown = False
     for path in present:
         entries = service_management.inspect_cron(str(path))
         if entries is None:
-            return False
+            unknown = True
+            continue
         for entry in entries:
-            if (not isinstance(entry, dict) or not isinstance(entry.get('script'), str)
-                    or not isinstance(entry.get('name'), str)):
-                return False
-            if Path(entry['script']).name in scripts or entry['name'] in names:
-                return False
-    return True
+            if not isinstance(entry, dict) or not isinstance(entry.get('name'), str):
+                unknown = True
+                continue
+            script = entry.get('script')
+            if script is not None and not isinstance(script, str):
+                unknown = True
+                continue
+            if entry['name'] in names or (isinstance(script, str) and Path(script).name in scripts):
+                return 'conflict'
+            if script is None and not isinstance(entry.get('prompt'), str):
+                complete = all(isinstance(entry.get(key), str)
+                               for key in ('repeat', 'next_run', 'deliver'))
+                if not complete:
+                    unknown = True
+                continue
+    return 'unknown' if unknown else 'clear'
 
 
-def _fresh_workers_absent():
-    """Require a successful, bounded inventory of known owned jobs and workers."""
+def _fresh_cron_absent():
+    """Unknown or matching Hermes schedules never prove a fresh install."""
+    return _fresh_cron_state() == 'clear'
+
+
+def _fresh_workers_state():
+    """Tri-state worker inventory: 'clear' proves no known MCS job or worker
+    is present, 'conflict' observes one, and 'unknown' means the bounded
+    inventory itself cannot be confirmed."""
     import subprocess
 
     try:
         result = subprocess.run(['/bin/ps', '-axo', 'pid=,args='], capture_output=True, text=True,
                                 timeout=10, check=False)
         if result.returncode != 0:
-            return False
+            return 'unknown'
         markers = ('mcs_standalone', 'lineworks_adapter', 'extract_llm.py', 'mcs_adapter.py',
                    'mcs_recover.py', 'mcs_update.py', '/mcs/ingest/', '/mcs/semantic/',
                    '/mcs/notify/', '/mcs/extract/', '/mcs/patients/', '/mcs/stamps/', '/mcs/ops/',
@@ -311,56 +335,85 @@ def _fresh_workers_absent():
         for line in result.stdout.splitlines():
             fields = line.strip().split(None, 1)
             if len(fields) != 2 or not fields[0].isdigit():
-                return False
+                return 'unknown'
             if int(fields[0]) != os.getpid() and any(marker in fields[1] for marker in markers):
-                return False
+                return 'conflict'
         home = Path.home()
         if sys.platform == 'darwin':
             agents = home / 'Library' / 'LaunchAgents'
             if agents.exists() or agents.is_symlink():
                 if agents.is_symlink() or not agents.is_dir():
-                    return False
+                    return 'unknown'
                 for entry in os.scandir(agents):
                     if entry.name.startswith(('ai.mcs.', 'local.mcs-', 'org.mcs.recovery')):
-                        return False
+                        return 'conflict'
             result = subprocess.run(['/bin/launchctl', 'list'], capture_output=True, text=True,
                                     timeout=10, check=False)
             if result.returncode != 0:
-                return False
+                return 'unknown'
             lines = result.stdout.splitlines()
             if not lines or lines[0].split() != ['PID', 'Status', 'Label']:
-                return False
+                return 'unknown'
             for line in lines[1:]:
                 fields = line.split()
                 if len(fields) != 3:
-                    return False
+                    return 'unknown'
                 if fields[2].startswith(('ai.mcs.', 'local.mcs-', 'org.mcs.recovery')):
-                    return False
+                    return 'conflict'
         elif sys.platform.startswith('linux'):
             units = home / '.config' / 'systemd' / 'user'
             if units.exists() or units.is_symlink():
                 if units.is_symlink() or not units.is_dir():
-                    return False
+                    return 'unknown'
                 for entry in os.scandir(units):
                     if entry.name.startswith(('mcs-', 'mcs.')):
-                        return False
+                        return 'conflict'
             result = subprocess.run(['/usr/bin/systemctl', '--user', 'list-units', '--all', '--plain',
                                      '--no-legend'], capture_output=True, text=True, timeout=10, check=False)
             if result.returncode != 0:
-                return False
+                return 'unknown'
             for line in result.stdout.splitlines():
                 fields = line.split()
                 if not fields:
                     continue
                 if fields[0] == '●':
                     fields = fields[1:]
-                if not fields or fields[0].startswith(('mcs-', 'mcs.')):
-                    return False
+                if not fields:
+                    return 'unknown'
+                if fields[0].startswith(('mcs-', 'mcs.')):
+                    return 'conflict'
         else:
-            return False
-        return True
+            return 'unknown'
+        return 'clear'
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
+        return 'unknown'
+
+
+def _fresh_workers_absent():
+    """Require a successful, bounded inventory of known owned jobs and workers."""
+    return _fresh_workers_state() == 'clear'
+
+
+def _fresh_precheck():
+    """Read-only pre-publication conflict inventory for a fresh install.
+
+    Prints a single machine word on stdout: 'clear', 'conflict' or 'unknown'.
+    Never mutates state; the bootstrap re-checks everything under the locks.
+    """
+    workers = _fresh_workers_state()
+    if workers == 'conflict':
+        print('conflict')
+        return 0
+    cron = _fresh_cron_state()
+    if cron == 'conflict':
+        print('conflict')
+    elif 'unknown' in (workers, cron):
+        print('unknown')
+    else:
+        print('clear')
+    return 0
+
+
 
 
 def _fresh_update_lock(root, lock_fd):
@@ -780,6 +833,15 @@ def fresh_marker_sync(root, update_fd):
 
 
 def main(argv):
+    if argv and argv[0] == 'fresh-precheck':
+        # Read-only conflict inventory before any config write; needs no paths.
+        if len(argv) != 1:
+            return 1
+        try:
+            return _fresh_precheck()
+        except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+            print('unknown')
+            return 1
     mode, config_path, legacy_path, expected, *desired = argv
     if mode == 'fresh-complete':
         try:

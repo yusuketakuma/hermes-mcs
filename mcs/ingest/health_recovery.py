@@ -196,9 +196,13 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
             or notify.get("interactive") not in ("slack", "discord")):
         raise ValueError("gateway_unavailable")
     transport = notify["interactive"]
-    profile = notify[transport]["profile"]
+    profile = notify[transport].get("profile") or "default"
     data = Path(home) / "data"
     path = card_worker_status._path(data, transport, profile)
+    deadline = time.monotonic() + 3 if deadline is None else deadline
+    card_worker_status.repair_missing_started_at(path, deadline=deadline)
+    if time.monotonic() >= deadline:
+        raise ValueError("observation_timeout")
     record = _read_gateway_witness(path)
     if type(record) is not dict or set(record) != {"version", "reason", "pid", "at", "started_at"}:
         raise ValueError("witness_missing")
@@ -210,7 +214,6 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
             or not _stamp(record["at"]) or record["at"] > now
             or not _stamp(record["started_at"]) or not 0 < record["started_at"] <= record["at"]):
         raise ValueError("witness_started_unknown")
-    deadline = time.monotonic() + 3 if deadline is None else deadline
     pids = [environment_diagnostics.launchd_pid(f"{domain}/{os.getuid()}/{GATEWAY}", deadline=deadline)
             for domain in ("gui", "user")]
     if time.monotonic() >= deadline:
@@ -223,8 +226,10 @@ def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | 
         raise ValueError("observation_timeout")
     if type(birth) not in (int, float) or birth != record["started_at"]:
         raise ValueError("birth_mismatch")
-    worker = card_worker_status.status(data, transport, profile)
+    worker = card_worker_status.status(data, transport, profile, deadline=deadline)
     expected = "started" if record["reason"] == "worker_started" else "disabled"
+    if time.monotonic() >= deadline:
+        raise ValueError("observation_timeout")
     if _read_gateway_witness(path) != record or worker != {"state": expected, "reason": record["reason"]}:
         raise ValueError("witness_reason")
     identity = {"pid": record["pid"], "started_at": birth}

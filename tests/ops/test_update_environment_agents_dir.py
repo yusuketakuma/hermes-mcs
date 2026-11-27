@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import environment_diagnostics
 import ledger
+from ops_testkit import _mk_schema
 import mcs_update
 import mcs_util
 
@@ -50,11 +51,14 @@ def test_baseline_and_postcheck_pass_the_updater_agents_dir(monkeypatch, tmp_pat
     monkeypatch.setattr(update_execution, '_agent_pid', mcs_update._agent_pid)
     monkeypatch.setattr(update_services, '_agent_pid', mcs_update._agent_pid)
     monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    _mk_schema(tmp_path / "ledger.db", 8)
     monkeypatch.setattr(ledger, "Ledger", lambda path:
                         SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
     seen = []
     monkeypatch.setattr(environment_diagnostics, "check_environment",
                         lambda cfg, **facts: seen.append(facts) or ([], []))
+    monkeypatch.setattr(mcs_update, "LEDGER", str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(update_execution, "LEDGER", mcs_update.LEDGER)
 
     assert mcs_update._baseline_check({}) == []
     assert mcs_update._postcheck({}, "synthetic-sha") == []

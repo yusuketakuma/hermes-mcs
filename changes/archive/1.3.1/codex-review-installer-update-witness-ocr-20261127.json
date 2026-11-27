@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "導入確認・設定移行・通知workerとOCR状態の確認を修正",
+  "summary": "導入後の確認は期限切れでも結果と終了コードが一致し、保存済み情報だけで確認できます。提供元設定の一本化が中断した場合は照合できた旧記録だけを退避し、通知workerは再利用されたPIDを起動証拠にせず、OCRの壊れた状態は警報側で安全に不明扱いします。",
+  "upgrade": "追加操作は不要です。旧い復旧監視を持つ独立動作から提供元設定の保存形式を移行する場合は、更新ガイド§3-Aのとおり移行先のscripts/mcs_upgrade.pyに --target-standalone を付けてください。",
+  "details": [
+    "postinstallの確認はinstall.shが許可する私有root symlinkを使えますが、配下のsymlinkは従来どおり拒否します。",
+    "postinstallのcheckはJevモデル一覧を新しく取得せず、保存済みの結果だけを使います。",
+    "独立動作の形式移行では、移行先の更新プログラムを使う明示的な経路だけを許可します。"
+  ],
+  "refs": [
+    "mcs/ops/setup/postinstall_watch.py",
+    "mcs/ops/update/update_migrations.py",
+    "mcs/views/card_worker_status.py",
+    "mcs/ingest/health_report.py",
+    "scripts/mcs_upgrade.py"
+  ]
+}

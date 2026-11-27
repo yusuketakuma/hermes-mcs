@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import collection_stages
+import history_walk
 import initial_import_state
 import job_ops
 import mcs_contract
@@ -25,8 +26,8 @@ from test_initial_history_capture import _Pages
 db = ledger_fixture(data_dir=True, name="db")
 
 
-def _capture(db, patients):
-    adapter = SimpleNamespace(list_unread=lambda: mcs_contract.UnreadSnapshot(
+def _capture(db, patients, *, latest=None):
+    adapter = SimpleNamespace(fetch_latest=latest, list_unread=lambda: mcs_contract.UnreadSnapshot(
         int(time.time()), [], listed_patients=patients))
     result = {"errors": [], "messages": 0, "incomplete": []}
     collection_stages.stage_unread(adapter, db, result, time.monotonic() + 60,
@@ -229,3 +230,177 @@ def test_initial_notification_source_is_validated(db, source):
     job_ops.run_history_jobs(SimpleNamespace(), db, result, time.monotonic() + 60)
     assert result["errors"] == ["import job: invalid_payload"]
     assert db.job_state("history_head", 1) == "failed"
+
+
+def test_latest_unread_across_pages_gets_fetched_with_one_registration_commit(db, monkeypatch):
+    from mcs_adapter import MCSAdapter
+
+    listed = []
+    for pid in range(1, 103):
+        activity = 90 if pid == 102 else 60
+        listed.append({"id": pid, "is_unread": pid in (1, 102), "type": "medical",
+                       "last_message": {"created_at": datetime.fromtimestamp(activity, timezone.utc).isoformat()}})
+    calls = []
+
+    class Adapter(MCSAdapter):
+        def _get(self, path, params=None, **kwargs):
+            assert path == "/projects"
+            page = params["page"]
+            return {"projects": listed[(page-1)*100:page*100],
+                    "paginate": {"timestamp": 100, "has_next": page == 1}}
+
+        def fetch_unread_messages(self, pid, stamp):
+            calls.append((pid, stamp))
+            return mcs_contract.MessageBatch([], 1, True)
+
+    # Count only commits that created history jobs. A per-project commit would
+    # exhaust this tick before its first GET, even for a patient on page one.
+    registered, commits = [], []
+
+    def count_registration_commits(sql):
+        if sql.lstrip().upper().startswith("INSERT INTO FETCH_JOBS"):
+            registered.append(True)
+        elif sql == "COMMIT" and registered:
+            commits.append(len(registered))
+            registered.clear()
+
+    db.db.set_trace_callback(count_registration_commits)
+    monkeypatch.setattr(collection_stages, "time", SimpleNamespace(monotonic=lambda: len(commits)))
+    result = {"errors": [], "messages": 0, "new_messages": 0, "incomplete": []}
+    collection_stages.stage_unread(Adapter(), db, result, 2, db.begin_run(None))
+    assert calls == [(102, 100), (1, 100)]
+    assert result["errors"] == []
+    assert commits == [102]
+    assert db.db.execute("SELECT count(*) FROM patients WHERE json_extract(initial_import, '$.boundary_ts')=100"
+                         ).fetchone()[0] == 102
+    assert db.history_jobs_due()[0]["project_id"] == 102
+
+
+@pytest.mark.parametrize(("same_second", "listed_mid"), [(False, None), (True, 600), (True, None)])
+def test_new_activity_in_read_room_gets_a_head_slot_during_initial_import(db, same_second, listed_mid):
+    now = int(time.time())
+    patients = [_unread_patient(pid) for pid in range(1, 7)]
+    for patient in patients:
+        db.upsert_patient_info(patient, is_archived=False, notify_new=True, observation_ts=now-120)
+    active = patients[-1]
+    active.last_activity = now
+    if same_second:
+        active.last_message_id = listed_mid
+        db.save_messages([_message(mid=599, project_id=6, posted_at=datetime.fromtimestamp(
+            now, timezone.utc).isoformat())], project_id=6)
+    pending = db.job_payload("history", active.project_id)
+    _capture(db, patients, latest=lambda pid: {"message_id": 600})
+    visited = []
+
+    def history(pid, since, *, max_pages, start_page):
+        visited.append((pid, since, start_page))
+        post = _message(mid=600, project_id=pid, posted_at=datetime.fromtimestamp(now, timezone.utc).isoformat())
+        posts = [post] if pid == active.project_id else []
+        return mcs_contract.MessageBatch(posts, pages=1, reached=True, page_observations=[
+            history_walk.observation(pid, since, 1, 10, False, [p.message_id for p in posts])])
+
+    result = {"errors": []}
+    job_ops.run_history_jobs(SimpleNamespace(fetch_history=history), db, result, time.monotonic()+60, max_jobs=2)
+    assert visited == [(6, 0, 1), (1, 0, 1)]
+    assert result["errors"] == []
+    assert db.job_payload("history", active.project_id) == pending
+    assert db.history_floor(active.project_id) != -1
+    assert _events(db) and json.loads(_events(db)[0]["payload"])["message_ids"] == [600]
+    _capture(db, patients, latest=lambda pid: {"message_id": 600})
+    assert db.job_state("history_head", active.project_id, 600) == "done"
+
+
+def test_unseen_reply_keeps_its_page_when_another_observation_arrives(db):
+    from mcs_adapter import MCSAdapter
+
+    now = int(time.time())
+    patient = _unread_patient(1)
+    db.upsert_patient_info(patient, is_archived=False, notify_new=True, observation_ts=now-120)
+    # Both the independent full walk and a pending coverage repair keep their original cursor.
+    history = db.job_pending("history", 1)
+    db.job_defer(history["job_id"], 3600)
+    db.job_add("history_head", 1, payload={"since": 0, "page": 17}, next_try=time.time()+3600)
+    original = [db.job_payload(kind, 1) for kind in ("history", "history_head")]
+    pages = []
+
+    def post(mid, stamp):
+        return {"id": mid, "project_id": 1, "comment": "synthetic",
+                "created_at": datetime.fromtimestamp(stamp, timezone.utc).isoformat()}
+
+    class Wire(MCSAdapter):
+        def _get(self, path, params=None, **kw):
+            if path == "/projects/1/messages/33/messages":
+                return {"messages": [post(1000, now-10)], "paginate": {"has_next": False}}
+            assert path == "/projects/1/messages"
+            page = params["page"]
+            pages.append(page)
+            row = post(page, now-3600)
+            if page == 1 and patient.last_message_id == 1001:
+                row = post(1001, now-9)
+            elif page == 3:
+                row = dict(post(33, now-3600), count={"thread_messages": 1})
+            return {"messages": [row], "paginate": {"has_next": page < 40}}
+
+    def drain():
+        result = {"errors": []}
+        job_ops.run_history_jobs(Wire(), db, result, time.monotonic()+60, max_jobs=1)
+        assert result["errors"] == []
+
+    patient.last_activity, patient.last_message_id = now-10, 1000
+    _capture(db, [patient])
+    drain()
+    assert db.job_payload("history_head", 1, 1000)["page"] == 2
+    patient.last_activity, patient.last_message_id = now-9, 1001
+    _capture(db, [patient])
+    drain()
+    assert db.has_message(1001) and db.job_state("history_head", 1, 1001) == "done"
+    drain()
+    drain()
+    assert db.db.execute("SELECT parent_id FROM messages WHERE message_id=1000").fetchone()[0] == 33
+    assert db.job_state("history_head", 1, 1000) == "done"
+    assert pages == [1, 1, 2, 3]
+    assert [db.job_payload(kind, 1) for kind in ("history", "history_head")] == original
+    assert db.coverage_ts(1) == 0 and db.history_floor(1) != -1
+
+
+def test_unavailable_time_only_hint_keeps_known_activity_and_required_history(db):
+    now = int(time.time())
+    patients = [_unread_patient(pid) for pid in (1, 2, 3)]
+    for p in patients:
+        db.upsert_patient_info(p, is_archived=False, notify_new=True, observation_ts=now-30)
+        p.last_activity = now
+    patients[-1].last_message_id = 300
+    probes = []
+
+    def expired(pid):
+        probes.append(pid)
+        raise mcs_contract.SessionExpired()
+
+    result = _capture(db, patients, latest=expired)
+    assert probes == [1]
+    assert result["errors"] == ["probe 1: session_expired"]
+    assert db.job_state("history_head", 3, 300) == "pending"
+    assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='history_head'").fetchone()[0] == 1
+    assert all(db.job_state("history", p.project_id) == "pending" for p in patients)
+
+
+def test_time_only_probe_rotates_after_failure_without_extra_gets(db):
+    now = int(time.time())
+    patients = [_unread_patient(pid) for pid in (1, 2)]
+    for p in patients:
+        db.upsert_patient_info(p, is_archived=False, notify_new=True, observation_ts=now-60)
+        p.last_activity = now - p.project_id
+    calls = []
+
+    def latest(pid):
+        calls.append(pid)
+        if pid == 1:
+            raise mcs_contract.MCSError("http_error", status=503)
+        return {"message_id": 200}
+
+    assert _capture(db, patients, latest=latest)["errors"] == ["probe 1: http_error"]
+    assert calls == [1]
+    assert _capture(db, patients, latest=latest)["errors"] == []
+    assert calls == [1, 2]
+    assert db.job_state("history_head", 2, 200) == "pending"
+    assert all(db.job_state("history", p.project_id) == "pending" for p in patients)

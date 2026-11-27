@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "OpenAIの拒否応答への課金再送を停止",
+  "summary": "OpenAIが拒否を明示した応答(拒否パート・content_filterによる中断)を、拒否として記録するようになりました。これまで不明な出力として扱われていたため、同じ要求が最大あと2回課金再送されることがありました。拒否と証明された応答は再送されず、遮断の計数にも入りません。",
+  "upgrade": "追加操作は不要です。拒否の記録が正しく付くようになり、同じ要求が再送されずに止まります。これまでに計上された料金の記録はそのまま変わりません。拒否と証明されない不明な出力は従来どおり再送され得ます。",
+  "details": [
+    "content part typeがrefusalの応答、およびincomplete理由がcontent_filterの応答をcontract_error/refusalとして分類する。",
+    "それ以外のunknown出力やincompleteは従来どおりunexpected_output/incomplete_responseで、再送可否の扱いは変わらない。",
+    "Anthropic経路と同じく、providerが拒否と証明した応答だけが再送停止に入る。"
+  ],
+  "refs": [
+    "mcs/llm/providers/openai_client.py"
+  ]
+}

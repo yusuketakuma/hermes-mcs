@@ -128,7 +128,7 @@ def preflight_decision(local_errors: list[str], tag_errors: list[str], state: di
         blockers.append("reinstall_incomplete")
     if legacy_source:
         blockers.append("legacy_source_manual")
-    if standalone and entry_context != "installed_standalone":
+    if standalone and entry_context not in ("installed_standalone", "target_standalone"):
         blockers.append("standalone_external_apply")
     if bump and automatic:
         blockers.append("schema_bump_auto_blocked")

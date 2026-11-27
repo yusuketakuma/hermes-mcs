@@ -9,8 +9,8 @@
     "auto-disableでもwireが組み立てられる場合は中央consent-revokeを送る。"
   ],
   "refs": [
-    "mcs/ops/release_auto_wire_factory.py",
-    "mcs/ops/release_auto_driver.py",
-    "mcs/ops/update_cli.py"
+    "mcs/ops/update/release_auto_wire_factory.py",
+    "mcs/ops/update/release_auto_driver.py",
+    "mcs/ops/update/update_cli.py"
   ]
 }

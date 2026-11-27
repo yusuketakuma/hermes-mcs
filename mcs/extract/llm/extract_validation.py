@@ -15,30 +15,6 @@ from mcs_util import fold_map, locate_quote_span
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 
-# A clause naming a medication the model did not list still bounds one
-# drug's attribute region: the name carries a drug morpheme and stands
-# in subject/object position (は/が/を/の). Tokens that merely end in a
-# person/place noun (薬剤師・薬局・医薬品…) never qualify.
-_OTHER_MED_MENTION = re.compile(
-    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}"
-    r"(?:薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|"
-    r"内服薬|経口薬|外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|"
-    r"トローチ|目薬|うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)"
-    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをのも])")
-_OTHER_MED_NONDRUG_END = re.compile(r"[師局品袋缶味箱代瓶器店価]$")
-# Katakana or alphanumeric drug names carry no drug morpheme
-# (テストミン・ワルファリン), so a name-shaped token in
-# subject/object position bounds the region the same way.
-_OTHER_MED_KATAKANA = re.compile(r"[ァ-ヶーA-Za-z0-9]{3,16}(?=[はがをのも])")
-# A bare dose count (3錠) or a generic form word (内服薬・坐薬) names no
-# particular drug, so it never bounds an attribute region either.
-_OTHER_MED_GENERIC = re.compile(
-    r"(?:[0-9０-９.]+(?:錠|包|カプセル|錠剤)?|"
-    r"薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|内服薬|経口薬|"
-    r"外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|トローチ|目薬|"
-    r"うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)")
-
-
 # Deterministic vital-sign thresholds, active only when the config
 # policy enables them (vital_threshold_policy). Vitals carry no
 # subject or tense context, so a crossing is gated by a context scan
@@ -581,17 +557,7 @@ class Validator:
             claimed = flat_text(name) if name else ""
             if claimed and claimed != target_flat and claimed in folded:
                 return True
-        for match in _OTHER_MED_MENTION.finditer(clause):
-            name = match[0]
-            if (_OTHER_MED_NONDRUG_END.search(name)
-                    or _OTHER_MED_GENERIC.fullmatch(name)
-                    or flat_text(name) == target_flat):
-                continue
-            return True
-        for match in _OTHER_MED_KATAKANA.finditer(clause):
-            if flat_text(match[0]) != target_flat:
-                return True
-        return False
+        return any(flat_text(match[0]) != target_flat for match in clinical_values.written_medication_mentions(clause))
 
     def _med_attribute_region(self, item, assertion, med_names) -> str:
         """Source text bounding one drug's own attribute wording.

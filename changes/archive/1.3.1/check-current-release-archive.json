@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "リリース前の検査で最新版の変更記録の不備を検出",
+  "summary": "リリース前の検査で、最新版の保存済み変更記録も確認します。必須項目が欠けている場合は、公開前に検査が止まります。",
+  "upgrade": "施設での追加操作は不要です。",
+  "details": [
+    "未リリースの記録と最新版の保存済み記録に同じ形式検査を適用します。過去の版の保存形式はそのままです。"
+  ],
+  "refs": [
+    "scripts/development/release_notes.py",
+    "tests/release/test_release_notes.py"
+  ]
+}

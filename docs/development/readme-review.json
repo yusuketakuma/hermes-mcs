@@ -1,44 +1,56 @@
 {
- "sections": {
-  "demos": {
-   "notes": "通知の起動確認と配送記録の違いを説明図に示し、390px幅で文字を確認しました。",
-   "sources": [
-    "docs/releases/v1.3.1/visual-source.json",
-    "docs/releases/v1.3.1/notification-observation.png"
-   ]
+  "sections": {
+    "demos": {
+      "notes": "通知の起動確認と配送記録の違いを説明図に示し、390px幅で文字を確認しました。",
+      "sources": [
+        "docs/releases/v1.3.1/visual-source.json",
+        "docs/releases/v1.3.1/notification-observation.png"
+      ]
+    },
+    "docs": {
+      "notes": "56件の変更記録の本文と更新時の注意を版別の変更一覧で照合しました。公開用の本文とタイトルを生成し、対応表に各変更記録のファイル名とSHA-256を記録しました。",
+      "sources": [
+        "CHANGELOG.md",
+        "docs/releases/v1.3.1/change-map.json",
+        "docs/releases/v1.3.1/release-notes-1.3.1.md",
+        "mcs/notify/notify_cards.py",
+        "mcs/ingest/init_data.py"
+      ]
+    },
+    "features": {
+      "notes": "中断した要約の再開、服薬量と検査値の区別、薬剤照合の持ち越し条件、OpenAIの拒否応答で課金再送しないこと、一時的な履歴読取り失敗の再観測を確認しました。",
+      "sources": [
+        "mcs/semantic/semantic_summary_stages.py",
+        "mcs/extract/clinical/clinical_values.py",
+        "mcs/ingest/run_check.py",
+        "mcs/llm/cloud_inference.py"
+      ]
+    },
+    "quickstart": {
+      "notes": "OCR導入済みの更新経路、初期設定で1つ前の項目へ戻る操作、導入後の継続確認、AIエージェント向け修正依頼、auto provision経路、standalone移行時のruntime照合を確認しました。 単独接続で設定項目が重複した場合の修正と、意味解析候補の再承認が必要な条件をREADMEに記載しました。",
+      "sources": [
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/EASY_SETUP.md",
+        "mcs/ops/setup/setup_wizard.py",
+        "mcs/ops/setup/postinstall_watch.py",
+        "scripts/mcs_upgrade.py",
+        "README.md",
+        "mcs_standalone/config.py",
+        "changes/archive/1.3.1/standalone-config-parse.json"
+      ]
+    },
+    "safety": {
+      "notes": "結果不明の部品は配送記録に従って保留します。クラウド要約は予約と成功記録を照合します。更新後の台帳確認は欠損や0バイトの空ファイルを作成せず、rollback復旧では送信済み・送信中・結果不明の通知を保全することを確認しました。",
+      "sources": [
+        "mcs/ingest/health_delivery.py",
+        "mcs/semantic/semantic_summary_stages.py",
+        "docs/releases/v1.3.1/ACCEPTANCE_1.3.1.md",
+        "mcs/ops/release_auto_bridge.py",
+        "mcs/ops/update/update_execution.py",
+        "mcs/ops/update/update_recovery.py",
+        "mcs/notify/notify_transport.py"
+      ]
+    }
   },
-  "docs": {
-   "notes": "19件の変更記録を版別の変更一覧と対応付け、公開用の本文とタイトルを生成しました。",
-   "sources": [
-    "CHANGELOG.md",
-    "docs/releases/v1.3.1/change-map.json",
-    "docs/releases/v1.3.1/release-notes-1.3.1.md"
-   ]
-  },
-  "features": {
-   "notes": "中断した要約の再開、服薬量と検査値の区別、薬剤照合の持ち越し条件を確認しました。",
-   "sources": [
-    "mcs/semantic/semantic_summary_stages.py",
-    "mcs/extract/clinical/clinical_values.py",
-    "mcs/ingest/run_check.py"
-   ]
-  },
-  "quickstart": {
-   "notes": "OCR導入済みの更新経路と、設定保存前のJev送信対象の表示を確認しました。",
-   "sources": [
-    "docs/guides/UPGRADE_AGENT.md",
-    "scripts/setup_yomitoku.py",
-    "mcs/ops/setup/setup_wizard.py"
-   ]
-  },
-  "safety": {
-   "notes": "結果不明の部品は配送記録に従って保留します。クラウド要約は予約と成功記録を照合します。医薬品マスターは同梱原本との一致を確認しました。",
-   "sources": [
-    "mcs/ingest/health_delivery.py",
-    "mcs/semantic/semantic_summary_stages.py",
-    "docs/releases/v1.3.1/ACCEPTANCE_1.3.1.md"
-   ]
-  }
- },
- "version": "1.3.1"
+  "version": "1.3.1"
 }

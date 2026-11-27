@@ -28,7 +28,9 @@ Hermes連携では、[Hermes v0.22.2](https://github.com/NousResearch/hermes-age
 > **AI エージェントにセットアップさせる場合:** 対話実行用の手順書は
 > [SETUP_AGENT.md](SETUP_AGENT.md) にあります — その文書を
 > エージェントに読み込ませれば、前提確認→形態選択→設定投入→検証
-> までを対話的に実行します。
+> までを対話的に実行します。Codex・Claude Code・Devinなどには
+> リポジトリURL（https://github.com/yusuketakuma/hermes-mcs）を読み込ませ、
+> 正常動作の継続確認が終わるまで同じセッションを維持してください。
 
 **LINE WORKS を使う場合:** 独自接続アダプターの
 [導入・接続手順](LINEWORKS.md)へ進んでください。本体の依存導入後に
@@ -418,6 +420,10 @@ CDPは同じMacの別ユーザーからも到達できるため、他にログ�
 
 5. セッション確認が成功してから、承認した範囲の初回収集と通知到着を確認します。未実施・失敗なら、その段階を未確認として残します。standaloneは[独立モード](STANDALONE.md)のPythonを使います。
 
+**初回の履歴と新着通知**　Hermes・standaloneともに、通常の導入では10分ごとに未読を確認します。複数のグループに未読があるときは、MCSの一覧で最後の投稿時刻が新しいグループから取得します。履歴を取り込んでいる間も、新着の通知は履歴の完了を待ちません。
+
+各グループを初めて認識した時刻より前の投稿と、投稿時刻が分からないものは、履歴として保存します。過去の投稿にその時刻以降の返信が付いたときは、返信に通常の通知条件を適用します。収集後の配送状況や親スレッドの確認によって、到着までに時間がかかることがあります。[新しく認識した患者の履歴](USER_GUIDE.md#新しく認識した患者の履歴)
+
 以下のPath Aの例は実データの取得・通知・既読化を伴うため、その範囲が承認済みの場合だけ進めます。
 
 ```bash
@@ -705,7 +711,7 @@ Hermes cronは定期8件を実行します。`backup.enabled=true` の場合は�
 
 | 症状 | 原因・対処 |
 |---|---|
-| `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` を確認。`manual_required`/`keychain_locked` は上記 Keychain 節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
+| `session_expired` 通知が来る | セッション失効 — tick 内で `auto_login` が `_recover_session`→フォーム投入をその場で試行。失敗時のみこの通知が来る（detail の `auto_login=<state>` の意味と対処は次節）。成功時は代わりに `session_recovered` 通知が来て run は継続する |
 | カードだけ届きスレッド本文が無い | gateway が旧 plugin を保持 — `hermes gateway restart`（§A-6） |
 
 ### セッション失効・Keychain 状態の読み方
@@ -723,8 +729,8 @@ README「導入方法」から移設（文言は同じ。段落を項目に分�
   フォールバック(`mcs_setup init` が Keychain と併記する; 平文のため
   FileVault/物理セキュリティ前提)。頻発する場合はログイン状態と Keychain の
   読み取り可否を確認し、自動ロックを収集失敗の回避策として無条件に解除しない。
-- `manual_required` はエントリ未登録かつ .env 未設定、またはフォーム非検出
-  — `mcs_setup init` で再登録する。
+- `manual_required:no_form` は、ログイン画面にパスワード欄が見つからず、既存のセッションも確認できなかったときに表示される。[専用Chromeとセッション確認の手順](#初回の専用chromeとセッション確認両モード共通)に沿って本人がログインし、端末でEnterを押す。
+- `manual_required` は、自動ログインでパスワードを取得できなかったときや、フォームの送信後にログインを確認できなかったときに表示される。パスワードが未登録と確認できた場合だけ、A-3の設定ウィザード（`mcs setup`）で登録する。
 
 ## 付録A: Discord 接続設定（hermes-agent リポジトリより転記）
 

@@ -9,11 +9,14 @@ stubbed cloud transport only.
 import copy
 import dataclasses
 import json
+import sqlite3
 import time
 
 import pytest
 
+import cloud_backlog
 import cloud_policy
+import extract_llm_store
 import extract_llm as worker
 import external_transfer
 import mcs_util
@@ -400,7 +403,19 @@ def test_a_flipped_provider_preference_resumes_on_the_original_provider_once_its
     assert _cloud_pass(ledger)['done'] == 0, "the pinned provider is still capped: it waits"
     assert len(cloud_calls) == 1 and not openai_calls and _attempts(ledger) == [('qc', 'open')]
     lift()
-    assert _cloud_pass(ledger)['done'] == 1
+    cfg['cloud_llm']['provider_budgets']['openai']['daily_cost_limit_usd'] = 0
+    settings = cloud_policy.resolve_settings(cfg, worker.HOME)[0]
+    assert cloud_backlog.backlog_admits(worker.HOME, cfg, settings, ledger)
+    allowed, blocked = cloud_backlog._backlog_admission(worker.HOME, cfg, settings, ledger, "reextract")
+    assert blocked is None and allowed == {ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['message_id']}
+    def busy(db):
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(extract_llm_store, "_open_cloud_attempts", busy)
+        assert cloud_backlog._backlog_admission(worker.HOME, cfg, settings, ledger, "reextract") == (
+            None, "window_history_unverified")
+    assert worker.run_pending(ledger, limit=1, budget_s=180, workers=1, background=True, cloud_only=True, admitted_ids=allowed)['done'] == 1
     assert not openai_calls, "nothing moves to the preferred provider"
     assert {call['model'] for call in cloud_calls} == {pin['backlog']['model']}
     assert _reservations(ledger) == len(cloud_calls) == len(set(_request_fps(ledger))), (

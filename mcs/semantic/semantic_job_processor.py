@@ -7,7 +7,7 @@ import semantic_render
 import semantic_store
 import semantic_transport
 import provider_registry
-from functools import wraps
+import functools
 import json
 from contextlib import ExitStack, nullcontext
 import sqlite3
@@ -48,6 +48,7 @@ from semantic_summary_stages import (
     _reused_pass_current,
     _store_empty_repair,
     _summarize_observed,
+    _summary_row_receipt,
     _summary_producer,
     _summary_provenance,
     _summary_repair_evidence,
@@ -219,7 +220,7 @@ def _bound_candidate(db, scfg, pid, mid, fp, policy, revision, facts):
     A repair reserved after the candidate means its audit rejected it (the
     repaired text is not a candidate); an empty-repair candidate is written
     after its own reservation and stays usable."""
-    candidate = current_artifact(db, KIND_CANDIDATE, mid, fp, policy)
+    candidate = current_artifact(db, KIND_CANDIDATE, mid, fp, policy, include_model=True)
     repair = semantic_store.current_row_id(db, KIND_REPAIR, mid, fp)
     if candidate is None or (repair is not None and repair > semantic_store.current_row_id(
             db, KIND_CANDIDATE, mid, fp, policy)) or not semantic_store.built_over_current_facts(
@@ -271,7 +272,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         summary = existing["content"]
         producer = _summary_producer(existing, fp, policy, revision, db=ledger.db, bundle=bundle,
                                      project_id=pid, message_id=mid,
-                                     generation=runtime.execution_generation(scfg))
+                                     generation=functools.partial(runtime.execution_generation, scfg))
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
@@ -280,7 +281,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
             summary = candidate["content"]
             producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle,
                                          project_id=pid, message_id=mid,
-                                         generation=runtime.execution_generation(scfg))
+                                         generation=functools.partial(runtime.execution_generation, scfg))
         else:
             format_repair_id = None
             try:
@@ -738,7 +739,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         diagnostics["target"] = mid
         if scfg["summary_mode"] == "off":
             continue
-        existing = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+        existing = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy, include_model=True)
         prev_audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
         if existing and existing["meta"].get("publication_mode") != scfg["summary_mode"]:
             existing = None
@@ -783,7 +784,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         empty_reason = {}
         recovered, empty_reserved = _empty_repair_candidate(
             ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
-            reason_out=empty_reason, fact_kind=_fact_kind(scfg))
+            reason_out=empty_reason, fact_kind=_fact_kind(scfg), bundle=bundle,
+            generation=functools.partial(runtime.execution_generation, scfg))
         if empty_reserved and recovered is None:
             _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)
@@ -840,10 +842,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         # It is never eligible for publication or automatic adoption.
         if existing is None and _bound_candidate(ledger.db, scfg, pid, mid, fp, policy, revision, facts) is None:
             guard("candidate_snapshot")
+            source_receipt = _summary_row_receipt(producer)
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
+                project_id=pid, message_id=mid, model=source_receipt["model"],
+                meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": source_receipt["requests"], "fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"],
@@ -1419,7 +1422,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
     llm_started = False
     local_llm_fn = llm_fn
 
-    @wraps(llm_fn)
+    @functools.wraps(llm_fn)
     def tracked_llm(*args, **kwargs):
         nonlocal llm_started
         llm_started = True

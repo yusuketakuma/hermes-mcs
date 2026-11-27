@@ -2,8 +2,10 @@
 
 署名credentialは既存SDC connector store(state_root)から使用毎に解決し、
 v3 pinはrelease control rootのauto-v3-pins.jsonだけから読む。
-networkからpinやcredentialを取得・更新しない。enrollment未完了・
-pin未配置・credential不整合ではNone(fail-closed)を返す。
+送信先endpointはauto provision bundleのorigin/audienceを使い、監視用
+endpoint.jsonは使わない(v3 device APIはSUPPORT_HOST)。bundle pinsは
+pin fileとの相互照合専用で不一致はfail-closed。enrollment未完了・
+auto provision未適用・pin未配置・credential不整合ではNone(fail-closed)を返す。
 release_metadataのattestation trustは未配線のまま(consent/owner経路では不使用)。
 """
 
@@ -48,16 +50,39 @@ def build_wire(runtime_home):
                 if type(state) is not dict or state.get('state') != 'active':
                     raise ValueError('SDC_CREDENTIAL_REQUIRED')
                 key = Connector(store, None).secret(state, cred)
-                return config, state, key
+                # 署名audienceはauto bundleの値 — 監視endpoint.jsonのaudienceで
+                # 署名するとautoサーバが拒否する。endpoint_cfgは構築時点で
+                # 検証済みなのでclosureの後置bindでよい。
+                return dict(config, **endpoint_cfg), state, key
 
         def pins():
             return release_auto_trust.load_v3_pins(pins_file)
 
         # pin fileの形状/期限不備をwire構築時にfail-closedへ倒す。
         # 後回しにするとverify時点でcentral側だけ状態が進む分裂が起きる。
-        pins()
+        file_pins = pins()
+
+        # v3 device APIはSUPPORT_HOSTにある — 監視enrollmentのendpoint.jsonは
+        # 使わず、auto provision bundleのorigin/audienceを送信先とする。
+        # bundleのpinsは正本pin fileとの相互照合専用で、不一致はfail-closed。
+        now = int(time.time() * 1000)
+        with Store(state_root) as store:
+            from adapters.sdc import provision
+            snap = provision.profile_snapshot(store, profile='auto', now_ms=now)
+        bundle = snap['bundle']
+        endpoint_cfg = {k: bundle[k] for k in ('origin', 'audience', 'environment')}
+
+        def canon_pin(pin):
+            from adapters.sdc.support_contract import canonical
+            return canonical(pin, max_bytes=4096)
+
+        bundle_pins = sorted(canon_pin(p) for p in bundle['pins'])
+        file_pins_c = sorted(canon_pin(p) for p in file_pins)
+        if bundle_pins != file_pins_c:
+            return None
+
         config, _state, _key = credential()
-        transport = ReleaseAutoTransport(dict(config))
+        transport = ReleaseAutoTransport(dict(endpoint_cfg))
         return Wire(transport=transport, credential=credential, pins=pins,
                     now_ms=lambda: int(time.time() * 1000))
     except Exception:

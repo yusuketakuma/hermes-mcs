@@ -362,15 +362,15 @@ _SQLITE_RW_OK = {"local_backup.py", "maintenance.py", "llm_admission.py"}
 # The former entrypoints retained these exact writer responsibilities after splitting.
 _SPLIT_LEDGER_WRITERS = {
     "extract/llm/extract_llm_resident.py": {"_open_current_ledger", "_main"},
-    "ops/update_execution.py": {"_postcheck"},
-    "ops/update_lifecycle_context.py": {"_enqueue_notice", "_NOTICE_CHILD"},
-    "ops/update_restore.py": {"_reconcile_restored"},
+    "ops/update/update_execution.py": {"_postcheck"},
+    "ops/update/update_lifecycle_context.py": {"_enqueue_notice", "_NOTICE_CHILD"},
+    "ops/update/update_restore.py": {"_reconcile_restored"},
 }
 _SPLIT_SQLITE_WRITERS = {
     # The home-care records database is separate from the ledger and its snapshots; only its opener writes.
     "homecare/core/homecare_store.py": {"connect"},
     "ops/ocr_failure_ack.py": {"apply"},
-    "ops/update_restore.py": {"_cancel_unsent_notices", "_replace_database"},
+    "ops/update/update_restore.py": {"_cancel_unsent_notices", "_replace_database"},
 }
 
 

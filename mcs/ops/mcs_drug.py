@@ -17,14 +17,14 @@ import drug_map  # noqa: E402
 from mcs_util import HOME, load_config, loads_dict  # noqa: E402
 from safe_io import fsync_dir  # noqa: E402  # noqa: E402
 from safe_io import publish_new_bytes  # noqa: E402
-from import_drug_master import BUNDLE, load_bundled_master  # noqa: E402
+from import_drug_master import BUNDLE, BUNDLED_ABSENT_DATES, load_bundled_master  # noqa: E402
 
 SNAPSHOT = Path(HOME) / "data" / "snapshots" / "ledger-snapshot.db"
 # R08rec1 pp16/18: medicine change values 0/3/5 stay usable (1/9 are deleted or
 # abolished); 99999999 means not abolished and 0 means no deadline. These are
 # applied only under the operator's --confirmed-by declaration.
 BUNDLED_POLICY = {"candidate_change_values": ["0", "3", "5"],
-                  "absent_date_values": ["0", "99999999"]}
+                  "absent_date_values": list(BUNDLED_ABSENT_DATES)}
 IMPACT_LABELS = {"unchanged": "変化なし", "newly_matched": "新たに候補あり",
                  "lost_match": "候補なしに変化", "became_ambiguous": "複数候補に変化",
                  "disambiguated": "単一候補に変化", "candidates_changed": "候補が変化"}

@@ -253,6 +253,8 @@ def request_offer(store, deps):
     if owner['active'] is not None or owner['consent'] is None:
         return None
     consent = owner['consent']
+    if not _consent_live(consent, deps.now_ms()):
+        return None
     request_id, request_nonce = _request_ids(
         'select', owner['scope'], owner['installed']['release_id'],
         owner['verified_installed']['release_id'], owner['runtime_generation'],

@@ -53,7 +53,7 @@ def _load_gateway_restart():
     the installed checkout's helper is the fallback. A missing/broken helper
     must not disable the whole updater: restart_gateway then reports that
     the restart could not be requested."""
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     for root in dict.fromkeys(os.path.realpath(path) for path in (here, REPO)):
         try:
             return runpy.run_path(os.path.join(
@@ -526,7 +526,7 @@ def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, 
         if notice_id is not None:
             payload["notice_id"] = notice_id
         live = os.path.join(REPO, "mcs")
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         stored = restore_evidence.database_version(LEDGER)
         loaded = getattr(ledger, "SCHEMA_VERSION", None)
         if os.path.realpath(here) != os.path.realpath(live) or (

@@ -38,7 +38,7 @@ def apply(config_path, legacy_path, expected_base, before_publication):
         raise MigrationError('settings_unverified') from None
 
 
-def migrate_provider_settings(root, *, before_publication=None):
+def migrate_provider_settings(root, *, before_publication=None, allow_legacy_retire=False):
     """Consolidate legacy or split provider settings after the updater has quiesced writers."""
     try:
         import config_edit
@@ -52,6 +52,25 @@ def migrate_provider_settings(root, *, before_publication=None):
         if before.get("layout") == "single":
             if provider_settings.read(root, **options) != before:
                 raise MigrationError("provider_settings_changed")
+            # A hard stop can happen after the one-file commit but before the
+            # verified legacy options record is retired. Only an exact value
+            # match is evidence of that interrupted transition; a different or
+            # unreadable reappearance is stale data and stays untouched.
+            config = Path(root) / "config.json"
+            legacy = Path(root) / "data" / "install_options.json"
+            central, embedded = install_options._central(config)
+            try:
+                recorded, legacy_digest = install_options._legacy(legacy)
+            except (OSError, ValueError, TypeError, RecursionError):
+                recorded, legacy_digest = None, None
+            if allow_legacy_retire and embedded and recorded is not None and central == recorded:
+                if before_publication is not None:
+                    before_publication()
+                with config_edit._edit_lock(config):
+                    if provider_settings.read(root, **options) != before:
+                        raise MigrationError("provider_settings_changed")
+                    install_options.retire_legacy(legacy, legacy_digest)
+                return True
             return False
         if before["mode"] not in ("legacy_unverified", "split"):
             raise MigrationError("provider_settings_unverified")

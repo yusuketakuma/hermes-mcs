@@ -13,7 +13,7 @@ import time
 from types import SimpleNamespace
 
 import collection_diagnostics
-from mcs_contract import MCSError, SessionExpired, describe_error
+from mcs_contract import MCSError, SessionExpired, describe_error, valid_id
 from message_observations import METADATA_SHADOW_BACKOFF_S
 from health_policy import COVERAGE_STALL_S
 from mcs_util import ATTACH_DIR, CHROME_BIN, CHROME_PROFILE, loads_dict
@@ -343,6 +343,64 @@ def _post_ack_gap(adapter, ledger, pid: int, result):
     result["errors"].append(f"mark {pid}: post_ack_gap")
 
 
+def _seed_initial_activity_head(ledger, patients, *, adapter, result, deadline):
+    """Reserve one observed message without replacing another target's cursor or a project head."""
+    import initial_import_state
+    activity = {p.project_id: [p.last_activity, p.last_message_id] for p in patients if p.last_activity > 0}
+    if not activity:
+        return
+    # Keep the bounded list outermost so SQLite traverses json_each only once.
+    candidates = ledger.db.execute("""
+        WITH listed AS (
+          SELECT CAST(key AS INTEGER) AS pid, json_extract(value,'$[0]') AS stamp,
+                 json_extract(value,'$[1]') AS mid FROM json_each(?)
+        )
+        SELECT p.project_id, a.mid FROM listed a CROSS JOIN patients p ON p.project_id=a.pid
+        CROSS JOIN fetch_jobs j ON j.project_id=p.project_id AND j.kind='history' AND j.message_id=0 AND j.state='pending'
+        WHERE p.is_archived=0 AND
+          a.stamp >= json_extract(CASE WHEN json_valid(p.initial_import) THEN p.initial_import END,'$.boundary_ts')
+          AND CASE WHEN a.mid IS NULL THEN
+              a.stamp >= COALESCE((SELECT MAX(posted_at_ts) FROM messages WHERE project_id=p.project_id),0)
+              ELSE NOT EXISTS (SELECT 1 FROM fetch_jobs h WHERE h.project_id=p.project_id AND h.kind='history_head'
+                               AND h.message_id=a.mid)
+                   AND NOT EXISTS (SELECT 1 FROM messages WHERE project_id=p.project_id AND message_id=a.mid
+                               AND (body_state IN ('full','deleted') OR (parent_id IS NULL AND body_state='unknown'))) END
+        ORDER BY a.stamp DESC, p.project_id
+    """, (json.dumps(activity),)).fetchall()
+    # Time alone cannot distinguish posts in the same second. Share one GET
+    # per tick across the ambiguous rooms, even when a probe keeps failing.
+    ambiguous = [row[0] for row in candidates if row[1] is None]
+    next_pid = _walk_next(ledger, "initial_activity") if len(ambiguous) > 1 else None
+    index = ambiguous.index(next_pid) if next_pid in ambiguous else 0
+    for row in candidates:
+        pid, mid = row
+        if mid is None:
+            if pid != ambiguous[index] or time.monotonic() > deadline - 30:
+                continue
+            if len(ambiguous) > 1:
+                _save_walk(ledger, "initial_activity", ambiguous[(index+1) % len(ambiguous)])
+        try:
+            state = initial_import_state.load(ledger.db, pid)
+        except ValueError:
+            continue  # The existing history job reports and holds its invalid cohort.
+        if state is None or state["capture_phase"] != "capturing":
+            continue
+        if mid is None:
+            try:
+                mid = adapter.fetch_latest(pid)["message_id"]
+            except MCSError as exc:
+                result["errors"].append(f"probe {pid}: {exc.kind}")
+                continue
+            if not valid_id(mid) or job_ops.activity_stored(ledger, pid, mid) or ledger.job_state("history_head", pid, mid):
+                continue
+        # A new reply can belong to an old root with no preview. Keep those roots
+        # for the ordinary thread merge; the full import owns coverage and floor.
+        ledger.job_add("history_head", pid, mid, payload={
+            "since": 0, "page": 1, "pages": 1, "notify": True, "notify_source": "discovery",
+        }, revive_failed=False)
+        return
+
+
 def stage_unread(adapter, ledger, result, deadline, run_id, *,
                  mark_read: bool = False, semantic: bool = False,
                  notify_max_age_s: float | None = None, ack_exclusions=None):
@@ -362,44 +420,11 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
     result["projects"] = len(snap.patients)
     result["snapshot_ts"] = snap.timestamp
 
-    # /projects already lists read rooms too; new invitations need no extra scan.
-    known = {r["project_id"] for r in ledger.frontier_patients()}
-    known_groups = None
-    for p in snap.listed_patients:
-        if p.project_id in known:
-            project_type = getattr(p, "project_type", None)
-            refresh_group = project_type == "group" and (
-                getattr(p, "group_id_present", False) or getattr(p, "group_name_present", False))
-            other_type = isinstance(project_type, str) and bool(project_type.strip()) and project_type != "group"
-            if other_type and known_groups is None:
-                if time.monotonic() > deadline:
-                    result["errors"].append("deadline_exceeded")
-                    break
-                try:
-                    known_groups = {r["project_id"] for r in ledger.db.execute(
-                        "SELECT project_id FROM patients WHERE is_archived=0 AND project_type='group'")}
-                except Exception:
-                    result["errors"].append(f"project {p.project_id}: db_write_failed")
-                    known_groups = set()
-                    continue
-            if refresh_group or other_type and p.project_id in known_groups:
-                if time.monotonic() > deadline:
-                    result["errors"].append("deadline_exceeded")
-                    break
-                try:
-                    ledger.update_group_metadata(p)
-                except Exception:
-                    result["errors"].append(f"project {p.project_id}: db_write_failed")
-            continue
-        if time.monotonic() > deadline:
-            result["errors"].append("deadline_exceeded")
-            break
-        try:
-            ledger.upsert_patient_info(p, is_archived=False, notify_new=True,
-                                       observation_ts=snap.timestamp)
-            known.add(p.project_id)
-        except Exception:
-            result["errors"].append(f"project {p.project_id}: db_write_failed")
+    # Commit every new cohort at the earliest snapshot timestamp before the first HTTP fetch.
+    known = dict(ledger.db.execute("SELECT project_id,project_type FROM patients WHERE is_archived=0"))
+    new = [p for p in snap.listed_patients if p.project_id not in known]
+    for pid in ledger.register_listed_projects(new, snap.timestamp):
+        result["errors"].append(f"project {pid}: db_write_failed")
 
     for index, p in enumerate(snap.patients):
         if time.monotonic() > deadline:
@@ -568,6 +593,23 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             except MCSError as e:
                 result["errors"].append(
                     f"mark {p.project_id}: {describe_error(e)}")
+    for p in snap.listed_patients:
+        if p.project_id not in known:
+            continue
+        project_type = getattr(p, "project_type", None)
+        refresh_group = project_type == "group" and (
+            getattr(p, "group_id_present", False) or getattr(p, "group_name_present", False))
+        other_type = isinstance(project_type, str) and bool(project_type.strip()) and project_type != "group"
+        if refresh_group or other_type and known[p.project_id] == "group":
+            if time.monotonic() > deadline:
+                result["errors"].append("deadline_exceeded")
+                break
+            try:
+                ledger.update_group_metadata(p)
+            except Exception:
+                result["errors"].append(f"project {p.project_id}: db_write_failed")
+    if time.monotonic() <= deadline:
+        _seed_initial_activity_head(ledger, snap.listed_patients, adapter=adapter, result=result, deadline=deadline)
     return snap
 
 
@@ -634,16 +676,20 @@ def stage_thread_read(adapter, ledger, result, deadline, *, exclude_projects=())
             result["errors"].append(f"thread_read: {describe_error(e)}")
 
 
+def _walk_next(ledger, stage):
+    cur = ledger.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
+        "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (WALK_CURSOR_KIND, stage)).fetchone()
+    return (loads_dict(cur[0]) or {}).get("next") if cur else None
+
+
 def walk_order(ledger, stage: str) -> list:
     """This stage's patient walk, starting where its last deadline stopped.
     Run ids are shared with deep and other runs, so they cannot order a
     walk; the stage's own stored cursor (one artifact row) does."""
     rows = list(ledger.frontier_patients())
-    cur = ledger.db.execute(
-        "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
-        "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
-        "ORDER BY artifact_id DESC LIMIT 1", (WALK_CURSOR_KIND, stage)).fetchone()
-    nxt = (loads_dict(cur[0]) or {}).get("next") if cur else None
+    nxt = _walk_next(ledger, stage)
     if not rows or type(nxt) is not int:
         return rows
     k = next((i for i, r in enumerate(rows) if r["project_id"] >= nxt), 0)

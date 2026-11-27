@@ -1233,8 +1233,12 @@ def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
     assert "照会コード" in text and "doctor --share" in text
     # the overlap classification replaces the general settings guidance
     assert "OCRの設定・実行環境" not in text
-    # exhausted_failed is a cross-reason count: a separate observed-range note
-    assert "観測範囲で自動再試行が上限に到達した記録が1件あります" in text
+    # exhaustion is not termination: pending retry targets display as still retrying
+    # without a proven-stop count the display states only the observed fact:
+    # unresolved records whose stop status is unconfirmed, never "still retrying"
+    assert "未解消の記録が3件（再試行の停止状況は確認できていません）" in text
+    assert "再試行を続ける記録" not in text
+    assert "自動再試行が上限に到達" not in text
     assert "再起動" not in text and "復元" not in text and "全件" not in text
     # other failure reasons keep the general guidance alongside the overlap note
     mixed = {**base, "attachment_ocr": {
@@ -1245,11 +1249,15 @@ def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
     assert "あわせてOCRの設定・実行環境と直近の実行結果を確認してください" in mixed_text
     # exhausted alone keeps the general guidance and stays unjoined to overlap
     exhausted_only = {**base, "attachment_ocr": {
-        "failure_reason_counts": {"timeout": 2}, "exhausted_failed": 2}}
+        "failure_reason_counts": {"timeout": 2}, "exhausted_failed": 2,
+        "pending_failed": 2, "queue_status": "known"}}
     exhausted_text = "\n".join(health_watch._reason_rows(
         exhausted_only, ["attachment_ocr_processing_failed"]))
     assert "OCRの設定・実行環境と直近の実行結果を確認してください" in exhausted_text
-    assert "観測範囲で自動再試行が上限に到達した記録が2件あります" in exhausted_text
+    assert "自動再試行が上限に到達" not in exhausted_text
+    assert "再試行が止まっている" not in exhausted_text
+    assert "再試行を続ける記録" not in exhausted_text
+    assert "未解消の記録が2件" in exhausted_text
     assert "表の行列対応" not in exhausted_text
     for bad in ({"failure_reason_counts": {"output_schema_table_overlap": 1}},
                 {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": True},
@@ -1264,6 +1272,40 @@ def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
     assert "表の行列対応" not in quiet and "自動再試行" not in quiet
     alert = "\n".join(health_watch._alert_lines(report))
     assert "照会コード: MCS-HLT-ATTACHMENT-OCR-PROCESSING-FAILED" in alert
+
+
+def test_attachment_ocr_latest_run_failure_displays_without_a_valid_queue_breakdown():
+    """Review regression: failed=1 with no valid aggregate breakdown must still
+    show the concrete latest-run count (the queue conditions must not swallow it)."""
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    for broken in ({"failed": 1},
+                   {"failed": 1, "failure_reason_counts": "x", "exhausted_failed": 1},
+                   {"failed": 1, "failure_reason_counts": {"timeout": 1}},
+                   {"failed": 1, "pending_failed": "x"}):
+        text = "\n".join(health_watch._reason_rows(
+            {**base, "attachment_ocr": broken}, ["attachment_ocr_processing_failed"]))
+        assert "直近の実行で失敗した記録が1件あります（未解消の記録に含まれ得ます）" in text, broken
+
+
+def test_attachment_ocr_unproven_retry_never_displays_as_still_retrying():
+    """Review regression: pending_failed without policy_rejected_exhausted is not
+    proof of continuing retry (a bad next_try keeps the worker idle), so the
+    display must state the unresolved observation without a retry claim, and an
+    unmeasurable stop classification must not be zero-filled into the active count."""
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    report = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed",
+        "pending_failed": 1, "queue_status": "known",
+        "failure_reason_counts": {"timeout": 1}, "exhausted_failed": 1}}
+    text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
+    assert "再試行を続ける記録" not in text
+    assert "再試行の停止が確認されていない" not in text
+    assert "未解消の記録が1件（再試行の停止状況は確認できていません）" in text
+    assert "再試行が止まっている記録が0件" not in text
 
 
 @pytest.mark.parametrize('reasons', [['disk_low'], ['notification_held']])
@@ -1283,3 +1325,52 @@ def test_malformed_reason_values_are_unknown_instead_of_crashing_the_alert(reaso
     text = '\n'.join(health_watch._alert_lines(report))
     assert 'MCS-HLT-UNKNOWN' in text and text.endswith('コード: degraded unknown')
     assert 'synthetic_private_reason' not in text
+
+
+def test_attachment_ocr_display_separates_retrying_stopped_and_latest_failure():
+    """r2 control: pending 33 / stopped 13 / latest-run failed 1 displays as
+    20 retrying, 13 stopped and 1 latest-run failure, each stated separately."""
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    report = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed",
+        "pending_failed": 33, "failed": 1, "queue_status": "known",
+        "failure_reason_counts": {"output_schema_table_overlap": 13, "timeout": 20},
+        "exhausted_failed": 20, "policy_rejected_exhausted": 13}}
+    text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
+    assert "再試行の停止が確認されていない未解消の記録が20件" in text
+    assert "再試行を続ける記録" not in text
+    assert "再試行が止まっている記録が13件" in text
+    assert "直近の実行で失敗した記録が1件あります（未解消の記録に含まれ得ます）" in text
+    assert "自動再試行が上限に到達" not in text
+    assert "件数は確認できた範囲" not in text  # known queue needs no partial note
+
+
+def test_attachment_ocr_partial_observation_states_counts_are_observed_range_only():
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    report = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed",
+        "pending_failed": 5, "failed": 0, "queue_status": "partial",
+        "failure_reason_counts": {"timeout": 5}, "exhausted_failed": 2}}
+    text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
+    assert "未解消の記録が5件（再試行の停止状況は確認できていません）" in text
+    assert "再試行を続ける記録" not in text
+    assert "件数は確認できた範囲のものです" in text
+    # a valid status read without any failure breakdown still shows the queue
+    # counts and the partial-observation note: only per-reason explanations
+    # are gated on the breakdown (review regression)
+    detailless = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed",
+        "pending_failed": 3, "failed": 1, "queue_status": "partial"}}
+    detailless_text = "\n".join(health_watch._reason_rows(
+        detailless, ["attachment_ocr_processing_failed"]))
+    assert "未解消の記録が3件（再試行の停止状況は確認できていません）" in detailless_text
+    assert "件数は確認できた範囲のものです" in detailless_text
+    assert "直近の実行で失敗した記録が1件あります" in detailless_text
+    assert "表の行列対応" not in detailless_text
+    detailless["attachment_ocr"]["pending_failed"] = 0
+    empty = "\n".join(health_watch._reason_rows(detailless, ["attachment_ocr_processing_failed"]))
+    assert "件数は確認できた範囲のものです" in empty and "直近の実行で失敗した記録が1件" in empty

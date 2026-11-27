@@ -8,9 +8,9 @@
 
 | 図の内容 | 現候補の根拠 |
 |---|---|
-| doctorの保存済み記録の鮮度、通知待ち件数、前回の未完了検出、日次ローカルバックアップ | [mcs_setup.cmd_doctor](../../../mcs/ops/mcs_setup.py)、[operational_status.stored_status / status_lines](../../../mcs/ops/operational_status.py) |
+| doctorの保存済み記録の鮮度、通知待ち件数、前回の未完了検出、日次ローカルバックアップ | [mcs_setup.cmd_doctor](../../../mcs/ops/mcs_setup.py)、[operational_status.stored_status / status_lines](../../../mcs/views/operational_status.py) |
 | 通知の待機理由を監視の警告に表示 | [run_check._pending_health / _health](../../../mcs/ingest/run_check.py)、[health_watch._optional_blocks / _reason_rows](../../../mcs/ingest/health_watch.py)、[notify_cards.pending_breakdown](../../../mcs/notify/notify_cards.py) |
-| 詳細診断の工程別件数、実測速度、条件付きの見通し | [semantic_observe.observe / main](../../../mcs/ops/semantic_observe.py)、[operational_progress.pipeline_progress / _rates](../../../mcs/ops/operational_progress.py) |
+| 詳細診断の工程別件数、実測速度、条件付きの見通し | [semantic_observe.observe / main](../../../mcs/ops/semantic_observe.py)、[operational_progress.pipeline_progress / _rates](../../../mcs/views/operational_progress.py) |
 | ローカルバックアップの検証記録 | [maintenance.local_backup_status](../../../mcs/core/maintenance.py) |
 | 利用手順と解釈の条件 | [利用ガイド](../../guides/USER_GUIDE.md#cli--処理の残数停滞の確認) |
 

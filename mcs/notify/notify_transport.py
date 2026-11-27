@@ -401,8 +401,11 @@ def settle_attempt_tx(db, attempt, render, result, now,
                 "WHERE event_id=? AND state IN ('pending','failed')",
                 (now, now, render["intent_event_id"]))
     # a factual settlement also answers any post-restore hold on this
-    # delivery — the disputed evidence is resolved
+    # delivery — the disputed evidence is resolved. Part-level holds are
+    # not the parent's evidence: an independent body/thread/attachment
+    # journal_conflict stays held until its own part-confirmed receipt.
     cards.release_holds(db, delivery_id=render["delivery_id"],
+                        skip_part_attempts=True,
                         command_id=f"settle:{result}", now=now)
     cards.mark_snapshot_dirty(db)
     return {"settled": result}
@@ -615,7 +618,7 @@ def _begin_check(db, req, cfg) -> str | None:
             if cards.unsettled_attempt(db, card["card_id"]):
                 return "in_flight"
             return "history_notification_disabled"
-        if card["transport"] == "lineworks" and card["kind"] == "thread" and render["op"] != "revoke":
+        if card["kind"] == "thread" and cards.own_post(card) is None and render["op"] != "revoke":
             # A pre-upgrade queued face may still name a reply excluded at capture.
             shown = db.execute(
                 """SELECT m.message_id,m.first_seen,m.posted_at_ts,m.notify_age_excluded
@@ -1007,6 +1010,14 @@ def settle_part_receipt(db, req, now) -> dict:
                 "WHERE ic.delivery_id=? AND o.kind='attachment_followup'",
                 (render["delivery_id"],)).fetchall():
             cards.complete_intent(db, owner["event_id"], now)
+    if receipt.get("applied") and render is not None and part is not None \
+            and req["result"] in ("delivered", "not_sent"):
+        # part-confirmed evidence: only this exact part scope releases —
+        # never the parent's or a sibling part's hold, and never on an
+        # 'unknown' outcome, which proves nothing.
+        cards.release_holds(
+            db, attempt_id=f"p:{render['delivery_id'].replace('-', '')}:{part['part_id']}",
+            command_id=req.get("command_id") or f"settle_part:{req['result']}", now=now)
     cards.mark_snapshot_dirty(db)
     return receipt
 

@@ -949,8 +949,47 @@ def test_flagless_rollback_restore_failure_retains_durable_hold(
 @pytest.mark.parametrize("outcome", ["success", "consent"])
 def test_flagless_rollback_reaches_existing_restore_outcomes(
         updater, tmp_path, monkeypatch, engine, outcome):
-    tool, recover, _repo, _live, back, _before, restarts = _synthetic_flagless_rollback(
+    import sqlite3
+
+    tool, recover, _repo, live, back, _before, restarts = _synthetic_flagless_rollback(
         updater, tmp_path, monkeypatch, engine)
+    con = sqlite3.connect(live)
+    con.executescript("""
+      DROP TABLE IF EXISTS notification_delivery_attempts;
+      DROP TABLE IF EXISTS notification_intent_cards;
+      DROP TABLE IF EXISTS notification_renders;
+      DROP TABLE IF EXISTS notify_outbox;
+      CREATE TABLE notify_outbox(event_id INTEGER PRIMARY KEY, state TEXT,
+        next_try REAL, updated_at REAL);
+      CREATE TABLE notification_renders(delivery_id TEXT PRIMARY KEY,
+        card_id INTEGER, op TEXT, state TEXT, intent_event_id INTEGER,
+        updated_at REAL);
+      CREATE TABLE notification_delivery_attempts(attempt_id TEXT,
+        delivery_id TEXT, state TEXT);
+      CREATE TABLE notification_intent_cards(event_id INTEGER, card_id INTEGER,
+        state TEXT, delivery_id TEXT, required_render_rev INTEGER);
+      INSERT INTO notify_outbox(event_id,state,next_try,updated_at) VALUES(1,'pending',9e9,0),(2,'pending',9e9,0);
+      INSERT INTO notification_renders(delivery_id,card_id,op,state,intent_event_id,updated_at) VALUES
+        ('unsent',NULL,'notice','queued',1,0),
+        ('attempted',NULL,'notice','queued',2,0);
+      INSERT INTO notification_delivery_attempts(attempt_id,delivery_id,state) VALUES('a','attempted','unknown');
+    """)
+    con.commit()
+    con.close()
+
+    def render_states():
+        con = sqlite3.connect(live)
+        try:
+            return dict(con.execute("SELECT delivery_id,state FROM notification_renders"))
+        finally:
+            con.close()
+
+    def drainer_after_cancel(*args, **kwargs):
+        if outcome == "success":
+            assert render_states() == {"unsent": "cancelled", "attempted": "queued"}
+        restarts.append(1)
+        return []
+
     report = {"report_id": "a" * 64, "backup_sha256": "b" * 64,
               "backup_schema": 7, "intervening_messages": 3, "external_effect_rows": 0}
     called = []
@@ -971,6 +1010,10 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
         monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
         monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
         monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(updater, "restart_agents", drainer_after_cancel)
+        monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+        monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+        monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
         monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
         monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
         monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
@@ -978,7 +1021,7 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
     else:
         patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
         patch_lifecycle_lookup(monkeypatch, tool, "_reconcile_membership", lambda snapshot: [])
-        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", drainer_after_cancel)
         patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
     assert recover() == 0 and called == [True]
     state = updater.journal_store.load_state(updater.STATE_PATH)
@@ -989,6 +1032,7 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
     else:
         assert state["applying"] is None and restarts == [1]
         assert not Path(updater.MARKER_PATH).exists()
+        assert render_states() == {"unsent": "cancelled", "attempted": "queued"}
 
 
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])

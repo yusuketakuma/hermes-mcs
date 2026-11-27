@@ -36,6 +36,17 @@ def test_cron_listing_keeps_the_header_state():
         ("abcdef", "disabled"), ("123abc", "active"), ("456def", None)]
 
 
+def test_cron_listing_distinguishes_prompt_only_from_missing_script():
+    prompt_only = ("  abcdef [active]\n    Name:      unrelated\n    Schedule:  0 1 * * *\n"
+                   "    Prompt:    synthetic prompt\n")
+    entries = contract.parse_cron_listing(prompt_only, 0)
+    assert entries[0]["prompt"] == "synthetic prompt" and "script" not in entries[0]
+    brief = ("  abcdef [active]\n    Name:      synthetic\n    Schedule:  0 1 * * *\n"
+             "    Repeat:    ∞\n    Next run:  ?\n    Deliver:   local\n")
+    row, = contract.parse_cron_listing(brief, 0)
+    assert (row["repeat"], row["next_run"], row["deliver"]) == ("∞", "?", "local")
+
+
 def test_duplicates_collision_and_order_are_preserved_without_mutation():
     previous = {"cron": [{"script": "old.sh"}]}
     observed = [entry("other.sh"), entry("old.sh", name="previous")]

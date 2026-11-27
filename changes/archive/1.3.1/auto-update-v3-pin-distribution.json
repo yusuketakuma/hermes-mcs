@@ -8,7 +8,7 @@
     "pinの用途と期限の評価は既存の署名検証側が担う。"
   ],
   "refs": [
-    "mcs/ops/release_auto_trust.py",
+    "mcs/ops/update/release_auto_trust.py",
     "docs/specs/auto-update-v2.md"
   ]
 }

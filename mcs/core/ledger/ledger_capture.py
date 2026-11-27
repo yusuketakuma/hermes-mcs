@@ -191,9 +191,9 @@ class LedgerCaptureMixin:
         notify_max_age_s drops messages posted more than this many
         seconds ago from the notification (bulk-added patients surface
         as 'unread' with months-old history — those are imported and
-        consumed, never announced). A NULL/unparseable posted_at cannot
-        be proven old, so it still notifies. Stale ids are marked
-        notified so they never resurface as candidates."""
+        consumed, never announced). A registered initial import also
+        silences undated rows. Without that boundary, the age filter
+        alone cannot exclude an undated unread post."""
         now = time.time()
         new_ids = []
         invalidated_roots = set()
@@ -435,19 +435,20 @@ class LedgerCaptureMixin:
         only to new rows posted strictly after it (a page-limited
         self-post probe's cutoff; older history stays quiet).
         notify_late (reconcile and quiet history walks, no notify template)
-        still announces new rows posted after the patient's newest stored
-        post: once such a row is stored, the unread, probe and backfill
-        paths find it present and never announce it. Only those rows
-        notify, as 'history' under the same age gate; older new rows in
-        the same batch (replies included) stay quiet."""
+        announces newly stored rows from the group's first observation
+        onward within a configured notification window, even out of order.
+        Without a cohort or age bound, only rows newer than the patient's
+        newest stored post qualify."""
         if not isinstance(msgs, (list, tuple)):
             msgs = list(msgs)
         new_ids = []
         now = time.time()
         late_after = None
         if notify_late and project_id and notify is None:
-            # 0 = never imported: the initial history stays quiet
-            late_after = self.high_watermark(project_id) or None
+            cohort = (initial_import_state.load(self.db, project_id)
+                      if notify_max_age_s is not None else None)
+            # The cohort includes its boundary second; _posted_after is strict.
+            late_after = cohort["boundary_ts"] - 1 if cohort else self.high_watermark(project_id) or None
         invalidated_roots = set()
         with self._intake_transaction(stage="save_messages"):
             t = monotonic()

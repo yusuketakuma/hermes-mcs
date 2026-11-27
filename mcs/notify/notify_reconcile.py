@@ -304,7 +304,9 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
             and not any(r.get("phase") == "started" for r in rows):
         return _apply_hold(db, aid, delivery_id,
                            "journal_corrupt:pre_http", dirs, now)
-    if part["state"] in ("delivered", "not_sent", "held"):
+    if part["state"] in ("delivered", "not_sent") or (
+            part["state"] == "held"
+            and part["error_code"] not in (None, "card_revoked")):
         if result_row is None:
             return {"attempt_id": aid, "delivery_id": delivery_id,
                     "verdict": "consistent",
@@ -318,6 +320,11 @@ def _reconcile_part(ledger, db, cfg, aid, info, dirs, now) -> dict:
                     "detail": f"already_{part['state']}"}
         return _apply_hold(db, aid, delivery_id, "journal_conflict",
                            dirs, now)
+    # a part the revoke caught mid-send (held with no attempt of its own)
+    # is not terminal: a same-attempt result that crossed with the
+    # cancellation falls through to the receipt path, whose own sealed
+    # check settles exactly that attempt once — the card stays revoked
+    # and a different attempt's fact is rejected into a hold.
     # pending part — republish the journal's fact through the checked path
     if result_row is not None:
         env = next((r["receipt_envelope"] for r in reversed(rows)

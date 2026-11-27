@@ -166,8 +166,13 @@ def _resident_loop(monkeypatch, cfg, events, *, carry=False):
             raise KeyboardInterrupt("synthetic stop")
         return {"done": 0}
 
+    def settle(led, carried, **kwargs):
+        carried[:] = []
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
+
     monkeypatch.setattr(extract_llm_resident, "run_pending", run_pending)
     monkeypatch.setattr(extract_llm_resident, "_background_semantic", background)
+    monkeypatch.setattr(extract_llm_resident, "_settle_carry", settle)
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
 

@@ -154,6 +154,14 @@ def notice(current: str, state: dict | None) -> str | None:
     return None
 
 
+def cached_notice(cfg, root) -> str | None:
+    """The stored model-list notice without reserving or performing a provider request."""
+    use = in_use(cfg, root)
+    if use is None or not use["askable"]:
+        return None
+    return notice(use["model"], read_state(root))
+
+
 def check(cfg, root, *, now=None, client_factory=None) -> str | None:
     """Refresh the list when Jev is in use and due, then return the notice for ``mcs_setup.py check``."""
     use = in_use(cfg, root)

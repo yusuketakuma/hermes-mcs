@@ -689,7 +689,7 @@ def live_notification_rows(db, project_id, rows):
 def thread_notification_rows(db, card, rows, cfg):
     """Retain capture eligibility and this card's already delivered posts."""
     rows = live_notification_rows(db, card["project_id"], rows)
-    if "transport" not in card.keys() or card["transport"] != "lineworks":
+    if "transport" not in card.keys() or own_post(card) is not None:
         return rows
     # Older ledgers only know the post and discovery times. Keep any positive
     # intent or delivered face even when today's setting would exclude it.

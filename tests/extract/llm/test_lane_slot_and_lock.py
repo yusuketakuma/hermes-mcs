@@ -432,6 +432,98 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
     assert extract_llm._SLOT_OVERRIDE is None
 
 
+def _resident_jev_harness(monkeypatch, events, now, settle):
+    """Shared harness: lane 2 resident with a semantic pass that spans 1300s —
+    longer than the 1230s carry lease — and one carry row per run_pending."""
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep",
+                        lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
+    monkeypatch.setattr(extract_llm.sys, "argv", [
+        "extract_llm", "--all", "--lane", "2", "--stop-after", "5000", "--semantic"])
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
+    monkeypatch.setattr(extract_llm_resident, '_jev_only_semantic', lambda cfg: True)
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    monkeypatch.delenv(extract_llm.local_llm.TURN_LOCK_ENV, raising=False)
+
+    def semantic(led, stop=None):
+        events.append(("semantic",))
+        now[0] += 1300   # a long drain: an unrenewed 1230s carry lease lapses inside it
+        return {"job_metrics": []}
+
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', semantic)
+
+    def run(*args, **kwargs):
+        events.append(("run_pending",))
+        now[0] += 60
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1,
+                "carry": [("row", 0.0, "commit")]}
+
+    monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+
+
+def test_resident_never_starts_a_jev_pass_while_a_carry_remains(monkeypatch, capsys):
+    """A carried claim's lease ticks through a long Jev-only drain whose worst
+    span exceeds the lease a renewal grants: when the pre-pass settle cannot
+    empty the carry, the pass must not start at all — the loop proceeds to the
+    carry processing instead. The drain span here (1300s) crosses the 1230s
+    lease, so any pass that did start would strand the row."""
+    now = [0.0]
+    events = []
+
+    def settle(led, carry, **kw):
+        events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
+        # the write lock stays busy: the renewal does not empty the carry
+        return {"done": 0}, 0, set()
+
+    _resident_jev_harness(monkeypatch, events, now, settle)
+    assert extract_llm.main() == 0
+    kinds = [event[0] for event in events]
+    assert kinds.count("run_pending") == 1  # subsequent passes only retry the outstanding write
+    # the pass may run in the opening iteration while the carry is still empty,
+    # but once the first run_pending produces a carried row it must never run
+    # again: the drain span here crosses the lease the renewal grants
+    first_run = kinds.index("run_pending")
+    assert "semantic" not in kinds[first_run:]
+
+
+def test_resident_runs_the_jev_pass_once_the_settle_empties_the_carry(monkeypatch, capsys):
+    """When the pre-pass settle commits the carry, no lease is at risk and the
+    pass may run — the settle still precedes it, never the other way round."""
+    now = [0.0]
+    events = []
+
+    def settle(led, carry, **kw):
+        events.append(("settle", list(carry), kw.get("final"), kw.get("write")))
+        committed = len(carry)
+        carry.clear()
+        return {"done": committed}, committed, set()
+
+    _resident_jev_harness(monkeypatch, events, now, settle)
+    assert extract_llm.main() == 0
+    kinds = [event[0] for event in events]
+    assert "semantic" in kinds
+    assert any(kinds[i:i + 2] == ["settle", "semantic"] for i in range(len(kinds)))
+    total = json.loads(capsys.readouterr().out.splitlines()[-1])
+    commits = sum(len(event[1]) for event in events if event[0] == "settle" and event[2] is False)
+    assert commits > 0 and total["done"] == kinds.count("run_pending") + commits
+
+
 @pytest.mark.parametrize("lane", ["0", "4"])
 def test_unknown_lane_is_rejected(monkeypatch, capsys, lane):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})

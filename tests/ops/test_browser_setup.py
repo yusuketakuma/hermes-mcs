@@ -103,7 +103,7 @@ def test_offer_after_init_without_terminal_prints_the_command(monkeypatch, capsy
 def test_recommended_course_keeps_the_installed_runtime(monkeypatch, capsys):
     asked = []
 
-    def ask(key, kind, default, desc, cur, present=False):
+    def ask(key, kind, default, desc, cur, present=False, *, allow_back=False):
         asked.append(key)
         return "recommended" if key == "setup_detail" else (cur if cur is not None else default)
 

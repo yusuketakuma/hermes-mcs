@@ -51,8 +51,8 @@ def test_reject_constant_rejects_nonfinite(raw):
         json.loads(raw, parse_constant=util.reject_constant)
 
 
-@pytest.mark.parametrize("raw", ['{"a": 1, "a": 2}', '{"x": NaN}'])
-def test_load_config_treats_duplicate_key_and_nan_as_malformed(tmp_path, raw):
+@pytest.mark.parametrize("raw", ['{"a": 1, "a": 2}', '{"x": NaN}', '{"x": 1e999}'])
+def test_load_config_treats_duplicate_key_and_nonfinite_numbers_as_malformed(tmp_path, raw):
     with pytest.raises(ValueError):
         util.parse_config(raw.encode("utf-8"))
     path = tmp_path / "config.json"

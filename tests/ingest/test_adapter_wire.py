@@ -138,6 +138,27 @@ def test_list_unread_filters_read_projects_and_uses_earliest_ts():
     assert [p.project_id for p in snap.listed_patients] == [11, 12, 13]
 
 
+def test_repeated_project_keeps_newest_activity_and_bad_hint_does_not_hide_unread():
+    newest = dict(_unread_project(11), last_message={"id": 900, "created_at": "2026-11-26T00:00:00+00:00"})
+    older = dict(_unread_project(11), last_message={"id": 899, "created_at": "2026-10-01T00:00:00+00:00"})
+    unknown = dict(_unread_project(12), last_message={"created_at": "invalid"})
+    adapter = _UnreadListAdapter([(100, True, [newest]), (105, False, [unknown, older])])
+    snap = adapter.list_unread()
+    assert snap.timestamp == 100
+    for projects in (snap.patients, snap.listed_patients):
+        assert [(p.project_id, p.last_message_id) for p in projects] == [(11, 900), (12, None)]
+        assert projects[0].last_activity > projects[1].last_activity == 0
+
+
+def test_same_second_at_page_boundary_uses_the_later_observation():
+    previous = dict(_unread_project(11), last_message={"id": 900, "created_at": "2026-11-26T00:00:00+00:00"})
+    latest = dict(previous, last_message=dict(previous["last_message"], id=901))
+    adapter = _UnreadListAdapter([(100, True, [previous]), (105, False, [latest, _unread_project(12)])])
+    snap = adapter.list_unread()
+    assert snap.timestamp == 100
+    assert snap.listed_patients[0].last_message_id == snap.patients[0].last_message_id == 901
+
+
 def test_list_unread_fails_when_pagination_sticks():
     adapter = _UnreadListAdapter([
         (100, True, [_unread_project(11)]),

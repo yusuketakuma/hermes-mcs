@@ -1177,6 +1177,37 @@ def test_semantic_previous_generation_success_does_not_block_reprocess_send(tmp_
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
+def test_semantic_same_attempt_checks_legacy_prompt_after_model_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:same',
+                            owner=_semantic_owner('old-generation'))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
+                              "WHERE kind='cloud_usage_reserve'")
+        with pytest.raises(anthropic_client.AnthropicError) as error:
+            _reserve(ledger, 'synthetic prompt', unit=previous['unit_key'],
+                     owner=_semantic_owner('new-generation'))
+        assert error.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('prompt,source,phase', [
+    ('synthetic updated', 'a' * 64, 'facts'),
+    ('synthetic prompt', 'b' * 64, 'facts'),
+    ('synthetic prompt', 'a' * 64, 'summary'),
+])
+def test_semantic_same_attempt_allows_a_distinct_request(tmp_path, monkeypatch, prompt, source, phase):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', unit='semantic:1:same',
+                            owner=_semantic_owner('old-generation'))
+        _settled_success(ledger, previous)
+        _reserve(ledger, prompt, unit=previous['unit_key'],
+                 owner=_semantic_owner('new-generation', source=source, phase=phase))
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
 def test_semantic_same_generation_success_still_blocks_duplicate_send(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:

@@ -8,7 +8,7 @@ from adapters.common import text
 from mcs_contract import MCSError
 import notify_spool
 import stamp_write
-from notify_testkit import _uuid
+from notify_testkit import NOW, _uuid
 from test_stamp_write import (
     _apply, _command, _drain, _press_buttons, _receipt, led, pinned_clock, scene,
 )
@@ -113,3 +113,57 @@ def test_a_press_followup_waits_for_and_reads_the_final_result(scene):
     final = json.loads((_results(scene) / (click + ".json")).read_bytes())
     assert final["request_id"] == click and final["stamp_state"] == "confirmed"
     assert not text.followup_waiting(final) and text.ja(final) == text.STAMP_STATE_TEXT["confirmed"]
+
+
+@pytest.mark.parametrize("state", ["confirmed", "rejected"])
+def test_repeated_presses_each_receive_the_settled_result(scene, state):
+    button = _button(scene, "👀")
+    ledger, _, _, adapter, _ = scene
+    first, second = _uuid(5000), _uuid(5010)
+    receipt = _click(scene, button, request_id=first)
+    assert text.followup_waiting(receipt)
+    # Simulate a waiting click recorded before multiple subscribers were supported.
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.followup_request_ids') "
+                          "WHERE kind=?", (stamp_write.KIND,))
+    for click in (second, second, first):
+        replay = _click(scene, button, request_id=click)
+        assert text.followup_waiting(replay)
+        assert replay["stamp_command_id"] == receipt["stamp_command_id"]
+
+    if state == "rejected":
+        adapter.account = 78
+    assert _drain(scene)[state] == 1
+    for click in (first, second):
+        final = json.loads((_results(scene) / (click + ".json")).read_bytes())
+        assert final["request_id"] == click and final["stamp_state"] == state
+        assert not text.followup_waiting(final)
+    assert len(adapter.posts) == (1 if state == "confirmed" else 0)
+    _drain(scene)
+    assert len(adapter.posts) == (1 if state == "confirmed" else 0)
+
+
+def test_partial_followup_publication_retries_without_another_stamp_post(scene, monkeypatch):
+    first, second = _uuid(5000), _uuid(5010)
+    button = _button(scene, "👀")
+    for click in (first, second):
+        assert text.followup_waiting(_click(scene, button, request_id=click))
+    publish = notify_spool.publish_file
+
+    def interrupt(directory, name, raw):
+        if name == second + ".json":
+            raise OSError("synthetic publication failure")
+        return publish(directory, name, raw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(notify_spool, "publish_file", interrupt)
+        initial = _drain(scene)
+    assert initial["confirmed"] == initial["publish_failed"] == 1
+    assert (_results(scene) / (first + ".json")).is_file()
+    assert not (_results(scene) / (second + ".json")).exists()
+    monkeypatch.setattr(stamp_write.time, "time", lambda: NOW + stamp_write.PUBLISH_BACKOFF_BASE_S)
+    assert _drain(scene)["publish_pending"] == 0
+    for click in (first, second):
+        final = json.loads((_results(scene) / (click + ".json")).read_bytes())
+        assert (final["request_id"], final["stamp_state"]) == (click, "confirmed")
+    assert scene[3].posts == [(101, "viewed", False)]

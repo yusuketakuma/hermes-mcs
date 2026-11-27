@@ -404,10 +404,14 @@ def watch_result(db, command_id, request_id):
         if str(uuid.UUID(request_id)) != request_id:
             return False
         with db:
-            return db.execute("UPDATE artifacts SET meta=json_set(meta,'$.followup_request_id',?) "
-                              "WHERE kind=? AND json_extract(meta,'$.command_id')=? "
-                              "AND json_extract(content,'$.state')='queued'",
-                              (request_id, KIND, command_id)).rowcount > 0
+            # Keep earlier clicks, including the single ID written by older versions.
+            # A JSON object makes concurrent or repeated registration of the same ID idempotent.
+            return db.execute(
+                "UPDATE artifacts SET meta=json_insert(meta, '$.followup_request_id', ?1, ?2, 1) "
+                "WHERE kind=?3 AND json_extract(meta,'$.command_id')=?4 "
+                "AND json_extract(content,'$.state')='queued'",
+                (request_id, f'$.followup_request_ids."{request_id}"', KIND, command_id),
+            ).rowcount > 0
     except (AttributeError, TypeError, ValueError, sqlite3.Error):
         return False
 
@@ -426,13 +430,16 @@ def _publish_result(ledger, root, value):
     notify_spool.ensure_dirs(root)
     results = notify_spool.notify_dirs(root)["cmd_results"]
     notify_spool.publish_file(results, req["command_id"] + ".json", canonical(result))
-    click = ledger.db.execute("SELECT json_extract(meta,'$.followup_request_id') FROM artifacts "
-                              "WHERE kind=? AND json_extract(meta,'$.command_id')=?",
-                              (KIND, req["command_id"])).fetchone()
-    if click and isinstance(click[0], str) and result.get("stamp_state") != "queued":
-        # A card press's followup reads only its click's request_id (written by watch_result).
-        notify_spool.publish_file(results, str(uuid.UUID(click[0])) + ".json",
-                                  canonical({**result, "request_id": click[0]}))
+    if result.get("stamp_state") != "queued":
+        row = ledger.db.execute("SELECT meta FROM artifacts WHERE kind=? AND json_extract(meta,'$.command_id')=?",
+                                (KIND, req["command_id"])).fetchone()
+        if row:
+            meta = json.loads(row[0])
+            clicks = (meta.get("followup_request_id"), *meta.get("followup_request_ids", {}))
+            for click in dict.fromkeys(clicks):
+                if isinstance(click, str):
+                    notify_spool.publish_file(results, str(uuid.UUID(click)) + ".json",
+                                              canonical({**result, "request_id": click}))
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.result_published',json('true')) "
                           "WHERE kind=? AND json_extract(meta,'$.command_id')=?",

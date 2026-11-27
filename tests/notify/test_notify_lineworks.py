@@ -232,8 +232,10 @@ def test_lineworks_revoke_invalidates_tokens_without_remote_delete(led):
     assert _card(led)["delivery_state"] == "revoked"
 
 
+@pytest.mark.parametrize("cfg", [LINEWORKS, {**CFG, "notify": {**CFG["notify"], "reply_cards": False}}],
+                         ids=["lineworks", "discord-combined"])
 @pytest.mark.parametrize("notify_all_replies", [False, True])
-def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, notify_all_replies):
+def test_thread_capture_window_keeps_old_reply_and_file_out_of_delivery(led, notify_all_replies, cfg):
     from ingest_testkit import _message
     from notify_testkit import _attach
 
@@ -253,7 +255,7 @@ def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, 
     event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
     assert json.loads(event["payload"])["message_ids"] == [102]
     # Dispatch later, after both posts have aged out, with the setting removed.
-    assert _dispatch(led, event, LINEWORKS, now=NOW + 3 * day)["dispatched"]
+    assert _dispatch(led, event, cfg, now=NOW + 3 * day)["dispatched"]
     render = _latest_render(led)
     spec = json.loads(render["spec_json"])
     shown = json.loads(led.db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
@@ -263,6 +265,103 @@ def test_lineworks_capture_window_keeps_old_reply_and_file_out_of_delivery(led, 
     files = {p["attachment_id"] for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part"}
     assert new_file in files and old_file not in files
     assert led.db.execute("SELECT body_text FROM messages WHERE message_id=101").fetchone()[0] == "SYNTHETIC-OLD"
+
+
+def test_manual_history_window_limits_later_lineworks_delivery_and_display(led, tmp_path, monkeypatch, capsys):
+    import sys
+    import init_data
+    import mcs_contract
+
+    day = 86400
+    old_ts = datetime.fromtimestamp(NOW - 2 * day, timezone.utc).isoformat()
+    new_ts = datetime.fromtimestamp(NOW - 3600, timezone.utc).isoformat()
+
+    def message(mid, parent_id=None, posted=old_ts, unread=False, replies=0):
+        return mcs_contract.Message(
+            message_id=mid, project_id=1, parent_id=parent_id, sender_id=1,
+            sender_name="synthetic", sender_type="staff", profession="", organization="",
+            posted_at=posted, body_html=f"SYNTHETIC-{mid}", body_state="full",
+            is_unread=unread, reply_count=replies)
+
+    class Adapter:
+        def set_deadline(self, _deadline):
+            pass
+
+        def list_projects(self):
+            patient = mcs_contract.UnreadPatient(
+                project_id=1, project_type="medical", patient_name="synthetic",
+                disease="d", station_name="s", url="u")
+            patient.last_activity = int(NOW)
+            return [patient]
+
+        def fetch_history(self, pid, since, max_pages=1, start_page=1):
+            return mcs_contract.MessageBatch(
+                [message(100, replies=1)], pages=1, reached=True)
+
+        def fetch_thread(self, pid, mid, **kwargs):
+            return [message(101, parent_id=100)]
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"notify_max_age_h": 24}))
+    monkeypatch.setattr(init_data, "CONF_PATH", str(config))
+    monkeypatch.setattr(init_data, "DB", str(tmp_path / "data" / "ledger.db"))
+    monkeypatch.setattr(init_data, "LOCKFILE", str(tmp_path / "run.lock"))
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda **kw: Adapter())
+    monkeypatch.setattr(sys, "argv", ["init_data.py", "--since", "1", "--delay", "0", "--pages", "1"])
+
+    assert init_data.main() == 0
+    capsys.readouterr()
+    rows = led.db.execute(
+        "SELECT message_id,body_text,notify_age_excluded FROM messages ORDER BY message_id").fetchall()
+    assert [row["message_id"] for row in rows] == [100, 101]
+    assert [row["notify_age_excluded"] for row in rows] == [1, 1]
+
+    led.save_thread_replies([message(102, parent_id=100, posted=new_ts, unread=True)], 1,
+                            notify={"source": "reply_job"}, notify_max_age_s=day)
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=102", (NOW - 900,))
+    event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchone()
+    assert json.loads(event["payload"])["message_ids"] == [102]
+
+    cfg = {**LINEWORKS, "notify_max_age_h": 24}
+    assert _dispatch(led, event, cfg)["dispatched"]
+    render = _latest_render(led)
+    shown = json.loads(led.db.execute(
+        "SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+        (render["manifest_id"],)).fetchone()[0])
+    assert shown == [102]
+    assert "SYNTHETIC-102" in render["spec_json"]
+    assert "SYNTHETIC-100" not in render["spec_json"]
+    assert "SYNTHETIC-101" not in render["spec_json"]
+    assert led.db.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 3
+
+
+@pytest.mark.parametrize("content,error", [
+    ("{synthetic malformed", "config_unreadable"),
+    (json.dumps({"notify_max_age_h": "24"}), "notify_max_age_h_invalid"),
+])
+def test_manual_history_refuses_untrusted_notify_age_config_before_saving(led, tmp_path, monkeypatch, capsys, content, error):
+    import sys
+    import init_data
+
+    class Adapter:
+        def set_deadline(self, _deadline):
+            pass
+
+        def list_projects(self):
+            raise AssertionError("history import must stop before reading patients")
+
+    config = tmp_path / "config.json"
+    config.write_text(content)
+    monkeypatch.setattr(init_data, "CONF_PATH", str(config))
+    monkeypatch.setattr(init_data, "DB", str(tmp_path / "data" / "ledger.db"))
+    monkeypatch.setattr(init_data, "LOCKFILE", str(tmp_path / "run.lock"))
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda **kw: Adapter())
+    monkeypatch.setattr(sys, "argv", ["init_data.py", "--since", "1", "--delay", "0", "--pages", "1"])
+
+    assert init_data.main() == 2
+    assert error in capsys.readouterr().out
+    assert led.db.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 0
 
 
 def test_lineworks_legacy_window_preserves_a_delivered_reply_without_an_intent(led):
@@ -288,18 +387,23 @@ def test_lineworks_legacy_window_preserves_a_delivered_reply_without_an_intent(l
     assert "返信未取得" not in render["spec_json"]
 
 
-def test_lineworks_rechecks_a_legacy_queued_face_before_grant(led):
+@pytest.mark.parametrize("base_cfg", [
+    LINEWORKS,
+    {**CFG, "notify": {**CFG["notify"], "reply_cards": False,
+                       "discord": {"profile": "mcs", "application_id": "1", "guild_id": "7", "channel_id": "42"}}},
+], ids=["lineworks", "discord-combined"])
+def test_thread_rechecks_a_legacy_queued_face_before_grant(led, base_cfg):
     from notify_testkit import _msg
 
     _seed_thread(led)
     _msg(led, 102, parent=100, body="SYNTHETIC-LEGACY-OLD", ts=int(NOW - 2 * 86400))
     led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=102", (NOW - 300,))
     led.db.commit()
-    _dispatch(led, _intent(led), LINEWORKS)
+    _dispatch(led, _intent(led), base_cfg)
     legacy = _latest_render(led)
     assert "SYNTHETIC-LEGACY-OLD" in legacy["spec_json"]
 
-    cfg = {**LINEWORKS, "notify_max_age_h": 24}
+    cfg = {**base_cfg, "notify_max_age_h": 24}
     result = _apply(led, envelopes.transport_begin(_claim(legacy)), cfg)
     assert not result["granted"] and result["error"] == "denied_source_changed"
     updated = _latest_render(led)

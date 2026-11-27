@@ -72,6 +72,7 @@ from update_repository import (
 from update_restore import (
     _adopted_marker,
     _consent_hold,
+    _cancel_unsent_notices,
     _restore_db,
     _restore_entered,
     _rollback_applying,
@@ -599,6 +600,12 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if applying.pop("restore_incomplete", None) or held_before:
                     journal_store.save_state(STATE_PATH, state)
             try:
+                if applying.get("rollback"):
+                    _cancel_unsent_notices()
+            except UpdateError:
+                _report("notice_cancel_failed", "rollback notice cancellation unverified — restart held")
+                return 1
+            try:
                 continuation = update_policy.classify_recovery_target_continuation(
                     rollback=bool(applying.get("rollback")),
                     runtime_migration=bool(applying.get("runtime_migration")),
@@ -629,7 +636,8 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         with _legacy_provider_migration_guard(
                                 state, recovery_fds=(upd_fd, run_fd),
                                 expected_mode=provider_recovery_mode) as before_publication:
-                            update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
+                            update_migrations.migrate_provider_settings(HOME, before_publication=before_publication,
+                                allow_legacy_retire=applying.get("provider_settings_migration_required") is True)
                         if _provider_migration_needed():
                             raise ValueError("provider_migration_incomplete")
                     except (update_migrations.MigrationError, UpdateError, OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
@@ -676,6 +684,11 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
             if not applying.get("rollback") and "post_merge" in stages:
                 # The new code ran and its failed rollback reset the tree but
                 # may not have re-rendered services: redo them, as _rollback_tree.
+                try:
+                    _cancel_unsent_notices()
+                except UpdateError:
+                    _report("notice_cancel_failed", "rollback notice cancellation unverified — restart held")
+                    return 1
                 try:
                     problems = service_management.retire_to_snapshot(
                         applying["manifest_snapshot"] if "manifest_snapshot" in applying
@@ -790,6 +803,7 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     # Keep the journal until workers are verified live; retry healthy workers
     # without bouncing them again for the same journal and checkout.
     _remove_marker()
+    applying = state.get("applying") or {}
     dkey = _drainers_key(state, _head_sha())
     if _last_report().get("drainers_key") == dkey:
         problems = restart_agents(bounce=False)
@@ -799,7 +813,6 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
         _report("recovery_incomplete", "restart:" + ",".join(problems),
                 drainers_key=dkey)
         return 1
-    applying = state.get("applying") or {}
     cid = applying.get("command_id")
     if cid:
         # consume the receipt — without this the next check would

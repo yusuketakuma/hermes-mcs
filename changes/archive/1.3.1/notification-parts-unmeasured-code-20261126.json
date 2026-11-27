@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "通知の本文・添付の完了件数を測定できないときの警報を、実測された未完了と区別",
+  "summary": "本文・添付の送信完了を観測できない（制限時間超過・読取り失敗）場合、監視コードがnotification_parts_incompleteからnotification_parts_unavailableに変わります。実際に未完了の部品が観測されている場合は従来どおりnotification_parts_incompleteです。件数の内訳が合わない記録や、観測時刻を確認できない旧形式の記録は未測定と表示します。",
+  "upgrade": "追加操作は不要です。測定不能の警報が続く場合は収集ログを確認してください。観測が再開すると自動で切り替わります。",
+  "details": [
+    "測定不能な間は件数を示さず、次回の収集で再確認する案内を表示します。",
+    "期限内の過去の観測値（carry）は従来どおり記録時点の値として表示し、notification_parts_incompleteのままです。",
+    "監視の再送・配送確定の判断は変更していません。"
+  ],
+  "refs": ["mcs/ingest/health_report.py", "mcs/ingest/health_watch.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+}

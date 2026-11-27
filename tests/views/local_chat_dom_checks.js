@@ -7,19 +7,26 @@ class Element {
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
   get firstElementChild() {return this.children[0];}
+  get firstChild() {return this.children[0];}
   remove() {this.parentNode.children = this.parentNode.children.filter(node => node !== this);}
   set id(value) {nodes.set(value, this);}
   setAttribute() {}
   scrollIntoView() {}
   focus() {document.activeElement = this;}
   contains(node) {for (; node; node = node.parentNode) if (node === this) return true; return false;}
+  get options() {return this.children.filter(node => node.tagName === "option");}
+  matches(selector) {return selector === this.tagName || (selector.startsWith(".") && this.className.split(" ").includes(selector.slice(1))) || (selector.startsWith('[name="') && this.name === selector.slice(7, -2));}
+  querySelector(selector) {return this.querySelectorAll(selector)[0] || null;}
+  querySelectorAll(selector) {const out = []; const walk = node => {for (const child of node.children) {if (child.matches && child.matches(selector)) out.push(child); walk(child);}}; walk(this); return out;}
+  addEventListener(type, handler) {(this.listeners ||= {})[type] = handler;}
 }
 const nodes = new Map();
 const listeners = {};
-const document = {body: new Element("body"), activeElement: null, addEventListener(type, handler) {(listeners[type] ||= []).push(handler);}, getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
+const document = {body: Object.assign(new Element("body"), {dataset: {}}), activeElement: null, addEventListener(type, handler) {(listeners[type] ||= []).push(handler);}, getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, querySelectorAll: () => [], createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
 const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promise(() => {})};
 vm.createContext(sandbox);
-const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");
+const source = process.argv.slice(2).map(path => fs.readFileSync(path, "utf8")
+  .replace(/loadPatients\(\);\s*$/, "").replace(/initHomecare\(\);\s*$/, "")).join("\n");
 vm.runInContext(source, sandbox);
 const realApi = sandbox.api;
 function content(node) {return [node.textContent, ...node.children.map(content)].join("\n");}
@@ -595,5 +602,197 @@ async function checkMcsData() {
   assert.equal(lines, "@自分宛て: 自分のアカウントを特定できません|ピン留め: 未取得|ブックマーク: なし");
   assert.equal(texts(run("flagLines")({})), "@自分宛て: 状態不明|ピン留め: 状態不明|ブックマーク: 状態不明");
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); console.log("local chat DOM contracts passed");}
+
+async function checkOpenMcsPatientSelection() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  const p11 = {project_id: 11, heading: "合成 十一", message_count: 1}, p22 = {project_id: 22, heading: "合成 二十二", message_count: 1}, p33 = {project_id: 33, heading: "合成 三十三", message_count: 1};
+  run("hc.enabled = true; hc.meta = {qualifications: {}, roles: {}, visit_kinds: {}}; state.project = 11; state.openPatient = null", sandbox);
+  run("loadMain = async () => {}; loadPatientContext = async () => {}; loadSideStatus = async () => {}; loadCounts = async () => {}", sandbox);
+  run("state.patients = [{project_id: 22, heading: '合成 旧二十二', message_count: 1}]", sandbox);
+  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [] : [p11], next_cursor: null});
+  await run("openMcs(22)");
+  assert.equal(run("state.project", sandbox), null);
+  assert.equal(byId("patient-name").textContent, "患者が見つかりません");
+  assert.equal(byId("patient-meta").textContent, "ID 22");
+  assert.match(byId("timeline-status").textContent, /見つかりません/);
+
+  const filtered = {project_id: 44, heading: "合成 旧検索", message_count: 1};
+  byId("patient-search").value = "旧検索";
+  sandbox.api = async () => ({items: [filtered], next_cursor: "old-search-page"});
+  await run("loadPatients()");
+  assert.match(content(byId("patients")), /旧検索/);
+  sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
+    if (kind === "hc/patients") return {items: []};
+    if (params.q === "22" && !params.cursor) return {items: [], next_cursor: "next"};
+    if (params.q === "22" && params.cursor === "next") return {items: [{...p22, heading: "合成 新二十二"}], next_cursor: null};
+    assert.equal(params.q, "");
+    if (!params.cursor) return {items: [p11], next_cursor: "all-patients-page"};
+    assert.equal(params.cursor, "all-patients-page", "an unfiltered page uses its own cursor");
+    return {items: [p33], next_cursor: null};
+  };
+  await run('setMode("pharmacy")');
+  const card = run('mcsCard({project_id: 22, patient_name: "合成 二十二"}, () => true)');
+  await button(card, "タイムラインを開く").onclick();
+  assert.equal(byId("patient-search").value, "");
+  assert.equal(run("state.project"), 22);
+  assert.equal(run("state.openPatient.heading"), "合成 新二十二");
+  assert.match(content(byId("patients")), /合成 十一/);
+  assert.doesNotMatch(content(byId("patients")), /合成 旧検索/);
+  assert.equal(byId("more-patients").hidden, false);
+  await byId("more-patients").onclick();
+  assert.match(content(byId("patients")), /合成 三十三/);
+  assert.equal(byId("more-patients").hidden, true);
+  assert.equal(run("state.project"), 22);
+
+  let answer22;
+  sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
+    if (params.q === "22") return new Promise(resolve => {answer22 = resolve;});
+    if (params.q === "33") return {items: [p33], next_cursor: null};
+    return {items: [], next_cursor: null};
+  };
+  const first = button(card, "タイムラインを開く").onclick();
+  for (let i = 0; i < 20 && !answer22; i++) await Promise.resolve();
+  assert.equal(typeof answer22, "function");
+  const secondCard = run('mcsCard({project_id: 33, patient_name: "合成 三十三"}, () => true)');
+  const second = button(secondCard, "タイムラインを開く").onclick();
+  await second;
+  assert.equal(run("state.project", sandbox), 33);
+  answer22({items: [p22], next_cursor: null});
+  await first;
+  assert.equal(run("state.project", sandbox), 33);
+
+  // A later search owns the sidebar and selection even if the linked lookup then fails.
+  let rejectOld;
+  sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
+    if (params.q === "22") return new Promise((resolve, reject) => {rejectOld = reject;});
+    return {items: params.q ? [p33] : [p11], next_cursor: params.q ? null : "new-page"};
+  };
+  const stale = button(card, "タイムラインを開く").onclick();
+  for (let i = 0; i < 20 && !rejectOld; i++) await Promise.resolve();
+  assert.equal(typeof rejectOld, "function");
+  assert.equal(byId("more-patients").hidden, true, "the sidebar opens with its linked selection");
+  assert.match(content(byId("patients")), /読み込んでいます/);
+  assert.equal(byId("patient-count").textContent, "");
+  byId("patient-search").value = "三十三";
+  byId("patient-form").onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && run("state.project") !== 33; i++) await Promise.resolve();
+  assert.equal(run("state.project"), 33);
+  byId("error").hidden = true;
+  rejectOld(new Error("合成 旧リンクの失敗"));
+  await stale;
+  assert.equal(byId("error").hidden, true);
+  assert.match(content(byId("patients")), /合成 三十三/);
+
+  // The first-page request can fail while the individually authorized linked patient opens.
+  let rejectList;
+  sandbox.api = async (kind, params) => {
+    if (params.q === "") return new Promise((resolve, reject) => {rejectList = reject;});
+    return {items: params.q === "22" ? [p22] : [filtered], next_cursor: params.q === "22" ? null : "old-search-page"};
+  };
+  byId("patient-search").value = "旧検索";
+  await run("loadPatients()");
+  const linked = button(card, "タイムラインを開く").onclick();
+  rejectList(new Error("合成 一覧エラー"));
+  await linked;
+  assert.equal(run("state.project"), 22);
+  assert.equal(byId("patient-name").textContent, p22.heading);
+  assert.equal(byId("patient-count").textContent, "");
+  assert.match(content(byId("patients")), /患者一覧を取得できません/);
+  assert.match(content(byId("patients")), /合成 二十二/);
+  assert.doesNotMatch(content(byId("patients")), /旧検索|該当する患者はいません/);
+  assert.equal(byId("more-patients").hidden, true);
+
+  // A newer successful search replaces both the error and cursor, even if an earlier list fails late.
+  const obsolete = button(card, "タイムラインを開く").onclick();
+  byId("patient-search").value = "三十三";
+  sandbox.api = async (kind, params) => {
+    assert.equal(params.q, "三十三"); assert.equal(params.cursor, null);
+    return {items: [p33], next_cursor: null};
+  };
+  byId("patient-form").onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && run("state.project") !== 33; i++) await Promise.resolve();
+  rejectList(new Error("合成 古い一覧エラー"));
+  await obsolete;
+  assert.equal(run("state.project"), 33);
+  assert.equal(byId("patient-count").textContent, "1");
+  assert.match(content(byId("patients")), /合成 三十三/);
+  assert.doesNotMatch(content(byId("patients")), /取得できません|旧検索|一覧エラー/);
+  assert.equal(byId("error").hidden, true);
+  sandbox.api = async () => ({items: [], next_cursor: null});
+  await run("loadPatients()");
+  assert.equal(byId("patient-count").textContent, "0");
+  assert.match(content(byId("patients")), /該当する患者はいません/);
+}
+
+async function checkPatientSearchSelection() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  const search = byId("patient-search"), rows = byId("patients"), more = byId("more-patients");
+  const patient = id => ({project_id: id, heading: `合成 患者${id}`, message_count: 1});
+  const submit = () => byId("patient-form").onsubmit({preventDefault() {}});
+  let answer;
+  const pages = [];
+  sandbox.api = async (kind, {q, cursor}) => {
+    if (kind === "hc/patients") return {items: []};
+    if (q === "旧検索") return {items: [patient(11), patient(22)], next_cursor: "old-page"};
+    pages.push([q, cursor]);
+    if (cursor) return {items: [patient(55)], next_cursor: null};
+    return new Promise(resolve => {answer = resolve;});
+  };
+  search.value = "旧検索"; submit(); await new Promise(setImmediate);
+  search.value = "新検索"; submit();
+  rows.children.find(row => content(row).includes("合成 患者22")).onclick();
+  assert.equal(byId("patient-name").textContent, "合成 患者22");
+  assert.equal(more.hidden, true);
+  answer({items: [patient(33)], next_cursor: "new-page"}); await new Promise(setImmediate);
+  assert.match(content(rows), /合成 患者33/);
+  assert.doesNotMatch(content(rows), /合成 患者11|合成 患者22/);
+  assert.equal(more.hidden, false);
+  search.value = "";  // Editing the field does not submit another search.
+  await more.onclick();
+  assert.deepEqual(pages, [["新検索", null], ["新検索", "new-page"]]);
+  assert.match(content(rows), /合成 患者33[\s\S]*合成 患者55/);
+  assert.doesNotMatch(content(rows), /合成 患者22/);
+  assert.equal(byId("patient-name").textContent, "合成 患者22");
+  assert.equal(more.hidden, true);
+
+  search.value = "切替前"; submit();
+  await run('setMode("pharmacy")');
+  answer({items: [patient(66)], next_cursor: "abandoned-page"}); await new Promise(setImmediate);
+  assert.equal(byId("patient-name").textContent, "患者台帳");
+  assert.doesNotMatch(content(rows), /合成 患者66/);
+  assert.equal(more.hidden, true);
+}
+
+
+async function checkRouteStaffRace() {
+  const run = code => vm.runInContext(code, sandbox);
+  run('hc.enabled = true; hc.routes = true; hc.actor = 1; hc.csrf = "synthetic"; hc.staff = [{staff_id:1,name:"合成 一",active:true},{staff_id:2,name:"合成 二",active:true}]; hc.meta = {qualifications:{},roles:{},visit_kinds:{}}', sandbox);
+  const route = run('routeCard("2026-11-27")', sandbox), form = route.card.querySelector("form"), select = form.querySelector("select"), result = route.card.querySelector(".route-result");
+  assert.ok(form && select && result);
+  let answer1, answer2;
+  sandbox.fetch = (_url, options) => {
+    const body = JSON.parse(options.body);
+    return new Promise(resolve => {if (body.staff === 1) answer1 = resolve; else answer2 = resolve;})
+      .then(plan => ({ok: true, json: async () => plan}));
+  };
+  select.value = "1";
+  const first = form.onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && !answer1; i++) await Promise.resolve();
+  select.value = "2";
+  select.listeners.change();
+  answer1({stops: [{patient_name: "合成一の患者", start_time: "10:00", arrival: "09:50"}], unscheduled: [], unlocated: []});
+  await first;
+  assert.doesNotMatch(content(result), /合成一の患者/);
+  const second = form.onsubmit({preventDefault() {}});
+  for (let i = 0; i < 20 && !answer2; i++) await Promise.resolve();
+  answer2({stops: [{patient_name: "合成二の患者", start_time: "11:00", arrival: "10:50"}], unscheduled: [], unlocated: []});
+  await second;
+  assert.match(content(result), /合成二の患者/);
+  assert.doesNotMatch(content(result), /合成一の患者/);
+}
+
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); await checkOpenMcsPatientSelection(); await checkPatientSearchSelection(); await checkRouteStaffRace(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

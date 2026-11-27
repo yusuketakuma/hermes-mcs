@@ -22,7 +22,7 @@ from test_mcs_update import prepared_run_log as prepared_run_log, updater as upd
 
 def _installed_identity(monkeypatch, repo):
     monkeypatch.delenv('MCS_UPDATE_REPO', raising=False)
-    monkeypatch.setattr(update_planning, '__file__', str(repo / 'mcs/ops/update_planning.py'))
+    monkeypatch.setattr(update_planning, '__file__', str(repo / 'mcs/ops/update/update_planning.py'))
     monkeypatch.setattr(mcs_util, 'REPO', str(repo))
     monkeypatch.setattr(sys, 'argv', [str(repo / 'mcs/ops/mcs_update.py')])
 
@@ -49,7 +49,7 @@ def test_installed_identity_cannot_open_external_or_ambiguous_source(
     if problem in ('empty_env', 'external_env'):
         monkeypatch.setenv('MCS_UPDATE_REPO', '' if problem == 'empty_env' else str(repo))
     elif problem == 'foreign_source':
-        monkeypatch.setattr(update_planning, '__file__', str(tmp_path / 'foreign/mcs/ops/update_planning.py'))
+        monkeypatch.setattr(update_planning, '__file__', str(tmp_path / 'foreign/mcs/ops/update/update_planning.py'))
     elif problem == 'foreign_entry':
         monkeypatch.setattr(sys, 'argv', [str(tmp_path / 'foreign/mcs_update.py')])
     elif problem == 'foreign_repo':

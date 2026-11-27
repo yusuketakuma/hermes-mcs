@@ -36,7 +36,8 @@ def test_post_merge_provider_migration_precedes_services(updater, monkeypatch, n
     state = updater.journal_store.default_state()
     state['applying'] = {'tag': 'v1.1.0', 'sha': 'a' * 40, 'prev_sha': 'b' * 40,
                          **({'release_ref': {'synthetic': True}} if native else {})}
-    def migrate(root):
+    def migrate(root, *, allow_legacy_retire):
+        assert not allow_legacy_retire
         assert root == updater.HOME
         calls.append('migrate')
         if failed:
@@ -1034,6 +1035,7 @@ def test_postcheck_accepts_only_same_legacy_diagnostic(
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 123)
     monkeypatch.setattr(update_execution, '_agent_pid', mcs_update._agent_pid)
     monkeypatch.setattr(update_services, '_agent_pid', mcs_update._agent_pid)
+    _mk_schema(updater.LEDGER, 8)
     monkeypatch.setattr(ledger, "Ledger", lambda path:
                         SimpleNamespace(db=SimpleNamespace(close=lambda: None)))
     monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([after], []))
@@ -1224,7 +1226,7 @@ def test_abort_notice_dropped_by_a_busy_tick_is_sent_by_the_next_check(updater, 
 
 # ------------------------------------------- idempotent pending abort notices
 
-_WORKTREE = str(Path(update_lifecycle_context.__file__).resolve().parents[2])
+_WORKTREE = str(Path(__file__).resolve().parents[2])
 
 
 def _pending_notice_check_env(updater, tmp_path, monkeypatch, pending, *, child=False):
@@ -1234,7 +1236,7 @@ def _pending_notice_check_env(updater, tmp_path, monkeypatch, pending, *, child=
     monkeypatch.setattr(update_lifecycle_context, 'LEDGER', str(tmp_path / 'notice-ledger.db'))
     if child:
         monkeypatch.setattr(update_lifecycle_context, '__file__',
-                            str(tmp_path / 'launcher' / 'mcs' / 'ops' / 'update_lifecycle_context.py'))
+                            str(tmp_path / 'launcher' / 'mcs' / 'ops' / 'update' / 'update_lifecycle_context.py'))
     os.makedirs(updater.DATA, exist_ok=True)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: (None, None))

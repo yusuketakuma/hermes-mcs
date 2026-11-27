@@ -33,8 +33,8 @@ def add_arguments(parser):
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--prepare-provision-root', action='store_true', help='新しい私有領域を準備し、Console発行用のroot IDを保存する')
     group.add_argument('--import-provision', type=Path, metavar='FILE', help='Consoleから受け取った公開bundleを取り込む')
-    group.add_argument('--provision-ack', choices=('monitor', 'support', 'restart'), metavar='PROFILE', help='R1登録後に対象profileの配布受領を中央へ照合・送信する')
-    group.add_argument('--provision-status', choices=('monitor', 'support', 'restart'), metavar='PROFILE', help='対象profileの配布状態を中央へ照会する')
+    group.add_argument('--provision-ack', choices=('monitor', 'support', 'restart', 'auto'), metavar='PROFILE', help='R1登録後に対象profileの配布受領を中央へ照合・送信する')
+    group.add_argument('--provision-status', choices=('monitor', 'support', 'restart', 'auto'), metavar='PROFILE', help='対象profileの配布状態を中央へ照会する')
     parser.add_argument('--confirm-human', action='store_true', help='この配布操作、または connect / rotate-key / disconnect の資格情報変更を本人が確認した')
     parser.add_argument('--reason', help='配布操作・資格情報変更の記録用理由（秘密を含まない半角文字、128文字以内）')
 
@@ -127,6 +127,10 @@ def _initialize_profile(store, profile):
     elif profile == 'restart':
         def initialize():
             restart_client.initialize_local_state(store)
+    elif profile == 'auto':
+        # autoにはconsumer state fileが無い — 初期化はpermitの消費だけ。
+        def initialize():
+            pass
     else:
         raise ValueError('SDC_PROVISION_UNSUPPORTED')
     provision.initialize_profile(store, profile=profile, now_ms=int(time.time() * 1000), initializer=initialize)
@@ -137,6 +141,8 @@ def _check_existing_profile(store, profile):
 
     now_ms = int(time.time() * 1000)
     provision.profile_snapshot(store, profile=profile, now_ms=now_ms)
+    if profile == 'auto':
+        return  # consumer stateを持たないためclient statusは無い
     client = support_client if profile == 'support' else restart_client
     client.status(store, now_ms=now_ms)
 
@@ -169,15 +175,19 @@ def run(args, *, connect):
                 if profile != 'monitor':
                     if previous['local_receipt_id'] is None:
                         _initialize_profile(store, profile)
-                        print('対象profileの空の支援記録を準備しました。診断への同意やサービス操作はまだ開始しません。')
+                        if profile == 'auto':
+                            print('対象profileの配布を有効化しました。自動更新はstanding consentとpin配置が揃うまで開始しません。')
+                        else:
+                            print('対象profileの空の支援記録を準備しました。診断への同意やサービス操作はまだ開始しません。')
                     else:
                         _check_existing_profile(store, profile)
-                        print('保存済みのprofileと支援記録を確認しました。停止状態や同意は作り直しません。')
+                        print('保存済みのprofile' + ('' if profile == 'auto' else 'と支援記録') + 'を確認しました。停止状態や同意は作り直しません。')
                     print('配布の状態: mcs connection --state-root <同じ私有領域> --provision-status ' + profile)
                     print('配布の受領: mcs connection --state-root <同じ私有領域> --provision-ack ' + profile
                           + ' --confirm-human --reason <秘密を含まない半角の理由>')
-                    print('次の操作: ' + ('mcs support connect（本人確認済みcase UUID）' if profile == 'support'
-                                          else 'mcs support plan-restart（本人確認済みcase UUID）'))
+                    if profile != 'auto':
+                        print('次の操作: ' + ('mcs support connect（本人確認済みcase UUID）' if profile == 'support'
+                                              else 'mcs support plan-restart（本人確認済みcase UUID）'))
                     return 0
                 print('配布を保存しました。Consoleの対象と登録コードを確認してから、既存のR1登録へ進めます。'
                       'R1登録後には connection --provision-status monitor / --provision-ack monitor で配布との一致を確認します。')

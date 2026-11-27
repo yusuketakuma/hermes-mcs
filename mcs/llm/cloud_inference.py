@@ -109,6 +109,11 @@ def _current_cloud_settings():
 
 _RESULT_SAVE_TRIES = 5
 
+# One fresh-snapshot retry of a transiently busy history read is a bounded
+# probe: its sqlite wait stays far under the connection's busy timeout, and
+# the retry is skipped unless the unit still has the probe's cost to spare.
+_TRANSIENT_READ_RETRY_S = 1.0  # pre-check margin scale only; the lock wait itself is the connection's own busy timeout
+
 
 def _after_send_code(metadata):
     """The classifier's after-send code for one attempt's result metadata; None for a clean answer."""
@@ -525,9 +530,9 @@ class CloudInferenceUnit:
                     cloud_policy._observe_recovery(observation, 'skipped_binding')
                     return None
                 self.commit_guard()
-                try:
+                def read_once(ledger_view):
                     body = self.client.body(prompt, tokens, prefix)
-                    return cloud_policy.recover_response(self.ledger, route=self.route,
+                    return cloud_policy.recover_response(ledger_view, route=self.route,
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
                         input_binding=self._input_binding(),
                         request_fp=mcs_util.payload_hash(body),
@@ -535,6 +540,30 @@ class CloudInferenceUnit:
                         model=self.selection["model"], effort=self.selection.get("effort"),
                         owner=self.owner, scope=self.scope,
                         **({'observation': observation} if observation is not None else {}))
+                try:
+                    try:
+                        return read_once(self.ledger)
+                    except sqlite3.OperationalError as first:
+                        # Only a locked database may be gone one snapshot later; every
+                        # other failure classifies below. The retry re-reads on the SAME
+                        # owner connection: file identity is intrinsic to the connection
+                        # (a path reopened elsewhere could be a replaced, divergent
+                        # database), and outside a transaction each statement is its own
+                        # fresh snapshot, so the retry genuinely observes a new snapshot.
+                        # Nothing about the connection is mutated. The lock wait can run
+                        # up to the connection's busy timeout regardless of the remaining
+                        # budget, so a result that arrives past the deadline is discarded
+                        # into the same hold as a failed read — correctness never depends
+                        # on how long the wait took.
+                        if (getattr(first, "sqlite_errorcode", 0) & 0xff
+                                not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                                or self.ledger.db.in_transaction
+                                or time.monotonic() + 2 * _TRANSIENT_READ_RETRY_S >= http_deadline):
+                            raise
+                        retried = read_once(self.ledger)
+                        if time.monotonic() >= http_deadline:
+                            raise first
+                        return retried
                 except cloud_client.CloudNotSent:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
@@ -556,10 +585,12 @@ class CloudInferenceUnit:
                 self.possibly_sent = True
                 self._unresolved = False
                 self.refusal = None
-                if evidence['reservation'] not in self.completed_reservations:
-                    self.completed_reservations.append(evidence['reservation'])
-                if evidence['reservation'] not in self.answered_reservations:
-                    self.answered_reservations.append(evidence['reservation'])
+                # Adoption and validation each use the last reservation of their list.
+                reservation = evidence['reservation']
+                for history in (self.completed_reservations, self.answered_reservations):
+                    if reservation in history:
+                        history.remove(reservation)
+                    history.append(reservation)
             else:
                 judged = {}
                 def send_block_reason():

@@ -29,7 +29,7 @@ PRODUCT_ENTRIES = {
     'hermes_plugin/__init__.py',
     'lineworks_adapter/__main__.py',
     'mcs/ops/mcs_setup.py',
-    'mcs/ops/update_cli.py',
+    'mcs/ops/update/update_cli.py',
     'mcs_standalone/__main__.py',
     'mcs_standalone/runtime.py',
 }
@@ -62,7 +62,7 @@ ENTRY_IMPORTS = {
     'hermes_plugin/__init__.py': {'runtime_entry'},
     'lineworks_adapter/__main__.py': {'runtime_entry'},
     'mcs/ops/mcs_setup.py': {'release_auto_status', 'runtime_entry'},
-    'mcs/ops/update_cli.py': {'release_auto_consent', 'release_auto_contract',
+    'mcs/ops/update/update_cli.py': {'release_auto_consent', 'release_auto_contract',
                               'release_auto_driver', 'release_auto_state',
                               'release_auto_status', 'release_auto_wire_factory',
                               'runtime_entry'},
@@ -159,7 +159,7 @@ def test_entry_reference_changes_are_named():
 
 def test_tick_invocation_stays_at_single_driver_boundary():
     """owner.tick is live only through release_auto_driver; recover_tick stays waiting."""
-    driver = ROOT / 'mcs/ops/release_auto_driver.py'
+    driver = ROOT / 'mcs/ops/update/release_auto_driver.py'
     trees = {p: _parse(p) for p in _files()}
     owner_offenders = []
     recovery_offenders = []

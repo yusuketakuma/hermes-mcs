@@ -71,7 +71,9 @@ def _ocr_ack_current(data, value, cfg=None):
                     or identity != attachment_ocr_ack.database_identity(db)
                     or any(os.path.lexists(path) for path in markers)):
                 return "attachment_ocr_ack_recheck_incomplete"
-            if not all(current[key] == value.get(key) for key in current):
+            if not all(current[key] == value.get(key)
+                       or (key == 'superseded_acknowledgements' and key not in value and current[key] == 0)
+                       for key in current):
                 return "attachment_ocr_ack_reconfirm_required"
             if policy and not attachment_ocr._settings_current(cfg["attachment_ocr"]):
                 return "attachment_ocr_ack_unverified"
@@ -115,6 +117,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
     failure_fields = ("failure_reason_counts", "exhausted_failed")
     ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
+    ack_optional = ('superseded_acknowledgements',)
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     snapshot_fields = ("snapshot_failure", "snapshot_timing")
@@ -124,7 +127,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                *failure_fields, *ack_fields, *ack_optional, *policy_fields, 'failure_cohort', *snapshot_fields,
                 defer_field, observed_field}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
@@ -160,9 +163,14 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                 raise ValueError("ocr_status_invalid")
         if 'failure_cohort' in value and not valid_hash(value['failure_cohort']):
             raise ValueError('ocr_status_invalid')
-        ack_detail = {key: value[key] for key in ack_fields if key in value}
-        if ack_detail:
-            if (len(ack_detail) != len(ack_fields) or len(failure_detail) != len(failure_fields)
+        if ('superseded_acknowledgements' in value
+                and (type(value['superseded_acknowledgements']) is not int
+                     or value['superseded_acknowledgements'] < 0)):
+            raise ValueError('ocr_status_invalid')
+        ack_detail = {key: value[key] for key in (*ack_fields, *ack_optional) if key in value}
+        if any(key in value for key in ack_fields):
+            if (any(key not in value for key in ack_fields)
+                    or len(failure_detail) != len(failure_fields)
                     or not valid_hash(value.get('failure_cohort'))
                     or any(type(count) is not int or count < 0 for count in ack_detail.values())
                     or ack_detail['acknowledged_exhausted'] > value['exhausted_failed']
@@ -174,7 +182,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
             rejected = value.get('policy_rejected_failed')
             rejected_exhausted = value.get('policy_rejected_exhausted')
             unack_rejected = value.get('policy_rejected_unacknowledged')
-            if (len(policy_detail) != len(policy_fields) or not ack_detail
+            if (len(policy_detail) != len(policy_fields) or any(key not in value for key in ack_fields)
                     or value.get('policy_binding') != attachment_ocr.rejection_policy(cfg)
                     or not valid_hash(value.get('policy_binding'))
                     or any(type(n) is not int for n in (rejected, rejected_exhausted, unack_rejected))
@@ -1218,9 +1226,12 @@ def build_health(db, result: dict, status: str,
         incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
                                 active_rows=active_part_rows),
         previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
-    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
+    # an unmeasurable read is not unfinished work: it is reported under its
+    # own reason, never as a measured count of incomplete parts
+    parts_unmeasured = incomplete_parts['status'] == 'unknown'
+    parts_incomplete = not parts_unmeasured and (bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
-        incomplete_parts.get('unknown_parts_total', 0))
+        incomplete_parts.get('unknown_parts_total', 0)))
     part_holds = part_holds_health(db, now, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     outbox = pending_health(db, now, seconds=remaining())
     # an unmeasurable pending count can never read as delivered work
@@ -1350,7 +1361,7 @@ def build_health(db, result: dict, status: str,
     if unstored_state != 'none_observed':
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
-    if parts_incomplete or cards_unknown:
+    if parts_incomplete or parts_unmeasured or cards_unknown:
         notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
     # an aggregate status alone cannot identify which saved work needs review.
@@ -1527,6 +1538,7 @@ def build_health(db, result: dict, status: str,
             ("notification_pending", bool(outbox["pending"])),
             ("notification_pending_unavailable", pending_unknown),
             ("notification_parts_incomplete", parts_incomplete),
+            ("notification_parts_unavailable", parts_unmeasured),
             ("notification_cards_unavailable", cards_unknown),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),

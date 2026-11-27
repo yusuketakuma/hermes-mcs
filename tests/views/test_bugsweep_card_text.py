@@ -49,14 +49,32 @@ def test_urgency_reason_is_not_cut_before_its_negating_tail(monkeypatch):
     assert f"🚨 緊急度高 — 根拠:「{reason}」" in lines
 
 
-def test_pharmacy_detail_quote_keeps_its_negating_tail(led, monkeypatch):
-    _patient(led, 1)
-    _msg(led, 100, body="合成本文")
+@pytest.mark.parametrize("store", [_extract, _llm_extract], ids=["rules", "llm"])
+def test_negated_storage_keeps_its_whole_quote_in_private_detail(led, store):
     value = "本人は薬を冷蔵庫に移したと話しているが、訪問時に確認すると実際には冷蔵保管していない"
     assert len(value) > 40
-    monkeypatch.setattr(read_model, "message_patient_context",
-                        lambda db, row: [{"subject": "patient", "details": [{"key": "storage_place", "value": value}]}])
-    assert structured_view._pharmacy_detail_lines(led.db, 100) == [f"服薬管理（保管場所）: 「{value}」"]
+    _patient(led, 1)
+    _msg(led, 100, body=value)
+    store(led, 100, {"patient_context": [{
+        "category": "medication_management", "text": value, "evidence": value, "subject": "patient",
+        "details": [{"key": "storage_place", "value": value, "evidence": value}]}]})
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    assert read_model.message_patient_context(led.db, row)[0]["details"] == [
+        {"key": "storage_place", "value": value, "evidence": value}]
+    assert structured_view._pharmacy_detail_lines(led.db, 100) == []
+
+
+def test_pharmacy_detail_without_source_quote_is_not_shown(led, monkeypatch):
+    _patient(led, 1)
+    body = "以前は冷蔵庫で保管していました。"
+    _msg(led, 100, body=body)
+    item = {"category": "medication_management", "text": body, "evidence": body, "subject": "patient",
+            "details": [{"key": "storage_place", "value": "冷蔵庫"}]}
+    _extract(led, 100, {"patient_context": [item]})
+    assert structured_view._pharmacy_detail_lines(led.db, 100) == []
+    # A reader returning the old detail verbatim must still fail the same display check.
+    monkeypatch.setattr(read_model, "message_patient_context", lambda db, row: [item])
+    assert structured_view._pharmacy_detail_lines(led.db, 100) == []
 
 
 def test_attachment_medication_matched_now_is_shown_as_current(led, tmp_path, monkeypatch):

@@ -52,6 +52,7 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
                                "notification_pending_unavailable",
+                               "notification_parts_unavailable",
                                "notification_delivery_unverified",
                                "provider_settings_unreadable"})
 STREAK_ALERT = 3
@@ -86,6 +87,7 @@ _RECORDED_DELIVERY_JA = {
     "notification_held": "通知の保留",
     "notification_pending": "通知の送信待ち",
     "notification_parts_incomplete": "通知の本文・添付の送信完了が未確認",
+    "notification_parts_unavailable": "通知の本文・添付の送信完了の件数が未確認",
     "notification_cards_unavailable": "通知カードの配送状況が未確認",
     "notification_pending_unavailable": "通知の送信待ち件数が未確認",
 }
@@ -249,9 +251,35 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     tracking = _tracking_parts(parts)
     tracking_present = isinstance(parts, dict) and any(key in parts for key in (
         'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
-    parts_unknown = (_measurement_unknown(parts, now)
-                     or tracking_present and tracking is None)
-    parts_active = parts_unknown or bool(tracking and (tracking['total'] or tracking['unknown']))
+    states = parts.get('by_state') if isinstance(parts, dict) else None
+    part_total = (
+        parts['total'] if isinstance(states, dict)
+        and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
+        and _count(parts.get('total')) and all(_count(n) for n in states.values())
+        and sum(states.values()) == parts['total'] else None)
+    measurement = 'unknown' if 'incomplete_parts' in notify else None
+    measured = False
+    if isinstance(parts, dict):
+        observed = parts.get('observed_at')
+        status = parts.get('status')
+        clock_valid = finite_number(observed) and observed <= now
+        counts_valid = part_total is not None and (not tracking_present or tracking is not None)
+        if counts_valid:
+            if status == 'recorded':
+                measurement = 'recorded'
+                measured = True
+            elif clock_valid and status == 'stale_measurement':
+                measured = True
+                if not _measurement_unknown(parts, now):
+                    measurement = 'stale'
+            elif clock_valid and 'status' not in parts:
+                measured = True
+                measurement = 'recorded' if now - observed <= CARD_STALL_S else 'stale'
+    parts_unknown = measurement == 'unknown'
+    if parts_unknown:
+        tracking = None
+    parts_active = parts_unknown or (bool(tracking['total'] or tracking['unknown'])
+                                     if tracking else bool(part_total))
     if parts_active and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
@@ -279,7 +307,15 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             reasons.append("unread_collection_unknown")
     if reasons is not None and parts_active and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
-        if 'notification_parts_incomplete' not in reasons:
+        if parts_unknown:
+            # positive counts an expired carry still shows are the old
+            # measurement's record, not current evidence: the current alert
+            # is the unmeasurable read. The record itself keeps its codes,
+            # so the measured-incomplete one stays visible in history.
+            reasons = [r for r in reasons if r != 'notification_parts_incomplete']
+            if 'notification_parts_unavailable' not in reasons:
+                reasons.append('notification_parts_unavailable')
+        elif 'notification_parts_incomplete' not in reasons:
             reasons.append('notification_parts_incomplete')
     if reasons is not None and cards_unknown and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
@@ -315,12 +351,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     pending = notify.get("pending")
     report["notify_pending"] = (pending if finite_number(pending)
                                 and pending >= 0 else None)
-    states = parts.get('by_state') if isinstance(parts, dict) else None
-    report['notify_incomplete_parts'] = (
-        parts['total'] if not parts_unknown and isinstance(states, dict)
-        and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
-        and _count(parts.get('total')) and all(_count(n) for n in states.values())
-        and sum(states.values()) == parts['total'] else None)
+    report['notify_incomplete_parts'] = None if parts_unknown else part_total
     report['notify_parts_breakdown'] = _part_breakdown(parts, report['notify_incomplete_parts'])
     report['notify_active_incomplete_parts'] = (tracking['total'] if tracking else
         None if tracking_present else report['notify_incomplete_parts'])
@@ -328,34 +359,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
     report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
         if tracking else report['notify_parts_breakdown'])
-    # the alert must tell a fresh count, a carried one and an unmeasured
-    # one apart: only 'recorded' is the current observation
-    parts_status = parts.get('status') if isinstance(parts, dict) else None
-    measurement = ('unknown' if parts_unknown
-                   else 'stale' if parts_status == 'stale_measurement'
-                   else 'recorded' if parts_status == 'recorded' else None)
-    if measurement is None and isinstance(parts, dict) and 'status' not in parts:
-        # Writers before the status field stored only counts and observed_at;
-        # judge that observation by its own clock — consistent counts with
-        # a fresh clock are a current measurement, with an old clock a past
-        # one, anything else (missing, inconsistent, unreadable) is not a
-        # measurement at all.
-        observed = parts.get('observed_at')
-        if (finite_number(observed) and observed <= now
-                and report['notify_incomplete_parts'] is not None):
-            age = now - observed
-            if age <= CARD_STALL_S:
-                measurement = 'recorded'
-            else:
-                measurement = 'stale'
-        if measurement is None:
-            measurement = 'unknown'
     report['notify_parts_measurement'] = measurement
+    report['notify_parts_measured'] = measured
     if report['notify_parts_measurement'] == 'stale':
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
     elif report['notify_parts_measurement'] == 'unknown':
-        reason = parts.get('reason')
+        reason = parts.get('reason') if isinstance(parts, dict) else None
         report['notify_parts_reason'] = (reason if reason in (
             'observation_limit', 'observation_unavailable') else None)
     held = notify.get("held_reasons")
@@ -1210,6 +1220,8 @@ _REASON_JA = {
         "通知先と配送記録、監視の状態を確認してください"),
     "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
+    "notification_parts_unavailable": ("本文・添付などの送信完了の件数を測定できていません",
+                                       "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
                                        "次回の収集で再確認します。続く場合は収集ログを確認"),
     "notification_pending_unavailable": ("通知の送信待ち件数を確認できません",
@@ -1452,7 +1464,7 @@ def _unverified_reason(report: dict, reason: str) -> bool:
     if base == "notification_parts_incomplete":
         return report.get('notify_parts_measurement') != 'recorded'
     return base in (_DELIVERY_UNVERIFIED, "notification_cards_unavailable",
-                    "notification_pending_unavailable")
+                    "notification_pending_unavailable", "notification_parts_unavailable")
 
 
 def _impact(report: dict, reasons) -> str:
@@ -1640,16 +1652,26 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 action = "次回の収集で再確認します。続く場合は収集ログを確認"
             else:
                 extra = f" {n}件" if _count(n) else ""
+                if n == 0:
+                    # a bare zero reads as 'nothing anywhere': the scope is the
+                    # tracked population, with any further records named below
+                    extra = " 追跡対象0件"
                 detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
                 if detail is not None:
                     states, plans = detail['by_state'], detail['by_plan']
                     labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
                               ('処理待ち', states['pending']), ('保留', states['held'])]
-                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                    breakdown = '・'.join(f'{label}{count}' for label, count in labels if count)
+                    if breakdown:
+                        extra += f"（現行{plans['current']}・過去{plans['superseded']}／{breakdown}）"
                 unknown = report.get('notify_unknown_part_outcomes')
-                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                    extra += f"／結果不明の全記録 {unknown}件"
+                active_unknown = detail['by_state']['unknown'] if detail else 0
+                if _count(unknown) and unknown > active_unknown:
+                    # the global count already contains the unknown rows the
+                    # breakdown shows: name the inclusion, never add them.
+                    # Rows beyond the active scope are separate records.
+                    extra += (f"／結果不明の全記録 {unknown}件（上記の結果不明を含む）" if active_unknown
+                              else f"／別に結果不明の記録 {unknown}件")
                 closed = report.get('notify_tracking_closed_parts')
                 if _count(closed) and closed:
                     extra += f"／別に運用終了・未回収 {closed}件"
@@ -1657,6 +1679,11 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     observed = report.get('notify_parts_observed_at')
                     extra += (f"（記録時点の観測値: {_jst(observed)}）"
                               if finite_number(observed) else "（記録時点の観測値）")
+        elif base == "notification_parts_unavailable":
+            why = {'observation_limit': '観測が制限時間で打ち切られました',
+                   'observation_unavailable': '観測に失敗しました'}.get(
+                       report.get('notify_parts_reason'), '観測できませんでした')
+            extra = f"（件数は未測定: {why}）"
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""
@@ -1683,24 +1710,57 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                          else "（直近の実行で保留の原因は特定できていません）")
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
-            if (isinstance(ocr, dict)
-                    and isinstance(ocr.get("failure_reason_counts"), dict)
-                    and type(ocr.get("exhausted_failed")) is int):
-                failed_counts = ocr["failure_reason_counts"]
-                overlap = failed_counts.get("output_schema_table_overlap")
-                if type(overlap) is int and overlap > 0:
-                    action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
-                              "元の添付を確認してください。解消しない場合は開発元へ連絡"
-                              f"（照会コードと {_DOCTOR} --share の結果を添える）。")
-                    if any(type(n) is int and n > 0 for key, n in failed_counts.items()
-                           if key != "output_schema_table_overlap"):
-                        action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
-                if ocr["exhausted_failed"] > 0:
-                    note = (f"観測範囲で自動再試行が上限に到達した記録が{ocr['exhausted_failed']}件あります。"
-                            "元の添付を確認してください。")
+            if isinstance(ocr, dict):
+                # 個別理由の説明(表の行列対応など)だけが内訳の有効性に依存する。
+                if (isinstance(ocr.get("failure_reason_counts"), dict)
+                        and type(ocr.get("exhausted_failed")) is int):
+                    failed_counts = ocr["failure_reason_counts"]
+                    overlap = failed_counts.get("output_schema_table_overlap")
+                    if type(overlap) is int and overlap > 0:
+                        action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
+                                  "元の添付を確認してください。解消しない場合は開発元へ連絡"
+                                  f"（照会コードと {_DOCTOR} --share の結果を添える）。")
+                        if any(type(n) is int and n > 0 for key, n in failed_counts.items()
+                               if key != "output_schema_table_overlap"):
+                            action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
+                # 未解消の件数と観測範囲は内訳に依らない上位の測定なので独立に示す。
+                # 3回到達は終了ではない: 一般失敗は日次で再試行が続く。再試行の停止を
+                # 証明するのは policy_rejected_exhausted だけ。残りは再試行中とは証明
+                # できない(再試行予約の状態はここからは分からない)ので、観測できる
+                # 事実――停止が確認されていない未解消の記録――として示す。停止分類を
+                # 測れないときは 0 扱いせず、未解消の件数だけを示す。
+                stopped = ocr.get("policy_rejected_exhausted")
+                stopped_known = type(stopped) is int and stopped >= 0
+                pending = ocr.get("pending_failed")
+                pieces = []
+                if type(pending) is int and pending >= 0:
+                    if stopped_known and pending >= stopped:
+                        active = pending - stopped
+                        if active:
+                            pieces.append(f"再試行の停止が確認されていない未解消の記録が{active}件")
+                        if stopped:
+                            pieces.append(f"再試行が止まっている記録が{stopped}件")
+                    elif pending:
+                        pieces.append(f"未解消の記録が{pending}件"
+                                      "（再試行の停止状況は確認できていません）")
+                if pieces:
+                    note = "観測範囲で" + "、".join(pieces) + "あります。"
+                    if "元の添付を確認してください" not in action:
+                        note += "元の添付を確認してください。"
                     if not action.endswith("。"):
                         action += "。"
                     action += note
+                if ocr.get("queue_status") not in (None, "known"):
+                    action = action.rstrip("。") + "。キューの件数は確認できた範囲のものです。"
+                # 直近の実行の失敗はキュー内訳や pending の有効性に依らず独立に示す。
+                # 失敗した記録は未解消キューに残るのが普通なので、件数が未解消の
+                # 記録と重複し得る集団であることを明記する。数えられないときは言わない。
+                latest = ocr.get("failed")
+                if type(latest) is int and latest > 0:
+                    if not action.endswith("。"):
+                        action += "。"
+                    action += (f"直近の実行で失敗した記録が{latest}件あります"
+                               "（未解消の記録に含まれ得ます）。")
         guide = None
         stop = (stop_explanation(report.get("run_stop"))
                 if base in ("run_failed", "session_expired") and not report.get("observations_recorded")
@@ -1816,8 +1876,15 @@ def _alert_lines(report: dict) -> list[str]:
         lines.extend(_delivery_observation_lines(report))
         recorded = report.get("recorded_delivery_reasons")
         if status == "stale" and isinstance(recorded, list):
-            past = list(dict.fromkeys(_RECORDED_DELIVERY_JA[code] for code in recorded
-                                      if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
+            # a recorded incomplete code asserts measured unfinished work only
+            # when the record's own measurement evidence is a real measurement;
+            # writers before the separation used it for unmeasurable reads too
+            unmeasured = not report.get('notify_parts_measured')
+            past = list(dict.fromkeys(
+                _RECORDED_DELIVERY_JA['notification_parts_unavailable']
+                if code == 'notification_parts_incomplete' and unmeasured
+                else _RECORDED_DELIVERY_JA[code]
+                for code in recorded if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
             if past:
                 lines.append(f"過去の通知記録（{_jst(report.get('health_at'), with_year=True)} JST）: " + "、".join(past))
         interrupt = report.get("last_interrupt")

@@ -648,7 +648,14 @@ def _settle_history_job(ledger, job, pl, *, pid, since, sp, pages, initial,
         pl["stalls"] = pl.get("stalls", 0) + 1
     floored = False
     is_head = job["kind"] == "history_head"
-    if initial and invalid_observations:
+    target = job["message_id"] if is_head else 0
+    if target and activity_stored(ledger, pid, target):
+        ledger.job_done(job["job_id"])
+    elif (target and batch.reached and not batch.error and merged.checkpoint_safe
+          and not ledger.pending_reply_jobs(pid)):
+        ledger.job_fail(job["job_id"], reason_code="window_stalled")
+        result["errors"].append(f"probe {pid}: history_incomplete")
+    elif initial and invalid_observations:
         ledger.job_fail(job["job_id"], reason_code="schema_error")
         result["errors"].append(f"import {pid}: initial_history_observations_invalid")
     elif initial and action in ("rescan", "mismatch"):
@@ -659,7 +666,7 @@ def _settle_history_job(ledger, job, pl, *, pid, since, sp, pages, initial,
             result["errors"].append(f"import {pid}: window_stalled")
     elif initial and action == "accepted":
         floored = _settle_initial_history(ledger, job, pl, cohort_id)
-    elif not initial and batch.reached and not batch.error and merged.checkpoint_safe \
+    elif not initial and not target and batch.reached and not batch.error and merged.checkpoint_safe \
             and ledger.pending_reply_jobs(pid) == 0:
         # floor only when the root walk AND all required reply bodies
         # completed (Oracle B08); non-terminal parent bodies already
@@ -724,6 +731,13 @@ def _settle_history_job(ledger, job, pl, *, pid, since, sp, pages, initial,
     return floored
 
 
+def activity_stored(ledger, pid, mid):
+    return ledger.db.execute(
+        "SELECT 1 FROM messages WHERE project_id=? AND message_id=? AND "
+        "(body_state IN ('full','deleted') OR (parent_id IS NULL AND body_state='unknown'))",
+        (pid, mid)).fetchone() is not None
+
+
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
@@ -772,6 +786,9 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         initial = (job["kind"] == "history" and since == 0 and initial_state is not None
                    and not (initial_state["capture_phase"] == "complete" and history_walk.capture_proof(
                        initial_state.get("capture_proof"), pid, initial_state["cohort_id"])))
+        if job["kind"] == "history_head" and job["message_id"] and activity_stored(ledger, pid, job["message_id"]):
+            ledger.job_done(job["job_id"])
+            continue
         if initial:
             try:
                 if "walk" not in pl:

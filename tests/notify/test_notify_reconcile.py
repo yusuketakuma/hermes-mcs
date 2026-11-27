@@ -245,6 +245,97 @@ def test_unknown_part_catches_up_from_a_journaled_factual_result(world):
     assert not report["held"]
 
 
+def _conflicting_part_journal(state, render, part):
+    """Two contradictory factual rows for one part attempt."""
+    paid = f"p:{render['delivery_id'].replace('-', '')}:{part['part_id']}"
+    journal.append(state, "w1", {
+        "attempt_id": paid, "delivery_id": render["delivery_id"],
+        "part_id": part["part_id"], "phase": "result", "result": "delivered",
+        "remote_id": "synthetic-body-1"})
+    journal.append(state, "w1", {
+        "attempt_id": paid, "delivery_id": render["delivery_id"],
+        "part_id": part["part_id"], "phase": "result", "result": "not_sent",
+        "error_code": "send_failed"})
+    return paid
+
+
+def test_parent_settlement_keeps_part_journal_conflict_held(world):
+    """A factual parent-card settlement is no evidence for an independent
+    body part: the part's journal_conflict hold must survive it."""
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    state = str(world.data / "discord_state")
+    # the card attempt began before the crash: its durable row exists and
+    # the worker journaled claimed/begin, but no result yet
+    claim = {"attempt_id": registry.new_attempt_id(), "worker_id": "b" * 16,
+             "spec": spec, "payload_hash": render["payload_hash"]}
+    assert notify_transport.apply_transport_begin(
+        world.led, envelopes.transport_begin(claim), CFG)["granted"]
+    aid = claim["attempt_id"]
+    journal.append(state, "w1", {
+        "phase": "claimed", "attempt_id": aid,
+        "delivery_id": spec["delivery_id"],
+        "render_rev": spec["render_rev"], "op": spec["op"]})
+    journal.append(state, "w1", {
+        "phase": "begin", "attempt_id": aid,
+        "delivery_id": spec["delivery_id"],
+        "begin_envelope": envelopes.transport_begin(claim),
+        "receipt_envelope": envelopes.transport_receipt(claim, "unknown")})
+    journal.append(state, "w1", {
+        "phase": "started", "attempt_id": aid,
+        "delivery_id": spec["delivery_id"]})
+    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "body_part")
+    paid = _conflicting_part_journal(state, render, part)
+    notify_spool.mark_restored(str(world.data))
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    part_holds = [h for h in world.holds() if h["attempt_id"] == paid]
+    assert len(part_holds) == 1 and part_holds[0]["reason"] == "journal_conflict"
+    assert part_holds[0]["released_at"] is None
+
+    # the card's own consistent result surfaces on a later tick; settling
+    # the parent must leave the part hold untouched
+    _journal_result(state, "w1", aid, render["delivery_id"],
+                    "delivered", message_id="synthetic-parent")
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    card_verdict = next(v for v in rep["verdicts"] if v["attempt_id"] == aid)
+    assert card_verdict["verdict"] == "settled", card_verdict
+    part_holds = [h for h in world.holds() if h["attempt_id"] == paid]
+    assert len(part_holds) == 1 and part_holds[0]["released_at"] is None
+
+
+def test_part_confirmed_receipt_releases_only_its_own_hold(world):
+    """Part-confirmed evidence releases exactly that part's hold — an
+    'unknown' outcome proves nothing and releases nothing."""
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    spec = world.spec(render["delivery_id"])
+    state = str(world.data / "discord_state")
+    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "body_part")
+    paid = _conflicting_part_journal(state, render, part)
+    notify_spool.mark_restored(str(world.data))
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert any(h["attempt_id"] == paid and h["released_at"] is None
+               for h in world.holds())
+
+    claim = {"attempt_id": "a" * 16, "worker_id": "b" * 16,
+             "spec": spec, "payload_hash": render["payload_hash"]}
+    env = envelopes.part_receipt(claim, part, "unknown")
+    out = notify_transport.apply_part_receipt(world.led, env, CFG)
+    assert out.get("applied") in (True, False)
+    assert any(h["attempt_id"] == paid and h["released_at"] is None
+               for h in world.holds())
+
+    env = envelopes.part_receipt(claim, part, "delivered",
+                                 remote_id="synthetic-body-1")
+    out = notify_transport.apply_part_receipt(world.led, env, CFG)
+    assert out.get("applied") is True
+    part_holds = [h for h in world.holds() if h["attempt_id"] == paid]
+    assert all(h["released_at"] is not None for h in part_holds)
+
+
 def test_tainted_journal_rerun_alerts_once(world):
     """U03-F06: a tainted journal keeps the restore marker, so reconcile
     re-runs every tick; the held-scope notice must not repeat for holds

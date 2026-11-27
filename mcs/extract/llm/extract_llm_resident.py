@@ -630,12 +630,24 @@ def _main() -> int:
                     sem, ran_semantic = None, False
                     jev_drain = args.semantic and _jev_only_semantic(load_config())
                     if jev_drain:
-                        # Jev-only semantic/QC work takes no local-model turn or
-                        # slot, so neither the extraction nor a carry waits on it.
-                        sem, ran_semantic = semantic_pass()
-                        if sem.get("run_lock_lost") in ("held", "updated"):
-                            _settle_carry(led, carry, write=False)
-                            return 0
+                        # A Jev pass can outlive a carried claim. Settle within this run's budget first.
+                        if carry:
+                            settled, _, _ = _settle_carry(
+                                led, carry, final=False, fence=context_state, deadline=stop,
+                                lock_context=_write_lock(True, wait_s=_RESIDENT_WRITE_WAIT_S, deadline=stop),
+                                preserve_on_fence_loss=True)
+                            total["done"] += settled["done"]
+                            if not _writer_current(full=True):
+                                return retire()
+                            if carry:
+                                carry_waiting()
+                                pause(2)
+                                continue
+                        if stop is None or time.monotonic() < stop:
+                            sem, ran_semantic = semantic_pass()
+                            if sem.get("run_lock_lost") in ("held", "updated"):
+                                _settle_carry(led, carry, write=False)
+                                return 0
                     if args.lane == 1:
                         import llm_slot_schedule
                         if not llm_slot_schedule.night():

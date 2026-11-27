@@ -200,7 +200,7 @@ def _python314(*, deadline=None) -> str | None:
 def _checkout_admits_python314(checkout: str, *, deadline=None) -> bool:
     """[project].requires-python checked by that interpreter, same script as install.sh."""
     python = _python314(**({} if deadline is None else {"deadline": deadline}))
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requires_python_admits.py")
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "requires_python_admits.py")
     if python is None:
         return False
     try:
@@ -217,7 +217,26 @@ def _provider_migration_needed() -> bool:
     if (first["mode"] not in ("legacy_unverified", "split")
             or second["mode"] != first["mode"] or second["snapshot"] != first["snapshot"]):
         raise ValueError("provider_settings_unverified")
-    return first.get("layout") != "single"
+    if first.get("layout") != "single":
+        return True
+    # A hard stop can leave the one-file settings commit complete while the
+    # legacy install-options record is still present. Recovery must enter the
+    # migration path once more so only an exact matching record is retired.
+    try:
+        applying = journal_store.load_state(STATE_PATH).get("applying")
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
+    if not isinstance(applying, dict) or applying.get("provider_settings_migration_required") is not True:
+        return False
+    legacy = os.path.join(DATA, "install_options.json")
+    try:
+        central, embedded = install_options._central(mcs_util.CONF_PATH)
+        recorded, _digest = install_options._legacy(legacy)
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
+    # A conflicting or unreadable reappearance is stale evidence, not proof of
+    # the interrupted transition; preserve it without blocking recovery forever.
+    return bool(embedded) and central is not None and recorded == central
 
 
 def _provider_bridge_verified(previous: str, target: str) -> bool:

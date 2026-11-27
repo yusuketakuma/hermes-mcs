@@ -82,7 +82,7 @@ def test_notification_format_is_selected_before_destinations_and_keeps_existing_
            "notify_target": "local", "semantic": {"mode": "off"}}
     seen = []
 
-    def keep(key, kind, default, desc, cur, present=False):
+    def keep(key, kind, default, desc, cur, present=False, *, allow_back=False):
         seen.append(key)
         if key == "setup_detail":
             return "recommended"
@@ -107,7 +107,7 @@ def test_detailed_questions_can_enable_later_fields_in_the_same_step(monkeypatch
     ])])
     seen = []
 
-    def answer(key, kind, default, desc, cur, present=False):
+    def answer(key, kind, default, desc, cur, present=False, *, allow_back=False):
         seen.append(key)
         return "detailed" if key == "setup_detail" else True if key.endswith("enabled") else 9
 
