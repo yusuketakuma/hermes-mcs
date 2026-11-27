@@ -47,7 +47,7 @@
     },
     "card-storage-predicate-scope": {
       "path": "changes/archive/1.3.1/card-storage-predicate-scope.json",
-      "sha256": "431152f51f8a93c00779686701cbbdc454813f1dc719ba56a4bea26bcede9ce4",
+      "sha256": "577b46ec2c572615ce09ab19a9c1e80aef294ef1390f0f14544e3b3a71c010f4",
       "title": "副作用なしの記載が続くと通知カードから薬の保管場所が消える問題を修正"
     },
     "check-current-release-archive": {
@@ -152,7 +152,7 @@
     },
     "linked-patient-sidebar-refresh": {
       "path": "changes/archive/1.3.1/linked-patient-sidebar-refresh.json",
-      "sha256": "28cebd7e4fc46b39b788de9a3eacdf10596c6c747fee063de67d8412e7b4a7c8",
+      "sha256": "9660def1ae22834e0f83e0066eab0fc28b118729c50b827993170c5b3dcbd251",
       "title": "訪問記録から関連患者を開いたときに患者一覧の検索条件を解除"
     },
     "live-only-join-notifications": {
