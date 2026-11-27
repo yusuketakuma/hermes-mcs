@@ -1,6 +1,7 @@
 """Local backup list/verify/held restore with a synthetic ledger; never live HOME."""
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,51 @@ def test_verify_reports_integrity_and_the_restore_hash(world, capsys):
     assert code == 0 and row["check"] == "ok"
     assert row["sha256"] == file_sha256(backups / "ledger-20261003.db")
     assert row["schema"] == ledger.SCHEMA_VERSION and row["last_successful_run"] is not None
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+def test_sidecar_holds_daily_copy_and_blocks_verification_until_it_disappears(world, suffix):
+    source, backups, parent = world
+    today = backups / "ledger-20261003.db"
+    original = today.stat()
+    sidecar = backups / (today.name + suffix)
+    sidecar.touch()
+
+    with pytest.raises(maintenance.MaintenanceError, match="backup_static_snapshot_required"):
+        local_backup.daily_backup(str(source))
+    assert today.stat() == original and sidecar.exists()
+    assert local_backup.local_backup_status(now=time.time())["state"] == "unverified"
+    [row] = mcs_local_backup.list_backups(verify=True)
+    assert (row["marker"], row["check"]) == ("unverified", "backup_static_snapshot_required")
+    with pytest.raises(mcs_local_backup.backup_evidence.BackupError, match="backup_static_snapshot_required"):
+        mcs_local_backup.restore(today.name, destination=str(parent / "unused"))
+
+    sidecar.unlink()
+    assert local_backup.daily_backup(str(source)) is None
+    assert local_backup.local_backup_status(now=time.time())["state"] == "verified"
+    [row] = mcs_local_backup.list_backups(verify=True)
+    assert (row["marker"], row["check"]) == ("verified", "ok")
+
+
+def test_sidecar_appearing_during_copy_aborts_before_publication(world, monkeypatch):
+    source, backups, _ = world
+    tomorrow = backups / "ledger-20261004.db"
+    sidecar = backups / (tomorrow.name + "-wal")
+    monkeypatch.setattr(local_backup.time, "strftime", lambda _: "20261004")
+    valid = local_backup._valid
+
+    def verify_staging(path, deadline):
+        if path.endswith(".db.tmp"):
+            sidecar.touch()
+        return valid(path, deadline)
+
+    monkeypatch.setattr(local_backup, "_valid", verify_staging)
+    with pytest.raises(maintenance.MaintenanceError, match="backup_static_snapshot_required"):
+        local_backup.daily_backup(str(source))
+    assert sidecar.exists() and not tomorrow.exists()
+    assert not list(backups.glob("*.tmp")) and not tomorrow.with_suffix(".db.ok").exists()
+    [prior] = mcs_local_backup.list_backups(verify=True)
+    assert (prior["marker"], prior["check"]) == ("verified", "ok")
 
 
 def test_verify_flags_a_damaged_generation_and_fails(world, capsys):

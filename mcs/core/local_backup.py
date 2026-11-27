@@ -26,7 +26,7 @@ from homecare_store import FOUNDATION as HOMECARE_FOUNDATION, default_path as ho
 from ledger import valid_mcs_db
 from llm_availability import disk_floor_mb
 from maintenance_errors import MaintenanceError
-from mcs_util import HOME
+from mcs_util import HOME, has_sqlite_sidecars
 from safe_io import atomic_write, publish_tmp, read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
@@ -46,21 +46,28 @@ BACKUP_STEP_PAGES = 256    # copy granularity the deadline is checked at
 BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 
 
-def _stat_sig(path: str) -> str | None:
-    """size + mtime_ns signature of ``path``; None when unreadable."""
+def _stat_sig(path: str, st: os.stat_result | None = None) -> str | None:
+    """Identify a static regular copy and the checks covered by its marker."""
     try:
-        st = os.stat(path)
+        if st is None:
+            st = os.lstat(path)
     except OSError:
         return None
-    return f"{st.st_size} {st.st_mtime_ns}"
+    if not stat.S_ISREG(st.st_mode) or has_sqlite_sidecars(path):
+        return None
+    # Older home-care markers predate the foreign key check.
+    prefix = "fk1 " if backup_class(os.path.basename(path)) == "homecare_daily" else ""
+    return f"{prefix}{st.st_size} {st.st_mtime_ns}"
 
 
 def _verified_unchanged(dest: str) -> bool:
-    """True when ``dest`` still matches the signature recorded right
-    after it was verified and published — lets a run skip re-running
-    quick_check over an unchanged same-day backup."""
-    marker = _read_ok_marker(dest)
-    return bool(marker) and marker == _stat_sig(dest)
+    """Skip verification only for a static copy with a current marker."""
+    return marker_matches(dest)
+
+
+def _require_static_destination(dest: str) -> None:
+    if has_sqlite_sidecars(dest):
+        raise MaintenanceError("backup_static_snapshot_required")
 
 
 def _valid(path: str, deadline: float | None) -> bool:
@@ -81,8 +88,16 @@ def homecare_migrations(db: sqlite3.Connection) -> dict[str, int] | None:
         "SELECT module, MAX(number) FROM schema_migrations GROUP BY module ORDER BY module")}
 
 
+def homecare_integrity_ok(db: sqlite3.Connection, *, full: bool) -> bool:
+    check = "PRAGMA integrity_check" if full else "PRAGMA quick_check"
+    return (db.execute(check).fetchall() == [("ok",)]
+            and db.execute("PRAGMA foreign_key_check").fetchone() is None)
+
+
 def _valid_homecare(path: str, deadline: float | None) -> bool:
-    """A static home-care copy: quick_check ok and the core foundation migration recorded."""
+    """A static home-care copy with intact references and the foundation migration."""
+    if deadline is not None and monotonic() >= deadline:
+        return False
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         return False
     try:
@@ -90,7 +105,7 @@ def _valid_homecare(path: str, deadline: float | None) -> bool:
                                      uri=True)) as db:
             if deadline is not None:
                 db.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
-            return (db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+            return (homecare_integrity_ok(db, full=False)
                     and homecare_migrations(db) is not None
                     and (deadline is None or monotonic() < deadline))
     except (OSError, sqlite3.DatabaseError):
@@ -139,6 +154,7 @@ def publish_backup(db_path: str, tmp: str, dest: str,
                 raise MaintenanceError("backup_deadline_exceeded")
             raise MaintenanceError("backup_verify_failed")
         check_deadline()
+        _require_static_destination(dest)
         publish_tmp(tmp, dest, mode=0o600)
     except BaseException as error:
         with suppress(OSError):
@@ -162,11 +178,20 @@ def backup_time_needed_s(db_path: str) -> float:
     return size / BACKUP_RATE_BPS + BACKUP_MARGIN_S
 
 
-def _write_ok_marker(dest: str) -> None:
-    sig = _stat_sig(dest)
+def _write_ok_marker(dest: str, sig: str | None = None) -> None:
+    _require_static_destination(dest)
+    sig = sig or _stat_sig(dest)
     if sig:
         with suppress(OSError):   # marker is only a fast path
             atomic_write(dest + ".ok", lambda f: f.write(sig), mode=0o600)
+
+
+def _revalidate_copy(path: str, valid, deadline: float | None) -> bool:
+    sig = _stat_sig(path)
+    if sig is None or not valid(path, deadline) or sig != _stat_sig(path):
+        return False
+    _write_ok_marker(path, sig)
+    return True
 
 
 def daily_backup(db_path: str, *, deadline: float | None = None):
@@ -206,16 +231,14 @@ def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
     # the .ok marker (size+mtime_ns at publish time) skips the full
     # quick_check while the verified file is untouched; any change or a
     # missing marker falls back to validation (B24)
+    _require_static_destination(dest)
     if _verified_unchanged(dest):
         return None
     # checking today's file must leave room to replace it: a broken copy
     # whose check eats the whole budget would otherwise never be replaced
     check_by = None if deadline is None \
         else deadline - backup_time_needed_s(db_path) - BACKUP_CHECK_SLACK_S
-    if valid(dest, check_by):
-        # re-arm the fast path, or every later tick today re-runs the
-        # full quick_check (a same-day backup made before the marker)
-        _write_ok_marker(dest)
+    if _revalidate_copy(dest, valid, check_by):
         return None
     if deadline is not None and (
             deadline - monotonic() < backup_time_needed_s(db_path)):
@@ -229,7 +252,14 @@ def _daily_copy(db_path: str, prefix: str, valid, deadline: float | None):
     publish_backup(db_path, tmp, dest, deadline=deadline, valid=valid)
     _write_ok_marker(dest)
     files = _daily_backups("daily" if prefix == "ledger" else "homecare_daily", prefix)
+    # Recheck retained copies only when rotation is due and their markers are stale.
+    if len(files) > BACKUP_KEEP:
+        for retained in files[-BACKUP_KEEP:]:
+            if not (_verified_unchanged(retained) or _revalidate_copy(retained, valid, deadline)):
+                return "published"
     for old in files[:-BACKUP_KEEP]:
+        if has_sqlite_sidecars(old):
+            continue
         for path in (old, old + ".ok"):
             with suppress(OSError):
                 os.unlink(path)
@@ -271,9 +301,10 @@ def _read_ok_marker(dest: str) -> str | None:
     return None
 
 
-def marker_matches(path: str, st: os.stat_result) -> bool:
-    """True when the .ok marker records exactly this file's size and mtime."""
-    return _read_ok_marker(path) == f"{st.st_size} {st.st_mtime_ns}"
+def marker_matches(path: str, st: os.stat_result | None = None) -> bool:
+    """True when the marker covers this static file and the current checks."""
+    sig = _stat_sig(path, st)
+    return sig is not None and _read_ok_marker(path) == sig
 
 
 def local_backup_status(*, now: float) -> dict:

@@ -65,6 +65,8 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db`（適用が成功したときに新しい3つへ整理。`mcs recover` で完了した更新や強制終了で残ったコピーは、次に成功した適用で整理）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
 まだ作っていないときは、台帳のバックアップは作りません。
 
+日次コピーは直近3世代の検証が済むまで、それより古い世代も残します。MCS 訪問薬剤管理の台帳では、記録が参照する患者や職員などが台帳に存在することも確認します。日次コピーの横に SQLite の作業ファイル（`-wal`、`-shm`、`-journal`）がある間は、そのコピーを検証済みとして扱わず、上書きや削除も見合わせます。
+
 ```bash
 "$PY" "$REPO/mcs/ops/mcs_local_backup.py" list            # 名前・大きさ・時刻・検証記録の一致だけ
 "$PY" "$REPO/mcs/ops/mcs_local_backup.py" list --verify   # 世代ごとに読取り専用で完全検査
