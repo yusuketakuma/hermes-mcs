@@ -485,11 +485,18 @@ def reject_constant(_):
     raise ValueError("invalid_number")
 
 
+def _finite_json_float(value):
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("nonfinite_json_number")
+    return result
+
+
 def parse_config(raw: bytes):
     """The one strict config.json parse every reader shares: a repeated key
     or NaN/Infinity is a ValueError, never a silently kept value."""
     return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs,
-                      parse_constant=reject_constant)
+                      parse_constant=reject_constant, parse_float=_finite_json_float)
 
 
 def strict_json(raw):
@@ -506,12 +513,7 @@ def strict_json(raw):
     def constant(_):
         raise ValueError("nonfinite_json_number")
 
-    def number(value):
-        result = float(value)
-        if not math.isfinite(result):
-            raise ValueError("nonfinite_json_number")
-        return result
-    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant, parse_float=_finite_json_float)
 
 
 def safe_error_code(exc) -> str:
