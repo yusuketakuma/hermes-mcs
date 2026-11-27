@@ -1305,7 +1305,14 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 old_identity = _semantic_generation_identity(previous)
                 new_identity = _semantic_generation_identity(candidate)
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
-                    continue
+                    # A worker can resume the very same job after its local model
+                    # changes. The generation alone cannot make its identical
+                    # paid cloud prompt a new request of that attempt.
+                    same_attempt = (previous['unit_key'] == candidate['unit_key']
+                                    and old_identity[:2] == new_identity[:2]
+                                    and old_identity[3] == new_identity[3])
+                    if not same_attempt:
+                        continue
                 if new_identity is not None and _prebinding_semantic_reservation(previous, row):
                     # The first target-aware rollout made interpretation generation part of
                     # the semantic unit. Earlier receipts can neither be reused for a reprocess

@@ -585,8 +585,10 @@ class CloudInferenceUnit:
                 self.possibly_sent = True
                 self._unresolved = False
                 self.refusal = None
-                if evidence['reservation'] not in self.completed_reservations:
-                    self.completed_reservations.append(evidence['reservation'])
+                # Consumers bind the current answer to the last completed reservation.
+                if evidence['reservation'] in self.completed_reservations:
+                    self.completed_reservations.remove(evidence['reservation'])
+                self.completed_reservations.append(evidence['reservation'])
                 if evidence['reservation'] not in self.answered_reservations:
                     self.answered_reservations.append(evidence['reservation'])
             else:
