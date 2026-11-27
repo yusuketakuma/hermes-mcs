@@ -319,12 +319,11 @@ def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]
         if _storage_restarted(continuation):
             return source[len(value):action.end()], 'current'
         return clause, 'past'
+    ongoing = action.end() == len(value) + len(tail) and action[0].endswith(('います', 'おります', 'いる'))
     other = _OTHER_PHARMACY_REPORT.match(source, action.end())
     if other:
         # Remove only the other assertion. A later correction about storage still applies.
         clause = source[len(value):action.end()] + source[other.end():]
-    complete = (other.end() if other else action.end()) == len(value) + len(tail)
-    ongoing = complete and (other is not None or action[0].endswith(('います', 'おります', 'いる')))
     return clause, 'current' if ongoing else None
 
 
