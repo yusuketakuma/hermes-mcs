@@ -132,8 +132,8 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - **semantic.extra_propositions 設定時に患者コンテキストのsource PASS検証が恒久的に失敗する構造を修正**
   semantic.extra_propositionsを設定すると、解釈ポリシーのfingerprintには命題集合が含まれる一方、患者コンテキスト品質のsource PASSを再検証するdescriptorに引き継がれず、fingerprintが永久に一致しない構造でした。descriptorは命題集合が有効なときだけそれを含め、fingerprintの条件付き包含と一致するようになりました。
 
-- **v3復旧closureが存在しない状態moduleを要求する問題を修正**
-  v3自動更新の移行用closureが、存在しない mcs/ops/release_auto_state.py を必須ファイルとして要求していました。実際に復旧処理が使う adapters/sdc/release_auto_state.py は従来どおり検証するため、移行用closureを実在する構成へ合わせました。
+- **v3自動更新の復旧用ファイルを単独で検証できるように修正**
+  v3自動更新の移行時に、復旧に必要なプログラムや契約ファイルが欠けていれば、配備前に停止します。存在しない旧ファイルを求めて移行が止まる問題も修正しました。
 
 ### 更新時の注意
 
@@ -199,7 +199,7 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 
 - 追加操作は不要です。新規導入後は ~/.local/bin/mcs setup postinstall を実行すると継続確認できます。失敗時は ~/.mcs/data/postinstall-watch/agent-repair-brief.md をAIエージェントへ渡し、修正後に同じコマンドを再実行してください。
 
-- 追加操作は不要です。v3自動更新へ未移行の環境では、この修正後の移行処理でclosureが正しく構成されます。
+- 通常の更新に追加操作はありません。v3移行用のファイル一覧を準備済みの場合は、不足と表示されたファイルとそのハッシュを追加してください。
 
 - 追加操作は不要です。初期設定の途中で1つ前へ戻りたい場合は b と入力します。従来どおり Enter は現在値または推奨値を保持し、q は保存せず中止します。
 
@@ -413,11 +413,11 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - この機能はAIエージェントを自動起動しません。導入を実行しているエージェントのセッション内で修正と再確認を続ける運用を案内します。
 - 根拠: mcs/ops/setup/postinstall_watch.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_cli.py、docs/guides/SETUP_AGENT.md
 
-#### v3復旧closureが存在しない状態moduleを要求する問題を修正
+#### v3自動更新の復旧用ファイルを単独で検証できるように修正
 
-- 存在しないファイルの要求を取り除くだけで、復旧時に検証する状態module自体は変更していません。
-- この修正はv3自動更新の移行・復旧closureに限定され、通常の更新確認や通知処理へ影響しません。
-- 根拠: mcs/ops/update/release_auto_bridge.py、adapters/sdc/release_auto_state.py
+- 移行コマンドは従来どおり python -m mcs.ops.release_auto_bridge migrate --spec で起動できます。
+- 配備した復旧世代を点検する際は Python に -B を指定し、検証対象へのバイトコードの書き込みを防ぎます。
+- 根拠: mcs/ops/release_auto_bridge.py、adapters/sdc/release_auto_state.py
 
 #### 初期設定で1つ前の項目へ戻れるようにし、保存前確認を明示
 
