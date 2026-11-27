@@ -595,7 +595,8 @@ def _pharmacy_detail_lines(db, mid: int) -> list[str]:
         for detail in item.get("details") or []:
             label = _CARD_DETAIL_LABEL.get(detail.get("key"))
             if label is None or patient_context.noncurrent_detail(
-                    row["body_text"], detail.get("evidence"), detail.get("value"), key=detail['key']):
+                    row["body_text"], detail.get("evidence"), detail.get("value"), key=detail['key'],
+                    subject=item.get('subject')):
                 continue
             # the whole quote: a cut would drop a trailing negation (…していない)
             line = (f"服薬管理（{label}）: 「{detail['value']}」"

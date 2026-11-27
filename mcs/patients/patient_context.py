@@ -261,15 +261,24 @@ def _quoted_value_positions(body: str, span: tuple[int, int], value: str):
         at = body.find(value, at + 1, span[1])
 
 
+def _drug_owner_at(body: str, start: int, at: int, end: int):
+    """The nearest preceding drug owner, otherwise the first owner following the value."""
+    owner = None
+    for candidate in _DRUG_OWNER.finditer(body, start, end):
+        if candidate.start() > at and owner is not None:
+            break
+        owner = candidate
+        if owner.end() > at:
+            break
+    return owner
+
+
 def _other_persons_drug(body: str, span, value: str) -> bool:
     """Whether every quoted occurrence of value belongs to a non-patient's drug in its sentence."""
     owned = []
     for start, at, end in _quoted_value_positions(body, span, value):
-        owners = list(_DRUG_OWNER.finditer(body, start, end))
-        # the nearest preceding owner, else the sentence's next one; the owner phrase itself is no value
-        if not any(o.start() <= at < o.end() for o in owners):
-            before = [o for o in owners if o.end() <= at]
-            owner = before[-1] if before else next(iter(owners), None)
+        owner = _drug_owner_at(body, start, at, end)
+        if owner is None or not owner.start() <= at < owner.end():
             owned.append(owner is not None and owner["who"] not in _PATIENT_OWNERS)
     return bool(owned) and all(owned)
 
@@ -278,10 +287,14 @@ _DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|か
 _DETAIL_CLAUSE_BREAK = re.compile(r"[、，,]")
 _STORAGE_OBSERVATION = re.compile(
     rf"(?:(?P<past>(?:{clinical_scope.HISTORICAL_MARK}|{clinical_scope.PAST_MARK}|前は)(?!から|より))"
-    rf"|今(?=[はも])|{clinical_scope.NOW_MARK}|今の)(?P<occasion>(?:の[一-龥々]*)?(?:時点|時|際))?"
+    rf"|(?P<planned>明日|翌日|来週|来月|予定|計画)|今(?=[はも])|{clinical_scope.NOW_MARK}|今の)"
+    r"(?P<occasion>(?:の[一-龥々]*)?(?:時点|時|際))?"
     r"(?:(?P<topic>(?:に|で)?[はも])|に)?")
 _STORAGE_ONSET = r"(?:以前|昨[日年]|先[日週月])(?:から|より)"
-_STORAGE_ARGUMENT = re.compile(rf"(?:{_STORAGE_ONSET})?(?:(?:{_DRUG_OWNER.pattern}|{_DRUG_NOUN})[はをがも])?")
+_STORAGE_ARGUMENT = re.compile(
+    rf"(?:{_STORAGE_ONSET})?(?:(?:{'|'.join(_PATIENT_OWNERS)})[がは])?(?:(?:{_DRUG_OWNER.pattern}|{_DRUG_NOUN})[はをがも])?")
+_ATTRIBUTIVE_ARGUMENT = re.compile(r"[^、，,。！？!?]*た[一-龥々ァ-ヶーA-Za-z0-9]+[はをがも]")
+_STORAGE_LABEL = re.compile(r"(?:保管|保存)(?:場所|先|状況)(?:は|[:：])\s*$")
 _ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
                     r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
                     r"|せん妄|不眠|振戦|発熱")
@@ -289,86 +302,131 @@ _NEXT_REPORT = re.compile(r"\s*(?:(?:が|けれど(?:も)?|ものの)\s*[、，,
 _STORAGE_ACTION = re.compile(
     r"(?:(?:内|の中)?[でに](?:の)?)?(?:冷蔵|冷凍|常温)?(?:保管|保存)"
     rf"(?:(?P<former>して(?:いました|おりました|いた))(?=$|{_NEXT_REPORT.pattern})"
-    r"|(?P<stopped>[はをも]?(?:中止|終了)(?:しました|した(?!い|ら)|済み|して?(?=$|[一-龥々])))"
-    r"|して(?:います|おります|いる|いて|おり))")
+    rf"|(?P<stopped>[はをも]?(?:中止|終了)(?:しました|した(?!い|ら)|済み|して?(?=$|[一-龥々]|{_NEXT_REPORT.pattern})))"
+    rf"|(?P<negative>{_DETAIL_NEGATIVE.pattern})|(?P<active>して(?:います|おります|いる|いて|おり)|です)?)")
 _STORAGE_RESTART = re.compile(
     r"(?:が|後に?)?[、，, ]*(?:その後|(?P<now>現在は|今は))?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
 _OTHER_PHARMACY_REPORT = re.compile(
-    rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:について)?[はがも]"
-    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})"
+    rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:なし|(?:について)?[はがも]"
+    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern}|あり(?:ます|ました)))"
     r"(?:でした|です)?(?:とのこと(?:でした|です)?)?")
+_STORAGE_REPORT = re.compile(r"(?:とのこと(?:です)?|ことを確認(?:しました|しています)|と(?:聞き|伺い)ました)")
 
 
-def _only_other_pharmacy_reports(continuation: str, end: int) -> bool:
-    """Whether only independent pharmacy reports follow a storage predicate."""
-    while end < len(continuation):
-        boundary = _NEXT_REPORT.match(continuation, end)
-        report = boundary and _OTHER_PHARMACY_REPORT.match(continuation, boundary.end())
+def _complete_storage_report(source: str, end: int, *, conjunctive=False) -> bool:
+    """A grounded assertion can be attributed or confirmed, then followed by independent reports."""
+    attribution = _STORAGE_REPORT.match(source, end)
+    if attribution:
+        end = attribution.end()
+    while end < len(source):
+        boundary = _NEXT_REPORT.match(source, end)
+        if not boundary and not conjunctive:
+            return False
+        report = _OTHER_PHARMACY_REPORT.match(source, boundary.end() if boundary else end)
         if not report:
             return False
         end = report.end()
+        conjunctive = False
     return True
 
 
-def _past_storage_observation(before: str, affirmed: bool) -> bool:
-    """Date the storage assertion from its own time frame, across a reporting attribution if present."""
+def _storage_observation_period(before: str) -> str:
+    """Date an affirmative storage assertion at its observation, allowing a reporting attribution."""
     chunks = _DETAIL_CLAUSE_BREAK.split(before)
     local = chunks[-1].strip()
     frame = None
+    ambiguous = False
     for mark in _STORAGE_OBSERVATION.finditer(local):
         # An explicit visit-time topic applies even when the object is an unrecognized medicine.
         explicit_topic = mark['topic'] and (mark['occasion'] or not mark['past'])
         if explicit_topic or _STORAGE_ARGUMENT.fullmatch(local, mark.end()):
-            frame = mark
-    if frame is None:
+            frame, ambiguous = mark, False
+        elif (mark['past'] or mark['planned']) and not _ATTRIBUTIVE_ARGUMENT.fullmatch(local, mark.end()):
+            frame, ambiguous = None, True
+    if frame is None and not ambiguous:
         for chunk in reversed(chunks[:-1]):
             preceding = chunk.strip()
             if not preceding.endswith(('によると', 'によれば')):
                 frame = _STORAGE_OBSERVATION.fullmatch(preceding)
+                if not frame and any(mark['past'] or mark['planned'] for mark in _STORAGE_OBSERVATION.finditer(preceding)):
+                    other = _OTHER_PHARMACY_REPORT.search(preceding)
+                    if not other or (other.end() != len(preceding) and not _NEXT_REPORT.fullmatch(preceding, other.end())):
+                        ambiguous = True
                 break
-    if frame is not None:
-        return frame['past'] is not None
-    # A starting point alone does not establish what happened afterwards.
-    return not affirmed and re.search(_STORAGE_ONSET, local) is not None
+    if ambiguous:
+        return 'unknown'
+    if frame and frame['planned']:
+        return 'planned'
+    return 'historical' if frame and frame['past'] else 'current'
 
 
-def _storage_scope(before: str, value: str, clause: str, tail: str) -> tuple[str, bool]:
-    """Return the storage's own qualifiers and whether it is a historical observation."""
-    source = value + clause
+def _storage_assertion(before: str, value: str, tail: str) -> str:
+    """Classify one source occurrence, requiring a complete affirmative assertion for a shared card."""
+    if _DETAIL_NEGATIVE.search(value) or _DETAIL_UNCERTAIN.search(value) or _DETAIL_CLAUSE_BREAK.search(value):
+        return 'unknown'
+    source = value + tail
+    label = _STORAGE_LABEL.search(before)
+    if label:
+        end = len(value) + (2 if tail.startswith('です') else 0)
+        if _complete_storage_report(source, end):
+            return _storage_observation_period(before[:label.start()])
+        return 'unknown'
     action = _STORAGE_ACTION.search(source)
     if action is None or not action.start() <= len(value) <= action.end():
-        return clause, _past_storage_observation(before, affirmed=False)
+        return 'unrelated'
+    period = _storage_observation_period(before)
     if action['former'] is not None or action['stopped'] is not None:
-        continuation = tail[action.end() - len(value):]
-        restart = _STORAGE_RESTART.match(continuation)
-        if restart and _only_other_pharmacy_reports(continuation, restart.end()):
-            past = not restart['now'] and _past_storage_observation(before, affirmed=True)
-            return source[len(value):action.end()], past
-        return clause, True
-    other = _OTHER_PHARMACY_REPORT.match(source, action.end())
-    if other:
-        # Remove only the other assertion. A later correction about storage still applies.
-        clause = source[len(value):action.end()] + source[other.end():]
-    end = (other.end() if other else action.end()) - len(value)
-    return clause, _past_storage_observation(before, affirmed=_only_other_pharmacy_reports(tail, end))
+        restart = _STORAGE_RESTART.match(source, action.end())
+        if restart and _complete_storage_report(source, restart.end()):
+            return 'current' if restart['now'] else period
+        if action['former']:
+            return 'historical' if _complete_storage_report(source, action.end()) else 'unknown'
+    if action['negative'] is not None or action['stopped'] is not None:
+        return 'inactive' if period == 'current' else period
+    if _complete_storage_report(source, action.end(), conjunctive=action['active'] in ('していて', 'しており')):
+        return period
+    return 'planned' if period == 'planned' else 'unknown'
 
 
-def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
-    """Whether one grounded detail is negated, uncertain or explicitly past-only."""
+def _current_storage_in_quote(body: str, span, value: str, subject) -> bool:
+    """Only quoted evidence establishes storage; a later assertion about the same subject can withdraw it."""
+    if not isinstance(value, str) or not value or value not in body[span[0]:span[1]]:
+        return False
+    active_owner = None
+    for start, at, end in _quoted_value_positions(body, (span[0], len(body)), value):
+        state = _storage_assertion(body[start:at], value, body[at + len(value):end])
+        if state in ('unrelated', 'historical', 'planned'):
+            continue
+        if body[end:end + 1] in ('?', '？'):
+            state = 'unknown'
+        owner = _drug_owner_at(body, start, at, end)
+        who = owner['who'] if owner else subject
+        if who in (*_PATIENT_OWNERS, None, 'unspecified'):
+            who = 'patient'
+        if subject in ('patient', 'unspecified') and who != 'patient':
+            continue
+        if state == 'current' and at + len(value) <= span[1]:
+            active_owner = who
+        elif state != 'current' and who == active_owner:
+            active_owner = None
+    return active_owner is not None
+
+
+def noncurrent_detail(body: str, evidence: str, value: str, *, key=None, subject=None) -> bool:
+    """Whether a quoted detail should be withheld from a shared card."""
     if not isinstance(body, str) or not isinstance(evidence, str):
         return True
     span = locate_quote_span(body, evidence)
     if span is None:
         return True
+    if key in ('storage_place', 'storage_status') or (key is None and ('保管' in body or '保存' in body)):
+        return not _current_storage_in_quote(body, span, value, subject)
     verdicts = []
     for start, at, end in _quoted_value_positions(body, span, value):
         before, tail = body[start:at], body[at + len(value):end]
         clause = _DETAIL_CLAUSE_BREAK.split(tail, maxsplit=1)[0]
-        if key in (None, 'storage_place', 'storage_status'):
-            clause, past_only = _storage_scope(before, value, clause, tail)
-        else:
-            past_only = (re.search(r"以前|過去|前は", before) is not None
-                         and not any(mark in before for mark in ("現在", "今は", "今の")))
+        past_only = (re.search(r"以前|過去|前は", before) is not None
+                     and not any(mark in before for mark in ("現在", "今は", "今の")))
         verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or _DETAIL_UNCERTAIN.search(clause) or past_only))
     return bool(verdicts) and all(verdicts)
 

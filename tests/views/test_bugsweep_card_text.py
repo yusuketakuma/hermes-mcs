@@ -50,7 +50,7 @@ def test_urgency_reason_is_not_cut_before_its_negating_tail(monkeypatch):
 
 
 @pytest.mark.parametrize("store", [_extract, _llm_extract], ids=["rules", "llm"])
-def test_pharmacy_detail_quote_keeps_its_negating_tail(led, store):
+def test_negated_storage_keeps_its_whole_quote_in_private_detail(led, store):
     value = "本人は薬を冷蔵庫に移したと話しているが、訪問時に確認すると実際には冷蔵保管していない"
     assert len(value) > 40
     _patient(led, 1)
@@ -58,7 +58,10 @@ def test_pharmacy_detail_quote_keeps_its_negating_tail(led, store):
     store(led, 100, {"patient_context": [{
         "category": "medication_management", "text": value, "evidence": value, "subject": "patient",
         "details": [{"key": "storage_place", "value": value, "evidence": value}]}]})
-    assert structured_view._pharmacy_detail_lines(led.db, 100) == [f"服薬管理（保管場所）: 「{value}」"]
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    assert read_model.message_patient_context(led.db, row)[0]["details"] == [
+        {"key": "storage_place", "value": value, "evidence": value}]
+    assert structured_view._pharmacy_detail_lines(led.db, 100) == []
 
 
 def test_pharmacy_detail_without_source_quote_is_not_shown(led, monkeypatch):
