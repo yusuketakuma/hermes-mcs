@@ -52,6 +52,74 @@ def test_part_delivered_after_revoke_keeps_its_remote_post(led):
     assert notify_scope.card_row(led.db, render["card_id"])["delivery_state"] == "revoked"
 
 
+def _journal_body_result_crossing_revoke(led, render, paid, result="delivered",
+                                         remote_id="synthetic-body"):
+    """The worker's in-flight body send journaled its factual outcome
+    before the crash — the send crossed with the revoke."""
+    from adapters.common import journal
+    root = notify_spool.data_root(led)
+    state = os.path.join(root, "discord_state")
+    journal.append(state, "w1", {
+        "attempt_id": paid, "delivery_id": render["delivery_id"],
+        "part_id": "body:0001", "phase": "started"})
+    row = {"attempt_id": paid, "delivery_id": render["delivery_id"],
+           "part_id": "body:0001", "phase": "result", "result": result}
+    if remote_id is not None:
+        row["remote_id"] = remote_id
+    journal.append(state, "w1", row)
+    return root
+
+
+@pytest.mark.usefixtures("v1_thread_bodies")
+def test_restore_reflects_same_attempt_result_crossed_with_revoke(led):
+    """Restore path: a normal same-attempt send result that crossed with
+    the cancellation is applied once to the actual part; the card stays
+    revoked and nothing resends."""
+    import notify_reconcile
+    render = _delivered_card(led)
+    assert _receipt(led, render, f"{1:016x}", message_id="synthetic-card")["applied"]
+    assert _part_receipt(led, render, "thread", remote_id="synthetic-thread")["applied"]
+    paid = f"p:{render['delivery_id'].replace('-', '')}:body:0001"
+    root = _journal_body_result_crossing_revoke(led, render, paid)
+    with led.db:
+        notify_cards.revoke_card(led.db, render["card_id"], NOW)
+    assert tuple(_part(led, render, "body:0001")[k] for k in ("state", "error_code")) == ("held", "card_revoked")
+    renders_before = led.db.execute(
+        "SELECT COUNT(*) FROM notification_renders WHERE card_id=?",
+        (render["card_id"],)).fetchone()[0]
+    notify_spool.mark_restored(root)
+    rep = notify_reconcile.reconcile_after_restore(led, CFG)
+    verdict = next((v for v in rep["verdicts"] if v["attempt_id"] == paid), None)
+    assert verdict is not None and verdict["verdict"] == "settled", verdict
+    part = _part(led, render, "body:0001")
+    assert (part["state"], part["remote_id"]) == ("delivered", "synthetic-body")
+    assert notify_scope.card_row(led.db, render["card_id"])["delivery_state"] == "revoked"
+    assert led.db.execute(
+        "SELECT COUNT(*) FROM notification_renders WHERE card_id=?",
+        (render["card_id"],)).fetchone()[0] == renders_before
+
+
+@pytest.mark.usefixtures("v1_thread_bodies")
+def test_restore_holds_foreign_attempt_result_on_revoked_part(led):
+    """A result under an attempt that is not the part's own sealed attempt
+    stays held — it proves nothing about this part."""
+    import notify_reconcile
+    render = _delivered_card(led)
+    assert _receipt(led, render, f"{1:016x}", message_id="synthetic-card")["applied"]
+    assert _part_receipt(led, render, "thread", remote_id="synthetic-thread")["applied"]
+    paid = "p:foreign:body:0001"
+    root = _journal_body_result_crossing_revoke(led, render, paid)
+    with led.db:
+        notify_cards.revoke_card(led.db, render["card_id"], NOW)
+    notify_spool.mark_restored(root)
+    rep = notify_reconcile.reconcile_after_restore(led, CFG)
+    verdict = next((v for v in rep["verdicts"] if v["attempt_id"] == paid), None)
+    assert verdict is not None and verdict["verdict"] == "held", verdict
+    part = _part(led, render, "body:0001")
+    assert part["state"] == "held" and part["remote_id"] is None
+    assert notify_scope.card_row(led.db, render["card_id"])["delivery_state"] == "revoked"
+
+
 def _receipt_cmd(led, render, n=9):
     req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(n),
            "attempt_id": f"{1:016x}", "delivery_id": render["delivery_id"],
