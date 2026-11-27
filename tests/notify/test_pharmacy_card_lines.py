@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import read_model
 import structured_view
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import current_projection_id
@@ -136,6 +137,26 @@ def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_
 
 
 @pytest.mark.parametrize("body,evidence,shown", [
+    pytest.param("先月の訪問時に本人が薬を冷蔵庫で保管していることを確認しました。", "冷蔵庫", False, id="confirmed-at-past-visit"),
+    pytest.param("昨日から薬を冷蔵庫で保管しているとのことです。", "冷蔵庫", True, id="reported-ongoing-storage"),
+    ("本日の訪問時に本人が薬を冷蔵庫で保管していることを確認しました。", "冷蔵庫", True),
+    ("先月の訪問時に本人に確認したところ、薬は冷蔵庫で保管しているとのことです。", "冷蔵庫", False),
+    ("昨日から薬を冷蔵庫で保管していないとのことです。", "冷蔵庫", False),
+    ("昨日から薬を冷蔵庫で保管しているとのことですが、実際には保管していません。", "冷蔵庫", False),
+    ("薬の保管場所は冷蔵庫です。", "冷蔵庫", True),
+    ("薬の保管場所は冷蔵庫かもしれません。", "冷蔵庫", False),
+    ("来月の薬の保管場所は冷蔵庫です。", "冷蔵庫", False),
+    ("薬の保管場所は冷蔵庫です？", "冷蔵庫", False),
+    ("薬を冷蔵庫で保管しています。現在、薬の冷蔵庫での保管は中止しました。", "薬を冷蔵庫で保管しています。", False),
+    ("薬を冷蔵庫で保管しています。現在、薬の冷蔵庫での保管は中止しました。", None, False),
+    ("冷蔵庫の写真を送ります。薬は冷蔵庫で保管しています。", "冷蔵庫", False),
+    ("冷蔵庫の写真を送ります。薬は冷蔵庫で保管しています。", "冷蔵庫の写真を送ります。", False),
+    ("本人の薬は冷蔵庫で保管しています。冷蔵庫には飲み物もあります。", "本人の薬は冷蔵庫で保管しています。", True),
+    ("本人の薬は冷蔵庫で保管しています。母の薬は冷蔵庫で保管していました。", None, True),
+    ("本人の薬は冷蔵庫で保管しています。母の薬の冷蔵庫での保管は中止しました。", None, True),
+    ("本人の薬は冷蔵庫で保管しています。来月は冷蔵庫での保管を中止する予定です。", None, True),
+    ("本人の薬は冷蔵庫で保管していません。母の薬は冷蔵庫で保管しています。", None, False),
+    ("冷蔵庫についての連絡です。薬は別室の棚で保管しています。", None, False),
     ("本人の薬は冷蔵庫で保管、副作用なし。", None, True),
     ("本人の薬は冷蔵庫で保管しており副作用はありません。", None, True),
     ("本人の薬は冷蔵庫で保管しており副作用はありませんとのことです。", "冷蔵庫", True),
@@ -225,6 +246,27 @@ def test_storage_scope_without_a_detail_key_requires_the_same_source_predicate()
     body = "本人の薬は冷蔵庫で保管しており残薬については確認しておりません。"
     assert not noncurrent_detail(body, "冷蔵庫", "冷蔵庫")
     assert noncurrent_detail(body, "冷蔵庫", "冷蔵庫", key="inquiry_result")
+
+
+@pytest.mark.parametrize("key,value", [("storage_place", "冷蔵庫"), ("storage_status", "冷蔵保管")])
+def test_unconfirmed_storage_is_private_with_its_original_evidence(led, key, value):
+    body = f"薬についての伝言には「{value}」とだけ書かれていました。"
+    detail = {"key": key, "value": value, "evidence": body}
+    _seed(led, [_item("medication_management", body, [detail])], body=body)
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    assert detail in read_model.message_patient_context(led.db, row)[0]["details"]
+    assert "服薬管理（" not in _card_text(led, SLACK)
+
+
+def test_other_allowed_details_keep_their_existing_card_projection(led):
+    body = "薬の管理者は合成家族、照会の結果は処方継続、相互作用の確認は薬局へ連絡。"
+    values = [("medication_manager", "管理者", "合成家族"), ("inquiry_result", "照会・提案の結果", "処方継続"),
+              ("interaction_check", "重複・相互作用の確認", "薬局へ連絡")]
+    details = [{"key": key, "value": value, "evidence": body} for key, _, value in values]
+    _seed(led, [_item("medication_management", body, details)], body=body)
+    card = _card_text(led, SLACK)
+    for _, label, value in values:
+        assert f"服薬管理（{label}）: 「{value}」" in card
 
 
 @pytest.mark.parametrize("body,value", [
