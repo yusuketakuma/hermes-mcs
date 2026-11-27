@@ -152,9 +152,10 @@ _REPORTED_DATE = re.compile(r"(?<!\d)\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?(?!\d)
 _DRUG_ONLY_KEYS = frozenset({"storage_status", "storage_place", "medication_manager", "inquiry_result",
                              "interaction_check"})
 _PATIENT_OWNERS = ("ご本人", "本人", "患者", "利用者")
+_DRUG_NOUN = r"(?:お)?(?:内服薬|処方薬|残薬|薬)"
 _DRUG_OWNER = re.compile(
     rf"(?P<who>ご本人|本人|患者|利用者|{clinical_scope.FAMILY_PERSON})"
-    r"(?:さん|様)?(?:が|は)?(?:自分|自身)?の(?:お)?(?:内服薬|処方薬|残薬|薬)")
+    rf"(?:さん|様)?(?:が|は)?(?:自分|自身)?の{_DRUG_NOUN}")
 
 
 PHARMACY_STATE_KEYS = frozenset({"inquiry_result", "storage_status", "storage_place",
@@ -274,9 +275,13 @@ def _other_persons_drug(body: str, span, value: str) -> bool:
 
 _DETAIL_NEGATIVE = re.compile(r"して(?:いない|いません|おりません|おらず)|しない|しません|なかった|ありません|ではない|なし")
 _DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|検討")
+_DETAIL_CLAUSE_BREAK = re.compile(r"[、，,]")
 _STORAGE_OBSERVATION = re.compile(
-    rf"(?P<past>(?:{clinical_scope.HISTORICAL_MARK}|{clinical_scope.PAST_MARK}|前は)(?!から|より))"
-    rf"|{clinical_scope.NOW_MARK}|今の")
+    rf"(?:(?P<past>(?:{clinical_scope.HISTORICAL_MARK}|{clinical_scope.PAST_MARK}|前は)(?!から|より))"
+    rf"|今(?=[はも])|{clinical_scope.NOW_MARK}|今の)(?P<occasion>(?:の[一-龥々]*)?(?:時点|時|際))?"
+    r"(?:(?P<topic>(?:に|で)?[はも])|に)?")
+_STORAGE_ONSET = r"(?:以前|昨[日年]|先[日週月])(?:から|より)"
+_STORAGE_ARGUMENT = re.compile(rf"(?:{_STORAGE_ONSET})?(?:(?:{_DRUG_OWNER.pattern}|{_DRUG_NOUN})[はをがも])?")
 _ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
                     r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
                     r"|せん妄|不眠|振戦|発熱")
@@ -287,7 +292,7 @@ _STORAGE_ACTION = re.compile(
     r"|(?P<stopped>[はをも]?(?:中止|終了)(?:しました|した(?!い|ら)|済み|して?(?=$|[一-龥々])))"
     r"|して(?:います|おります|いる|いて|おり))")
 _STORAGE_RESTART = re.compile(
-    r"(?:が|後に?)?[、，, ]*(?:その後|現在は|今は)?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
+    r"(?:が|後に?)?[、，, ]*(?:その後|(?P<now>現在は|今は))?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
 _OTHER_PHARMACY_REPORT = re.compile(
     rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:について)?[はがも]"
     rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})"
@@ -305,26 +310,47 @@ def _only_other_pharmacy_reports(continuation: str, end: int) -> bool:
     return True
 
 
-def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, bool | None]:
-    """Return the storage's own qualifiers and whether its predicate affirms or ends the practice."""
+def _past_storage_observation(before: str, affirmed: bool) -> bool:
+    """Date the storage assertion from its own time frame, across a reporting attribution if present."""
+    chunks = _DETAIL_CLAUSE_BREAK.split(before)
+    local = chunks[-1].strip()
+    frame = None
+    for mark in _STORAGE_OBSERVATION.finditer(local):
+        # An explicit visit-time topic applies even when the object is an unrecognized medicine.
+        explicit_topic = mark['topic'] and (mark['occasion'] or not mark['past'])
+        if explicit_topic or _STORAGE_ARGUMENT.fullmatch(local, mark.end()):
+            frame = mark
+    if frame is None:
+        for chunk in reversed(chunks[:-1]):
+            preceding = chunk.strip()
+            if not preceding.endswith(('によると', 'によれば')):
+                frame = _STORAGE_OBSERVATION.fullmatch(preceding)
+                break
+    if frame is not None:
+        return frame['past'] is not None
+    # A starting point alone does not establish what happened afterwards.
+    return not affirmed and re.search(_STORAGE_ONSET, local) is not None
+
+
+def _storage_scope(before: str, value: str, clause: str, tail: str) -> tuple[str, bool]:
+    """Return the storage's own qualifiers and whether it is a historical observation."""
     source = value + clause
     action = _STORAGE_ACTION.search(source)
     if action is None or not action.start() <= len(value) <= action.end():
-        return clause, None
-    if action['former'] is not None:
-        return clause, False
-    if action['stopped'] is not None:
+        return clause, _past_storage_observation(before, affirmed=False)
+    if action['former'] is not None or action['stopped'] is not None:
         continuation = tail[action.end() - len(value):]
         restart = _STORAGE_RESTART.match(continuation)
         if restart and _only_other_pharmacy_reports(continuation, restart.end()):
-            return source[len(value):action.end()], True
-        return clause, False
+            past = not restart['now'] and _past_storage_observation(before, affirmed=True)
+            return source[len(value):action.end()], past
+        return clause, True
     other = _OTHER_PHARMACY_REPORT.match(source, action.end())
     if other:
         # Remove only the other assertion. A later correction about storage still applies.
         clause = source[len(value):action.end()] + source[other.end():]
     end = (other.end() if other else action.end()) - len(value)
-    return clause, True if _only_other_pharmacy_reports(tail, end) else None
+    return clause, _past_storage_observation(before, affirmed=_only_other_pharmacy_reports(tail, end))
 
 
 def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
@@ -337,16 +363,12 @@ def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool
     verdicts = []
     for start, at, end in _quoted_value_positions(body, span, value):
         before, tail = body[start:at], body[at + len(value):end]
-        clause = re.split(r"[、，,]", tail, maxsplit=1)[0]
-        past_only = (re.search(r"以前|過去|前は", before) is not None
-                     and not any(mark in before for mark in ("現在", "今は", "今の")))
+        clause = _DETAIL_CLAUSE_BREAK.split(tail, maxsplit=1)[0]
         if key in (None, 'storage_place', 'storage_status'):
-            clause, active = _storage_scope(value, clause, tail)
-            times = list(_STORAGE_OBSERVATION.finditer(before))
-            if active is not None:
-                past_only = not active
-            if times and times[-1]['past']:
-                past_only = True
+            clause, past_only = _storage_scope(before, value, clause, tail)
+        else:
+            past_only = (re.search(r"以前|過去|前は", before) is not None
+                         and not any(mark in before for mark in ("現在", "今は", "今の")))
         verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or _DETAIL_UNCERTAIN.search(clause) or past_only))
     return bool(verdicts) and all(verdicts)
 
