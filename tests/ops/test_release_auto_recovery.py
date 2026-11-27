@@ -88,16 +88,34 @@ def test_cli_module_and_script_invocation(tmp_path):
     import subprocess
     import sys
     from pathlib import Path
-    gen, _, _ = _deploy(tmp_path, _full_files())
     repo = Path(__file__).resolve().parents[2]
-    for argv in ([sys.executable, '-m', 'mcs.ops.release_auto_recovery',
-                  'verify', '--generation-dir', gen],
-                 [sys.executable, 'mcs/ops/release_auto_recovery.py',
-                  'verify', '--generation-dir', gen]):
-        proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True,
-                              timeout=60)
-        assert proc.returncode == 0, proc.stderr
+    gen, _, _ = _deploy(tmp_path, {p: (repo / p).read_bytes() for p in rec._REQUIRED_CLOSURE})
+    entry = Path(gen, 'mcs/ops/release_auto_recovery.py')
+    for cwd, args in [(gen, ['-E', '-s', '-S', '-B', '-m', 'mcs.ops.release_auto_recovery']),
+                      (tmp_path, ['-I', '-S', '-B', str(entry)])]:
+        proc = subprocess.run([sys.executable, *args, 'verify', '--generation-dir', gen],
+                              cwd=cwd, capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr or proc.stdout
         assert json.loads(proc.stdout)['ok'] is True
+
+    # The generation must also load the runtime modules used after verification.
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
+             "import release_auto_apply, release_auto_owner, release_runtime_proof, runtime_entry")
+    subprocess.run([sys.executable, '-I', '-S', '-B', '-c', probe, str(Path(gen, 'mcs'))],
+                   cwd=tmp_path, check=True, timeout=60)
+    assert not list(Path(gen).rglob('*.pyc'))
+
+
+def test_bridge_maintenance_module_remains_available():
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    proc = subprocess.run([sys.executable, '-E', '-s', '-S', '-B', '-m',
+                           'mcs.ops.release_auto_bridge', 'migrate', '--help'],
+                          cwd=root, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert '--spec' in proc.stdout
 
 
 # --- verify_generation ---------------------------------------------------------
