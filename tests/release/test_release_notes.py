@@ -462,6 +462,75 @@ class ReleaseNotesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             scenario("changes/archive/1.0.1/a.json", json.dumps(broken))
 
+    def test_unpublished_latest_version_accepts_only_new_documented_archives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+            archive = root / "changes/archive/1.0.1"
+            archive.mkdir(parents=True)
+            old_item = self.item()
+            new_item = dict(old_item, title="復旧を修正", summary="配送を保留します。", refs=["#21"])
+
+            def write_notes(items):
+                body = notes.render(items, "修正", "合成の説明です。")
+                (root / "CHANGELOG.md").write_text("## [Unreleased]\n\n## [1.0.1] — 2026-01-02\n\n" + body)
+
+            git("init")
+            (root / "mcs").mkdir()
+            runtime = root / "mcs/example.py"
+            runtime.write_text("# before\n")
+            (archive / "old.json").write_text(json.dumps(old_item))
+            write_notes([old_item])
+            git("add", ".")
+            git("commit", "-m", "prepare")
+            base = git("rev-parse", "HEAD")
+            runtime.write_text("# after\n")
+            (archive / "new.json").write_text(json.dumps(new_item))
+            write_notes([old_item, new_item])
+            git("add", ".")
+            git("commit", "-m", "append")
+            notes.require_fragment(root, base)
+
+            git("tag", "v1.0.1")
+            with self.assertRaises(ValueError):
+                notes.require_fragment(root, base)
+            git("tag", "-d", "v1.0.1")
+
+            for label, shown in (
+                ("missing", [old_item]),
+                ("mismatched summary", [old_item, dict(new_item, summary="ほかの説明。")]),
+                ("wrong reference", [dict(old_item, refs=["#21"]), dict(new_item, refs=["#20"])]),
+                ("missing upgrade", [dict(old_item, upgrade="必要なし。"), dict(new_item, upgrade="必要なし。")]),
+            ):
+                with self.subTest(label=label):
+                    write_notes(shown)
+                    git("add", "CHANGELOG.md")
+                    git("commit", "-m", label)
+                    # Changes in the working copy must not supply the missing release evidence.
+                    write_notes([old_item, new_item])
+                    with self.assertRaises(ValueError):
+                        notes.require_fragment(root, base)
+
+            (archive / "duplicate.json").write_text(json.dumps(new_item))
+            write_notes([old_item, new_item])
+            git("add", ".")
+            git("commit", "-m", "duplicate new record")
+            with self.assertRaises(ValueError):
+                notes.require_fragment(root, base)
+
+            (archive / "duplicate.json").unlink()
+            (archive / "new.json").write_text(json.dumps(old_item))
+            write_notes([old_item])
+            git("add", ".")
+            git("commit", "-m", "copy old record")
+            with self.assertRaises(ValueError):
+                notes.require_fragment(root, base)
+
     def test_unreadable_base_changelog_never_accepts_archives(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -233,6 +233,16 @@ def check_changelog(text):
     return versions
 
 
+def _item_entry(item):
+    prefix = "セキュリティ：" if item["category"] == "security" else ""
+    return [f"- **{prefix}{item['title']}**", f"  {item['summary']}"]
+
+
+def _item_details(item):
+    return [f"#### {item['title']}", "", *("- " + x for x in item["details"]),
+            "- 根拠: " + "、".join(item["refs"])]
+
+
 def render(items, headline, summary):
     if not headline.strip() or not summary.strip() or len(headline) > 100:
         raise ValueError("headline・summaryは必須です。headlineは100文字以内です")
@@ -251,48 +261,75 @@ def render(items, headline, summary):
         if entries:
             out += [f"### {label}", ""]
             for item in entries:
-                prefix = "セキュリティ：" if item["category"] == "security" else ""
-                out += [f"- **{prefix}{item['title']}**", f"  {item['summary']}", ""]
+                out += _item_entry(item) + [""]
     out += ["### 更新時の注意", ""]
     for x in upgrades:
         out += [f"- {x}", ""]
     out += ["### 技術詳細", "", "<details>", "<summary>技術詳細・根拠を表示</summary>", ""]
     for item in items:
-        out += [f"#### {item['title']}", ""]
-        out.extend(f"- {x}" for x in item["details"])
-        out += ["- 根拠: " + "、".join(item["refs"]), ""]
+        out += _item_details(item) + [""]
     out += ["</details>", ""]
     return "\n".join(out)
 
 
+def _git(root, *args):
+    return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout
+
+
+def _candidate_fragments(root, base, candidate, old, current):
+    # CI fetches all history and tags. A version tag freezes its archive.
+    if (_git(root, "rev-parse", "--is-shallow-repository").strip() != "false"
+            or _git(root, "tag", "--list", f"v{candidate}").strip()):
+        return False
+    paths = _git(root, "diff", "--no-renames", "--diff-filter=A", "--name-only", base, "HEAD",
+                 "--", f":(glob)changes/archive/{candidate}/*.json").splitlines()
+    if not paths:
+        return False
+    seen_headings = set(section(old, candidate).splitlines())
+    body = section(current, candidate)
+    parts = re.split(r"^### ([^\n]+)\n", body, flags=re.M)
+    # Ignore blank lines between bullets in hand-edited release notes.
+    sections = {name: "\n" + "\n".join(filter(None, content.splitlines())) + "\n"
+                for name, content in zip(parts[1::2], parts[2::2])}
+    for path in paths:
+        item = validate(json.loads(_git(root, "show", f"HEAD:{path}")))
+        entry = _item_entry(item)
+        details = _item_details(item)
+        group = GROUPS.get(item["category"], GROUPS["fixed"])  # security is listed in fixes
+        if (entry[0] in seen_headings or details[0] in seen_headings
+                or "\n" + "\n".join(entry) + "\n" not in sections.get(group, "")
+                or f"\n- {item['upgrade']}\n" not in sections.get("更新時の注意", "")
+                or "\n" + "\n".join(filter(None, details)) + "\n" not in sections.get("技術詳細", "")):
+            return False
+        seen_headings.update((entry[0], details[0]))
+    return True
+
+
 def _released_fragment(root, base, paths):
-    """A release commit moves its records to changes/archive/<version>/.
-    Count those only for a version whose CHANGELOG section is new since
-    base, and only when every such record still validates."""
+    """Count newly built releases or additions documented in the current untagged candidate."""
     archived = [(m[1], p) for p in paths
                 if (m := re.fullmatch(r"changes/archive/([0-9]+\.[0-9]+\.[0-9]+)/[^/]+\.json", p))
                 and (root / p).is_file()]
     if not archived:
         return False
-    # fail closed: an unreadable base CHANGELOG must not make every version new
-    old = subprocess.run(["git", "show", f"{base}:CHANGELOG.md"], cwd=root,
-                         check=True, capture_output=True, text=True).stdout
+    base = _git(root, "merge-base", base, "HEAD").strip()
+    old = _git(root, "show", f"{base}:CHANGELOG.md")
+    current = _git(root, "show", "HEAD:CHANGELOG.md")
     heading = re.compile(r"^## \[([0-9]+\.[0-9]+\.[0-9]+)\]", re.M)
-    released = (set(heading.findall((root / "CHANGELOG.md").read_text(encoding="utf-8")))
-                - set(heading.findall(old)))
+    previous, versions = heading.findall(old), heading.findall(current)
+    released = set(versions) - set(previous)
     records = [p for version, p in archived if version in released]
-    for p in records:
-        validate(json.loads((root / p).read_text(encoding="utf-8")))
-    return bool(records)
+    if records:
+        for path in records:
+            validate(json.loads(_git(root, "show", f"HEAD:{path}")))
+        return True
+    return bool(versions and previous and versions[0] == previous[0]
+                and _candidate_fragments(root, base, versions[0], old, current))
 
 
 def require_fragment(root, base):
     # base is passed as argv, never interpolated into a shell command.
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        cwd=root, check=True, capture_output=True, text=True,
-    )
-    paths = result.stdout.splitlines()
+    paths = _git(root, "diff", "--name-only", f"{base}...HEAD").splitlines()
     runtime = any((p.startswith(("mcs/", "hermes_plugin/", "adapters/", "lineworks_adapter/", "mcs_standalone/", "deployment/"))
                    and not p.endswith(".md")) or p in {
                        "install.sh", "scripts/mcs", "scripts/install_local.py",
