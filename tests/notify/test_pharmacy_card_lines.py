@@ -49,6 +49,12 @@ def _card_text(led, cfg):
     return "\n".join(c.get("text", "") for c in spec["parts"]["containers"])
 
 
+def _shows_fridge(led, body, evidence=None):
+    item = _item("medication_management", body, [{"key": "storage_place", "value": "冷蔵庫", "evidence": evidence or body}])
+    _seed(led, [item], body=body)
+    return "服薬管理（保管場所）: 「冷蔵庫」" in _card_text(led, SLACK)
+
+
 @pytest.mark.parametrize("cfg", [CFG, SLACK, LINEWORKS], ids=["discord", "slack", "lineworks"])
 def test_a_storage_detail_shows_one_line_on_every_platform(led, cfg):
     _seed(led, [_storage()])
@@ -154,6 +160,12 @@ def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_
     ("本人の薬は冷蔵庫で保管しており残薬については確認しておりません。", "冷蔵庫", True),
     ("本人の薬は冷蔵庫で保管しており保管場所については確認しておりません。", "冷蔵庫", False),
     ("本人の薬は以前から冷蔵庫で保管しています。", "冷蔵庫", True),
+    ("以前から薬を冷蔵庫で保管しており、残薬は未確認です。", "冷蔵庫", True),
+    ("先月の訪問時とは異なり、現在は薬を冷蔵庫で保管しており残薬は未確認です。", "冷蔵庫", True),
+    ("前回の訪問時には、先週から薬を冷蔵庫で保管しており残薬は未確認でした。", "冷蔵庫", False),
+    ("薬を冷蔵庫で保管していましたが、残薬は未確認です。", "冷蔵庫", False),
+    ("以前から使っている冷蔵庫での保管は中止しました。残薬は未確認です。", "冷蔵庫", False),
+    ("以前から薬を冷蔵庫で保管しているとの情報は誤りで、実際には保管していません。", "冷蔵庫", False),
     pytest.param("先月の訪問時には、以前から薬を冷蔵庫で保管しており副作用はありませんでした。", "冷蔵庫", False,
                  id="storage_tense-past-visit"),
     pytest.param("先月の訪問時には、以前から薬を冷蔵庫で保管しており副作用はありません。", "冷蔵庫", False,
@@ -180,9 +192,14 @@ def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_
     ("本人の薬は冷蔵庫で保管しているかは未確認です。", "冷蔵庫", False),
 ])
 def test_storage_card_uses_the_storage_predicate_in_the_source(led, body, evidence, shown):
-    item = _item("medication_management", body, [{"key": "storage_place", "value": "冷蔵庫", "evidence": evidence or body}])
-    _seed(led, [item], body=body)
-    assert ("服薬管理（保管場所）: 「冷蔵庫」" in _card_text(led, SLACK)) is shown
+    assert _shows_fridge(led, body, evidence) is shown
+
+
+@pytest.mark.parametrize("observation,shown", [("", True), ("先月の訪問時には、", False)])
+@pytest.mark.parametrize("onset", ["", "以前から"])
+@pytest.mark.parametrize("ending", ["保管しています。", "保管しており残薬は未確認です。", "保管しており副作用はありません。"])
+def test_storage_observation_time_is_independent_of_onset_and_other_reports(led, observation, onset, ending, shown):
+    assert _shows_fridge(led, f"{observation}{onset}薬を冷蔵庫で{ending}", "冷蔵庫") is shown
 
 
 def test_storage_scope_without_a_detail_key_requires_the_same_source_predicate():

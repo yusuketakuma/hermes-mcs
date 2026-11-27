@@ -274,29 +274,28 @@ def _other_persons_drug(body: str, span, value: str) -> bool:
 
 _DETAIL_NEGATIVE = re.compile(r"して(?:いない|いません|おりません|おらず)|しない|しません|なかった|ありません|ではない|なし")
 _DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|検討")
+_STORAGE_OBSERVATION = re.compile(
+    rf"(?P<past>(?:{clinical_scope.HISTORICAL_MARK}|{clinical_scope.PAST_MARK}|前は)(?!から|より))"
+    rf"|{clinical_scope.NOW_MARK}|今の")
 _ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
                     r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
                     r"|せん妄|不眠|振戦|発熱")
+_NEXT_REPORT = re.compile(r"\s*(?:(?:が|けれど(?:も)?|ものの)\s*[、，,;；]?|[、，,;；])\s*")
 _STORAGE_ACTION = re.compile(
     r"(?:(?:内|の中)?[でに](?:の)?)?(?:冷蔵|冷凍|常温)?(?:保管|保存)"
-    r"(?:(?P<former>して(?:いました|おりました|いた))$"
+    rf"(?:(?P<former>して(?:いました|おりました|いた))(?=$|{_NEXT_REPORT.pattern})"
     r"|(?P<stopped>[はをも]?(?:中止|終了)(?:しました|した(?!い|ら)|済み|して?(?=$|[一-龥々])))"
     r"|して(?:います|おります|いる|いて|おり))")
 _STORAGE_RESTART = re.compile(
     r"(?:が|後に?)?[、，, ]*(?:その後|現在は|今は)?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
-_NEXT_REPORT = re.compile(r"\s*(?:(?:が|けれど(?:も)?|ものの)\s*[、，,;；]?|[、，,;；])\s*")
 _OTHER_PHARMACY_REPORT = re.compile(
     rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:について)?[はがも]"
     rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})"
     r"(?:でした|です)?(?:とのこと(?:でした|です)?)?")
 
 
-def _storage_restarted(continuation: str) -> bool:
-    """An affirmative restart may be followed only by separately grounded pharmacy reports."""
-    restart = _STORAGE_RESTART.match(continuation)
-    if restart is None:
-        return False
-    end = restart.end()
+def _only_other_pharmacy_reports(continuation: str, end: int) -> bool:
+    """Whether only independent pharmacy reports follow a storage predicate."""
     while end < len(continuation):
         boundary = _NEXT_REPORT.match(continuation, end)
         report = boundary and _OTHER_PHARMACY_REPORT.match(continuation, boundary.end())
@@ -306,25 +305,26 @@ def _storage_restarted(continuation: str) -> bool:
     return True
 
 
-def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]:
-    """Keep this storage's qualifiers and the tense of its own predicate."""
+def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, bool | None]:
+    """Return the storage's own qualifiers and whether its predicate affirms or ends the practice."""
     source = value + clause
     action = _STORAGE_ACTION.search(source)
     if action is None or not action.start() <= len(value) <= action.end():
         return clause, None
     if action['former'] is not None:
-        return clause, 'past'
+        return clause, False
     if action['stopped'] is not None:
         continuation = tail[action.end() - len(value):]
-        if _storage_restarted(continuation):
-            return source[len(value):action.end()], 'current'
-        return clause, 'past'
-    ongoing = action.end() == len(value) + len(tail) and action[0].endswith(('います', 'おります', 'いる'))
+        restart = _STORAGE_RESTART.match(continuation)
+        if restart and _only_other_pharmacy_reports(continuation, restart.end()):
+            return source[len(value):action.end()], True
+        return clause, False
     other = _OTHER_PHARMACY_REPORT.match(source, action.end())
     if other:
         # Remove only the other assertion. A later correction about storage still applies.
         clause = source[len(value):action.end()] + source[other.end():]
-    return clause, 'current' if ongoing else None
+    end = (other.end() if other else action.end()) - len(value)
+    return clause, True if _only_other_pharmacy_reports(tail, end) else None
 
 
 def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
@@ -337,14 +337,16 @@ def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool
     verdicts = []
     for start, at, end in _quoted_value_positions(body, span, value):
         before, tail = body[start:at], body[at + len(value):end]
-        current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
-        past = re.search(r"以前から|以前|過去|前は", before)
         clause = re.split(r"[、，,]", tail, maxsplit=1)[0]
-        tense = None
+        past_only = (re.search(r"以前|過去|前は", before) is not None
+                     and not any(mark in before for mark in ("現在", "今は", "今の")))
         if key in (None, 'storage_place', 'storage_status'):
-            clause, tense = _storage_scope(value, clause, tail)
-        past_only = tense == 'past' or (past is not None and current < 0
-                                        and not (past[0] == '以前から' and tense == 'current'))
+            clause, active = _storage_scope(value, clause, tail)
+            times = list(_STORAGE_OBSERVATION.finditer(before))
+            if active is not None:
+                past_only = not active
+            if times and times[-1]['past']:
+                past_only = True
         verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or _DETAIL_UNCERTAIN.search(clause) or past_only))
     return bool(verdicts) and all(verdicts)
 
