@@ -273,6 +273,29 @@ def test_validation_failed_paid_answer_is_not_reused_and_allows_bounded_retry(pa
         assert failure_meta['repair_issues'] == {'evidence': 2}
 
 
+def test_patient_context_validation_failure_follows_the_recovered_answer(paid):
+    path, _cfg, calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(path)) as ledger:
+        provider = unit(ledger, route='patient_context', purpose='patient_context')
+        deadline = time.monotonic() + 60
+        provider('synthetic first', deadline=deadline, max_tokens=100)
+        first = provider.answered_reservations[-1]
+        provider('synthetic second', deadline=deadline, max_tokens=100)
+        second = provider.answered_reservations[-1]
+        assert first['reservation_id'] != second['reservation_id']
+        assert provider('synthetic first', deadline=deadline, max_tokens=100)['reused_response']
+        assert provider.completed_reservations == [second, first]
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            cloud_policy.record_validation_failure_tx(ledger, provider.answered_reservations[-1],
+                                                       failure_reason='patient_context_invalid_response')
+        failure, = ledger.artifacts(cloud_policy.VALIDATION_FAILURE_KIND)
+        assert json.loads(failure['meta'])['reservation_id'] == first['reservation_id']
+        assert provider.answered_reservations == [second, first]
+        assert provider('synthetic second', deadline=deadline, max_tokens=100)['reused_response']
+        assert len(calls) == len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
 def test_validation_failure_binding_mismatch_fails_closed(paid):
     path, _cfg, _calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:

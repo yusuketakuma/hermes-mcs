@@ -585,12 +585,12 @@ class CloudInferenceUnit:
                 self.possibly_sent = True
                 self._unresolved = False
                 self.refusal = None
-                # Consumers bind the current answer to the last completed reservation.
-                if evidence['reservation'] in self.completed_reservations:
-                    self.completed_reservations.remove(evidence['reservation'])
-                self.completed_reservations.append(evidence['reservation'])
-                if evidence['reservation'] not in self.answered_reservations:
-                    self.answered_reservations.append(evidence['reservation'])
+                # Adoption and validation each use the last reservation of their list.
+                reservation = evidence['reservation']
+                for history in (self.completed_reservations, self.answered_reservations):
+                    if reservation in history:
+                        history.remove(reservation)
+                    history.append(reservation)
             else:
                 judged = {}
                 def send_block_reason():
