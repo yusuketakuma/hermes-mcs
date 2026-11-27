@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import stat
 
+import mcs_util
 import safe_io
 
 from mcs_runtime import mode
@@ -23,7 +24,7 @@ class ConfigError(ValueError):
 def load(root):
     try:
         path = Path(root).expanduser().resolve() / "config.json"
-        limit = 1024 * 1024
+        limit = mcs_util.CONFIG_MAX_BYTES
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         with safe_io.fdopen_owned(fd, "rb") as stream:
             st = os.fstat(stream.fileno())
@@ -34,7 +35,7 @@ def load(root):
             raw = stream.read(limit + 1)
         if len(raw) > limit:
             raise ValueError
-        cfg = json.loads(raw.decode("utf-8"))
+        cfg = mcs_util.parse_config(raw)
         if not isinstance(cfg, dict):
             raise ValueError
     except (OSError, ValueError, TypeError, RecursionError, UnicodeError):

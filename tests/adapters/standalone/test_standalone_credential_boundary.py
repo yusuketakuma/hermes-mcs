@@ -114,3 +114,16 @@ def test_standalone_config_refuses_writable_or_linked_file(tmp_path):
     path.symlink_to(tmp_path / "real.json")
     with pytest.raises(config.ConfigError, match="standalone_configuration_invalid"):
         config.load(tmp_path)
+
+
+@pytest.mark.parametrize("field", [
+    '"notify_target":"local","notify_target":"local"',
+    '"optional":{"nested":1,"nested":2}',
+    '"optional":NaN',
+    '"optional":1e999',
+])
+def test_check_rejects_ambiguous_config_before_connecting(tmp_path, field, capsys):
+    path = tmp_path / "config.json"
+    path.write_text('{"runtime_mode":"standalone",' + field + '}')
+    assert cli.main(["check", "--root", str(tmp_path)]) == 1
+    assert capsys.readouterr().err.strip() == "standalone_configuration_invalid"
