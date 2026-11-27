@@ -278,7 +278,7 @@ def _observe_existing_backup(directory, *, deadline):
                 mcs_update._bounded_timeout(None, deadline)
                 if count >= local_backup.LOCAL_STATUS_SCAN_MAX:
                     raise ReleaseApplyError('BACKUP_UNVERIFIED')
-                if not (entry.name.startswith('ledger-') and entry.name.endswith(('.db', '.db.gz'))):
+                if not (entry.name.startswith('ledger-') and entry.name.endswith('.db')):
                     continue
                 current = entry.stat(follow_symlinks=False)
                 if not stat.S_ISREG(current.st_mode):

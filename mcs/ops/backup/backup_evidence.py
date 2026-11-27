@@ -687,21 +687,14 @@ def inventory_matches(path: Path, expected: Inventory, *, max_steps: int | None 
 
 
 
-def _valid_static(path) -> bool:
-    """Validate a daily snapshot, decompressing compressed copies to a staging file."""
-    import local_backup  # late: core module, no cycle at import time
-    with local_backup.materialize_backup(str(path)) as real:
-        return valid_mcs_db(real)
-
-
 def latest_snapshot(directory: str) -> str:
     root = Path(directory)
     require_private_directory(root)
     for path in sorted(root.iterdir(), reverse=True):
-        if (re.fullmatch(r"ledger-[0-9]{8}\.db(\.gz)?", path.name)
+        if (re.fullmatch(r"ledger-[0-9]{8}\.db", path.name)
                 and not path.is_symlink()
                 and not has_sqlite_sidecars(path)
-                and _valid_static(path)):
+                and valid_mcs_db(str(path))):
             return str(path)
     raise BackupError("backup_no_valid_daily_snapshot")
 
@@ -764,10 +757,8 @@ def _snapshot_info(snapshot: str, policy: BackupPolicy, *,
             or has_sqlite_sidecars(source)):
         raise BackupError("backup_static_snapshot_required")
     before_hash, before = _inspection_hash(source, policy.max_snapshot_bytes)
-    import local_backup  # late: core module, no cycle at import time
-    with local_backup.materialize_backup(str(source)) as real:
-        inventory = inventory_snapshot(
-            real, max_steps=max_steps, deadline=time.monotonic() + max_seconds)
+    inventory = inventory_snapshot(
+        source, max_steps=max_steps, deadline=time.monotonic() + max_seconds)
     after_hash, after = _inspection_hash(source, policy.max_snapshot_bytes)
     if (before_hash != after_hash
             or _inspection_signature(before) != _inspection_signature(after)

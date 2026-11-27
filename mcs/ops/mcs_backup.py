@@ -59,7 +59,6 @@ import notify_spool
 from lifecycle_io import store_keychain  # noqa: E402
 import backup_evidence  # noqa: E402
 import held_restore  # noqa: E402
-import local_backup  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
 ITERATIONS = 600000
@@ -230,13 +229,10 @@ def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
     with tempfile.TemporaryDirectory(prefix="mcs-backup-", dir=policy.scratch_dir) as work:
         work = Path(work)
         plain = work / "ledger.db"
-        # compressed snapshots freeze at materialize time; the copy binds
-        # the plaintext bytes the manifest's plain_sha256 then proves
-        with local_backup.materialize_backup(str(source)) as real:
-            held_restore.copy_private(real, plain, policy.max_snapshot_bytes)
-            plain_sha256 = file_sha256(plain)
-            if file_sha256(real) != plain_sha256:
-                raise backup_evidence.BackupError("backup_source_changed")
+        held_restore.copy_private(source, plain, policy.max_snapshot_bytes)
+        plain_sha256 = file_sha256(plain)
+        if file_sha256(source) != plain_sha256:
+            raise backup_evidence.BackupError("backup_source_changed")
         inventory = backup_evidence.inventory_snapshot(plain)
         backup_evidence.check_fresh(inventory["last_successful_run"], policy)
         compressed, encrypted = work / "ledger.gz", work / "cipher"

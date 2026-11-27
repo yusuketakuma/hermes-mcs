@@ -34,9 +34,9 @@ from llm_availability import disk_floor_mb  # noqa: E402
 import local_backup  # noqa: E402
 from mcs_util import file_sha256, has_sqlite_sidecars  # noqa: E402
 
-_NAME = re.compile(r"(?:ledger|homecare)-\d{8}\.db(?:\.gz)?"
-                   r"|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db(?:\.gz)?"
-                   r"|homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db(?:\.gz)?")
+_NAME = re.compile(r"(?:ledger|homecare)-\d{8}\.db"
+                   r"|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db"
+                   r"|homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db")
 _HOMECARE = ("homecare_daily", "homecare_preupdate")
 
 
@@ -55,22 +55,18 @@ def list_backups(*, verify: bool = False) -> list[dict]:
 
 
 def _verify(path: Path) -> dict:
-    """sha256 is the PLAINTEXT hash — the same bytes a restore would place —
-    so operators can compare it against restore/adoption receipts."""
     try:
         if has_sqlite_sidecars(path):
             raise backup_evidence.BackupError("backup_static_snapshot_required")
-        artifact = file_sha256(path)
-        with local_backup.materialize_backup(str(path)) as real:
-            sha256 = file_sha256(real)
-            inventory = backup_evidence.inventory_snapshot(real)
-        if file_sha256(path) != artifact:
+        before = file_sha256(path)
+        inventory = backup_evidence.inventory_snapshot(path)
+        if file_sha256(path) != before:
             raise backup_evidence.BackupError("backup_source_changed")
     except backup_evidence.BackupError as exc:
         return {"check": backup_evidence.failure_code(exc)}
-    except (OSError, EOFError, sqlite3.Error, ValueError):
+    except (OSError, sqlite3.Error, ValueError):
         return {"check": "backup_unreadable"}
-    return {"check": "ok", "sha256": sha256, "schema": inventory["schema"],
+    return {"check": "ok", "sha256": before, "schema": inventory["schema"],
             "last_successful_run": inventory["last_successful_run"]}
 
 
@@ -78,17 +74,15 @@ def _verify_homecare(path: Path) -> dict:
     try:
         if has_sqlite_sidecars(path):
             raise backup_evidence.BackupError("backup_static_snapshot_required")
-        artifact = file_sha256(path)
-        with local_backup.materialize_backup(str(path)) as real:
-            sha256 = file_sha256(real)
-            migrations = _homecare_inventory(Path(real))
-        if file_sha256(path) != artifact:
+        before = file_sha256(path)
+        migrations = _homecare_inventory(path)
+        if file_sha256(path) != before:
             raise backup_evidence.BackupError("backup_source_changed")
     except backup_evidence.BackupError as exc:
         return {"check": backup_evidence.failure_code(exc)}
-    except (OSError, EOFError, sqlite3.Error, ValueError):
+    except (OSError, sqlite3.Error, ValueError):
         return {"check": "backup_unreadable"}
-    return {"check": "ok", "sha256": sha256, "migrations": migrations}
+    return {"check": "ok", "sha256": before, "migrations": migrations}
 
 
 def _homecare_inventory(path: Path) -> dict[str, int]:
@@ -123,26 +117,25 @@ def restore(name: str, *, destination: str) -> dict:
     homecare = backup_class(name) in _HOMECARE
     target, pinned = held_restore.new_destination(
         destination, outside=Path(local_backup.BACKUP_DIR).resolve())
-    with local_backup.materialize_backup(str(source)) as real:
-        size = os.path.getsize(real)
-        if shutil.disk_usage(target.parent).free / (1024 * 1024) < (
-                2 * size / (1024 * 1024) + disk_floor_mb()):
-            raise backup_evidence.BackupError("backup_restore_disk_low")
-        with tempfile.TemporaryDirectory(prefix=".mcs-local-restore-", dir=target.parent) as work:
-            plain = Path(work) / ("homecare.db" if homecare else "ledger.db")
-            held_restore.copy_private(real, plain, size)
-            source_sha256 = file_sha256(plain)
-            if file_sha256(real) != source_sha256:
-                raise backup_evidence.BackupError("backup_source_changed")
-            if homecare:
-                migrations = _homecare_inventory(plain)
-                held_restore.publish_new(target, pinned, plain, "homecare.db", source_sha256, size)
-                return {"v": 1, "sha256": source_sha256, "migrations": migrations,
-                        "database": str(target / "homecare.db")}
-            inventory = backup_evidence.inventory_snapshot(plain)
-            report = held_restore.report(source_sha256, source_sha256, inventory,
-                                         restore_pending=True)
-            return held_restore.place(target, pinned, plain, report, size)
+    size = source.stat().st_size
+    if shutil.disk_usage(target.parent).free / (1024 * 1024) < (
+            2 * size / (1024 * 1024) + disk_floor_mb()):
+        raise backup_evidence.BackupError("backup_restore_disk_low")
+    with tempfile.TemporaryDirectory(prefix=".mcs-local-restore-", dir=target.parent) as work:
+        plain = Path(work) / ("homecare.db" if homecare else "ledger.db")
+        held_restore.copy_private(source, plain, size)
+        source_sha256 = file_sha256(plain)
+        if file_sha256(source) != source_sha256:
+            raise backup_evidence.BackupError("backup_source_changed")
+        if homecare:
+            migrations = _homecare_inventory(plain)
+            held_restore.publish_new(target, pinned, plain, "homecare.db", source_sha256, size)
+            return {"v": 1, "sha256": source_sha256, "migrations": migrations,
+                    "database": str(target / "homecare.db")}
+        inventory = backup_evidence.inventory_snapshot(plain)
+        report = held_restore.report(source_sha256, source_sha256, inventory,
+                                     restore_pending=True)
+        return held_restore.place(target, pinned, plain, report, size)
 
 
 def main(argv: list[str] | None = None) -> int:

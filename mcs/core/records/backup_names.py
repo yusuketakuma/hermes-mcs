@@ -16,16 +16,16 @@ BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "patient_context_reset",
 # Classes holding a whole copy of the ledger; the home-care records database is a separate file.
 _LEDGER_COPIES = ("daily", "preupdate", "patient_context_reset", "manual")
 
-_BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db(\.gz)?")),
-                          ("daily_ok", re.compile(r"ledger-\d{8}\.db(\.gz)?\.ok")),
-                          ("preupdate", re.compile(r"preupdate-.*\.db(\.gz)?")),
+_BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
+                          ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
+                          ("preupdate", re.compile(r"preupdate-.*\.db")),
                           # reset_backup's copies: kept by the owner, never rotated
-                          ("patient_context_reset", re.compile(r"patient-context-reset-.*\.db(\.gz)?")),
+                          ("patient_context_reset", re.compile(r"patient-context-reset-.*\.db")),
                           # copies of the home-care records database (homecare.db)
-                          ("homecare_daily", re.compile(r"homecare-\d{8}\.db(\.gz)?")),
-                          ("homecare_daily_ok", re.compile(r"homecare-\d{8}\.db(\.gz)?\.ok")),
+                          ("homecare_daily", re.compile(r"homecare-\d{8}\.db")),
+                          ("homecare_daily_ok", re.compile(r"homecare-\d{8}\.db\.ok")),
                           # only the generated <time>-<random> form: a hand-named copy stays manual
-                          ("homecare_preupdate", re.compile(r"homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db(\.gz)?")),
+                          ("homecare_preupdate", re.compile(r"homecare-preupdate-\d{8}-\d{6}-[0-9A-Za-z_]+\.db")),
                           ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
 
 # Settled journal rows are kept back to the oldest restorable backup, but
@@ -44,9 +44,8 @@ def backup_class(name: str) -> str:
 
 
 def restorable(name: str) -> bool:
-    """A whole ledger copy a restore could rewind to (no marker, staging or home-care file).
-    Compressed copies (``.db.gz``) restore through materialize_backup."""
-    return name.endswith((".db", ".db.gz")) and backup_class(name) in _LEDGER_COPIES
+    """A whole ledger copy a restore could rewind to (no marker, staging or home-care file)."""
+    return name.endswith(".db") and backup_class(name) in _LEDGER_COPIES
 
 
 def journal_horizon(backup_dir: str, now: float) -> float | None:
