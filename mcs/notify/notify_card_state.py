@@ -33,9 +33,14 @@ def _restore_hold_active(db, *, card_id=None, delivery_id=None) -> bool:
         (delivery_id,)).fetchone() is not None
 
 
-def release_holds(db, *, delivery_id=None, card_id=None,
-                  command_id=None, now=None) -> int:
-    """Release active restore holds for a settled scope."""
+def release_holds(db, *, delivery_id=None, card_id=None, attempt_id=None,
+                  skip_part_attempts=False, command_id=None, now=None) -> int:
+    """Release active restore holds for a settled scope.
+
+    ``skip_part_attempts`` keeps every part-level (``p:``-attempt) hold:
+    a parent card's settlement is never evidence for an independent body,
+    thread or attachment part. An exact ``attempt_id`` releases only that
+    one part scope — pass it without delivery_id/card_id."""
     now = time.time() if now is None else now
     clauses, vals = [], []
     if delivery_id is not None:
@@ -44,13 +49,17 @@ def release_holds(db, *, delivery_id=None, card_id=None,
     if card_id is not None:
         clauses.append("card_id=?")
         vals.append(card_id)
+    if attempt_id is not None:
+        clauses.append("attempt_id=?")
+        vals.append(attempt_id)
     if not clauses:
         return 0
-    return db.execute(
-        "UPDATE notification_restore_holds SET released_at=?,"
-        "release_command_id=? WHERE released_at IS NULL AND ("
-        + " OR ".join(clauses) + ")",
-        [now, command_id, *vals]).rowcount
+    sql = ("UPDATE notification_restore_holds SET released_at=?,"
+           "release_command_id=? WHERE released_at IS NULL AND ("
+           + " OR ".join(clauses) + ")")
+    if skip_part_attempts:
+        sql += " AND (attempt_id IS NULL OR attempt_id NOT LIKE 'p:%')"
+    return db.execute(sql, [now, command_id, *vals]).rowcount
 
 
 def mark_snapshot_dirty(db) -> None:
