@@ -647,14 +647,16 @@ async function checkOpenMcsPatientSelection() {
 
   let answer22;
   sandbox.api = async (kind, params) => {
+    if (kind === "brief") return {sections: []};
     if (params.q === "22") return new Promise(resolve => {answer22 = resolve;});
     if (params.q === "33") return {items: [p33], next_cursor: null};
     return {items: [], next_cursor: null};
   };
-  const first = run("openMcs(22)");
+  const first = button(card, "タイムラインを開く").onclick();
   for (let i = 0; i < 20 && !answer22; i++) await Promise.resolve();
   assert.equal(typeof answer22, "function");
-  const second = run("openMcs(33)");
+  const secondCard = run('mcsCard({project_id: 33, patient_name: "合成 三十三"}, () => true)');
+  const second = button(secondCard, "タイムラインを開く").onclick();
   await second;
   assert.equal(run("state.project", sandbox), 33);
   answer22({items: [p22], next_cursor: null});
@@ -725,6 +727,45 @@ async function checkOpenMcsPatientSelection() {
   assert.match(content(byId("patients")), /該当する患者はいません/);
 }
 
+async function checkPatientSearchSelection() {
+  const run = code => vm.runInContext(code, sandbox), byId = id => document.getElementById(id);
+  const search = byId("patient-search"), rows = byId("patients"), more = byId("more-patients");
+  const patient = id => ({project_id: id, heading: `合成 患者${id}`, message_count: 1});
+  const submit = () => byId("patient-form").onsubmit({preventDefault() {}});
+  let answer;
+  const pages = [];
+  sandbox.api = async (kind, {q, cursor}) => {
+    if (kind === "hc/patients") return {items: []};
+    if (q === "旧検索") return {items: [patient(11), patient(22)], next_cursor: "old-page"};
+    pages.push([q, cursor]);
+    if (cursor) return {items: [patient(55)], next_cursor: null};
+    return new Promise(resolve => {answer = resolve;});
+  };
+  search.value = "旧検索"; submit(); await new Promise(setImmediate);
+  search.value = "新検索"; submit();
+  rows.children.find(row => content(row).includes("合成 患者22")).onclick();
+  assert.equal(byId("patient-name").textContent, "合成 患者22");
+  assert.equal(more.hidden, true);
+  answer({items: [patient(33)], next_cursor: "new-page"}); await new Promise(setImmediate);
+  assert.match(content(rows), /合成 患者33/);
+  assert.doesNotMatch(content(rows), /合成 患者11|合成 患者22/);
+  assert.equal(more.hidden, false);
+  search.value = "";  // Editing the field does not submit another search.
+  await more.onclick();
+  assert.deepEqual(pages, [["新検索", null], ["新検索", "new-page"]]);
+  assert.match(content(rows), /合成 患者33[\s\S]*合成 患者55/);
+  assert.doesNotMatch(content(rows), /合成 患者22/);
+  assert.equal(byId("patient-name").textContent, "合成 患者22");
+  assert.equal(more.hidden, true);
+
+  search.value = "切替前"; submit();
+  await run('setMode("pharmacy")');
+  answer({items: [patient(66)], next_cursor: "abandoned-page"}); await new Promise(setImmediate);
+  assert.equal(byId("patient-name").textContent, "患者台帳");
+  assert.doesNotMatch(content(rows), /合成 患者66/);
+  assert.equal(more.hidden, true);
+}
+
 
 async function checkRouteStaffRace() {
   const run = code => vm.runInContext(code, sandbox);
@@ -753,5 +794,5 @@ async function checkRouteStaffRace() {
   assert.doesNotMatch(content(result), /合成一の患者/);
 }
 
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); await checkOpenMcsPatientSelection(); await checkRouteStaffRace(); console.log("local chat DOM contracts passed");}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); await checkDisplayGaps(); await checkMcsData(); await checkOpenMcsPatientSelection(); await checkPatientSearchSelection(); await checkRouteStaffRace(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

@@ -660,14 +660,15 @@ function routeCard(date) {
 async function openMcs(projectId) {
   // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
   $("patient-search").value = ""; state.panel = "";
-  state.openPatient = null; state.patients = []; state.patientCursor = null;
+  state.openPatient = null; state.patients = [];
   $("patients").replaceChildren(el("p", "患者一覧を読み込んでいます。", "empty"));
-  $("patient-count").textContent = ""; $("more-patients").hidden = true;
+  $("patient-count").textContent = "";
   // Refresh the unfiltered sidebar without opening the first or remembered patient.
   const loading = setMode("mcs", {deferSelection: true});
   const request = state.patientRequest;
+  const current = () => request === state.patientRequest && state.project === null;
   await loading;
-  if (request !== state.patientRequest) return;
+  if (!current()) return;
   let cursor = null, patient = null;
   do {
     const query = {q: String(projectId)};
@@ -675,10 +676,10 @@ async function openMcs(projectId) {
     let data;
     try {data = await api("patients", query);}
     catch (error) {
-      if (request !== state.patientRequest) return;
+      if (!current()) return;
       patientList(); throw error;
     }
-    if (request !== state.patientRequest) return;
+    if (!current()) return;
     patient = data.items.find(row => row.project_id === projectId) || patient;
     cursor = data.next_cursor;
   } while (!patient && cursor);
