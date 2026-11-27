@@ -250,20 +250,26 @@ def reference_item(value):
     return {**value, "drug_names": list(value["drug_names"])}
 
 
-def _other_persons_drug(body: str, span, value: str) -> bool:
-    """Whether every quoted occurrence of value belongs to a non-patient's drug in its sentence."""
-    owned = []
+def _quoted_value_positions(body: str, span: tuple[int, int], value: str):
+    """Yield the sentence start, value position and sentence end for each quoted match."""
     at = body.find(value, span[0], span[1])
     while at >= 0:
         start = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
         end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
+        yield start, at, end
+        at = body.find(value, at + 1, span[1])
+
+
+def _other_persons_drug(body: str, span, value: str) -> bool:
+    """Whether every quoted occurrence of value belongs to a non-patient's drug in its sentence."""
+    owned = []
+    for start, at, end in _quoted_value_positions(body, span, value):
         owners = list(_DRUG_OWNER.finditer(body, start, end))
         # the nearest preceding owner, else the sentence's next one; the owner phrase itself is no value
         if not any(o.start() <= at < o.end() for o in owners):
             before = [o for o in owners if o.end() <= at]
             owner = before[-1] if before else next(iter(owners), None)
             owned.append(owner is not None and owner["who"] not in _PATIENT_OWNERS)
-        at = body.find(value, at + 1, span[1])
     return bool(owned) and all(owned)
 
 _DETAIL_NEGATIVE = re.compile(r"して(?:いない|いません|おりません|おらず)|しない|しません|なかった|ありません|ではない|なし")
@@ -322,13 +328,15 @@ def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]
     return clause, 'current' if ongoing else None
 
 
-def _noncurrent_detail(body: str, span, value: str, key) -> bool:
-    """Whether every occurrence is in a negated, uncertain or explicitly past-only clause."""
+def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
+    """Whether one grounded detail is negated, uncertain or explicitly past-only."""
+    if not isinstance(body, str) or not isinstance(evidence, str):
+        return True
+    span = locate_quote_span(body, evidence)
+    if span is None:
+        return True
     verdicts = []
-    at = body.find(value, span[0], span[1])
-    while at >= 0:
-        start = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
-        end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
+    for start, at, end in _quoted_value_positions(body, span, value):
         before, tail = body[start:at], body[at + len(value):end]
         current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
         past = re.search(r"以前から|以前|過去|前は", before)
@@ -339,16 +347,7 @@ def _noncurrent_detail(body: str, span, value: str, key) -> bool:
         past_only = tense == 'past' or (past is not None and current < 0
                                         and not (past[0] == '以前から' and tense == 'current'))
         verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or _DETAIL_UNCERTAIN.search(clause) or past_only))
-        at = body.find(value, at + 1, span[1])
     return bool(verdicts) and all(verdicts)
-
-
-def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
-    """Whether one grounded detail is negated, uncertain or explicitly past-only."""
-    if not isinstance(body, str) or not isinstance(evidence, str):
-        return True
-    span = locate_quote_span(body, evidence)
-    return span is None or _noncurrent_detail(body, span, value, key)
 
 
 def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
