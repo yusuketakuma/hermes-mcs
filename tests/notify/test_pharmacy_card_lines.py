@@ -121,11 +121,21 @@ def test_an_edited_or_deleted_source_shows_no_detail(led, change):
     ("本人の薬は冷蔵保管していません。", "storage_status", "冷蔵保管"),
     ("以前は冷蔵庫、現在は常温で保管しています。", "storage_place", "冷蔵庫"),
     ("母が自分の薬を冷蔵庫に保管しています。", "storage_place", "冷蔵庫"),
+    ("本人の薬は冷蔵庫で保管しているかは未確認です。", "storage_place", "冷蔵庫"),
 ])
 def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_fact(led, body, key, value):
     item = _item("medication_management", body, [{"key": key, "value": value, "evidence": body}])
     _seed(led, [item], body=body)
     assert not any(line.startswith("服薬管理（") for line in structured_view.structured_lines(led.db, 100))
+
+
+
+
+def test_a_current_storage_value_is_not_hidden_by_a_later_negative_clause(led):
+    body = "本人の薬は冷蔵庫で保管、副作用なし。"
+    item = _item("medication_management", body, [{"key": "storage_place", "value": "冷蔵庫", "evidence": body}])
+    _seed(led, [item], body=body)
+    assert "服薬管理（保管場所）: 「冷蔵庫」" in structured_view.structured_lines(led.db, 100)
 
 
 def test_a_current_patient_storage_value_still_reaches_the_shared_card(led):

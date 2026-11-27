@@ -1316,3 +1316,16 @@ def test_reported_panel_result_stays_confirmed_while_conditional_result_does_not
     negative = "採血 カリウム 4.5mEq/L、補正カルシウム 8.5mg/dL未満なら医師に報告"
     lab, = extract_validation.validate({"labs": [raw]}, negative)["labs"]
     assert lab["unverified"] is True and lab["normalized"]["confirmation"] == "unverified"
+
+
+def test_fullwidth_cropped_result_is_unverified_while_a_complete_fullwidth_result_is_confirmed():
+    body = "採血 クレアチニン １２．７"
+    raw = {"name": "クレアチニン", "value": "1", "evidence": "クレアチニン １"}
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+    raw = {"name": "クレアチニン", "value": "12.7", "evidence": "クレアチニン １２．７"}
+    lab, = extract_validation.validate({"labs": [raw]}, body)["labs"]
+    assert not lab.get("unverified")
+    assert lab["normalized"]["confirmation"] == "quote_supported"

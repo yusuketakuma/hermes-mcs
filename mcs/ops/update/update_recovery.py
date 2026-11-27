@@ -218,6 +218,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     if not _provider_recovery_ready():
         return 1
     if applying.get("rollback"):
+        _cancel_unsent_notices()
         _drop_reverted(state, applying)
         result = "rolled_back"
     else:
@@ -593,16 +594,14 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if "restore_staging" in applying:
                     _report("restore_consent_blocked", "rollback restore staging remains unverified")
                     return 1
-                # Recovery can resume after the tree was rolled back but before
-                # the normal rollback path cancelled never-attempted new-code notices.
-                if rollback_shaped:
-                    _cancel_unsent_notices()
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     journal_store.save_state(STATE_PATH, state)
+            if applying.get("rollback"):
+                _cancel_unsent_notices()
             try:
                 continuation = update_policy.classify_recovery_target_continuation(
                     rollback=bool(applying.get("rollback")),
@@ -795,6 +794,9 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     # Keep the journal until workers are verified live; retry healthy workers
     # without bouncing them again for the same journal and checkout.
     _remove_marker()
+    applying = state.get("applying") or {}
+    if applying.get("rollback"):
+        _cancel_unsent_notices()
     dkey = _drainers_key(state, _head_sha())
     if _last_report().get("drainers_key") == dkey:
         problems = restart_agents(bounce=False)
@@ -804,7 +806,6 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
         _report("recovery_incomplete", "restart:" + ",".join(problems),
                 drainers_key=dkey)
         return 1
-    applying = state.get("applying") or {}
     cid = applying.get("command_id")
     if cid:
         # consume the receipt — without this the next check would

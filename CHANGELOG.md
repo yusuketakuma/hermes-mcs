@@ -164,7 +164,7 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 
 
 - **導入確認・訪問記録・共有カードの誤表示を修正**
-  導入後確認が安全なフォルダーだけへ結果を書き、訪問ルートと訪問時刻の不正な応答・入力を確定しません。服薬管理では、否定・過去・本人以外の薬の情報を現在の本人の事実として共有カードへ出しません。
+  導入後確認が安全なフォルダーだけへ結果を書き、訪問ルートと訪問時刻の不正な応答・入力を確定しません。服薬管理では、否定・過去・未確認・本人以外の薬の情報を現在の本人の事実として共有カードへ出さず、切れた全角の検査値も確定しません。
 
 - **復元後の保留が親カードの配達確定で外れてしまう問題を修正**
   バックアップ復元の照合で本文・スレッド・添付などの部品に矛盾した送信記録(ジャーナル競合)が見つかったとき、その保留は部品自身の確定証拠が得られるまで外れなくなりました。これまでは親カードの配達が確定しただけで部品の保留も一緒に外れ、矛盾した記録が未解決のまま配送状態が進んでいました。
@@ -507,12 +507,13 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 
 - MCS患者を開く操作では、見つからない患者で前の患者を表示したままにせず、遅れて届いた検索結果が後の選択を上書きしません。
 
-- 服薬管理の共有カードと次回抽出の参考情報では、否定・過去・本人以外の薬の保管情報を現在の本人の値として使いません。
+- 服薬管理の共有カードと次回抽出の参考情報では、否定・過去・未確認・本人以外の薬の保管情報を現在の本人の値として使いません。否定や未確認は、その値が属する句だけで判定し、後続の別の句にある「なし」で正しい保管場所を隠しません。
 
 - 自動更新のSDC provisionでは、auto用途の鍵IDをv3配布pinと同じ64桁sha256 hexとして検証します。support/restartの既存形式は変わりません。
 
 - 同意が撤回・期限切れになった後は、自動更新のoffer要求を新しく送りません。
 
+- 検査値の引用が全角数字・全角小数点・全角符号の途中で切れている場合は、その数値を確定しません。切れていない全角の値は従来どおり引用根拠付きで確認できます。
 - 根拠: mcs/ops/setup/postinstall_watch.py、mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/homecare/core/homecare_route.py、mcs/homecare/core/homecare_visits.py、mcs/views/local_chat/homecare.js、mcs/views/local_chat/app.js、mcs/patients/patient_context.py、mcs/extract/llm/extraction_context.py、adapters/sdc/provision_contract.py、mcs/ops/update/release_auto_owner.py、mcs/extract/clinical/clinical_values.py
 
 #### 復元後の保留が親カードの配達確定で外れてしまう問題を修正
@@ -535,19 +536,20 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 
 #### 更新復旧と履歴通知の取りこぼしを修正
 
-- 更新後確認は台帳が存在しない場合や0バイトの不正な空ファイルの場合に、新しい空台帳を作らず失敗として扱います。既存の正当な空台帳と必要なschema migrationは従来どおり通ります。
+- 更新後確認は台帳が存在しない場合や0バイトの不正な空ファイルの場合に、新しい空台帳を作らず失敗として扱います。MCSのmessages表を持たない無関係なSQLiteファイルも初期化せず失敗とし、既存の正当な空台帳と必要なschema migrationは従来どおり通ります。
 
-- provider設定の一ファイル化が完了した後に旧導入記録だけ残った中断では、内容が一致する記録だけを一度退避し、不一致の記録は削除せず保全します。
+- provider設定の一ファイル化が完了した後に旧導入記録だけ残った正規の中断journalでは、内容が一致する記録だけを一度退避し、不一致の記録は削除せず保全します。完了後に同じ旧記録が再配置されても、通常更新では中断移行とみなしません。
 
 - standalone向け更新の対話経路でも、計画時と適用時のruntime_modeが変わっていないことを更新プログラムへ伝えます。
 
-- rollbackの中断復旧では、送信していない新しい版向け通知だけを通常のrollbackと同じく取り消し、送信済み・送信中・送信結果不明の通知はそのまま保全します。
+- rollbackの中断復旧では、更新プログラムと独立した復旧watchdogの両方で、旧workerを再開する前に送信していない新しい版向け通知だけを通常のrollbackと同じく取り消します。送信済み・送信中・送信結果不明の通知はそのまま保全します。
 
-- card_threadを使わないDiscordとLINE WORKSでは、履歴の親を含んで送信前だったカードから新しい返信だけを分離し、送信結果不明の親は再送しません。
+- DiscordとLINE WORKSでは、履歴の親を含んで送信前だったカードから新しい返信だけを分離し、送信結果不明の親は再送しません。
 
 - 手動履歴取込ではnotify_max_age_hの通知期間を保存時の判定へ伝え、期間外の親と返信は表示対象から外しつつ、後から届いた新しい返信だけを通知します。
 
-- 根拠: mcs/ops/update/update_execution.py、mcs/ops/update/update_preflight.py、mcs/ops/update/update_recovery.py、scripts/mcs_upgrade.py、mcs/notify/notify_cards.py、mcs/ingest/init_data.py
+- 手動履歴取込では、config.jsonが読めない場合やnotify_max_age_hが明示の不正値の場合は、期間未指定と区別して履歴を保存する前に停止します。
+- 根拠: mcs/ops/update/update_execution.py、mcs/ops/update/update_preflight.py、mcs/ops/update/update_recovery.py、deployment/recovery/mcs_recover.py、scripts/mcs_upgrade.py、mcs/notify/notify_cards.py、mcs/ingest/init_data.py
 
 </details>
 ## [1.3.0] — 2026-11-26

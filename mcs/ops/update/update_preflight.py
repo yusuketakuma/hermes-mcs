@@ -222,6 +222,12 @@ def _provider_migration_needed() -> bool:
     # A hard stop can leave the one-file settings commit complete while the
     # legacy install-options record is still present. Recovery must enter the
     # migration path once more so only an exact matching record is retired.
+    try:
+        applying = journal_store.load_state(STATE_PATH).get("applying")
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
+    if not isinstance(applying, dict) or applying.get("provider_settings_migration_required") is not True:
+        return False
     legacy = os.path.join(DATA, "install_options.json")
     try:
         central, embedded = install_options._central(mcs_util.CONF_PATH)

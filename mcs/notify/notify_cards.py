@@ -406,9 +406,6 @@ def _reroute_unsent_history_threads(db, event, scope, cfg, now, specs):
     transport = scope.get("transport") or notify_scope.active_transport(cfg)
     if transport not in ("slack", "discord", "lineworks"):
         return
-    if transport in ("discord", "lineworks") \
-            and notify_scope.notify_cfg(cfg).get("card_thread") is True:
-        return
     event_id = event["event_id"]
     families = {}
     for row in db.execute(

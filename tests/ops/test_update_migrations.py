@@ -227,6 +227,13 @@ def test_single_layout_needs_migration_only_for_the_matching_legacy_record(tmp_p
     assert update_preflight._provider_migration_needed() is False
 
     put(legacy, {'v': 1, 'install_args': ['--no-llm']})
+    assert update_preflight._provider_migration_needed() is False
+
+    state_path = tmp_path / 'data' / 'update_state.json'
+    monkeypatch.setattr(update_preflight, 'STATE_PATH', str(state_path))
+    journal = {'v': 1, 'stages': [], 'applied': [], 'attempts': {}, 'executed': {}, 'applying': {'provider_settings_migration_required': True}}
+    import update_journal
+    update_journal.save_state(str(state_path), journal)
     assert update_preflight._provider_migration_needed() is True
     assert update_migrations.migrate_provider_settings(tmp_path) is True
     assert not legacy.exists()

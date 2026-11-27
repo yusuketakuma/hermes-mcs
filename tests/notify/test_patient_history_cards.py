@@ -231,11 +231,13 @@ def test_pending_legacy_undated_reply_stays_out_of_mixed_live_notification(led, 
 
 
 @pytest.mark.parametrize("transport", ["discord", "lineworks"])
-def test_unsent_history_parent_reroutes_only_the_live_reply_without_card_thread(led, transport):
+@pytest.mark.parametrize("card_thread", [False, True])
+def test_unsent_history_parent_reroutes_only_the_live_reply(led, transport, card_thread):
     from notify_testkit import _msg
 
-    cfg = LINEWORKS if transport == "lineworks" else {
-        **CFG, "notify": {**CFG["notify"], "card_thread": False}}
+    cfg = ({**LINEWORKS, "notify": {**LINEWORKS["notify"], "card_thread": card_thread}}
+           if transport == "lineworks" else
+           {**CFG, "notify": {**CFG["notify"], "card_thread": card_thread}})
     _patient(led)
     _msg(led, 100, body="合成の履歴親", ts=int(NOW) - 10)
     _msg(led, 102, parent=100, body="合成の新規返信", ts=int(NOW) + 1)
@@ -275,11 +277,13 @@ def test_unsent_history_parent_reroutes_only_the_live_reply_without_card_thread(
 
 
 @pytest.mark.parametrize("transport", ["discord", "lineworks"])
-def test_unknown_parent_result_is_never_rerouted_or_resent_without_card_thread(led, transport):
+@pytest.mark.parametrize("card_thread", [False, True])
+def test_unknown_parent_result_is_never_rerouted_or_resent(led, transport, card_thread):
     from notify_testkit import _msg
 
-    cfg = LINEWORKS if transport == "lineworks" else {
-        **CFG, "notify": {**CFG["notify"], "card_thread": False}}
+    cfg = ({**LINEWORKS, "notify": {**LINEWORKS["notify"], "card_thread": card_thread}}
+           if transport == "lineworks" else
+           {**CFG, "notify": {**CFG["notify"], "card_thread": card_thread}})
     _patient(led)
     _msg(led, 100, body="合成の履歴親", ts=int(NOW) - 10)
     _msg(led, 102, parent=100, body="合成の新規返信", ts=int(NOW) + 1)

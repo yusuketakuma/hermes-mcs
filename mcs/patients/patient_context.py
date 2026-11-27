@@ -280,9 +280,9 @@ def _noncurrent_detail(body: str, span, value: str) -> bool:
         before, tail = body[start:at], body[at + len(value):end]
         current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
         past = re.search(r"以前|過去|前は", before)
-        near = tail[:12]
-        unconfirmed = re.search(r"予定|検討|可能性|かもしれ", near)
-        verdicts.append(bool(_DETAIL_NEGATIVE.search(near) or unconfirmed
+        clause = re.split(r"[、，,]", tail, maxsplit=1)[0]
+        unconfirmed = _DETAIL_UNCERTAIN.search(clause)
+        verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or unconfirmed
                              or past is not None and current < 0))
         at = body.find(value, at + 1, span[1])
     return bool(verdicts) and all(verdicts)

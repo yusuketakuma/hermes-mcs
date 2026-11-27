@@ -41,3 +41,20 @@ def test_postcheck_accepts_a_valid_empty_ledger_and_schema_migration(tmp_path, m
     assert "ledger_open_failed" not in errors
     with sqlite3.connect(path) as con:
         assert con.execute("SELECT 1 FROM messages LIMIT 0").fetchall() == []
+
+
+def test_postcheck_rejects_an_unrelated_sqlite_file_without_initializing_it(tmp_path, monkeypatch):
+    _quiet_postcheck(monkeypatch)
+    path = tmp_path / "ledger.db"
+    with sqlite3.connect(path) as con:
+        con.execute("CREATE TABLE unrelated(value TEXT)")
+        con.execute("INSERT INTO unrelated VALUES('synthetic')")
+    before = path.read_bytes()
+    monkeypatch.setattr(update_execution, "LEDGER", str(path))
+
+    errors = update_execution._postcheck({}, "synthetic-sha")
+    assert "ledger_invalid" in errors
+    assert path.read_bytes() == before
+    with sqlite3.connect(path) as con:
+        assert con.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'").fetchone()[0] == 0

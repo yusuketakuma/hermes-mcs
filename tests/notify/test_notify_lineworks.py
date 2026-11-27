@@ -334,6 +334,34 @@ def test_manual_history_window_limits_later_lineworks_delivery_and_display(led, 
     assert led.db.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 3
 
 
+@pytest.mark.parametrize("content,error", [
+    ("{synthetic malformed", "config_unreadable"),
+    (json.dumps({"notify_max_age_h": "24"}), "notify_max_age_h_invalid"),
+])
+def test_manual_history_refuses_untrusted_notify_age_config_before_saving(led, tmp_path, monkeypatch, capsys, content, error):
+    import sys
+    import init_data
+
+    class Adapter:
+        def set_deadline(self, _deadline):
+            pass
+
+        def list_projects(self):
+            raise AssertionError("history import must stop before reading patients")
+
+    config = tmp_path / "config.json"
+    config.write_text(content)
+    monkeypatch.setattr(init_data, "CONF_PATH", str(config))
+    monkeypatch.setattr(init_data, "DB", str(tmp_path / "data" / "ledger.db"))
+    monkeypatch.setattr(init_data, "LOCKFILE", str(tmp_path / "run.lock"))
+    monkeypatch.setattr(init_data, "MCSAdapter", lambda **kw: Adapter())
+    monkeypatch.setattr(sys, "argv", ["init_data.py", "--since", "1", "--delay", "0", "--pages", "1"])
+
+    assert init_data.main() == 2
+    assert error in capsys.readouterr().out
+    assert led.db.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 0
+
+
 def test_lineworks_legacy_window_preserves_a_delivered_reply_without_an_intent(led):
     from notify_testkit import _msg
 

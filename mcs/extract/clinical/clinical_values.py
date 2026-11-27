@@ -869,7 +869,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             panel_quote += fold_surface(source_tail).replace("µ", "μ")
         # A quote may end before a unit or a later condition, but not in the
         # middle of the result token itself (12.7 -> 1, 1+ -> 1).
-        if span is not None and re.match(r"[0-9.+-]", source_tail):
+        if span is not None and re.match(r"[0-9０-９.．+＋−-]", source_tail):
             unverified = True
         # A quote that starts after a salt stem can turn a prescription
         # (塩化カリウム) into a blood reading. Read the missing left context.

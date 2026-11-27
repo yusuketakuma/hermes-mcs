@@ -194,8 +194,19 @@ def _postcheck(state: dict, expect_sha: str) -> list[str]:
             errors.append("ledger_invalid")
         else:
             try:
-                db = ledger.Ledger(LEDGER)
-                db.db.close()
+                import sqlite3
+                probe = sqlite3.connect(
+                    Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
+                try:
+                    known = probe.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").fetchone()
+                finally:
+                    probe.close()
+                if not known:
+                    errors.append("ledger_invalid")
+                else:
+                    db = ledger.Ledger(LEDGER)
+                    db.db.close()
             except Exception:
                 errors.append("ledger_open_failed")
     try:

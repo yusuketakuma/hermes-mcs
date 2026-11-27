@@ -32,7 +32,7 @@ from mcs_contract import MCSError, SessionExpired
 from ledger import Ledger
 from job_ops import merge_full_replies
 from mcs_config import positive_number_problem
-from mcs_util import CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB, load_config
+from mcs_util import CACHE, CHROME_BIN, CHROME_PROFILE, CONF_PATH, DB, config_read_state
 import notify_spool
 from writer_lock import (RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
                          code_stamp)
@@ -219,13 +219,18 @@ def main() -> int:
         ledger = Ledger(DB)
         resources.callback(ledger.close)
         stats = {"errors": [], "threads": 0, "deadline": False}
-        notify_hours = load_config(CONF_PATH).get("notify_max_age_h")
+        cfg, config_state = config_read_state(CONF_PATH)
+        if config_state == "unreadable":
+            print(json.dumps({"ok": False, "error": "config_unreadable"}))
+            return 2
+        notify_hours = cfg.get("notify_max_age_h")
         notify_max_age_s = None
         if notify_hours is not None:
             if positive_number_problem(notify_hours) is None:
                 notify_max_age_s = notify_hours * 3600
             else:
-                stats["errors"].append("config: notify_max_age_h_invalid")
+                print(json.dumps({"ok": False, "error": "notify_max_age_h_invalid"}))
+                return 2
 
         try:
             projects = adapter.list_projects()
