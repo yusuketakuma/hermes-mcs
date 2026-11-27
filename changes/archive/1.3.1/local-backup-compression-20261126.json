@@ -1,7 +1,7 @@
 {
   "category": "changed",
   "title": "日次バックアップをgzip圧縮して保存し、更新前バックアップの掃除を毎回の点検で行う",
-  "summary": "日次バックアップが ledger-YYYYMMDD.db.gz として圧縮保存されるようになり、バックアップ用のディスク使用量が大幅に減ります（実測で元の約23%）。また更新前バックアップの掃除が日次バックアップ公開時だけでなく毎回の定期点検で行われるため、配備が止まっている間に古いコピーが溜まり続けることがなくなります。",
+  "summary": "日次バックアップが ledger-YYYYMMDD.db.gz として圧縮保存されるようになり、バックアップ用のディスク使用量が大幅に減ります。また更新前バックアップの掃除が日次バックアップ公開時だけでなく毎回の定期点検で行われるため、配備が止まっている間に古いコピーが溜まり続けることがなくなります。",
   "upgrade": "追加操作は不要です。mcs backup / mcs_local_backup などの復元系コマンドは圧縮済みバックアップをそのまま扱えます。手作業でバックアップファイルを直接利用する場合は、先に gunzip で展開してください。",
   "details": [
     "日次バックアップは公開時にgzip（レベル6）で圧縮され、検証済みマーカーは圧縮後のファイルに付きます。圧縮が時間切れで完了しなくても検証済みの非圧縮コピーが残り、次の点検で圧縮が仕上げられます。",
@@ -9,5 +9,10 @@
     "更新前バックアップ（preupdate-*）はこの段階では圧縮しません。更新のロールバック経路がバックアップのパス同一性に依存しているためで、圧縮は別の変更で扱います。",
     "preupdate-* の掃除は従来どおり update_state.json が参照するコピーを保持したまま、参照のない古いコピーだけを削除します。参照が読めない場合は何も削除しません。"
   ],
-  "refs": ["mcs/core/local_backup.py", "mcs/core/records/backup_names.py", "mcs/ops/mcs_local_backup.py", "mcs/ingest/run_check.py"]
+  "refs": [
+    "mcs/core/local_backup.py",
+    "mcs/core/records/backup_names.py",
+    "mcs/ops/mcs_local_backup.py",
+    "mcs/ingest/run_check.py"
+  ]
 }

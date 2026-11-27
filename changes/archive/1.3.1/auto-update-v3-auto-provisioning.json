@@ -8,5 +8,9 @@
     "v3署名pinは従来どおりauto-v3-pins.jsonが正本で、bundle内のpinsは同値の相互照合専用とし、不一致はfail-closedでwireを構築しない。",
     "pinのkidをsha256hex形式に統一し、provisionとv3 pin双方の契約で同じ値が使えるようにした。"
   ],
-  "refs": ["mcs/ops/release_auto_wire_factory.py", "adapters/sdc/provision.py", "adapters/sdc/provision_contract.py"]
+  "refs": [
+    "mcs/ops/update/release_auto_wire_factory.py",
+    "adapters/sdc/provision.py",
+    "adapters/sdc/provision_contract.py"
+  ]
 }
