@@ -276,8 +276,8 @@ def test_latest_unread_across_pages_gets_fetched_with_one_registration_commit(db
     assert db.history_jobs_due()[0]["project_id"] == 102
 
 
-@pytest.mark.parametrize("same_second", [False, True])
-def test_new_activity_in_read_room_gets_a_head_slot_during_initial_import(db, same_second):
+@pytest.mark.parametrize(("same_second", "listed_mid"), [(False, None), (True, 600), (True, None)])
+def test_new_activity_in_read_room_gets_a_head_slot_during_initial_import(db, same_second, listed_mid):
     now = int(time.time())
     patients = [_unread_patient(pid) for pid in range(1, 7)]
     for patient in patients:
@@ -285,7 +285,7 @@ def test_new_activity_in_read_room_gets_a_head_slot_during_initial_import(db, sa
     active = patients[-1]
     active.last_activity = now
     if same_second:
-        active.last_message_id = 600
+        active.last_message_id = listed_mid
         db.save_messages([_message(mid=599, project_id=6, posted_at=datetime.fromtimestamp(
             now, timezone.utc).isoformat())], project_id=6)
     pending = db.job_payload("history", active.project_id)
@@ -306,7 +306,7 @@ def test_new_activity_in_read_room_gets_a_head_slot_during_initial_import(db, sa
     assert db.job_payload("history", active.project_id) == pending
     assert db.history_floor(active.project_id) != -1
     assert _events(db) and json.loads(_events(db)[0]["payload"])["message_ids"] == [600]
-    _capture(db, patients)
+    _capture(db, patients, latest=lambda pid: {"message_id": 600})
     assert db.job_state("history_head", active.project_id, 600) == "done"
 
 
@@ -381,4 +381,26 @@ def test_unavailable_time_only_hint_keeps_known_activity_and_required_history(db
     assert result["errors"] == ["probe 1: session_expired"]
     assert db.job_state("history_head", 3, 300) == "pending"
     assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='history_head'").fetchone()[0] == 1
+    assert all(db.job_state("history", p.project_id) == "pending" for p in patients)
+
+
+def test_time_only_probe_rotates_after_failure_without_extra_gets(db):
+    now = int(time.time())
+    patients = [_unread_patient(pid) for pid in (1, 2)]
+    for p in patients:
+        db.upsert_patient_info(p, is_archived=False, notify_new=True, observation_ts=now-60)
+        p.last_activity = now - p.project_id
+    calls = []
+
+    def latest(pid):
+        calls.append(pid)
+        if pid == 1:
+            raise mcs_contract.MCSError("http_error", status=503)
+        return {"message_id": 200}
+
+    assert _capture(db, patients, latest=latest)["errors"] == ["probe 1: http_error"]
+    assert calls == [1]
+    assert _capture(db, patients, latest=latest)["errors"] == []
+    assert calls == [1, 2]
+    assert db.job_state("history_head", 2, 200) == "pending"
     assert all(db.job_state("history", p.project_id) == "pending" for p in patients)
