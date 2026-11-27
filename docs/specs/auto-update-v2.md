@@ -968,7 +968,7 @@ P0完了条件: 現行経路対応表、実lock DAG、bridge対象、backend int
 |W01|新`adapters/sdc/release_auto_contract.py`＋contracts JSON|parse_typed/canonical_typed/hash_v2、SEM01–34、既存v1dispatch保持|全構造/意味vector、v1未知schema拒否、署名purpose分離|
 |W02|`mcs/ops/sdc_support_signatures.py`|新v2 purpose wrapper、独立pins/expected、historical検査分離|旧用途の受入集合不変。historicalはgrant発行不可|
 |W03|新`adapters/sdc/release_auto_state.py`＋`storage.py`|OwnerState load/validate/CAS、capacity、intent/spent/terminal/outbox|fault injection、連続2更新、ACK遅延でexecution_revision不変|
-|W04|新`mcs/ops/update/release_auto_bridge.py`、既存recovery一式|ControlManifest/MigrationIntent、初期baseline、既存v1から明示移行|pending/unknown拒否、before/after crash、旧入口閉鎖、`.prev`世代維持|
+|W04|新`mcs/ops/release_auto_bridge.py`、既存recovery一式|ControlManifest/MigrationIntent、初期baseline、既存v1から明示移行|pending/unknown拒否、before/after crash、旧入口閉鎖、`.prev`世代維持|
 |W05|新`mcs/core/runtime_entry.py`＋各launcher|Q寿命gate、prepared fence、世代/boot、quarantine admission|import途中の切替禁止、旧process拒否、全入口coverage|
 |W06|`update_services.py`、service_management、standalone、Hermes/LINE WORKS入口|profile別drain/退役/起動観測、独立owner起動|R外drain、強制kill非流用、自己deadlockなし|
 |W07|新`adapters/sdc/release_auto_transport.py`|固定JSON v2 path＋別artifact stream|16KiB既存上限維持、256MiB stream/hash/timeout/no-redirect|
@@ -980,6 +980,8 @@ P0完了条件: 現行経路対応表、実lock DAG、bridge対象、backend int
 |W13|既存SDC backend（実repoを確認して実装）|03のtransaction/table/routes、CAS/cohort/grant/result|clientと共通vector、tenant分離、署名key分離、rate budgets|
 |W14|`update_cli.py`、scheduler、status/doctor表示|顧客v2ルーティング、legacy auto抑止、固定状態/理由、outboxretry|autoモードだけで同意せず、unknownを正常にしない|
 |W15|tests、docs、changes記録|05の受入、既存回帰、現行受入票|実測/再利用/未実行を明示、外部操作未実施|
+
+配備した復旧世代を点検するときは、そのディレクトリで `python -B -m mcs.ops.release_auto_recovery verify --generation-dir "$PWD"` を実行する。`-B` は、照合対象のディレクトリに Python がバイトコードを書き込むのを防ぐ。
 
 新helperは実装が既存責務へ自然に収まる場合統合してよい。ただし別状態正本・別Updater・別認可体系を作らない。pathの変更は本書対応表とtest importを更新し、ファイル名だけ違う重複実装を残さない。
 interfaces.pyiは関数境界の仕様であり、...のまま製品へ入れて完了としない。DTOはschemaからclosedな型へ落とし、実装内部で任意dictが権限を持つ状態を避ける。
