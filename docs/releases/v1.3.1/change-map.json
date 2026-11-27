@@ -60,6 +60,16 @@
    "sha256": "ace631f5b2ddf6cfd07ea7588f03471b5109bbb0bc835bd1f60ea3d9aad5302a",
    "title": "データベースの一時的な混雑で有料回答の再利用が遅れる問題を修正"
   },
+  "codex-review-installer-update-witness-ocr-20261127": {
+   "path": "changes/archive/1.3.1/codex-review-installer-update-witness-ocr-20261127.json",
+   "sha256": "6cde69c8ded382be3ebd47ac96ede69569a1b19b1169da15eedc5ae09bef03fb",
+   "title": "導入確認・設定移行・通知workerとOCR状態の確認を修正"
+  },
+  "codex-review-v131-integration-20261127": {
+   "path": "changes/archive/1.3.1/codex-review-v131-integration-20261127.json",
+   "sha256": "09e8760cd06cc46b03afa0f037abb5df050b380f5c896f21c761c3590fa5c612",
+   "title": "導入確認・訪問記録・共有カードの誤表示を修正"
+  },
   "command-snapshot-release-lock": {
    "path": "changes/archive/1.3.1/command-snapshot-release-lock.json",
    "sha256": "3d62cadc3a65ab5ca8d761a5ee7ed09a96008e0d759fc068e5a2f2d8b29fb54a",
@@ -114,6 +124,16 @@
    "path": "changes/archive/1.3.1/notification-parts-unmeasured-code-20261126.json",
    "sha256": "84a5d41e463992d50dabe71b4bca3a6a76099510ed36a84b271dfe46f7f22c11",
    "title": "通知の本文・添付の完了件数を測定できないときの警報を、実測された未完了と区別"
+  },
+  "notify-part-hold-scope-20261127": {
+   "path": "changes/archive/1.3.1/notify-part-hold-scope-20261127.json",
+   "sha256": "21c387c73fe0f57bee2a5b8523752c4a683b622654c469c6474fea0b92a13f43",
+   "title": "復元後の保留が親カードの配達確定で外れてしまう問題を修正"
+  },
+  "notify-restore-revoke-crossing-20261127": {
+   "path": "changes/archive/1.3.1/notify-restore-revoke-crossing-20261127.json",
+   "sha256": "521183eb20ee7526a591309afc3cea4f4ce5935d1084b0079634934d761dabe4",
+   "title": "取消と交差した送信結果が復元照合で部品に反映されない問題を修正"
   },
   "ocr-retry-display-truthful-20261126": {
    "path": "changes/archive/1.3.1/ocr-retry-display-truthful-20261126.json",
@@ -189,6 +209,11 @@
    "path": "changes/archive/1.3.1/single-tenant-settings.json",
    "sha256": "cce03b67367b7da2dda4e26fd0ed358c8d49f554ecea50abd9ee9517b9fd3418",
    "title": "施設ごとの設定を config.json に集約"
+  },
+  "update-recovery-notify-window-20261127": {
+   "path": "changes/archive/1.3.1/update-recovery-notify-window-20261127.json",
+   "sha256": "5960c49afa7147253ea9426db05e3b3c1949bb2e9da88f4e5f23b1e6a8d7b263",
+   "title": "更新復旧と履歴通知の取りこぼしを修正"
   }
  },
  "version": "1.3.1"
