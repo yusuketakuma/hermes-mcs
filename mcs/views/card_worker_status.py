@@ -72,10 +72,15 @@ def repair_missing_started_at(path):
         if type(pid) is not int or pid <= 0:
             return False
         started_at = value.get('started_at')
+        recorded_at = value.get('at')
+        if type(recorded_at) not in (int, float) or not math.isfinite(recorded_at) or recorded_at <= 0:
+            return False
         os.kill(pid, 0)
         birth = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 3)
         if type(birth) not in (int, float) or not math.isfinite(birth) or birth <= 0:
             return False
+        if birth > recorded_at:
+            return False  # a pid reused after this record cannot be its writer
         if type(started_at) in (int, float) and math.isfinite(started_at) and started_at > 0:
             return started_at == birth  # present evidence is never overwritten
         if started_at is not None:

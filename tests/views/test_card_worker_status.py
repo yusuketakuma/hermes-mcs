@@ -55,26 +55,43 @@ def test_live_reused_pid_does_not_prove_the_recorded_worker_started(tmp_path, pr
         'state': 'unknown', 'reason': 'worker_start_unverified'}
 
 
-@pytest.mark.parametrize('started_at', [None, True, False, '1790000000', 0, -1,
+@pytest.mark.parametrize('started_at', [True, False, '1790000000', 0, -1,
                                       float('nan'), float('inf'), 10**400])
-def test_missing_or_invalid_birth_witness_is_unknown(tmp_path, started_at):
+def test_invalid_birth_witness_is_unknown(tmp_path, started_at):
     workers.record(tmp_path, 'discord', 'primary', 'worker_started')
     path = workers._path(tmp_path, 'discord', 'primary')
     data = json.loads(path.read_text())
-    if started_at is None:
-        data.pop('started_at', None)
-    else:
-        data['started_at'] = started_at
+    data['started_at'] = started_at
     path.write_text(json.dumps(data))
     assert workers.status(tmp_path, 'discord', 'primary') == {
         'state': 'unknown', 'reason': 'worker_start_unverified'}
 
 
-def test_unavailable_recorded_birth_cannot_be_reconstructed_later(tmp_path, process_birth):
+def test_missing_birth_witness_is_repaired_for_the_same_live_pid(tmp_path, process_birth):
+    workers.record(tmp_path, 'discord', 'primary', 'worker_started')
+    path = workers._path(tmp_path, 'discord', 'primary')
+    data = json.loads(path.read_text())
+    data.pop('started_at', None)
+    path.write_text(json.dumps(data))
+    assert workers.status(tmp_path, 'discord', 'primary') == {'state': 'started', 'reason': 'worker_started'}
+    assert json.loads(path.read_text())['started_at'] == process_birth[0]
+
+
+def test_missing_birth_is_not_reconstructed_for_a_process_started_after_the_record(tmp_path, process_birth):
+    process_birth[0] = None
+    workers.record(tmp_path, 'lineworks', 'default', 'worker_started')
+    path = workers._path(tmp_path, 'lineworks', 'default')
+    recorded_at = json.loads(path.read_text())['at']
+    process_birth[0] = recorded_at + 1
+    assert workers.status(tmp_path, 'lineworks', 'default')['state'] == 'unknown'
+    assert 'started_at' not in json.loads(path.read_text()) or json.loads(path.read_text())['started_at'] is None
+
+
+def test_unavailable_recorded_birth_is_reacquired_for_the_same_live_pid(tmp_path, process_birth):
     process_birth[0] = None
     workers.record(tmp_path, 'lineworks', 'default', 'worker_started')
     process_birth[0] = 1_790_000_000.0
-    assert workers.status(tmp_path, 'lineworks', 'default')['state'] == 'unknown'
+    assert workers.status(tmp_path, 'lineworks', 'default')['state'] == 'started'
 
 
 @pytest.mark.parametrize('failure', [None, OSError, ValueError])

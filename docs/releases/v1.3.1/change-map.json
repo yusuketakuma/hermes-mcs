@@ -97,7 +97,7 @@
   },
   "gateway-witness-ocr-superseded-20261127": {
    "path": "changes/archive/1.3.1/gateway-witness-ocr-superseded-20261127.json",
-   "sha256": "3218dfdbfd24807190e13c132f1626019751da327c31fcde03b95cde24075ca4",
+   "sha256": "4430fc16825603370edcdeb31c21421367f4158a0cd91f553baa9a7caa40dd43",
    "title": "通知workerの開始時刻を再確認しOCR受付の旧証明を区別"
   },
   "install-fresh-conflict-precheck-20261127": {
