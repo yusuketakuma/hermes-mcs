@@ -577,7 +577,9 @@ def test_fresh_hermes_cron_inventory_requires_proven_absence(tmp_path, monkeypat
     ([{'name': 'synthetic', 'script': '/synthetic/mcs_deep.sh'}], 'conflict'),
     ([{'name': 'synthetic', 'script': 'other.sh'}], 'clear'),
     ([{'name': 'synthetic', 'prompt': 'synthetic prompt'}], 'clear'),
+    ([{'name': 'synthetic', 'repeat': '∞', 'next_run': '?', 'deliver': 'local'}], 'clear'),
     ([{'name': 'MCS unread check', 'prompt': 'synthetic prompt'}], 'conflict'),
+    ([{'name': 'MCS unread check', 'repeat': '∞', 'next_run': '?', 'deliver': 'local'}], 'conflict'),
     ([{'name': 'synthetic'}], 'unknown'),
     (None, 'unknown'),
 ])

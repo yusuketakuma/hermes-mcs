@@ -616,7 +616,11 @@ async function checkOpenMcsPatientSelection() {
   assert.equal(byId("patient-meta").textContent, "ID 22");
   assert.match(byId("timeline-status").textContent, /見つかりません/);
 
-  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [{...p22, heading: "合成 新二十二"}] : [p11], next_cursor: null});
+  sandbox.api = async (kind, params) => {
+    if (params.q === "22" && !params.cursor) return {items: [], next_cursor: "next"};
+    if (params.q === "22" && params.cursor === "next") return {items: [{...p22, heading: "合成 新二十二"}], next_cursor: null};
+    return {items: [p11], next_cursor: null};
+  };
   await run("openMcs(22)");
   assert.equal(run("state.project", sandbox), 22);
   assert.equal(run("state.openPatient.heading", sandbox), "合成 新二十二");
