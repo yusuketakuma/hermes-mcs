@@ -444,46 +444,13 @@ def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=Fals
         return None, errors
     if not ordered:
         return profile_for_settings(cfg, settings, route=route, purpose=purpose)
-    reason = None
-    first = None
-    import external_transfer
-    seen, review = {}, []
-
-    def keyed(name):
-        if name not in seen:
-            seen[name] = bool(provider_key(name, root))
-        return seen[name]
-
-    def allowed(name):
-        if not review:
-            review.append(external_transfer.status(root))
-        return external_transfer.service_allowed(review[0], name)
-
-    for provider in settings["provider_order"]:
-        # "may actually send": a provider without a key or facility approval
-        # can never win the ordered contract, however its budget looks.
-        if not keyed(provider) or not allowed(provider):
-            continue
-        selection, provider_errors = profile_for_settings(
-            cfg, settings, route=route, purpose=purpose, provider=provider)
-        if provider_errors or selection is None:
-            errors = provider_errors or errors
-            continue
-        if first is None:
-            first = selection
-        limit = selection_max_tokens(selection)
-        # The budget read validates the selection against the provider context:
-        # the shared settings name the resolved primary, so a fallback candidate
-        # would always mismatch and die as profile_invalid. Judge each candidate
-        # in its own provider view; the selection validation itself is unchanged.
-        view = {**settings, "provider": provider}
-        reason = ledger is not None and (
-            global_block_reason(ledger, model=selection["model"])
-            or budget_block_reason(ledger, view, max_tokens=limit, selection=selection))
-        if reason:
-            continue
-        return selection, []
-    return first, ([reason] if reason else []) + errors
+    selection, errors = profile_for_settings(cfg, settings, route=route, purpose=purpose)
+    if errors or selection is None or ledger is None:
+        return selection, errors
+    reason = (global_block_reason(ledger, model=selection["model"])
+              or budget_block_reason(ledger, settings, max_tokens=selection_max_tokens(selection),
+                                     selection=selection))
+    return selection, [reason] if reason else []
 
 
 def _profile_map_valid(module, mapping):
