@@ -266,8 +266,10 @@ def _other_persons_drug(body: str, span, value: str) -> bool:
         at = body.find(value, at + 1, span[1])
     return bool(owned) and all(owned)
 
-_DETAIL_NEGATIVE = re.compile(r"していない|していません|しない|しません|なかった|ありません|ではない|なし")
+_DETAIL_NEGATIVE = re.compile(r"して(?:いない|いません|おりません|おらず)|しない|しません|なかった|ありません|ではない|なし")
 _DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|検討")
+_DETAIL_NEXT_TOPIC = re.compile(
+    r"(?:[てで](?:おり|いて)|(?<=[一-龥々])し)(?P<topic>[一-龥々ァ-ヶー]+(?:の[一-龥々ァ-ヶー]+)*[ぁ-ん]?)(?<![にでと])[はがも]")
 
 
 def _noncurrent_detail(body: str, span, value: str) -> bool:
@@ -281,8 +283,14 @@ def _noncurrent_detail(body: str, span, value: str) -> bool:
         current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
         past = re.search(r"以前|過去|前は", before)
         clause = re.split(r"[、，,]", tail, maxsplit=1)[0]
-        unconfirmed = _DETAIL_UNCERTAIN.search(clause)
-        verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or unconfirmed
+        negative_scope = clause
+        other = _DETAIL_NEXT_TOPIC.search(clause)
+        if other and not re.search(r"確認|根拠|裏付け|記録|報告|確証|証拠", other['topic']):
+            # Keep a later denial about the same value or action (冷蔵庫 / 保管).
+            own_terms = re.findall(r"[一-龥々ァ-ヶー]+", value + clause[:other.start()])
+            if not any(term in clause[other.start('topic'):] for term in own_terms):
+                negative_scope = clause[:other.start('topic')]
+        verdicts.append(bool(_DETAIL_NEGATIVE.search(negative_scope) or _DETAIL_UNCERTAIN.search(clause)
                              or past is not None and current < 0))
         at = body.find(value, at + 1, span[1])
     return bool(verdicts) and all(verdicts)
