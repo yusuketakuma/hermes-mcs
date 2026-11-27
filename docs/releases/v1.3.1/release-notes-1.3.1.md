@@ -16,7 +16,7 @@ OCRを導入済みのMacでは、更新時に専用環境のライブラリを�
 
 自動更新v3では、中央が署名して配布するauto provision bundleから接続先を読みます。クラウド履歴の一時的な読取り失敗は1回だけ新しいスナップショットで確認します。通知workerの起動記録は開始時刻を再確認し、OCR失敗では現在の証明に対応しない旧受付を区別します。
 
-導入後の確認は安全な私有フォルダーだけへ結果を書き、訪問ルートや訪問時刻の不正な応答を確定しません。服薬管理では、否定・過去・本人以外の薬の情報を現在の本人の事実として共有カードへ出しません。
+導入後の確認は安全な私有フォルダーだけへ結果を書き、Slackの新規患者チャンネルに監視先を流用しません。訪問ルートや訪問時刻の不正な応答を確定せず、MCS患者表示は最新の検索結果だけを使います。服薬管理では、否定・過去・本人以外の薬の情報を現在の本人の事実として共有カードへ出しません。
 
 更新後の確認は台帳が見つからないのに空の台帳を作って成功扱いせず、復旧では送信済み・送信中・結果不明の通知を保全します。手動で取り込んだ履歴にも通知期間を適用し、期間外の親や返信ではなく新しい返信だけを通知します。
 
@@ -153,8 +153,8 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
   通知workerの起動記録で開始時刻だけが欠けた場合、同じプロセスが生きているときに限り開始時刻を再確認して記録を修復します。あわせて、OCR失敗の受付済み件数とは別に、以前は有効だったが現在の失敗証明とは一致しなくなった受付の件数を状態へ表示します。
 
 
-- **導入確認・訪問記録・共有カードの誤表示を修正**
-  導入後確認が安全なフォルダーだけへ結果を書き、訪問ルートと訪問時刻の不正な応答・入力を確定しません。服薬管理では、否定・過去・未確認・本人以外の薬の情報を現在の本人の事実として共有カードへ出さず、切れた全角の検査値も確定しません。
+- **導入確認・通知設定・訪問記録・共有カードの誤表示を修正**
+  導入後確認が安全なフォルダーだけへ結果を書き、Slackの新規患者チャンネルに監視先を流用しません。訪問ルートと訪問時刻の不正な応答・入力を確定せず、MCS患者表示は最新の検索結果だけを使います。服薬管理では、否定・過去・未確認・本人以外の薬の情報を現在の本人の事実として共有カードへ出さず、切れた全角の検査値も確定しません。
 
 - **復元後の保留が親カードの配達確定で外れてしまう問題を修正**
   バックアップ復元の照合で本文・スレッド・添付などの部品に矛盾した送信記録(ジャーナル競合)が見つかったとき、その保留は部品自身の確定証拠が得られるまで外れなくなりました。これまでは親カードの配達が確定しただけで部品の保留も一緒に外れ、矛盾した記録が未解決のまま配送状態が進んでいました。
@@ -487,7 +487,7 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - 証明が一致しなくなったOCR受付は、現在の失敗を受付済みとして数えません。過去に担当者が確認した証拠としてだけ件数を区別します。
 - 根拠: mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/extract/attachment_ocr_ack.py、mcs/ingest/health_report.py
 
-#### 導入確認・訪問記録・共有カードの誤表示を修正
+#### 導入確認・通知設定・訪問記録・共有カードの誤表示を修正
 
 - 初期導入後の自動確認は、install時に許可された私有root symlinkを使えますが、解決先や子フォルダーが所有者・権限の条件を満たさない場合はデータ作成前に失敗します。
 
@@ -504,7 +504,13 @@ v1.2.1から更新する場合は、MCSを実行する利用者が .env を所�
 - 同意が撤回・期限切れになった後は、自動更新のoffer要求を新しく送りません。
 
 - 検査値の引用が全角数字・全角小数点・全角符号の途中で切れている場合は、その数値を確定しません。切れていない全角の値は従来どおり引用根拠付きで確認できます。
-- 根拠: mcs/ops/setup/postinstall_watch.py、mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/homecare/core/homecare_route.py、mcs/homecare/core/homecare_visits.py、mcs/views/local_chat/homecare.js、mcs/views/local_chat/app.js、mcs/patients/patient_context.py、mcs/extract/llm/extraction_context.py、adapters/sdc/provision_contract.py、mcs/ops/update/release_auto_owner.py、mcs/extract/clinical/clinical_values.py
+- Slackの詳細設定では、監視通知先の既存チャンネルIDを患者カードの既定へ流用しません。患者用は独立に作成・選択し、監視用の既存IDは監視用に残ります。
+- 訪問ルートの外部応答は、当日範囲・車両の始業時刻・予約時刻の前後15分を満たす到着・待機だけを採用し、満たさない応答はルート失敗として拒否します。
+- MCS患者を開く操作では、以前の一覧cacheに残る古いIDや旧名称を使わず、今回のID検索で見つかった最新の範囲と名称だけを採用します。
+- v1.3.0形式のOCR状態ではsuperseded_acknowledgementsがなくても、現在の件数が0なら旧形式として扱います。件数が増えた場合や原資料・受付証明が変わった場合は従来どおり再確認を要求します。
+- クラウド要約の保存providerは、成功した予約の所有者・経路に加え、予約の価格証明から確認できる提供元と一致するときだけ確定します。不一致や根拠不足はunknownです。
+- 初回導入の事前確認では、MCSと無関係なHermes prompt-only定期jobを競合と误判しません。既知のMCS名はScript行がなくても競合、読取失敗や未知形式は従来どおり不明です。
+- 根拠: mcs/ops/setup/postinstall_watch.py、mcs/views/card_worker_status.py、mcs/ingest/health_recovery.py、mcs/homecare/core/homecare_route.py、mcs/homecare/core/homecare_visits.py、mcs/views/local_chat/homecare.js、mcs/views/local_chat/app.js、mcs/patients/patient_context.py、mcs/extract/llm/extraction_context.py、adapters/sdc/provision_contract.py、mcs/ops/update/release_auto_owner.py、mcs/extract/clinical/clinical_values.py、mcs/ops/setup/setup_wizard.py、mcs/ops/install_options.py、mcs/ingest/health_report.py、mcs/semantic/semantic_summary_stages.py
 
 #### 復元後の保留が親カードの配達確定で外れてしまう問題を修正
 

@@ -457,7 +457,7 @@ def wizard(cfg: dict):
         if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
                 and get_key(cfg, key) is None:
             transport = key.split(".")[1]
-            for target in (cfg.get("notify_target"), cfg.get("notify_system_target")):
+            for target in (cfg.get("notify_target"),):
                 if isinstance(target, str) and target.startswith(transport + ":"):
                     channel = target.partition(":")[2]
                     if ((transport == "slack" and re.fullmatch(r"[CGD][A-Z0-9]+", channel))

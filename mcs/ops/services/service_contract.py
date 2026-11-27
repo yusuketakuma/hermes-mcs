@@ -111,7 +111,7 @@ def parse_cron_listing(stdout: str, returncode: int) -> list[dict] | None:
                 cur["state"] = m.group(2)   # e.g. active / disabled / paused
             out.append(cur)
             continue
-        m = re.match(r"^\s+(Name|Schedule|Script):\s*(.+?)\s*$", line)
+        m = re.match(r"^\s+(Name|Schedule|Script|Prompt):\s*(.+?)\s*$", line)
         if m:
             if cur is None:
                 return None            # field before any header

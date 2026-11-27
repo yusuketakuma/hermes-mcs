@@ -293,11 +293,17 @@ def _fresh_cron_state():
             unknown = True
             continue
         for entry in entries:
-            if (not isinstance(entry, dict) or not isinstance(entry.get('script'), str)
-                    or not isinstance(entry.get('name'), str)):
+            if not isinstance(entry, dict) or not isinstance(entry.get('name'), str):
                 unknown = True
                 continue
-            if Path(entry['script']).name in scripts or entry['name'] in names:
+            script = entry.get('script')
+            if script is not None and not isinstance(script, str):
+                unknown = True
+                continue
+            if script is None and not isinstance(entry.get('prompt'), str):
+                unknown = True
+                continue
+            if (isinstance(script, str) and Path(script).name in scripts) or entry['name'] in names:
                 return 'conflict'
     return 'unknown' if unknown else 'clear'
 

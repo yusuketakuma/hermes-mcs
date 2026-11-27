@@ -71,7 +71,9 @@ def _ocr_ack_current(data, value, cfg=None):
                     or identity != attachment_ocr_ack.database_identity(db)
                     or any(os.path.lexists(path) for path in markers)):
                 return "attachment_ocr_ack_recheck_incomplete"
-            if not all(current[key] == value.get(key) for key in current):
+            if not all(current[key] == value.get(key)
+                       or (key == 'superseded_acknowledgements' and key not in value and current[key] == 0)
+                       for key in current):
                 return "attachment_ocr_ack_reconfirm_required"
             if policy and not attachment_ocr._settings_current(cfg["attachment_ocr"]):
                 return "attachment_ocr_ack_unverified"

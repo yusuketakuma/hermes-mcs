@@ -608,6 +608,7 @@ async function checkOpenMcsPatientSelection() {
   const p11 = {project_id: 11, heading: "合成 十一", message_count: 1}, p22 = {project_id: 22, heading: "合成 二十二", message_count: 1}, p33 = {project_id: 33, heading: "合成 三十三", message_count: 1};
   run("hc.enabled = true; hc.meta = {qualifications: {}, roles: {}, visit_kinds: {}}; state.project = 11; state.openPatient = null", sandbox);
   run("loadMain = async () => {}; loadPatientContext = async () => {}; loadSideStatus = async () => {}; loadCounts = async () => {}", sandbox);
+  run("state.patients = [{project_id: 22, heading: '合成 旧二十二', message_count: 1}]", sandbox);
   sandbox.api = async (kind, params) => ({items: params.q === "22" ? [] : [p11], next_cursor: null});
   await run("openMcs(22)");
   assert.equal(run("state.project", sandbox), null);
@@ -615,9 +616,11 @@ async function checkOpenMcsPatientSelection() {
   assert.equal(byId("patient-meta").textContent, "ID 22");
   assert.match(byId("timeline-status").textContent, /見つかりません/);
 
-  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [p22] : [p11], next_cursor: null});
+  sandbox.api = async (kind, params) => ({items: params.q === "22" ? [{...p22, heading: "合成 新二十二"}] : [p11], next_cursor: null});
   await run("openMcs(22)");
   assert.equal(run("state.project", sandbox), 22);
+  assert.equal(run("state.openPatient.heading", sandbox), "合成 新二十二");
+  run("state.patients = []", sandbox);
 
   let answer22;
   sandbox.api = async (kind, params) => {

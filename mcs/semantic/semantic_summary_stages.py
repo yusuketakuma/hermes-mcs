@@ -106,6 +106,10 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                       "semantic_source": mcs_util.payload_hash(occurrences),
                       "semantic_generation": generation, "semantic_phase": "summary"}
     import cloud_policy
+    proof = meta.get("provider_provenance")
+    providers = proof.get("providers") if isinstance(proof, dict) else None
+    if not isinstance(providers, list) or len(providers) != 1:
+        return False
     try:
         rows = db.execute(
             "SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
@@ -117,7 +121,10 @@ def _summary_cloud_producer_verified(db, bundle, pid, mid, generation, meta) -> 
                 reservation = cloud_policy.reservation_evidence(db, row["artifact_id"])["reservation"]
             except ValueError:
                 continue
-            if reservation["route"] == "semantic_backlog" and reservation.get("owner") == expected_owner:
+            provider = cloud_policy._price_definition(
+                reservation["model"], reservation["price_version"])["provider"]
+            if (reservation["route"] == "semantic_backlog" and reservation.get("owner") == expected_owner
+                    and providers == [provider]):
                 return True
     except sqlite3.Error:
         return False

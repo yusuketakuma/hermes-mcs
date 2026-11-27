@@ -358,6 +358,34 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     assert any("notify.card_thread" in p for p in prompts)
 
 
+def test_detailed_wizard_slack_new_patient_does_not_borrow_system_channel(monkeypatch):
+    import setup_wizard
+    import slack_channel_setup
+
+    cfg = {"runtime_mode": "hermes", "mcs_login_id": "synthetic",
+           "notify_target": "slack:new", "notify_system_target": "slack:C99999999",
+           "notify": {"interactive": "slack", "slack": {
+               "profile": "synthetic", "application_id": "A000000001", "team_id": "T000000001"}}}
+    group = next(group for group in setup_wizard.WIZARD if group[0] == "Slackの接続先と操作できる人")
+    monkeypatch.setattr(setup_wizard, "WIZARD", [group])
+    defaults = {}
+
+    def answer(key, kind, default, desc, cur, present=False, *, allow_back=False):
+        if key == "setup_detail":
+            return "detailed"
+        if key == "notify.slack.channel_id":
+            defaults[key] = default
+            return setup_wizard.UNSET
+        return cur if present else default if default is not None else setup_wizard.UNSET
+
+    monkeypatch.setattr(setup_wizard, "ask", answer)
+    setup_wizard.wizard(cfg)
+    assert defaults["notify.slack.channel_id"] is None
+    roles = slack_channel_setup.plan(cfg, users=["U000000001"])["roles"]
+    assert roles["patient"] == {"name": "mcs", "id": None, "state": "pending"}
+    assert roles["system"] == {"name": "mcslog", "id": "C99999999", "state": "existing"}
+
+
 def test_wizard_keeps_current_values(monkeypatch, tmp_path):
     """Enter keeps existing values; saving alone needs an explicit yes."""
     import json

@@ -170,14 +170,21 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
                 continue
             position = step.get("id") if kind == "job" else None
             waiting = step.get("waiting_time", 0)
+            arrival = step.get("arrival")
             if type(position) is not int or not 1 <= position <= len(placed) or position in positions \
-                    or type(step.get("arrival")) is not int or type(waiting) is not int or waiting < 0:
+                    or type(arrival) is not int or type(waiting) is not int or waiting < 0 \
+                    or not settings.depart <= arrival <= DAY_END or arrival + waiting > DAY_END:
                 raise ValueError("route_failed")
             positions.add(position)
             row = placed[position - 1]
+            start = arrival + waiting
+            if row["start_time"]:
+                booked = _seconds(row["start_time"])
+                if not max(0, booked - WINDOW_SECONDS) <= start <= min(DAY_END, booked + WINDOW_SECONDS):
+                    raise ValueError("route_failed")
             # Arriving early means waiting for the booked window, so the shown time is when the visit can start.
             stops.append({"visit_id": row["visit_id"], "patient_name": row["patient_name"],
-                          "start_time": row["start_time"], "arrival": _clock(step["arrival"] + waiting),
+                          "start_time": row["start_time"], "arrival": _clock(start),
                           "travel_seconds": step.get("duration")})
         routed = {stop["visit_id"] for stop in stops}
         unscheduled = [row["visit_id"] for row in placed if row["visit_id"] not in routed]

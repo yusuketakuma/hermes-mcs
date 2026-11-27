@@ -48,6 +48,22 @@ def test_interrupted_ocr_ack_read_waits_for_next_check(tmp_path, monkeypatch):
     assert health_report._ocr_ack_current(tmp_path, {}) == "attachment_ocr_ack_recheck_incomplete"
 
 
+def test_legacy_ack_status_missing_superseded_count_is_compatible_only_at_zero(tmp_path, monkeypatch):
+    import sqlite3
+    import attachment_ocr_ack
+
+    sqlite3.connect(tmp_path / "ledger.db").close()
+    current = {"pending_failed": 1, "queue_status": "known", "failure_reason_counts": {"timeout": 1},
+               "exhausted_failed": 1, "acknowledged_exhausted": 1, "unacknowledged_pending_failed": 0,
+               "superseded_acknowledgements": 0, "failure_cohort": "0" * 64}
+    monkeypatch.setattr(attachment_ocr_ack, "database_identity", lambda db: "synthetic-db")
+    monkeypatch.setattr(attachment_ocr_ack, "failure_counts", lambda *a, **k: dict(current))
+    value = {key: item for key, item in current.items() if key != "superseded_acknowledgements"}
+    assert health_report._ocr_ack_current(tmp_path, value, None) is None
+    current["superseded_acknowledgements"] = 1
+    assert health_report._ocr_ack_current(tmp_path, value, None) == "attachment_ocr_ack_reconfirm_required"
+
+
 def test_disabled_never_reads_status_and_unknown_config_is_not_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report.safe_io, "read_private_bytes", lambda *args, **kwargs:
                         pytest.fail("disabled OCR read status"))

@@ -856,7 +856,7 @@ def test_route_rejects_null_duplicate_and_malformed_route_replies(db, tmp_path):
     path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
     path.chmod(0o600)
     row = patient(db, me["staff_id"], address="合成市2-2")
-    visit = visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])
+    visit = visits.create(db, REGISTRY, visit_values(row["patient_id"], start_time="10:00"), actor=me["staff_id"])
     settings = route.RouteSettings(path)
 
     def fetch(reply):
@@ -867,17 +867,20 @@ def test_route_rejects_null_duplicate_and_malformed_route_replies(db, tmp_path):
         return send
 
     for reply in ({"routes": None}, {"routes": [{}, {}]},
-                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 600},
-                                           {"type": "job", "id": 1, "arrival": 900}]}]},
-                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": "600"}]}]},
-                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 600, "waiting_time": -1}]}]}):
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 34200, "waiting_time": 1800},
+                                           {"type": "job", "id": 1, "arrival": 34200, "waiting_time": 1800}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": "34200"}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 34200, "waiting_time": -1}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": -7140}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 93600}]}]},
+                  {"routes": [{"steps": [{"type": "job", "id": 1, "arrival": 45000}]}]}):
         with pytest.raises(ValueError, match="route_failed"):
             route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch(reply))
 
     empty = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch({"routes": []}))
     assert empty["stops"] == [] and empty["unscheduled"] == [visit["visit_id"]]
     ordered = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fetch(
-        {"routes": [{"steps": [{"type": "start"}, {"type": "job", "id": 1, "arrival": 600, "duration": 300},
+        {"routes": [{"steps": [{"type": "start"}, {"type": "job", "id": 1, "arrival": 34200, "waiting_time": 1800, "duration": 300},
                                {"type": "end"}]}]}))
     assert [stop["visit_id"] for stop in ordered["stops"]] == [visit["visit_id"]]
 

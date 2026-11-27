@@ -546,6 +546,7 @@ def test_fresh_worker_inventory_requires_a_readable_empty_owned_set(tmp_path, mo
     ([{'name': 'MCS unread check', 'script': 'mcs_check.sh'}], False),
     ([{'name': 'synthetic', 'script': '/synthetic/mcs_deep.sh'}], False),
     ([{'name': 'synthetic', 'script': 'other.sh'}], True),
+    ([{'name': 'synthetic', 'prompt': 'synthetic prompt'}], True),
     ([{'name': 'synthetic'}], False),
     (None, False),
 ])
@@ -575,6 +576,8 @@ def test_fresh_hermes_cron_inventory_requires_proven_absence(tmp_path, monkeypat
     ([{'name': 'MCS unread check', 'script': 'mcs_check.sh'}], 'conflict'),
     ([{'name': 'synthetic', 'script': '/synthetic/mcs_deep.sh'}], 'conflict'),
     ([{'name': 'synthetic', 'script': 'other.sh'}], 'clear'),
+    ([{'name': 'synthetic', 'prompt': 'synthetic prompt'}], 'clear'),
+    ([{'name': 'MCS unread check', 'prompt': 'synthetic prompt'}], 'conflict'),
     ([{'name': 'synthetic'}], 'unknown'),
     (None, 'unknown'),
 ])
