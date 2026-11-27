@@ -268,11 +268,42 @@ def _other_persons_drug(body: str, span, value: str) -> bool:
 
 _DETAIL_NEGATIVE = re.compile(r"して(?:いない|いません|おりません|おらず)|しない|しません|なかった|ありません|ではない|なし")
 _DETAIL_UNCERTAIN = re.compile(r"未確認|未確定|不明|疑い|可能性|かもしれ|予定|検討")
-_DETAIL_NEXT_TOPIC = re.compile(
-    r"(?:[てで](?:おり|いて)|(?<=[一-龥々])し)(?P<topic>[一-龥々ァ-ヶー]+(?:の[一-龥々ァ-ヶー]+)*[ぁ-ん]?)(?<![にでと])[はがも]")
+_ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
+                    r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
+                    r"|せん妄|不眠|振戦|発熱")
+_STORAGE_ACTION = re.compile(
+    r"(?:(?:内|の中)?[でに](?:の)?)?(?:冷蔵|冷凍|常温)?(?:保管|保存)"
+    r"(?:(?P<former>して(?:いました|おりました|いた))$"
+    r"|(?P<stopped>[はをも]?(?:中止|終了)(?:しました|した(?!い|ら)|済み|して?(?=$|[一-龥々])))"
+    r"|して(?:います|おります|いる|いて|おり))")
+_STORAGE_RESTART = re.compile(
+    r"(?:が|後に?)?[、，, ]*(?:その後|現在は|今は)?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
+_OTHER_PHARMACY_REPORT = re.compile(
+    rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:について)?[はがも]"
+    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})")
 
 
-def _noncurrent_detail(body: str, span, value: str) -> bool:
+def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]:
+    """Keep this storage's qualifiers and the tense of its own predicate."""
+    source = value + clause
+    action = _STORAGE_ACTION.search(source)
+    if action is None or not action.start() <= len(value) <= action.end():
+        return clause, None
+    if action['former'] is not None:
+        return clause, 'past'
+    if action['stopped'] is not None:
+        continuation = tail[action.end() - len(value):]
+        return clause, 'current' if _STORAGE_RESTART.fullmatch(continuation) else 'past'
+    other = _OTHER_PHARMACY_REPORT.match(source, action.end())
+    if other:
+        # Remove only the other assertion. A later correction about storage still applies.
+        clause = source[len(value):action.end()] + source[other.end():]
+    complete = (other.end() if other else action.end()) == len(value) + len(tail)
+    ongoing = complete and (other is not None or action[0].endswith(('います', 'おります', 'いる')))
+    return clause, 'current' if ongoing else None
+
+
+def _noncurrent_detail(body: str, span, value: str, key) -> bool:
     """Whether every occurrence is in a negated, uncertain or explicitly past-only clause."""
     verdicts = []
     at = body.find(value, span[0], span[1])
@@ -281,27 +312,24 @@ def _noncurrent_detail(body: str, span, value: str) -> bool:
         end = min((i for i in (body.find(mark, at) for mark in "。！？!?\n") if i >= 0), default=len(body))
         before, tail = body[start:at], body[at + len(value):end]
         current = max(before.rfind("現在"), before.rfind("今は"), before.rfind("今の"))
-        past = re.search(r"以前|過去|前は", before)
+        past = re.search(r"以前から|以前|過去|前は", before)
         clause = re.split(r"[、，,]", tail, maxsplit=1)[0]
-        negative_scope = clause
-        other = _DETAIL_NEXT_TOPIC.search(clause)
-        if other and not re.search(r"確認|根拠|裏付け|記録|報告|確証|証拠", other['topic']):
-            # Keep a later denial about the same value or action (冷蔵庫 / 保管).
-            own_terms = re.findall(r"[一-龥々ァ-ヶー]+", value + clause[:other.start()])
-            if not any(term in clause[other.start('topic'):] for term in own_terms):
-                negative_scope = clause[:other.start('topic')]
-        verdicts.append(bool(_DETAIL_NEGATIVE.search(negative_scope) or _DETAIL_UNCERTAIN.search(clause)
-                             or past is not None and current < 0))
+        tense = None
+        if key in (None, 'storage_place', 'storage_status'):
+            clause, tense = _storage_scope(value, clause, tail)
+        past_only = tense == 'past' or (past is not None and current < 0
+                                        and not (past[0] == '以前から' and tense == 'current'))
+        verdicts.append(bool(_DETAIL_NEGATIVE.search(clause) or _DETAIL_UNCERTAIN.search(clause) or past_only))
         at = body.find(value, at + 1, span[1])
     return bool(verdicts) and all(verdicts)
 
 
-def noncurrent_detail(body: str, evidence: str, value: str) -> bool:
+def noncurrent_detail(body: str, evidence: str, value: str, *, key=None) -> bool:
     """Whether one grounded detail is negated, uncertain or explicitly past-only."""
     if not isinstance(body, str) or not isinstance(evidence, str):
         return True
     span = locate_quote_span(body, evidence)
-    return span is None or _noncurrent_detail(body, span, value)
+    return span is None or _noncurrent_detail(body, span, value, key)
 
 
 def detail_items(items, body: str, parent_span, category=None, subject=None) -> list[dict]:
@@ -456,9 +484,6 @@ _OBJECT = _thing(f"{_NOT_A_THING}|{_STANCE}")
 _OBJECT = rf"{_OBJECT}(?:(?:での|への|の|で|に|へ){_OBJECT}){{0,2}}"
 _ALLERGY_SYMPTOM = (r"発疹|皮疹|薬疹|蕁麻疹|じんましん|湿疹|かぶれ|発赤|かゆみ|痒み|口がかゆくなる|かゆくなる"
                     r"|腫れ|むくみ|喘息|呼吸困難|アナフィラキシー|嘔吐|下痢")
-_ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
-                    r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
-                    r"|せん妄|不眠|振戦|発熱")
 _DOING = r"(?:する|しない|している|していない|しています|されている|されています|です)?"
 _WISH = (rf"(?:希望|拒否|反対|賛成|了承|同意){_DOING}"
          r"|望む|望まない|望んでいる|望んでいない|望んでいます|望みます")

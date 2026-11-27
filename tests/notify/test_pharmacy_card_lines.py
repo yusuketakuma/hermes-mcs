@@ -134,12 +134,28 @@ def test_negated_past_or_another_persons_storage_value_is_not_a_patient_current_
     ("本人の薬は冷蔵庫で保管しており副作用はありません。", None, True),
     ("本人の薬は冷蔵庫で保管しており副作用はありませんとのことです。", "冷蔵庫", True),
     ("本人の薬は冷蔵庫で保管していて残薬はありません。", "冷蔵庫", True),
+    ("薬の冷蔵庫での保管は中止し再開はしていません。", "冷蔵庫", False),
+    ("薬の冷蔵庫での保管は中止し常温に変更しました。", "冷蔵庫", False),
+    ("薬の冷蔵庫での保管を中止した後に再開しました。", "冷蔵庫", True),
+    ("薬の冷蔵庫での保管を中止し、その後保管を再開しました。", "冷蔵庫", True),
+    ("薬の冷蔵庫での保管を中止し通院を再開しました。", "冷蔵庫", False),
+    ("薬の冷蔵庫での保管を中止し再開を検討しています。", "冷蔵庫", False),
+    ("薬の冷蔵庫での保管を中止する予定です。", "冷蔵庫", False),
+    ("現在は冷蔵庫で保管しています。来月から中止する予定です。", "冷蔵庫", True),
+    ("本人の薬は冷蔵庫で保管しており残薬については確認しておりません。", "冷蔵庫", True),
+    ("本人の薬は冷蔵庫で保管しており保管場所については確認しておりません。", "冷蔵庫", False),
+    ("本人の薬は以前から冷蔵庫で保管しています。", "冷蔵庫", True),
+    ("本人の薬は冷蔵庫で保管していました。", "冷蔵庫", False),
+    ("本人の薬は冷蔵庫での保管を中止しました。", "冷蔵庫", False),
+    ("本人の薬は以前から冷蔵庫で保管していました。", "冷蔵庫", False),
+    ("本人の薬は以前から冷蔵庫で保管していましたが今は中止しました。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫で保管しており頭痛の訴えはありません。", "冷蔵庫", True),
     ("本人の薬は冷蔵庫で保管しておりません。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫で保管していません。副作用はありません。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫で保管していると聞きましたが実際には保管していません。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫に移しており本人は冷蔵庫では保管していません。", "冷蔵庫に移し", False),
     ("本人の薬は冷蔵庫で保管しており確認はしていません。", "冷蔵庫", False),
+    ("本人の薬は冷蔵庫で保管しており副作用はありませんが実際には保管していません。", "冷蔵庫", False),
     ("本人の薬は以前は冷蔵庫で保管しており副作用はありません。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫で保管する予定で副作用はありません。", "冷蔵庫", False),
     ("本人の薬は冷蔵庫で保管しているかは未確認です。", "冷蔵庫", False),
@@ -150,8 +166,19 @@ def test_storage_card_uses_the_storage_predicate_in_the_source(led, body, eviden
     assert ("服薬管理（保管場所）: 「冷蔵庫」" in _card_text(led, SLACK)) is shown
 
 
-def test_a_current_patient_storage_value_still_reaches_the_shared_card(led):
-    body = "本人の薬は常温で保管しています。"
-    item = _item("medication_management", body, [{"key": "storage_status", "value": "常温で保管", "evidence": body}])
+def test_storage_scope_without_a_detail_key_requires_the_same_source_predicate():
+    from patient_context import noncurrent_detail
+
+    body = "本人の薬は冷蔵庫で保管しており残薬については確認しておりません。"
+    assert not noncurrent_detail(body, "冷蔵庫", "冷蔵庫")
+    assert noncurrent_detail(body, "冷蔵庫", "冷蔵庫", key="inquiry_result")
+
+
+@pytest.mark.parametrize("body,value", [
+    ("本人の薬は常温で保管しています。", "常温で保管"),
+    ("本人の薬は冷蔵保管しており残薬については確認しておりません。", "冷蔵保管"),
+])
+def test_a_current_patient_storage_value_still_reaches_the_shared_card(led, body, value):
+    item = _item("medication_management", body, [{"key": "storage_status", "value": value, "evidence": body}])
     _seed(led, [item], body=body)
-    assert "服薬管理（保管状況）: 「常温で保管」" in structured_view.structured_lines(led.db, 100)
+    assert f"服薬管理（保管状況）: 「{value}」" in _card_text(led, SLACK)
