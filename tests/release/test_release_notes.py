@@ -116,6 +116,30 @@ class ReleaseNotesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             notes.section(text + "## [1.0.8]\nduplicate\n", "1.0.8")
 
+    def test_check_validates_latest_archived_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            body = notes.render([self.item()], "通知を改善", "合成の変更です。")
+            (root / "CHANGELOG.md").write_text(
+                "## [Unreleased]\n\n## [1.0.1] — 2026-10-02\n\n" + body
+                + "\n## [1.0.0] — 2026-10-01\n\n" + body, encoding="utf-8")
+            record = self.item()
+            del record["details"]
+            archive = root / "changes/archive"
+            previous = archive / "1.0.0" / "older.json"
+            previous.parent.mkdir(parents=True)
+            previous.write_text(json.dumps(record), encoding="utf-8")
+            self.assertEqual(notes.main(["--root", tmp, "check"]), 0)
+
+            latest = archive / "1.0.1" / "current.json"
+            latest.parent.mkdir()
+            latest.write_text(json.dumps(record), encoding="utf-8")
+            with self.assertRaises(SystemExit) as error:
+                notes.main(["--root", tmp, "check"])
+            self.assertEqual(error.exception.code, 1)
+            latest.write_text(json.dumps(self.item()), encoding="utf-8")
+            self.assertEqual(notes.main(["--root", tmp, "check"]), 0)
+
     def test_build_archive_export_and_refuse_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

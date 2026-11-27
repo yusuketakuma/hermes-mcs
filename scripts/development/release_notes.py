@@ -111,9 +111,9 @@ def validate(item):
     return item
 
 
-def load_fragments(root):
+def load_fragments(directory):
     return [(p, validate(json.loads(p.read_text(encoding="utf-8"))))
-            for p in sorted((root / "changes").glob("*.json"))]
+            for p in sorted(directory.glob("*.json"))]
 
 
 def section(text, release_version):
@@ -324,9 +324,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
-            load_fragments(args.root)
+            load_fragments(args.root / "changes")
             text = (args.root / "CHANGELOG.md").read_text(encoding="utf-8")
             versions = check_changelog(text)
+            if versions:
+                load_fragments(args.root / "changes" / "archive" / versions[0])
             for p in sorted((args.root / "docs" / "releases").glob("v*/changelog-*.md")):
                 if p.stat().st_size >= DETAILS_FILE_LIMIT:
                     raise ValueError(f"{p} が1MBを超えています")
@@ -346,7 +348,7 @@ def main(argv=None):
         else:
             version(args.version)
             datetime.date.fromisoformat(args.date)
-            fragments = load_fragments(args.root)
+            fragments = load_fragments(args.root / "changes")
             if not fragments:
                 raise ValueError("未リリースの変更記録がありません")
             path = args.root / "CHANGELOG.md"
