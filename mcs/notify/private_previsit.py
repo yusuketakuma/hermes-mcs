@@ -507,7 +507,9 @@ def _claim(ledger, event, now):
             metadata_fields = {"schema", "visit_date", "logical_key", "assignment_artifact_id",
                                "assignment_revision", "registration_artifact_id", "schedule_pin",
                                "source_pins", "source_watermark", "date_basis"}
-            registration_id = meta.get("registration_artifact_id") if type(meta) is dict else None
+            if type(meta) is not dict or meta.keys() != metadata_fields:
+                raise PrevisitError("previsit_note_invalid")
+            registration_id = meta["registration_artifact_id"]
             expected_basis = "registered" if registration_id is not None else "source_schedule"
             try:
                 valid_visit_date = (isinstance(meta.get("visit_date"), str)
@@ -515,9 +517,8 @@ def _claim(ledger, event, now):
                                    == meta["visit_date"])
             except (TypeError, ValueError):
                 valid_visit_date = False
-            watermark = meta.get("source_watermark") if type(meta) is dict else None
-            if (type(meta) is not dict or meta.keys() != metadata_fields
-                    or type(meta.get("schema")) is not int or meta["schema"] != 1
+            watermark = meta["source_watermark"]
+            if (type(meta["schema"]) is not int or meta["schema"] != 1
                     or meta.get("logical_key") != payload["logical_key"]
                     or meta.get("visit_date") != payload["visit_date"]
                     or not valid_visit_date

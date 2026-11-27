@@ -516,6 +516,26 @@ def test_private_note_expired_after_due_selection_is_suppressed(ctx, monkeypatch
     assert sender.calls == []
 
 
+@pytest.mark.parametrize("meta", ["null", "[]"])
+def test_invalid_note_meta_is_held_without_blocking_shared_delivery(ctx, monkeypatch, meta):
+    _prepare(ctx, monkeypatch)
+    current = _at_jst(VISIT_DAY, 8)
+    monkeypatch.setattr(private_previsit, "_instant", lambda now=None: current if now is None else now)
+    sender = StubPrivateSender()
+    monkeypatch.setattr(private_previsit, "_provider", lambda root: sender)
+    monkeypatch.setattr(notify_flush, "_config", lambda: {**CFG, "notify_target": "lineworks:synthetic"})
+    shared = []
+    monkeypatch.setattr(notify_sender, "send", lambda argv, text, *args, **kwargs: shared.append(text))
+    ctx.db.db.execute("UPDATE artifacts SET meta=? WHERE kind=?", (meta, private_previsit.NOTE_KIND))
+    ctx.db.db.commit()
+    eid = ctx.db.outbox_add("run_failed", None, {})
+    result = notify_flush.flush(ctx.db)
+    assert result["parked"] == 1 and result["sent"] == 1
+    assert sender.calls == [] and len(shared) == 1
+    assert json.loads(_event(ctx.db)["progress"])["hold_reason"] == "previsit_note_invalid"
+    assert ctx.db.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()[0] == "accepted"
+
+
 def test_normal_flush_intercepts_private_kind_before_shared_routing(ctx, monkeypatch):
     _prepare(ctx, monkeypatch)
     now = _at_jst(VISIT_DAY, 8)
