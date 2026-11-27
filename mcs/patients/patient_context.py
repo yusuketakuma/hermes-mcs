@@ -278,9 +278,26 @@ _STORAGE_ACTION = re.compile(
     r"|して(?:います|おります|いる|いて|おり))")
 _STORAGE_RESTART = re.compile(
     r"(?:が|後に?)?[、，, ]*(?:その後|現在は|今は)?[、，, ]*(?:(?:保管|保存)を)?再開(?:しました|しています|した|済み)(?:です)?")
+_NEXT_REPORT = re.compile(r"\s*(?:(?:が|けれど(?:も)?|ものの)\s*[、，,;；]?|[、，,;；])\s*")
 _OTHER_PHARMACY_REPORT = re.compile(
     rf"(?:残薬量?|副作用(?:症状)?|飲み忘れ|{_ADVERSE_SYMPTOM})(?:の訴え)?(?:について)?[はがも]"
-    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})")
+    rf"(?:特に)?(?:確認)?(?:{_DETAIL_NEGATIVE.pattern}|{_DETAIL_UNCERTAIN.pattern})"
+    r"(?:でした|です)?(?:とのこと(?:でした|です)?)?")
+
+
+def _storage_restarted(continuation: str) -> bool:
+    """An affirmative restart may be followed only by separately grounded pharmacy reports."""
+    restart = _STORAGE_RESTART.match(continuation)
+    if restart is None:
+        return False
+    end = restart.end()
+    while end < len(continuation):
+        boundary = _NEXT_REPORT.match(continuation, end)
+        report = boundary and _OTHER_PHARMACY_REPORT.match(continuation, boundary.end())
+        if not report:
+            return False
+        end = report.end()
+    return True
 
 
 def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]:
@@ -293,7 +310,9 @@ def _storage_scope(value: str, clause: str, tail: str) -> tuple[str, str | None]
         return clause, 'past'
     if action['stopped'] is not None:
         continuation = tail[action.end() - len(value):]
-        return clause, 'current' if _STORAGE_RESTART.fullmatch(continuation) else 'past'
+        if _storage_restarted(continuation):
+            return source[len(value):action.end()], 'current'
+        return clause, 'past'
     other = _OTHER_PHARMACY_REPORT.match(source, action.end())
     if other:
         # Remove only the other assertion. A later correction about storage still applies.
