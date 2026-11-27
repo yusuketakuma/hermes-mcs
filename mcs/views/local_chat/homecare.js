@@ -664,9 +664,13 @@ async function openMcs(projectId) {
   const request = ++state.patientRequest;
   await loading;
   if (request !== state.patientRequest) return;
-  const data = await api("patients", {q: String(projectId)});
-  if (request !== state.patientRequest) return;
-  const patient = data.items.find(row => row.project_id === projectId);
+  let cursor = null, patient = null;
+  do {
+    const data = await api("patients", {q: String(projectId), cursor});
+    if (request !== state.patientRequest) return;
+    patient = data.items.find(row => row.project_id === projectId) || patient;
+    cursor = data.next_cursor;
+  } while (!patient && cursor);
   if (patient) {
     selectPatient(patient);
     return;

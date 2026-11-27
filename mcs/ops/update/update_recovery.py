@@ -73,6 +73,7 @@ from update_restore import (
     _adopted_marker,
     _consent_hold,
     _cancel_unsent_notices,
+    rollback_notice_cancel_needed,
     _restore_db,
     _restore_entered,
     _rollback_applying,
@@ -218,7 +219,8 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     if not _provider_recovery_ready():
         return 1
     if applying.get("rollback"):
-        _cancel_unsent_notices()
+        if rollback_notice_cancel_needed(applying):
+            _cancel_unsent_notices()
         _drop_reverted(state, applying)
         result = "rolled_back"
     else:
@@ -600,8 +602,12 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     journal_store.save_state(STATE_PATH, state)
-            if applying.get("rollback"):
-                _cancel_unsent_notices()
+            try:
+                if rollback_notice_cancel_needed(applying):
+                    _cancel_unsent_notices()
+            except UpdateError:
+                _report("notice_cancel_failed", "rollback notice cancellation unverified — restart held")
+                return 1
             try:
                 continuation = update_policy.classify_recovery_target_continuation(
                     rollback=bool(applying.get("rollback")),
@@ -633,7 +639,8 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         with _legacy_provider_migration_guard(
                                 state, recovery_fds=(upd_fd, run_fd),
                                 expected_mode=provider_recovery_mode) as before_publication:
-                            update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
+                            update_migrations.migrate_provider_settings(
+                                HOME, before_publication=before_publication, allow_legacy_retire=True)
                         if _provider_migration_needed():
                             raise ValueError("provider_migration_incomplete")
                     except (update_migrations.MigrationError, UpdateError, OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
@@ -795,8 +802,12 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     # without bouncing them again for the same journal and checkout.
     _remove_marker()
     applying = state.get("applying") or {}
-    if applying.get("rollback"):
-        _cancel_unsent_notices()
+    try:
+        if rollback_notice_cancel_needed(applying):
+            _cancel_unsent_notices()
+    except UpdateError:
+        _report("notice_cancel_failed", "rollback notice cancellation unverified — restart held")
+        return 1
     dkey = _drainers_key(state, _head_sha())
     if _last_report().get("drainers_key") == dkey:
         problems = restart_agents(bounce=False)

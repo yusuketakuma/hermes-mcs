@@ -783,7 +783,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         empty_reason = {}
         recovered, empty_reserved = _empty_repair_candidate(
             ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
-            reason_out=empty_reason, fact_kind=_fact_kind(scfg))
+            reason_out=empty_reason, fact_kind=_fact_kind(scfg), bundle=bundle,
+            generation=runtime.execution_generation(scfg))
         if empty_reserved and recovered is None:
             _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)

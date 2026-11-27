@@ -442,10 +442,12 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
                 journal(state, "reinstall")      # persists reinstall_done
             if applying.get("runtime_migration"):
                 _use_migrated_runtime(applying["runtime_migration"])
+            allow_retire = applying.get("provider_settings_migration_required") is True
             if legacy_provider_migration:
-                update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
+                update_migrations.migrate_provider_settings(
+                    HOME, before_publication=before_publication, allow_legacy_retire=allow_retire)
             elif native_provider_migration:
-                update_migrations.migrate_provider_settings(HOME)
+                update_migrations.migrate_provider_settings(HOME, allow_legacy_retire=allow_retire)
     except update_migrations.MigrationError as error:
         raise UpdateError("provider_settings_migration_unverified") from error
     _prepare_run_log(promote=True)

@@ -523,7 +523,7 @@ def _recorded_claim_audit(meta, content):
 
 
 def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None,
-                            fact_kind=None):
+                            fact_kind=None, bundle=None, generation=None):
     """Recover only the latest source-bound, reserved empty repair candidate.
 
     A reservation reserves nothing once its result was committed (the
@@ -564,7 +564,9 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             if not isinstance(cand_content, dict) or not isinstance(cand_meta, dict):
                 return None, 'empty_repair_candidate_invalid'
             proof = cand_meta.get('provider_provenance')
-            producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision)
+            producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision,
+                                         db=db, bundle=bundle, project_id=pid, message_id=mid,
+                                         generation=generation)
             # Keep the original predicate order and short-circuiting; these labels
             # only describe the first failed gate, never weaken a recovery gate.
             if not is_current(cand_meta) or cand_meta.get('invalidated') or cand_meta.get('stale'):

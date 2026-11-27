@@ -164,6 +164,7 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             raise ValueError("route_failed") from None
         positions = set()
+        previous_finish = settings.depart
         for step in steps:
             kind = step.get("type")
             if kind in ("start", "end"):
@@ -178,6 +179,9 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
             positions.add(position)
             row = placed[position - 1]
             start = arrival + waiting
+            if start < previous_finish or start + SERVICE_SECONDS > DAY_END:
+                raise ValueError("route_failed")
+            previous_finish = start + SERVICE_SECONDS
             if row["start_time"]:
                 booked = _seconds(row["start_time"])
                 if not max(0, booked - WINDOW_SECONDS) <= start <= min(DAY_END, booked + WINDOW_SECONDS):

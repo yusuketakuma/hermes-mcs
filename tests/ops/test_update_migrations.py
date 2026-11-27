@@ -235,7 +235,7 @@ def test_single_layout_needs_migration_only_for_the_matching_legacy_record(tmp_p
     import update_journal
     update_journal.save_state(str(state_path), journal)
     assert update_preflight._provider_migration_needed() is True
-    assert update_migrations.migrate_provider_settings(tmp_path) is True
+    assert update_migrations.migrate_provider_settings(tmp_path, allow_legacy_retire=True) is True
     assert not legacy.exists()
 
     put(legacy, {'v': 1, 'install_args': ['--no-brew']})
@@ -262,7 +262,7 @@ def test_interruption_after_single_commit_retires_only_the_matching_legacy_recor
     assert (tmp_path / 'data' / '.provider-settings-authority.json').exists()
 
     monkeypatch.setattr(install_options, 'retire_legacy', retiring)
-    assert update_migrations.migrate_provider_settings(tmp_path) is True
+    assert update_migrations.migrate_provider_settings(tmp_path, allow_legacy_retire=True) is True
     archive, = (tmp_path / 'data').glob('.install-options-pre-v3-*/install_options.json')
     assert archive.read_bytes() == original and not legacy.exists()
     assert update_migrations.migrate_provider_settings(tmp_path) is False

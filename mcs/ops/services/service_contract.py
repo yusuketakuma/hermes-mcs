@@ -111,11 +111,11 @@ def parse_cron_listing(stdout: str, returncode: int) -> list[dict] | None:
                 cur["state"] = m.group(2)   # e.g. active / disabled / paused
             out.append(cur)
             continue
-        m = re.match(r"^\s+(Name|Schedule|Script|Prompt):\s*(.+?)\s*$", line)
+        m = re.match(r"^\s+(Name|Schedule|Script|Prompt|Repeat|Next run|Deliver):\s*(.+?)\s*$", line)
         if m:
             if cur is None:
                 return None            # field before any header
-            cur[m.group(1).lower()] = m.group(2)
+            cur[m.group(1).lower().replace(" ", "_")] = m.group(2)
     # Hermes >= 2026-09-28 prints "No scheduled jobs in profile '<name>'."
     if not out and not re.search(r"^No scheduled jobs(?: in profile '[^'\n]*')?\.",
                                  output, re.M):

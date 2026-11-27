@@ -38,7 +38,7 @@ def apply(config_path, legacy_path, expected_base, before_publication):
         raise MigrationError('settings_unverified') from None
 
 
-def migrate_provider_settings(root, *, before_publication=None):
+def migrate_provider_settings(root, *, before_publication=None, allow_legacy_retire=False):
     """Consolidate legacy or split provider settings after the updater has quiesced writers."""
     try:
         import config_edit
@@ -63,7 +63,7 @@ def migrate_provider_settings(root, *, before_publication=None):
                 recorded, legacy_digest = install_options._legacy(legacy)
             except (OSError, ValueError, TypeError, RecursionError):
                 recorded, legacy_digest = None, None
-            if embedded and recorded is not None and central == recorded:
+            if allow_legacy_retire and embedded and recorded is not None and central == recorded:
                 install_options.retire_legacy(legacy, legacy_digest)
                 return True
             return False

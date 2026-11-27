@@ -223,10 +223,10 @@ def main() -> int:
         if config_state == "unreadable":
             print(json.dumps({"ok": False, "error": "config_unreadable"}))
             return 2
-        notify_hours = cfg.get("notify_max_age_h")
         notify_max_age_s = None
-        if notify_hours is not None:
-            if positive_number_problem(notify_hours) is None:
+        if "notify_max_age_h" in cfg:
+            notify_hours = cfg.get("notify_max_age_h")
+            if notify_hours is not None and positive_number_problem(notify_hours) is None:
                 notify_max_age_s = notify_hours * 3600
             else:
                 print(json.dumps({"ok": False, "error": "notify_max_age_h_invalid"}))
