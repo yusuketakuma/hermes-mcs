@@ -1,0 +1,7 @@
+{
+  "category": "fixed",
+  "title": "Discordのスレッド通知に古い返信が混ざる問題を修正",
+  "summary": "Discordで複数の投稿を1枚のカードにまとめるとき、収集時に通知対象から外れた古い返信と添付を除きます。新しい返信はこれまでどおり通知します。",
+  "upgrade": "追加の設定は不要です。更新前から送信待ちのカードも、送信前に対象の投稿を確認します。",
+  "refs": ["mcs/notify/notify_render.py", "mcs/notify/notify_transport.py"]
+}

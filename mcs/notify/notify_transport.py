@@ -618,7 +618,7 @@ def _begin_check(db, req, cfg) -> str | None:
             if cards.unsettled_attempt(db, card["card_id"]):
                 return "in_flight"
             return "history_notification_disabled"
-        if card["transport"] == "lineworks" and card["kind"] == "thread" and render["op"] != "revoke":
+        if card["kind"] == "thread" and cards.own_post(card) is None and render["op"] != "revoke":
             # A pre-upgrade queued face may still name a reply excluded at capture.
             shown = db.execute(
                 """SELECT m.message_id,m.first_seen,m.posted_at_ts,m.notify_age_excluded
