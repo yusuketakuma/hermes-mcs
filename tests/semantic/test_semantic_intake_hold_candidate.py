@@ -1,7 +1,5 @@
 """Synthetic intake evidence and guards against publishing through active holds."""
-import semantic_fact_stages
 import semantic_job_processor
-import semantic_summary_stages
 import json
 
 import pytest
@@ -527,10 +525,12 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
     import semantic_assessment
     import semantic_audit
     import semantic_drain
+    import semantic_policy
     import semantic_runtime as runtime
     import semantic_store
     import semantic_transport
     import time
+    from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_testkit import _FakeJev, _cfg
 
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(tmp_path / 'format.json'))
@@ -555,17 +555,14 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
         monkeypatch.setattr(semantic_audit, 'evaluate_source_fact_coverage', lambda *a, **kw: {
             'findings': [], 'evaluated': True})
         monkeypatch.setattr(semantic_store, 'refresh_cards_allowed', lambda *a: False)
-        original_artifact = semantic_drain.current_artifact
-        def artifact(ledger, kind, mid, *args):
-            if kind == semantic_drain.KIND_SUMMARY and mid == 1:
-                return {'content': {'claims': []}, 'meta': {'publication_mode': 'shadow'}}
-            if kind == semantic_drain.KIND_AUDIT and mid == 1:
-                return {'content': {'status': 'PASS', 'findings': []}, 'meta': {'audit_status': 'PASS'}}
-            return original_artifact(ledger, kind, mid, *args)
-        monkeypatch.setattr(semantic_drain, 'current_artifact', artifact)
-        monkeypatch.setattr(semantic_fact_stages, 'current_artifact', semantic_drain.current_artifact)
-        monkeypatch.setattr(semantic_job_processor, 'current_artifact', semantic_drain.current_artifact)
-        monkeypatch.setattr(semantic_summary_stages, 'current_artifact', semantic_drain.current_artifact)
+        cfg = _cfg('shadow', loop_mode='off')
+        scfg, _ = semantic_policy.semantic_config(cfg)
+        meta = {VERSION_KEY: CURRENT_VERSION, 'policy_fingerprint': semantic_policy.policy_fingerprint(scfg),
+                'fingerprint': semantic_store.thread_bundle(db.db, 1, 1)['source_fingerprint']}
+        db.artifact_add(semantic_drain.KIND_SUMMARY, json.dumps({'claims': []}), project_id=1, message_id=1,
+                        meta={**meta, 'publication_mode': 'shadow'})
+        db.artifact_add(semantic_drain.KIND_AUDIT, json.dumps({'status': 'PASS', 'findings': []}),
+                        project_id=1, message_id=1, meta={**meta, 'audit_status': 'PASS'})
         original_obtain = semantic_job_processor._obtain_summary
         def reject_after_hold(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                               facts, verdicts, existing, deadline, *, diagnostics):
@@ -583,8 +580,9 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
         monkeypatch.setattr(semantic_drain, '_obtain_summary', reject_after_hold)
         monkeypatch.setattr(semantic_job_processor, '_obtain_summary', semantic_drain._obtain_summary)
         result = {'errors': []}
-        semantic_drain.run_due(db, _cfg('shadow', loop_mode='off'), result, time.monotonic() + 300,
+        semantic_drain.run_due(db, cfg, result, time.monotonic() + 300,
                                jev_client=_FakeJev(), llm_fn=None, max_jobs=1)
+        assert result['errors'] == []
         assert _held(db, 2)
         assert semantic_drain._long_defers(db)[str(token.job_id)] == {
             'g': token.generation, 'n': (previous or 0) + 1}
