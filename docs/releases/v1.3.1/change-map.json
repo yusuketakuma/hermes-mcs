@@ -110,11 +110,6 @@
    "sha256": "d49316c7ae4aa7d3532c4af479931ad63147ea225414cf4665bf5abd7725f718",
    "title": "新しく認識したグループでは新着だけを通知"
   },
-  "local-backup-compression-20261126": {
-   "path": "changes/archive/1.3.1/local-backup-compression-20261126.json",
-   "sha256": "42f28981878b27a7b4ed965ba2eaff459e92db831d4018cdf1afc36e6ce70a60",
-   "title": "日次バックアップをgzip圧縮して保存し、更新前バックアップの掃除を毎回の点検で行う"
-  },
   "notification-parts-unmeasured-code-20261126": {
    "path": "changes/archive/1.3.1/notification-parts-unmeasured-code-20261126.json",
    "sha256": "84a5d41e463992d50dabe71b4bca3a6a76099510ed36a84b271dfe46f7f22c11",
