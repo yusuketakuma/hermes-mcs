@@ -345,76 +345,96 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         True when the row ends up archived and was not before — covers
         both a live 0 -> 1 flip and a brand-new archived registration;
         both need the atomic history_head reservation."""
-        flag = None if is_archived is None else int(bool(is_archived))
-        now = time.time()
         with self.db:
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
-            row = self.db.execute(
-                "SELECT is_archived a,project_type,karte_id,patient_name FROM patients WHERE project_id=?",
-                (p.project_id,)).fetchone()
-            prev = bool(row["a"]) if row else False
-            import inference_dependency_loss as dependency_loss
-            old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
-                if row is not None and getattr(p, 'karte_id', None) is not None
-                and row['karte_id'] != p.karte_id else None)
-            # VALUES gets COALESCE(flag,0) for the NOT NULL column on
-            # fresh inserts; the UPDATE side re-binds the raw flag so
-            # NULL means "preserve" rather than "clear" (COALESCE against
-            # excluded.is_archived would never see NULL)
-            self.db.execute("""
-              INSERT INTO patients(project_id,project_type,patient_name,disease,
-                station_name,url,karte_id,is_archived,last_seen,created_at)
-              VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?)
-              ON CONFLICT(project_id) DO UPDATE SET
-                group_id=CASE WHEN patients.project_type IS NOT excluded.project_type
-                              THEN NULL ELSE patients.group_id END,
-                group_name=CASE WHEN patients.project_type IS NOT excluded.project_type
-                                THEN NULL ELSE patients.group_name END,
-                project_type=excluded.project_type,
-                patient_name=excluded.patient_name,
-                disease=excluded.disease,
-                station_name=excluded.station_name,
-                url=excluded.url,
-                karte_id=COALESCE(excluded.karte_id, patients.karte_id),
-                is_archived=COALESCE(?, patients.is_archived),
-                last_seen=excluded.last_seen
-            """, (p.project_id, p.project_type, _patient_name_for_write(p, row), p.disease,
-                  p.station_name, p.url, getattr(p, "karte_id", None),
-                  flag, now, now, flag))
-            if getattr(p, "project_type", None) == "group":
-                self._update_group_metadata_tx(p)
-            if old_karte is not None:
-                dependency_loss.record_tx(self.db, old_karte)
-            if (row is None or flag is not None and bool(flag) != prev
-                    or row['project_type'] != p.project_type
-                    or getattr(p, 'karte_id', None) is not None and row['karte_id'] != p.karte_id):
-                self.bump_inference_source_epoch_tx()
-            if flag == 1 and not prev:
-                # live -> archived transition: the final head-sync
-                # reservation must be durable in the SAME commit —
-                # a separate job_add could be lost to a crash, leaving a
-                # floored patient that nothing re-visits (Oracle R1).
-                # 'history_head' is a distinct job kind so a pending
-                # deep-walk never absorbs it (R2). A pending head from a
-                # PREVIOUS archive cycle must still restart at page 1 —
-                # new posts arrived during reactivation (F02) — and keep
-                # the deeper (smaller) since of the two reservations.
-                since = self.archive_head_since(p.project_id)
-                old = self.job_payload("history_head", p.project_id)
-                if old and type(old.get("since")) is int:
-                    since = min(since, old["since"])
-                self.job_add_tx("history_head", p.project_id, payload={
-                    "since": since, "page": 1, "trickle": True},
-                    reset_pending=True)
-            if notify_new and flag == 0 and row is None:
-                self._start_initial_import_tx(p.project_id, observation_ts, now,
-                                              observation_source=observation_source)
-            if notify_new and flag == 0 and prev:
-                # Registration and its first notifying walk must survive together.
-                self.job_add_tx("history", p.project_id, payload={
-                    "since": 0, "page": 1, "pages": 3, "trickle": False,
-                    "notify": True, "notify_source": "discovery"},
-                    reset_pending=prev)
+            return self._upsert_patient_info_tx(p, is_archived, notify_new, observation_ts, observation_source)
+
+    def register_listed_projects(self, projects, observation_ts):
+        """Reserve each newly listed live project's cohort and job in one snapshot commit."""
+        failures = []
+        if not projects:
+            return failures
+        with self.db:
+            self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
+            for p in projects:
+                self.db.execute("SAVEPOINT listed_project")
+                try:
+                    self._upsert_patient_info_tx(p, False, True, observation_ts, "server")
+                except Exception:
+                    self.db.execute("ROLLBACK TO listed_project")
+                    failures.append(p.project_id)
+                self.db.execute("RELEASE listed_project")
+        return failures
+
+    def _upsert_patient_info_tx(self, p, is_archived, notify_new, observation_ts, observation_source):
+        flag = None if is_archived is None else int(bool(is_archived))
+        now = time.time()
+        row = self.db.execute(
+            "SELECT is_archived a,project_type,karte_id,patient_name FROM patients WHERE project_id=?",
+            (p.project_id,)).fetchone()
+        prev = bool(row["a"]) if row else False
+        import inference_dependency_loss as dependency_loss
+        old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
+            if row is not None and getattr(p, 'karte_id', None) is not None
+            and row['karte_id'] != p.karte_id else None)
+        # VALUES gets COALESCE(flag,0) for the NOT NULL column on
+        # fresh inserts; the UPDATE side re-binds the raw flag so
+        # NULL means "preserve" rather than "clear" (COALESCE against
+        # excluded.is_archived would never see NULL)
+        self.db.execute("""
+          INSERT INTO patients(project_id,project_type,patient_name,disease,
+            station_name,url,karte_id,is_archived,last_seen,created_at)
+          VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?)
+          ON CONFLICT(project_id) DO UPDATE SET
+            group_id=CASE WHEN patients.project_type IS NOT excluded.project_type
+                          THEN NULL ELSE patients.group_id END,
+            group_name=CASE WHEN patients.project_type IS NOT excluded.project_type
+                            THEN NULL ELSE patients.group_name END,
+            project_type=excluded.project_type,
+            patient_name=excluded.patient_name,
+            disease=excluded.disease,
+            station_name=excluded.station_name,
+            url=excluded.url,
+            karte_id=COALESCE(excluded.karte_id, patients.karte_id),
+            is_archived=COALESCE(?, patients.is_archived),
+            last_seen=excluded.last_seen
+        """, (p.project_id, p.project_type, _patient_name_for_write(p, row), p.disease,
+              p.station_name, p.url, getattr(p, "karte_id", None),
+              flag, now, now, flag))
+        if getattr(p, "project_type", None) == "group":
+            self._update_group_metadata_tx(p)
+        if old_karte is not None:
+            dependency_loss.record_tx(self.db, old_karte)
+        if (row is None or flag is not None and bool(flag) != prev
+                or row['project_type'] != p.project_type
+                or getattr(p, 'karte_id', None) is not None and row['karte_id'] != p.karte_id):
+            self.bump_inference_source_epoch_tx()
+        if flag == 1 and not prev:
+            # live -> archived transition: the final head-sync
+            # reservation must be durable in the SAME commit —
+            # a separate job_add could be lost to a crash, leaving a
+            # floored patient that nothing re-visits (Oracle R1).
+            # 'history_head' is a distinct job kind so a pending
+            # deep-walk never absorbs it (R2). A pending head from a
+            # PREVIOUS archive cycle must still restart at page 1 —
+            # new posts arrived during reactivation (F02) — and keep
+            # the deeper (smaller) since of the two reservations.
+            since = self.archive_head_since(p.project_id)
+            old = self.job_payload("history_head", p.project_id)
+            if old and type(old.get("since")) is int:
+                since = min(since, old["since"])
+            self.job_add_tx("history_head", p.project_id, payload={
+                "since": since, "page": 1, "trickle": True},
+                reset_pending=True)
+        if notify_new and flag == 0 and row is None:
+            self._start_initial_import_tx(p.project_id, observation_ts, now,
+                                          observation_source=observation_source)
+        if notify_new and flag == 0 and prev:
+            # Registration and its first notifying walk must survive together.
+            self.job_add_tx("history", p.project_id, payload={
+                "since": 0, "page": 1, "pages": 3, "trickle": False,
+                "notify": True, "notify_source": "discovery"},
+                reset_pending=prev)
         return (row is None, bool(flag) and not prev)
 
     def _start_initial_import_tx(self, project_id, observation_ts, now, *, observation_source="server"):
@@ -1000,7 +1020,13 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
           SELECT * FROM fetch_jobs j
           WHERE kind IN ('history','history_head')
             AND state='pending' AND next_try <= ?
-          ORDER BY kind='history_head' AND
+          ORDER BY j.job_id IS NOT (
+            SELECT h.job_id FROM fetch_jobs h
+            WHERE h.kind='history_head' AND h.state='pending' AND h.next_try <= ?1
+              AND h.message_id>0
+              AND json_extract(CASE WHEN json_valid(h.payload) THEN h.payload END,'$.page')=1
+            ORDER BY h.created_at DESC,h.job_id DESC LIMIT 1
+          ), kind='history_head' AND message_id=0 AND
             COALESCE((SELECT MAX(posted_at_ts) FROM messages m
                       WHERE m.project_id=j.project_id),0)
             <= COALESCE((SELECT coverage_ts FROM patients p
@@ -1107,11 +1133,18 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         self.db.commit()
         return rid
 
-    def outbox_due(self, limit: int = 20, *, history_fair: bool = False) -> list:
+    def outbox_due(self, limit: int = 20, *, history_fair: bool = False,
+                   arrivals_after: int | None = None, interactive_arrivals_only: bool = False) -> list:
         now = time.time()
         sql = ("SELECT event_id,kind,project_id,payload,attempts,progress,route,state,next_try "
                "FROM notify_outbox WHERE state IN ('pending','failed') AND next_try <= ? ")
-        if not history_fair or limit <= 1:
+        if arrivals_after is not None:
+            if interactive_arrivals_only:
+                sql += "AND route='interactive' "
+            return self.db.execute(
+                sql + "AND kind='new_messages' AND event_id>? ORDER BY event_id LIMIT ?",
+                (now, arrivals_after, limit)).fetchall()
+        if not history_fair or limit <= 0:
             return self.db.execute(sql + "ORDER BY event_id LIMIT ?", (now, limit)).fetchall()
         live_sql = sql + "AND kind!='patient_history' ORDER BY event_id LIMIT ?"
         live = self.db.execute(live_sql, (now, max(1, limit - 2))).fetchall()
@@ -1120,7 +1153,8 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             (now, limit - len(live))).fetchall()
         if len(history) + len(live) < limit:
             live = self.db.execute(live_sql, (now, limit - len(history))).fetchall()
-        return sorted([*live, *history], key=lambda row: row["event_id"])
+        # A short flush must reach live work before cleaning up legacy history notices.
+        return live + history
 
     def outbox_progress(self, event_id: int, next_chunk: int,
                         sent_ids: list, fingerprint: str,

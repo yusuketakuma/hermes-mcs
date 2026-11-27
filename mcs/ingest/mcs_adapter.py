@@ -100,6 +100,17 @@ def _thread_has_next(r) -> bool:
     return page_has_next(r["paginate"], "thread")
 
 
+def _recent_projects(patients):
+    """Keep the newest observation of projects that moved across page boundaries."""
+    seen = {}
+    for patient in patients:
+        previous = seen.get(patient.project_id)
+        if previous is None or patient.last_activity > previous.last_activity or (
+                patient.last_activity == previous.last_activity and patient.last_message_id is not None):
+            seen[patient.project_id] = patient
+    return sorted(seen.values(), key=lambda p: p.last_activity, reverse=True)
+
+
 def walk_reaction_actors(get, project_id: int, message_id: int, *,
                          reaction_type: str | None = None,
                          max_pages: int = 10, per_page: int = 50) -> dict:
@@ -796,8 +807,8 @@ class MCSAdapter(MCSAuthenticationMixin):
         else:
             raise MCSError("pages_exceeded", "unread list > 50 pages",
                            retryable=True)
-        return UnreadSnapshot(timestamp=ts, patients=patients,
-                              listed_patients=listed_patients)
+        return UnreadSnapshot(timestamp=ts, patients=_recent_projects(patients),
+                              listed_patients=_recent_projects(listed_patients))
 
     def fetch_unread_messages(self, project_id: int, timestamp: int,
                               per_page: int = 10,
@@ -964,28 +975,13 @@ class MCSAdapter(MCSAuthenticationMixin):
             if not isinstance(projs, list) or not isinstance(pag, dict):
                 raise SchemaError("projects: page invalid")
             for p in projs:
-                up = unread_patient(p, "projects")
-                lm = p.get("last_message") or {}
-                if not isinstance(lm, dict):
-                    raise SchemaError("projects: nested object invalid")
-                ca = text_field(lm.get("created_at"),
-                           "projects: last_message.created_at")
-                try:
-                    up.last_activity = int(
-                        datetime.fromisoformat(ca).timestamp()) if ca else 0
-                except (ValueError, OverflowError) as e:
-                    # a malformed timestamp must fail loud like every other
-                    # field here — coercing to 0 silently drops a live
-                    # project from init_data's active filter (FIX-ID2)
-                    raise SchemaError(
-                        "projects: last_message.created_at invalid") from e
-                out.append(up)
+                out.append(unread_patient(p, "projects"))
             if not page_has_next(pag, "projects"):
                 break
         else:
             raise MCSError("pages_exceeded", "projects inventory",
                            retryable=True)
-        return out
+        return _recent_projects(out)
 
     def list_archived_kartes(self, per_page: int = 50,
                              max_pages: int = 20) -> list[UnreadPatient]:

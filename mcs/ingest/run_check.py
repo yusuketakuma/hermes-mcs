@@ -81,6 +81,7 @@ import run_interrupt
 LOCKFILE = RUN_LOCK
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
 RUN_BUSY_TIMEOUT_MS = 120_000  # heartbeat writes wait out the worker lock lottery
+ARRIVAL_NOTIFY_BUDGET_S = 60  # leave time for collection even when a text sender is slow
 REALTIME_CARRY_S = 86400      # notified arrivals stay on the realtime slot this long
 # the armed watchdog's exit time (monotonic); backup and DB upkeep start
 # only when they fit before it, less this margin for the tail stages
@@ -699,6 +700,10 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     if args.jobs_only:
         result["jobs_only"] = True
         return
+    notify = not getattr(args, "no_notify", False)
+    if notify:
+        # A previous unread walk may have exhausted its deadline after committing arrivals.
+        checked_event = _deliver_arrivals(ledger, cfg, result, deadline)
     outage_since = collection_stages.outage_since()
     if outage_since is not None:
         result["outage_since"] = outage_since
@@ -721,6 +726,8 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       deadline, run_id, semantic=seed_on,
                       notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
         _require_closed_transaction(ledger, result)
+    if notify:
+        _deliver_arrivals(ledger, cfg, result, deadline, after_event=checked_event)
     probe_after = result.pop("self_probe_after", None)
     if args.no_backfill:
         # no backfill to finish the probe's walk this run
@@ -739,19 +746,15 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
 
 
-def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
-              notify_max_age_s, ack_exclusions=()):
-    """Durable job machinery — command ingest, discovery, reply and
-    history drains, trickle seeding, reconcile and self profile."""
-    # cmd ingest first so requests are due THIS run; discovery and
-    # trickle seeding only enqueue — the drains below execute them.
+def _drain_tick_commands(ledger, cfg, result, deadline):
+    """Apply restore reconciliation and operator commands before interactive grants."""
+    import notify_spool
+    root = notify_spool.data_root(ledger)
     try:
-        import notify_spool
-        notify_spool.ensure_dirs(os.path.join(HOME, "data"))
+        notify_spool.ensure_dirs(root)
         # a DB restore holds send grants until the journal-vs-DB reconcile
         # lands — run it before any command (a never-started approval) applies
-        if notify_spool.restore_pending(
-                os.path.join(HOME, "data")) is not None:
+        if notify_spool.restore_pending(root) is not None:
             import notify_reconcile
             rep = notify_reconcile.reconcile_after_restore(
                 ledger, cfg)
@@ -769,13 +772,22 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
         # and card actions apply mid-tick, not just via the watcher
         import notify_cmds
         notify_cmds.drain_int_commands(
-            ledger, result, cfg, os.path.join(HOME, "data"),
+            ledger, result, cfg, root,
             deadline=deadline)
     except TickTransactionOpen:
         raise
     except Exception as e:
         result["errors"].append(f"cmd_int: {type(e).__name__}")
     _require_closed_transaction(ledger, result)
+
+
+def _run_jobs(adapter, ledger, args, cfg, result, deadline, seed_on,
+              notify_max_age_s, ack_exclusions=()):
+    """Durable job machinery — command ingest, discovery, reply and
+    history drains, trickle seeding, reconcile and self profile."""
+    # cmd ingest first so requests are due THIS run; discovery and
+    # trickle seeding only enqueue — the drains below execute them.
+    _drain_tick_commands(ledger, cfg, result, deadline)
     # Human intent was committed above; external mutations never run in that TX.
     try:
         import stamp_write
@@ -912,6 +924,56 @@ def _notify_max_age_s(cfg, result):
     return seconds
 
 
+def _flush_notifications(ledger, result, deadline, *, arrivals_after=None):
+    """Retain delivery outcomes across the arrival, normal and failure flushes."""
+    outcome = notify_flush.flush(ledger, deadline=deadline, arrivals_after=arrivals_after)
+    counts = result.setdefault("notify", {})
+    for key, value in outcome.items():
+        counts[key] = counts.get(key, 0) + value
+    return outcome
+
+
+def _deliver_arrivals(ledger, cfg, result, deadline, *, after_event=0):
+    """Flush due arrivals, returning the queue boundary so an empty fetch does not retry them."""
+    import notify_spool
+    _require_closed_transaction(ledger, result)
+    checked = after_event
+    try:
+        started = time.monotonic()
+        deadline = min(deadline, started + ARRIVAL_NOTIFY_BUDGET_S)
+        if started >= deadline or not ledger.db.execute(
+                "SELECT 1 FROM notify_outbox WHERE kind='new_messages' AND state IN ('pending','failed') "
+                "AND next_try<=? AND event_id>? LIMIT 1", (time.time(), after_event)).fetchone():
+            return checked
+        checked = ledger.db.execute("SELECT MAX(event_id) FROM notify_outbox").fetchone()[0]
+        root = notify_spool.data_root(ledger)
+        if notify_spool.restore_pending(root) is not None:
+            return checked  # the normal command stage owns restore reconciliation
+        _drain_tick_commands(ledger, cfg, result, deadline)
+        notify_spool.publish_restore_holds(ledger, root)
+        notify_spool.publish_flags(cfg, root)
+        issued_at = time.time()
+        outcome = _flush_notifications(ledger, result, deadline, arrivals_after=after_event)
+        _require_closed_transaction(ledger, result)
+        if outcome.get("dispatched") and time.monotonic() < deadline:
+            _drain_tick_commands(ledger, cfg, result, deadline)
+            remaining = deadline - time.monotonic()
+            # A grant moves its render to sending. Only fresh specs still waiting
+            # for the worker's 2s poll need another chance before a long backfill.
+            if remaining > 0 and ledger.db.execute(
+                    "SELECT 1 FROM notification_renders WHERE state='queued' AND updated_at>=? "
+                    "AND spec_published=1 LIMIT 1", (issued_at,)).fetchone():
+                time.sleep(min(3, remaining))
+                _drain_tick_commands(ledger, cfg, result, deadline)
+    except TickTransactionOpen:
+        raise
+    except Exception as e:
+        result["errors"].append(f"notify: {type(e).__name__}")
+    finally:
+        _require_closed_transaction(ledger, result)
+    return checked
+
+
 def _deliver(ledger, args, cfg, result, deadline):
     """Committed sends first — notify outbox flush, live-card sweep and
     card gc — ahead of any new semantic analysis (§19.1)."""
@@ -940,7 +1002,7 @@ def _deliver(ledger, args, cfg, result, deadline):
             result["errors"].append(f"task_reminders: {type(e).__name__}")
         _require_closed_transaction(ledger, result)
         try:
-            result["notify"] = notify_flush.flush(ledger, deadline=deadline)
+            _flush_notifications(ledger, result, deadline)
         except Exception as e:
             result["errors"].append(f"notify: {type(e).__name__}")
         _require_closed_transaction(ledger, result)
@@ -1386,7 +1448,7 @@ def _fail_run(ledger, args, result, run_id, status, error, detail,
         # alert=None: the session_recovered notice was already queued by
         # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
-            result["notify"] = notify_flush.flush(ledger, deadline=deadline)
+            _flush_notifications(ledger, result, deadline)
     except Exception as e:  # queued for a later flush — but visible
         result["errors"].append(f"alert_enqueue_failed: {type(e).__name__}")
 

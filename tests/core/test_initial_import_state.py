@@ -105,6 +105,35 @@ def test_discovery_of_undated_reply_to_old_root_is_silent_on_replay(store):
     assert [event['message_ids'] for event in _events(store, 'new_messages')] == [[12]]
 
 
+@pytest.mark.parametrize(('age', 'expected'), [(3600, [[2], [3, 5]]), (60, [[2]]), (None, [[2]])])
+def test_quiet_walk_after_restart_notifies_recent_live_rows_behind_newest_stored(store, tmp_path, monkeypatch,
+                                                                                age, expected):
+    # Another new post reached the unread route first. A read reply to an old
+    # parent is then discovered out of order by a quiet history/reconcile walk.
+    monkeypatch.setattr('ledger.time.time', lambda: BOUNDARY + 120)
+    old = _post(1, BOUNDARY - 60)
+    already_notified = _post(2, BOUNDARY + 10)
+    store.save_messages([old, already_notified], project_id=1, notify={'source': 'discovery'})
+    assert [e['message_ids'] for e in _events(store, 'new_messages')] == [[2]]
+    cohort = state.load(store.db, 1)
+    store.close()
+    restarted = make_ledger(tmp_path)
+    try:
+        restarted.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=True,
+                                      observation_ts=BOUNDARY + 60)
+        assert state.load(restarted.db, 1) == cohort
+        old.replies = [_post(3, BOUNDARY, parent_id=1, unread=False),
+                       _post(4, BOUNDARY - 1, parent_id=1, unread=False)]
+        same_second = _post(5, BOUNDARY + 10, unread=False)
+        for _ in range(2):
+            restarted.save_messages([old, same_second], project_id=1,
+                                    notify_late=True, notify_max_age_s=age)
+        assert state.message_ids(restarted.db, 1) == [1, 4]
+        assert [e['message_ids'] for e in _events(restarted, 'new_messages')] == expected
+    finally:
+        restarted.close()
+
+
 def test_registration_failure_rolls_back_patient_cohort_job_and_intent(tmp_path, monkeypatch):
     store = make_ledger(tmp_path)
     def fail(*args, **kwargs):
@@ -142,15 +171,15 @@ def test_capture_never_counts_failed_or_unfetched_bodies_as_complete(store):
 
 
 def test_opt_in_fair_selection_preserves_default_fifo_and_never_starves_live(store):
-    for i in range(20):
-        store.outbox_add('patient_history', i + 10, {'cohort_id': 'synthetic'})
-    for i in range(15):
-        store.outbox_add('new_messages', 100 + i, {'message_ids': [i]})
-    assert all(r['kind'] == 'patient_history' for r in store.outbox_due(10))
-    fair = store.outbox_due(10, history_fair=True)
-    assert sum(r['kind'] == 'patient_history' for r in fair) == 2
-    assert sum(r['kind'] == 'new_messages' for r in fair) == 8
-    assert store.outbox_due(1, history_fair=True)[0]['event_id'] == store.outbox_due(1)[0]['event_id']
+    history = [store.outbox_add('patient_history', i + 10, {'cohort_id': 'synthetic'})
+               for i in range(20)]
+    assert [r['event_id'] for r in store.outbox_due(1, history_fair=True)] == history[:1]
+    store.outbox_add('new_messages', 99, {'message_ids': [99]}, next_try=BOUNDARY + 3600)
+    live = [store.outbox_add('new_messages', 100 + i, {'message_ids': [i]})
+            for i in range(15)]
+    assert [r['event_id'] for r in store.outbox_due(10)] == history[:10]
+    assert [r['event_id'] for r in store.outbox_due(10, history_fair=True)] == live[:8] + history[:2]
+    assert [r['event_id'] for r in store.outbox_due(1, history_fair=True)] == live[:1]
 
 
 @pytest.mark.parametrize("semantic", [False, True])

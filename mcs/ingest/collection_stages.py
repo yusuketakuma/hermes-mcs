@@ -362,44 +362,11 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
     result["projects"] = len(snap.patients)
     result["snapshot_ts"] = snap.timestamp
 
-    # /projects already lists read rooms too; new invitations need no extra scan.
-    known = {r["project_id"] for r in ledger.frontier_patients()}
-    known_groups = None
-    for p in snap.listed_patients:
-        if p.project_id in known:
-            project_type = getattr(p, "project_type", None)
-            refresh_group = project_type == "group" and (
-                getattr(p, "group_id_present", False) or getattr(p, "group_name_present", False))
-            other_type = isinstance(project_type, str) and bool(project_type.strip()) and project_type != "group"
-            if other_type and known_groups is None:
-                if time.monotonic() > deadline:
-                    result["errors"].append("deadline_exceeded")
-                    break
-                try:
-                    known_groups = {r["project_id"] for r in ledger.db.execute(
-                        "SELECT project_id FROM patients WHERE is_archived=0 AND project_type='group'")}
-                except Exception:
-                    result["errors"].append(f"project {p.project_id}: db_write_failed")
-                    known_groups = set()
-                    continue
-            if refresh_group or other_type and p.project_id in known_groups:
-                if time.monotonic() > deadline:
-                    result["errors"].append("deadline_exceeded")
-                    break
-                try:
-                    ledger.update_group_metadata(p)
-                except Exception:
-                    result["errors"].append(f"project {p.project_id}: db_write_failed")
-            continue
-        if time.monotonic() > deadline:
-            result["errors"].append("deadline_exceeded")
-            break
-        try:
-            ledger.upsert_patient_info(p, is_archived=False, notify_new=True,
-                                       observation_ts=snap.timestamp)
-            known.add(p.project_id)
-        except Exception:
-            result["errors"].append(f"project {p.project_id}: db_write_failed")
+    # Commit every new cohort at the earliest snapshot timestamp before the first HTTP fetch.
+    known = dict(ledger.db.execute("SELECT project_id,project_type FROM patients WHERE is_archived=0"))
+    new = [p for p in snap.listed_patients if p.project_id not in known]
+    for pid in ledger.register_listed_projects(new, snap.timestamp):
+        result["errors"].append(f"project {pid}: db_write_failed")
 
     for index, p in enumerate(snap.patients):
         if time.monotonic() > deadline:
@@ -568,6 +535,23 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             except MCSError as e:
                 result["errors"].append(
                     f"mark {p.project_id}: {describe_error(e)}")
+    for p in snap.listed_patients:
+        if p.project_id not in known:
+            continue
+        project_type = getattr(p, "project_type", None)
+        refresh_group = project_type == "group" and (
+            getattr(p, "group_id_present", False) or getattr(p, "group_name_present", False))
+        other_type = isinstance(project_type, str) and bool(project_type.strip()) and project_type != "group"
+        if refresh_group or other_type and known[p.project_id] == "group":
+            if time.monotonic() > deadline:
+                result["errors"].append("deadline_exceeded")
+                break
+            try:
+                ledger.update_group_metadata(p)
+            except Exception:
+                result["errors"].append(f"project {p.project_id}: db_write_failed")
+    if time.monotonic() <= deadline:
+        job_ops.seed_initial_activity_head(ledger, snap.listed_patients, adapter=adapter, result=result, deadline=deadline)
     return snap
 
 

@@ -98,7 +98,7 @@ class UnreadPatient:
     ack_fallback: bool = False
     # MCS karte id (patient record) — the 連携サマリー route is keyed by it
     karte_id: int | None = None
-    # epoch of the last message; only list_projects fills it (0 = unknown)
+    # Last-message epoch from the project inventory or unread list (0 = unknown).
     last_activity: int = 0
     group_id: int | None = None
     group_name: str | None = None
@@ -109,6 +109,7 @@ class UnreadPatient:
     patient_name_presence: tuple[str, str] | None = None
     patient_name_karte_id: int | None = None
     patient_name_karte_state: str | None = None
+    last_message_id: int | None = None
 
 
 

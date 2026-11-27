@@ -1,6 +1,8 @@
 """Validate and normalize MCS response values without transport or persistent state."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from stamp_contract import normalize_reactions
 from mcs_contract import (Attachment, Message, UnreadPatient, SchemaError, project_url,
                           valid_group_name, valid_id)
@@ -75,6 +77,22 @@ def patient_name_karte(source: dict) -> tuple[int | None, str]:
     return (value, "value") if valid_id(value) else (None, "invalid")
 
 
+def _last_message(project, src):
+    last = project.get("last_message") or {}
+    try:
+        if not isinstance(last, dict):
+            raise ValueError
+        stamp = last.get("created_at")
+        activity = int(datetime.fromisoformat(stamp).timestamp()) if stamp is not None and stamp != "" else 0
+        mid = last.get("id")
+        return activity, mid if valid_id(mid) else None
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        # The unread flag remains usable when its optional ordering hint is malformed.
+        if src == "unread":
+            return 0, None
+        raise SchemaError(f"{src}: last_message.created_at invalid") from exc
+
+
 def unread_patient(p, src: str) -> UnreadPatient:
     """Project row -> UnreadPatient — shape shared by the /projects
     readers (unread list and full inventory)."""
@@ -102,13 +120,14 @@ def unread_patient(p, src: str) -> UnreadPatient:
     group_id = info.get("id") if valid_id(info.get("id")) else None
     group_name = valid_group_name(info.get("name"))
     patient_name, name_presence = patient_name_info(k, src)
+    activity, last_mid = _last_message(p, src)
     return UnreadPatient(
         project_id=p["id"],
         project_type=text_field(p.get("type"), f"{src}: project type"),
         patient_name=patient_name,
         disease=text_field(k.get("disease"), f"{src}: disease"),
         station_name=text_field(st.get("name"), f"{src}: station name"),
-        url=project_url(p['id']), karte_id=karte_id,
+        url=project_url(p['id']), karte_id=karte_id, last_activity=activity, last_message_id=last_mid,
         group_id=group_id, group_name=group_name,
         group_id_present=group_id_present, group_name_present=group_name_present,
         patient_name_presence=name_presence, patient_name_karte_id=karte_id,
