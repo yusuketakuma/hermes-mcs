@@ -12,15 +12,27 @@ stray sweep and verification code run unmodified. Launch paths of one run:
   REPO/mcs/ops/mcs_update.py, --post-merge]`` with the inherited PATH in a new
   session. sys.executable is the guard interpreter, so the child loads the
   signal guard and finds the fake pgrep.
-- Python with isolation options (``sys.executable -I ...``: the planning
-  source probe, run_log ``_drain`` and helper ``exec``, snapshot workers, the
-  preflight version probes of the services python): the guard ``.pth`` is in
-  the interpreter's own site-packages, which ``-I`` still reads.
+- Python with isolation options started from the guard interpreter
+  (``sys.executable -I ...``: the planning source probe, run_log ``_drain``
+  and helper ``exec``, snapshot workers): the guard ``.pth`` is in the
+  interpreter's own site-packages, which ``-I`` still reads.
 - Services python ``~/.hermes/hermes-agent/venv/bin/python{,3}``: a /bin/sh
-  wrapper that execs the guard interpreter. The recovery python3.14
-  (Homebrew or /usr/bin, runtime_inspection) is only written into plists,
-  which the fake launchctl never starts. No tree passes ``-S``, so no
-  interpreter started from the guard interpreter skips its site-packages.
+  wrapper that execs the guard interpreter, so the runtime probes of it
+  (runtime_inspection ``probe_python`` ``[exe, -I, -c, <metadata probe>]``
+  and ``python_problem`` ``[exe, -c, <version or sqlite probe>]``) load the
+  guard as well.
+- Host interpreters outside the guard, each running a fixed read-only script
+  that starts no process and sends no signal: update_preflight ``_python314``
+  runs ``shutil.which('python3.14')`` (then ``python3``) on the harness PATH
+  as ``[exe, -I, -c, <version check>]`` and, for the runtime plan,
+  ``[exe, -I, mcs/ops/requires_python_admits.py, <pyproject.toml>]`` (re,
+  sys and tomllib only). The recovery python3.14 (Homebrew, /usr/local,
+  /usr/bin or ``which``) is written into the recovery plist; service
+  management probes it with ``probe_python`` once that plist exists. The
+  fake launchctl never starts it.
+- ``-S`` (skip site-packages, so no guard): only release_dependency_lock and
+  release_quarantine build such argv, in both trees, and only the release
+  route reaches them. This harness takes the local-candidate route.
 - Shell children: the synthetic one-line install.sh, the services wrapper, and
   ``/bin/sh -c RELOAD_SCRIPT`` (only for the caller's own launchd label or a
   bootout that never completes; the fake launchctl always completes it). They
@@ -42,6 +54,7 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
 
 import cloud_policy
 import ledger
@@ -230,7 +243,12 @@ def _split_settings(home):
 
 
 def _world(tmp_path, *, failing_install=False):
-    base = _git(SOURCE, 'rev-parse', 'v1.3.0^{commit}').stdout.strip()
+    tagged = _git(SOURCE, 'rev-parse', '--verify', '--quiet', 'v1.3.0^{commit}', check=False)
+    if tagged.returncode != 0:
+        # the parent is the real tagged code; a shallow checkout without tags
+        # (the CI default) cannot provide it, and no fixture can stand in
+        pytest.skip('needs the v1.3.0 tag and the history from it to HEAD')
+    base = tagged.stdout.strip()
     target = _git(SOURCE, 'rev-parse', 'HEAD').stdout.strip()
     repo = tmp_path / 'repo'
     subprocess.run(['git', 'clone', '-q', '--shared', '--no-checkout', str(SOURCE), str(repo)], check=True)
