@@ -26,7 +26,8 @@ stray sweep and verification code run unmodified. Launch paths of one run:
   ``/bin/ps -o lstart``, ``/usr/sbin/sysctl`` (read-only observations of the
   host) and ``/usr/bin/git`` (on the temporary clone). None can send a signal;
   the harness refuses to run if either tree gains an absolute-path pgrep,
-  pkill, killall or kill.
+  pkill, killall or kill outside tests, documents and the evaluation benches
+  (scripts/evaluation/llm_lane_bench.sh uses /usr/bin/pgrep; no update runs it).
 - Synthetic targets are children of the pytest process and stay unreaped
   until the run ends, so their pids cannot be reused by another process.
 """
@@ -48,7 +49,9 @@ import update_child_guard_testkit
 
 
 SOURCE = Path(__file__).resolve().parents[2]
-_UNGUARDED_SIGNAL_TOOLS = r"/(usr/)?s?bin/(pgrep|pkill|killall|kill)\b"
+# git grep -E has no portable \b; the evaluation benches never run in an update
+_UNGUARDED_SIGNAL_TOOLS = r"/(usr/)?s?bin/(pgrep|pkill|killall|kill)([^A-Za-z0-9_]|$)"
+_UNSCANNED = (':!tests', ':!integration', ':!docs', ':!changes', ':!evaluation', ':!scripts/evaluation')
 
 
 def _git(repo, *args, check=True):
@@ -251,8 +254,8 @@ def _world(tmp_path, *, failing_install=False):
     target = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
     _git(repo, 'checkout', '-q', '--detach', base)
     for rev in (base, target):
-        found = _git(repo, 'grep', '-nE', _UNGUARDED_SIGNAL_TOOLS, rev, '--', '.',
-                     ':!tests', ':!integration', ':!docs', ':!changes', check=False)
+        found = _git(repo, 'grep', '-nE', _UNGUARDED_SIGNAL_TOOLS, rev, '--', '.', *_UNSCANNED,
+                     check=False)
         assert found.returncode == 1, 'a launch path this harness does not guard:\n' + found.stdout
 
     home = tmp_path / 'home'
