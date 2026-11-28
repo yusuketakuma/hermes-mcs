@@ -3,9 +3,11 @@
 An update routine finds leftover workers with ``pgrep -u <uid> -f`` and stops
 them with ``os.kill``. Neither depends on HOME or MCS_ROOT, so a test that runs
 such a routine for real would reach the live services of the same user. The
-decoy here stands for such a service: it matches by name, is not a descendant
-of this run, and exits by itself.
+decoy here stands for such a service: it matches by name and is not a
+descendant of this run. It lives only while the test holds the write end of a
+FIFO, so no cleanup ever signals a bare pid outside the run.
 """
+import errno
 import os
 import signal
 import subprocess
@@ -17,19 +19,15 @@ import pytest
 
 import mcs_test_guard
 
-_SLEEP = "import time; time.sleep(20)"
+_SLEEP = "import time; time.sleep(30)"
+# Blocks until the test opens the FIFO, then exits when the test closes it.
+_DECOY = "import sys; open(sys.argv[2]).read()"
 
 
-def _parent(pid):
-    return mcs_test_guard._process_parent(pid)
-
-
-def _alive(pid):
-    try:
-        mcs_test_guard._ORIGINAL_KILL(pid, 0)
-    except OSError:
-        return False
-    return True
+def _exists(pid):
+    table = mcs_test_guard._process_table()
+    assert table is not None
+    return pid in table
 
 
 def _real_pgrep(token):
@@ -41,33 +39,55 @@ def _real_pgrep(token):
     pytest.skip("pgrep is not installed")
 
 
+def _open_writer(fifo):
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            return os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as error:      # no reader yet
+            if error.errno != errno.ENXIO or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
 @pytest.fixture
-def processes():
-    """One owned child and one decoy outside this run, both named by a token."""
+def processes(tmp_path):
+    """An owned child and a decoy outside this run, both named by one token.
+
+    The decoy is started by a shell that leads its own session and exits at
+    once: the decoy is re-parented away from this run and its process group
+    has no leader any more."""
     token = "mcs-guard-" + uuid.uuid4().hex
+    fifo = str(tmp_path / "decoy-control")
+    os.mkfifo(fifo, 0o600)
     child = subprocess.Popen([sys.executable, "-c", _SLEEP, token], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # The shell exits at once, so the decoy is re-parented away from this run.
-    shell = subprocess.run(
-        ["/bin/sh", "-c", '"$0" -c "$1" "$2" </dev/null >/dev/null 2>&1 & echo $!', sys.executable, _SLEEP, token],
-        capture_output=True, text=True, timeout=30)
-    decoy = int(shell.stdout.strip())
+    writer = None
     try:
+        shell = subprocess.run(
+            ["/bin/sh", "-c", '"$0" -c "$1" "$2" "$3" </dev/null >/dev/null 2>&1 & echo "$! $$"',
+             sys.executable, _DECOY, token, fifo],
+            capture_output=True, text=True, timeout=30, start_new_session=True)
+        decoy, group = (int(value) for value in shell.stdout.split())
+        writer = _open_writer(fifo)   # the decoy is running and now waits for this end to close
         deadline = time.monotonic() + 10
         while mcs_test_guard._in_test_tree(decoy) and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert _alive(decoy) and not mcs_test_guard._in_test_tree(decoy)
-        assert child.poll() is None and _parent(child.pid) == os.getpid()
-        yield token, child, decoy
+        table = mcs_test_guard._process_table()
+        assert decoy in table and table[decoy][1] == group and group not in table
+        assert not mcs_test_guard._in_test_tree(decoy, table)
+        assert child.poll() is None and table[child.pid][0] == os.getpid()
+        yield token, child, decoy, group
     finally:
-        for pid in (child.pid, decoy):
-            if _alive(pid):
-                mcs_test_guard._ORIGINAL_KILL(pid, signal.SIGKILL)
+        if writer is not None:
+            os.close(writer)          # end of input: the decoy exits by itself
+        if child.poll() is None:
+            child.kill()
         child.wait(timeout=10)
 
 
 def test_pgrep_returns_only_processes_of_this_run(processes):
-    token, child, decoy = processes
+    token, child, decoy, _group = processes
     # the system pgrep matches both, which is what a live service would look like
     assert {child.pid, decoy} <= _real_pgrep(token)
 
@@ -83,12 +103,31 @@ def test_pgrep_returns_only_processes_of_this_run(processes):
 
 
 def test_pgrep_reports_no_match_when_only_outside_processes_match(processes):
-    token, child, decoy = processes
+    token, child, decoy, _group = processes
     child.terminate()
     child.wait(timeout=10)
     assert decoy in _real_pgrep(token)
     found = subprocess.run(["pgrep", "-f", token], capture_output=True, text=True)
     assert (found.returncode, found.stdout) == (1, "")
+
+
+@pytest.mark.parametrize("ps_body,root", [
+    ("exit 1\n", None),                # ps fails
+    ("echo not-a-pid\n", None),        # ps answers something that is not a pid
+    (None, "x"),                       # the run's root is unknown
+])
+def test_pgrep_that_cannot_verify_is_not_a_no_match(tmp_path, ps_body, root):
+    # update_services treats exit 1 as "none left" and anything above as unverifiable
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    if ps_body is not None:
+        (tools / "ps").write_text("#!/bin/sh\n" + ps_body)
+        (tools / "ps").chmod(0o755)
+    env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
+    if root is not None:
+        env["MCS_TEST_ROOT_PID"] = root
+    found = subprocess.run(["pgrep", "-f", "mcs-guard-none"], env=env, capture_output=True, text=True)
+    assert found.returncode == 3 and found.stdout == ""
 
 
 def test_system_process_matchers_cannot_be_started_directly():
@@ -101,15 +140,58 @@ def test_system_process_matchers_cannot_be_started_directly():
 
 
 def test_signal_reaches_only_processes_of_this_run(processes):
-    _token, child, decoy = processes
-    for send in (os.kill, os.killpg):
-        with pytest.raises(PermissionError, match="disabled in MCS tests"):
-            send(decoy, signal.SIGTERM)
+    _token, child, decoy, group = processes
+    # the single process, and the leaderless group it lives in, are both refused
+    assert not mcs_test_guard._signal_allowed(decoy)
+    assert not mcs_test_guard._signal_allowed(-group)
+    with pytest.raises(PermissionError, match="disabled in MCS tests"):
+        os.kill(decoy, signal.SIGTERM)
+    with pytest.raises(PermissionError, match="disabled in MCS tests"):
+        os.killpg(group, signal.SIGTERM)
+    with pytest.raises(PermissionError, match="disabled in MCS tests"):
+        os.kill(-group, signal.SIGTERM)
     time.sleep(0.2)
-    assert _alive(decoy)
+    assert _exists(decoy)
 
     os.kill(decoy, 0)                        # probing stays allowed
     child.terminate()                        # an owned child is stopped as before
     assert child.wait(timeout=10) == -signal.SIGTERM
     with pytest.raises(ProcessLookupError):  # an absent pid keeps the kernel's answer
         os.kill(child.pid, signal.SIGTERM)
+
+
+def test_group_signal_needs_every_member_inside_this_run():
+    # The decisions only: sending these for real would signal the test run itself.
+    assert not mcs_test_guard._signal_allowed(-1)
+    # this run's own group also holds the shell that started pytest
+    table = mcs_test_guard._process_table()
+    own = [pid for pid, (_parent, group) in table.items() if group == os.getpgrp()]
+    expected = all(mcs_test_guard._in_test_tree(pid, table) for pid in own)
+    assert mcs_test_guard._signal_allowed(0) is expected
+    assert mcs_test_guard._signal_allowed(-os.getpgrp()) is expected
+
+
+def test_group_started_by_a_test_can_be_stopped():
+    # the usual cleanup of a session a test started itself
+    leader = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & wait"], start_new_session=True,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            table = mcs_test_guard._process_table()
+            if sum(group == leader.pid for _parent, group in table.values()) >= 2:
+                break
+            time.sleep(0.02)
+        os.killpg(leader.pid, signal.SIGTERM)
+        assert leader.wait(timeout=10) == -signal.SIGTERM
+    finally:
+        if leader.poll() is None:
+            leader.kill()
+            leader.wait(timeout=10)
+
+
+def test_unreadable_process_table_refuses_instead_of_allowing(monkeypatch):
+    monkeypatch.setattr(mcs_test_guard, "_process_table", lambda: None)
+    assert not mcs_test_guard._signal_allowed(os.getppid())
+    assert not mcs_test_guard._signal_allowed(0)
+    assert mcs_test_guard._signal_allowed(os.getpid())

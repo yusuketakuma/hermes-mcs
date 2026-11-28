@@ -48,6 +48,7 @@ _TEST_ROOT_PID = os.getpid()
 _PGREP_SHIM = r"""#!/bin/sh
 # Real pgrep, narrowed to the process tree of this test run. A match on any
 # other process of the same user is dropped, so callers never learn its pid.
+# Exit 1 means "no match in this run"; 3 means the answer could not be verified.
 root="${MCS_TEST_ROOT_PID:-}"
 case "$root" in ''|*[!0-9]*) echo 'pgrep: the MCS test root is unknown' >&2; exit 3 ;; esac
 real=''
@@ -55,6 +56,8 @@ for candidate in /usr/bin/pgrep /bin/pgrep; do
     if [ -x "$candidate" ]; then real="$candidate"; break; fi
 done
 [ -n "$real" ] || { echo 'pgrep: not available in MCS tests' >&2; exit 3; }
+self_parent="$(ps -o ppid= -p "$$" 2>/dev/null | tr -d ' ')"
+case "$self_parent" in ''|*[!0-9]*) echo 'pgrep: ps cannot report process parents' >&2; exit 3 ;; esac
 out="$("$real" "$@")"
 rc=$?
 [ "$rc" -eq 0 ] || exit "$rc"
@@ -71,7 +74,9 @@ while IFS=' ' read -r pid rest; do
             break
         fi
         parent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
-        case "$parent" in ''|*[!0-9]*) break ;; esac
+        # an empty answer is a process that ended meanwhile; anything else that
+        # is not a pid means ps cannot be trusted
+        case "$parent" in '') break ;; *[!0-9]*) echo 'pgrep: unreadable ps output' >&2; exit 3 ;; esac
         depth=$((depth + 1))
     done
 done <<MCS_PGREP_OUTPUT
@@ -254,42 +259,67 @@ _ORIGINAL_KILLPG = os.killpg
 _SIGNAL_REFUSED = "signalling a process outside this test run is disabled in MCS tests"
 
 
-def _process_parent(pid: int):
+def _process_table():
+    """Return {pid: (parent, group)} for every visible process, or None when ps fails."""
     # The saved Popen class, not subprocess.run: a test that replaces
     # subprocess.Popen to record its own calls must not see this lookup.
     try:
-        with _ORIGINAL_POPEN(["ps", "-o", "ppid=", "-p", str(pid)], stdin=subprocess.DEVNULL,
+        with _ORIGINAL_POPEN(["ps", "-A", "-o", "pid=,ppid=,pgid="], stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as process:
-            value = process.communicate(timeout=10)[0].strip()
+            output = process.communicate(timeout=20)[0]
     except (OSError, subprocess.SubprocessError):
         return None
-    return int(value) if process.returncode == 0 and value.isdigit() else None
+    if process.returncode != 0:
+        return None
+    table = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or not all(field.isdigit() for field in fields):
+            return None
+        table[int(fields[0])] = (int(fields[1]), int(fields[2]))
+    return table or None
 
 
-def _in_test_tree(pid: int) -> bool:
+def _in_test_tree(pid: int, table=None) -> bool:
+    """True when `pid` is this test run's root or one of its descendants."""
+    table = _process_table() if table is None else table
+    if table is None:
+        return False
     for _ in range(64):
         if pid == _TEST_ROOT_PID:
             return True
-        if pid is None or pid <= 1:
+        if pid not in table or pid <= 1:
             return False
-        pid = _process_parent(pid)
+        pid = table[pid][0]
     return False
 
 
 def _signal_allowed(pid: int) -> bool:
-    """True for the caller, its own group, a process of this run, or a pid the
-    kernel will refuse or not find by itself. A negative pid names the group
-    led by that process."""
-    if pid == 0 or pid == os.getpid():
+    """Decide whether a real signal may be sent.
+
+    A single process must belong to this run. A process group (pid 0, a
+    negative pid, killpg) is allowed only when every live member belongs to
+    this run: a descendant in the group does not vouch for the others, and a
+    group outlives its leader. A target that does not exist is left to the
+    kernel, which reports it."""
+    if pid == os.getpid():
         return True
     if pid == -1:
         return False
-    target = abs(pid)
-    try:
-        _ORIGINAL_KILL(target, 0)
-    except OSError:
-        return True       # absent or not ours: the real call reports it
-    return _in_test_tree(target)
+    table = _process_table()
+    if table is None:
+        return False
+    if pid > 0:
+        if pid in table:
+            return _in_test_tree(pid, table)
+        try:
+            _ORIGINAL_KILL(pid, 0)
+        except OSError:
+            return True       # absent or not ours: the real call reports it
+        return False          # alive but not in the snapshot: not provably ours
+    group = os.getpgrp() if pid == 0 else -pid
+    members = [member for member, (_parent, member_group) in table.items() if member_group == group]
+    return all(_in_test_tree(member, table) for member in members)
 
 
 def _guarded_kill(pid, sig):
@@ -299,7 +329,7 @@ def _guarded_kill(pid, sig):
 
 
 def _guarded_killpg(pgid, sig):
-    if sig != 0 and not _signal_allowed(-pgid if pgid > 0 else pgid):
+    if sig != 0 and not _signal_allowed(-pgid if pgid > 0 else 0 if pgid == 0 else -1):
         raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
     return _ORIGINAL_KILLPG(pgid, sig)
 
