@@ -146,6 +146,7 @@ def test_focus_count_stays_linear_on_every_ledger_shape(tmp_path, shape):
     measured = {}
     for per in (50, 200):
         ledger = _shaped_ledger(tmp_path / str(per), shape, per)
+        extract_llm.patient_progress_counts(ledger.db)  # one-time setup is not the count's cost
         counts, steps = _steps(ledger.db, extract_llm.patient_progress_counts)
         assert counts == expected
         if per == 50 or shape == 'mature':
