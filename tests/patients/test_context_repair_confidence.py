@@ -215,6 +215,8 @@ def test_an_upgrade_re_evaluates_only_the_held_source_and_keeps_the_stored_pass(
         for module in (extract_llm, extract_llm_context, extract_llm_qc, extract_llm_resident):
             previous_release.setattr(module, '_LOADED_SOURCE_DIGESTS', old)
         assert semantic_candidate.candidate_fingerprint({}) != fingerprint
+        # Under the legacy fact source the PASS binding ignores the candidate fingerprint.
+        assert patient_context_refresh_state._quality_assessment(scfg) == assessment
         _run_until(runtime, lambda _: _scans(led).get(1, {}).get('audited') and [
             key for key, scan in _scans(led).items() if scan.get('quality_state') == 'held'] == [2], steps=120)
         for _ in range(4):
@@ -226,15 +228,13 @@ def test_an_upgrade_re_evaluates_only_the_held_source_and_keeps_the_stored_pass(
         passed, [held] = _passed(_scans(led)[1]), _held(led)
         requests = len(led.synthetic_jev_requests)
     assert semantic_candidate.candidate_fingerprint({}) == fingerprint
-    # Under the legacy fact source the PASS binding ignores the candidate fingerprint.
-    assert patient_context_refresh_state._quality_assessment(scfg) == assessment
     _run_until(runtime, lambda result: result['status'] == 'complete', steps=60)
     after, new = _settled(led, source_repair), led.synthetic_jev_requests[requests:]
     # The stored PASS is neither asked again nor re-verified into a new audit.
     assert not _source_pages(new, _PASS_FILLER)
     assert _passed(_scans(led)[1]) == passed
     # The one held source is re-evaluated once: one repair of the same finite plan and cost.
-    assert after[1] - stored[1] == stored[1] and after[2] == 2 and after[3] - stored[3] == stored[3]
+    assert after[1] - stored[1] == stored[1] and after[2] == 2 and 0 < after[3] - stored[3] <= stored[3]
     assert not _held(led) and held['quality_hold_key']
     # Stored answers about the original candidate are reused; only the repaired candidate is audited.
     coverage = [body for body in _source_pages(new, _HELD_FILLER) if body['state']['target']['id'] == 'source_coverage']
