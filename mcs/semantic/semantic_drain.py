@@ -1124,7 +1124,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 counts = out.setdefault("defer_reasons", {})
                 counts[reason] = counts.get(reason, 0) + 1
             free_hold = _free_hold(job, lane, cloud_only, status, diagnostics,
-                                   used, llm_s, job_progressed)
+                                   used, llm_acc["dispatched"], job_progressed)
             # Only a hold known to wait on an input change takes the hourly
             # wait; a multi-target one needs every target's own cause.
             if _apply_job_status(ledger, token, limit, status, budget_short, out,

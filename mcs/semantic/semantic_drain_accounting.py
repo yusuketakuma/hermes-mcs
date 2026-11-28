@@ -12,6 +12,7 @@ from semantic_due_selection import (
 )
 from semantic_job_processor import (
     NOT_SENT_BACKOFF_S,
+    UNSENT_HOLD_STAGES,
     _jev_error_brief,
 )
 from semantic_scheduler_state import (
@@ -65,27 +66,23 @@ def _defer_note(out: dict, reason: str) -> None:
     counts[reason] = counts.get(reason, 0) + 1
 
 
-# Deterministic holds whose answer only an input change can alter.
-_FREE_HOLD_CODES = ('empty_repair_candidate_binding', 'audit_empty_unverified')
-# Not-sent reasons whose retry cannot produce a different answer while the
-# input stays the same: the send was denied before reservation, so nothing
-# was spent, and re-selecting the job every minute only crowds out the jobs
-# behind it. LLM-availability waits (a busy turn, an unsent probe) are not
-# here — they can clear within a minute and keep the short retry.
-_FREE_HOLD_NOT_SENT = ('cloud_unit_unresolved',)
+# Deterministic holds whose answer only an input change can alter. A cloud
+# refusal of UNSENT_HOLD_STAGES arrives as the job's code: the processor
+# holds it per member target and never lets it reach not_sent.
+_FREE_HOLD_CODES = ('empty_repair_candidate_binding', 'audit_empty_unverified',
+                    *sorted(UNSENT_HOLD_STAGES))
 
 
 def _free_hold(job, lane, cloud_only: bool, status, diagnostics: dict,
-               used: int, llm_s: float, progressed: bool) -> bool:
-    """True for a backlog semantic defer that spent no model time, no Jev
-    request and saved no stage, held by a deterministic gate rather than
-    an unavailable LLM; its slot goes back to independent due jobs."""
-    input_stable = (diagnostics.get('not_sent') in _FREE_HOLD_NOT_SENT
-                    or diagnostics.get('not_sent') is None
-                    and diagnostics.get('code') in _FREE_HOLD_CODES)
+               used: int, dispatched: bool, progressed: bool) -> bool:
+    """True for a backlog semantic defer that made no call that may have run
+    a model or sent a request, no Jev request and saved no stage, held by a
+    deterministic gate rather than an unavailable LLM; its slot goes back to
+    independent due jobs."""
     return (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
-            and status == 'deferred' and input_stable
-            and used == 0 and llm_s == 0 and not progressed)
+            and status == 'deferred' and diagnostics.get('not_sent') is None
+            and diagnostics.get('code') in _FREE_HOLD_CODES
+            and used == 0 and not dispatched and not progressed)
 
 
 def _hold_waits_for_input(job, diagnostics: dict) -> bool:

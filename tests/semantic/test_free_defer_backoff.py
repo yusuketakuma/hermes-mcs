@@ -1,18 +1,23 @@
-"""A free deterministic semantic hold (no model time, no Jev request, no
-saved stage) waits NOT_SENT_BACKOFF_S and hands its slot to the next due
-job, while LLM-availability defers and holds that spent model time keep
-the one-minute retry.
+"""A free deterministic semantic hold (no call that may have run a model or
+sent a request, no Jev request, no saved stage) waits NOT_SENT_BACKOFF_S and
+hands its slot to the next due job, while LLM-availability defers and holds
+that ran a model keep the one-minute retry.
 
-Synthetic fixtures, temp DB and stubbed processor only."""
+Synthetic fixtures and temp DB only; the processor or, for the real-path
+tests, only the transport boundary is stubbed."""
 import json
 import time
+from contextlib import contextmanager
 
 import pytest
 
 import semantic_drain
+import semantic_job_processor
 import semantic_runtime as runtime
+import semantic_store
+import semantic_transport
 from inference_version import CURRENT_VERSION, VERSION_KEY
-from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient
+from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient
 
 
 @pytest.fixture
@@ -50,8 +55,7 @@ def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, mod
         if job['message_id'] == 999:
             assert runtime.transition(db, runtime.JobToken.from_row(job), 'done')
             return 'done'
-        if code is not None:
-            semantic_drain._why(kw['diagnostics'], code)
+        semantic_drain._why(kw['diagnostics'], code)
         if model:
             llm_fn('synthetic scheduler control')
         kw['diagnostics']['not_sent'] = not_sent
@@ -239,16 +243,140 @@ def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_
         db.close()
 
 
-def test_cloud_unit_unresolved_hold_waits_backoff_and_yields_tail(jobs_db, monkeypatch):
-    """#417: unresolved not-sent head jobs must not re-head the queue every minute."""
-    first = _job(jobs_db, 100)
-    second = _job(jobs_db, 101)
-    _job(jobs_db, 999)
-    served = _processor(monkeypatch, code=None, not_sent='cloud_unit_unresolved')
-    out = _run(jobs_db)
-    assert served == [100, 101, 999]
-    assert out['done'] == 1 and out['deferred'] == 2
-    for held in (first, second):
-        row = _row(jobs_db, held)
+_HELD = (100, 101)
+_TAIL = 102
+
+
+def _no_local_model(prompt, timeout=None, max_tokens=None):
+    pytest.fail('the backlog cloud lane must not call the local model')
+
+
+def _cloud_lane(monkeypatch, answer):
+    """Replace only the transport boundary: the backlog cloud context yields
+    ``answer(root, prompt)`` as its chat; the local model stays unused."""
+    served = []
+
+    @contextmanager
+    def backlog_inference(ledger, cfg, job, deadline, current, transport, **kw):
+        root = job['message_id']
+        served.append(root)
+        yield lambda prompt, timeout=None: answer(root, prompt)
+
+    monkeypatch.setattr(semantic_transport, 'backlog_inference', backlog_inference)
+    monkeypatch.setattr(semantic_transport, 'llm_chat', _no_local_model)
+    return served
+
+
+def _cloud_drain(db, max_jobs):
+    # llm_fn left out: the backlog lane then routes through the cloud context
+    return semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
+                                  time.monotonic() + 300, jev_client=_FakeJev(),
+                                  lane='backlog', max_jobs=max_jobs)
+
+
+def _job_id(db, mid):
+    return db.db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'"
+                         " AND message_id=?", (mid,)).fetchone()[0]
+
+
+@pytest.mark.parametrize('stage', ['cloud_unit_unresolved', 'llm_turn_busy'])
+def test_real_unsent_cloud_holds_yield_to_the_tail(tmp_path, monkeypatch, stage):
+    """#417 through the real run_due and _process_job, only the transport
+    replaced: head jobs whose cloud send is refused as unresolved before any
+    reservation stop re-heading the queue every minute, and the job behind
+    them runs. Before the fix the refusal's measured time (llm_s > 0) and its
+    member-level code kept the minute retry and the only slot, so the
+    measured pass served [100] and left next_try = updated_at + 60. A busy
+    GPU turn can clear within a minute and keeps both."""
+    def answer(root, prompt):
+        if root == _TAIL:
+            return _llm(prompt)
+        raise runtime.LLMNotSent(stage)
+
+    db = _ledger(tmp_path)
+    _patient(db)
+    try:
+        db.save_messages([_message(mid) for mid in _HELD], project_id=1)
+        db.semantic_seed(1, list(_HELD), {"source": "synthetic"})
+        held = [_job_id(db, mid) for mid in _HELD]
+        served = _cloud_lane(monkeypatch, answer)
+        # First pass: each head saves its bundle and pays its Jev assessment
+        # before the refused call, so it is no free hold.
+        first = _cloud_drain(db, len(_HELD))
+        assert served == list(_HELD) and first['progressed'] == len(_HELD)
+        for job_id in held:
+            row = _row(db, job_id)
+            assert row['state'] == 'pending' and row['attempts'] == 0
+            assert row['next_try'] == row['updated_at'] + 60
+        db.save_messages([_message(_TAIL)], project_id=1)
+        db.semantic_seed(1, [_TAIL], {"source": "synthetic"})
+        tail = _job_id(db, _TAIL)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        del served[:]
+        out = _cloud_drain(db, 1)
+        if stage == 'llm_turn_busy':
+            assert served == [_HELD[0]] and out['done'] == 0
+            row = _row(db, held[0])
+            assert row['next_try'] == row['updated_at'] + 60
+            assert _row(db, tail)['state'] == 'pending'
+            return
+        assert served == [*_HELD, _TAIL]
+        assert out['done'] == 1 and _row(db, tail)['state'] == 'done'
+        assert out['progressed'] == 1    # only the tail saved anything
+        metrics = {m['job_id']: m for m in out['job_metrics']}
+        for job_id in held:
+            metric, row = metrics[job_id], _row(db, job_id)
+            # nothing paid or saved; the refusal's time is still measured
+            assert metric['status'] == 'deferred' and metric['jev_requests'] == 0
+            assert metric['retry_reason'] == 'cloud_unit_unresolved'
+            assert metric['llm_s'] > 0
+            assert row['state'] == 'pending' and row['attempts'] == 0
+            assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
+        # a re-seed after an input change makes the hold due again
+        db.save_messages([_message(_HELD[0], body="合成の別本文です。")], project_id=1)
+        db.semantic_seed(1, [_HELD[0]], {"source": "synthetic"})
+        row = _row(db, held[0])
+        assert row['state'] == 'pending' and row['next_try'] <= time.time()
+    finally:
+        db.close()
+
+
+def test_answered_cloud_call_before_an_unsent_refusal_keeps_minute_and_slot(
+        tmp_path, monkeypatch):
+    """Control for the evidence split: an earlier cloud call of the same pass
+    answered and may have been billed, so a later unresolved refusal is no
+    free hold. Real run_due, _process_job and its cloud call wrapper; the
+    stages only make the two calls and record the member hold as the
+    processor does. Marking every cloud call unsent would wait an hour and
+    serve the tail too."""
+    def answer(root, prompt):
+        if prompt == 'second':
+            raise runtime.LLMNotSent('cloud_unit_unresolved')
+        return '{}'
+
+    def stages(ledger, scfg, job, jev_client, llm_fn, deadline, *, diagnostics, **kw):
+        llm_fn('first')
+        try:
+            llm_fn('second')
+        except runtime.LLMNotSent as error:
+            semantic_drain._why(diagnostics, error.stage)
+        return 'deferred'
+
+    db = _ledger(tmp_path)
+    _patient(db)
+    try:
+        db.save_messages([_message(_HELD[0]), _message(_TAIL)], project_id=1)
+        db.semantic_seed(1, [_HELD[0]], {"source": "synthetic"})
+        db.semantic_seed(1, [_TAIL], {"source": "synthetic"})
+        served = _cloud_lane(monkeypatch, answer)
+        monkeypatch.setattr(semantic_job_processor, '_process_job_inner', stages)
+        monkeypatch.setattr(semantic_store, 'refresh_cards_allowed', lambda *a: False)
+        out = _cloud_drain(db, 1)
+        assert served == [_HELD[0]] and out['progressed'] == 0
+        assert out['job_metrics'][0]['jev_requests'] == 0
+        row = _row(db, _job_id(db, _HELD[0]))
         assert row['state'] == 'pending' and row['attempts'] == 0
-        assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
+        assert row['next_try'] == row['updated_at'] + 60
+    finally:
+        db.close()
