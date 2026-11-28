@@ -58,6 +58,20 @@ EXCLUSIONS = frozenset({
 UNAPPROVED, ACTIVE, ADOPTED = 'unapproved', 'active', 'adopted'
 PROOF_CHANGED, UNVERIFIED = 'local_rebuild_proof_changed', 'local_rebuild_unverified'
 PERMIT_STATES = frozenset({UNAPPROVED, ACTIVE, ADOPTED, PROOF_CHANGED, UNVERIFIED})
+# Contracts that may appear on an existing approval. The current contract must stay in this
+# tuple even when extraction inputs change: the test pins it, so the author must keep the
+# previous value here instead of invalidating every already approved rebuild.
+_APPROVED_CONTRACTS = (
+    '88b7f0dd6ac7a73e1f8185ec19108889592e60f805d41758be3ccb3476653f92',  # v1.3.1
+    '5e0fbf99023ecc18e1d005c0d591ab1e6435aa82907da1885c011d263ee862c2',  # v1.3.0
+    '5659ec26c1dbf34d07cbd876c04ae77ea67826aa9b38e862b9a1184ef38c6e46',  # v1.2.1
+)
+
+
+def _approval_contracts():
+    return frozenset(_APPROVED_CONTRACTS)
+
+
 # The states whose unit runs under its approval's own local guards and tag: an adopted unit that
 # QC, a human report or a thin retry makes pending again is re-processed the same way.
 RUNNABLE = frozenset({ACTIVE, ADOPTED})
@@ -537,7 +551,7 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally
             return PROOF_CHANGED   # a copied or replaced database never inherits the approval
     except (OSError, ValueError):
         return UNVERIFIED
-    if unit['contract'] != _context_contract():
+    if unit['contract'] not in _approval_contracts():
         return PROOF_CHANGED
     if inference_dependency_loss.source_binding(ledger.db, project_id, message_id) != unit['source_binding']:
         return PROOF_CHANGED

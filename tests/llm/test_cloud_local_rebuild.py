@@ -298,11 +298,51 @@ def test_an_approval_that_cannot_reverify_in_time_rejects_the_whole_bundle(legac
     assert local_rebuild.approved_units(ledger.db) == {}
 
 
-def test_a_changed_extraction_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
+@pytest.mark.parametrize('old_contract', [
+    '88b7f0dd6ac7a73e1f8185ec19108889592e60f805d41758be3ccb3476653f92',  # v1.3.1
+    '5e0fbf99023ecc18e1d005c0d591ab1e6435aa82907da1885c011d263ee862c2',  # v1.3.0
+    '5659ec26c1dbf34d07cbd876c04ae77ea67826aa9b38e862b9a1184ef38c6e46',  # v1.2.1
+])
+def test_a_shipped_contract_keeps_an_existing_approval_active(legacy, monkeypatch, old_contract):
     ledger, _ = legacy
-    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    current = local_rebuild._context_contract
+    monkeypatch.setattr(local_rebuild, '_context_contract', lambda: old_contract)
+    plan = local_rebuild.preview(ledger)['plan']
+    _, receipt = _approve(ledger, plan)
+    monkeypatch.setattr(local_rebuild, '_context_contract', current)
+    assert receipt['outcome'] == 'applied'
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+
+
+def test_an_unregistered_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
+    ledger, _ = legacy
+    current = local_rebuild._context_contract
     monkeypatch.setattr(local_rebuild, '_context_contract', lambda: 'c' * 64)
+    plan = local_rebuild.preview(ledger)['plan']
+    _, receipt = _approve(ledger, plan)
+    monkeypatch.setattr(local_rebuild, '_context_contract', current)
+    assert receipt['outcome'] == 'applied'
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+@pytest.mark.parametrize('frame_only', [
+    'c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65',
+    '5cb44f05e7f891c08c2c5fbbaf4552c0756de69afd7e7b98707f8d546f2d6d85',
+    '68b3a528d6257790a36504d31b6c29ed4a82a2069f946981f715ee36454fe1a1',
+])
+def test_a_frame_only_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch, frame_only):
+    ledger, _ = legacy
+    current = local_rebuild._context_contract
+    monkeypatch.setattr(local_rebuild, '_context_contract', lambda: frame_only)
+    plan = local_rebuild.preview(ledger)['plan']
+    _, receipt = _approve(ledger, plan)
+    monkeypatch.setattr(local_rebuild, '_context_contract', current)
+    assert receipt['outcome'] == 'applied'
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+def test_the_current_contract_is_registered_before_it_changes():
+    assert local_rebuild._context_contract() in local_rebuild._APPROVED_CONTRACTS
 
 
 def test_a_reader_limit_leaves_the_rest_unverified_and_the_preview_partial(legacy, monkeypatch):
