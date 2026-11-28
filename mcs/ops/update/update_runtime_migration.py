@@ -534,9 +534,9 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
                 _use_migrated_runtime(applying["runtime_migration"])
             allow_retire = applying.get("provider_settings_migration_required") is True
             if defer_migration:
-                # Durable evidence that consolidation still owes: the applied
-                # record keeps it, and the measured split layout converges the
-                # install through the completion path.
+                # Durable record that consolidation was deferred; the applied
+                # record keeps it. Nothing in this version reads it back: the
+                # install stays split until a later update consolidates it.
                 applying["provider_settings_migration_deferred"] = True
                 journal_store.save_state(STATE_PATH, state)
             elif legacy_provider_migration:
