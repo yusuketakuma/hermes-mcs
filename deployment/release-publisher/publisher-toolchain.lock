@@ -3,13 +3,13 @@
     "release_verify": true,
     "release_verify_asset": true
   },
-  "measured_at": 1795320025,
+  "measured_at": 1795824510,
   "schema_version": "mcs.publisher-toolchain.v1",
   "tools": {
     "gh": {
       "path": "/usr/bin/gh",
-      "sha256": "fca7ac8a8386e3ad65c9a96a96cbf272d1dcc4f76de174dae91d54e50729e240",
-      "version": "gh version 2.104.0 (2026-11-12)"
+      "sha256": "fa7cff06d4db9eee98e00b10ac93beebfe1822109ac04a6cbbf9d806c21d0073",
+      "version": "gh version 2.105.0 (2026-11-17)"
     },
     "git": {
       "path": "/usr/bin/git",

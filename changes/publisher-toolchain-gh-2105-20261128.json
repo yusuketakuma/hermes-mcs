@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "GitHub配布toolchainのgh実測値を更新",
+  "summary": "GitHub Actions runnerのghが2.104.0から2.105.0へ自動更新され、v1.3.1の配布toolchain照合がTOOLCHAIN_MISMATCHで止まったため、配布lockの実測値を更新します。配布物の内容やMCSの実行時動作は変わりません。",
+  "upgrade": "利用者の追加操作はありません。このlockはGitHub Release配布の検査だけに使います。",
+  "details": [
+    "変更するのはghのversionとsha256、measured_atだけです。git・Python・gh release verify/verify-asset capabilityは変わっていません。",
+    "値はread-only計測workflow publisher-toolchain-measure.ymlのrun 46086273904でubuntu runnerから実測しました。同runがfailureなのは計測不能ではなく、既存lockとの不一致をcheckが非0で返す仕様のためです。",
+    "ghの更新に伴うverify機能の欠落はなく、release_verify・release_verify_assetはどちらもtrueのままです。"
+  ],
+  "refs": [
+    "deployment/release-publisher/publisher-toolchain.lock"
+  ]
+}
