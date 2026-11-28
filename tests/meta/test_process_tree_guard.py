@@ -136,22 +136,38 @@ def test_pgrep_that_cannot_verify_is_not_a_no_match(tmp_path, ps_body, root):
 
 
 @pytest.mark.parametrize("listing", [
-    "exit 2",                                   # the listing after the search fails
-    "exit 0",                                   # ... or is empty
-    'echo "$MCS_TEST_ROOT_PID 1"',              # ... or does not show a live match
+    "exit 2",                                           # the listing after the search fails
+    "exit 0",                                           # ... or is empty
+    'echo "$MCS_TEST_ROOT_PID 1"',                      # ... or does not show a live match
+    'printf "%s 1\\n{child} 9999999\\n" "$MCS_TEST_ROOT_PID"',   # ... or shows it under an unlisted parent
+    'printf "%s 1\\n{child} {child}\\n" "$MCS_TEST_ROOT_PID"',   # ... or its ancestry never ends
 ])
 def test_pgrep_with_a_match_it_cannot_place_is_unverified(tmp_path, processes, listing):
     token, child, _decoy, _group = processes
     tools = tmp_path / "bin"
     tools.mkdir()
     # the root check (`-p`) answers; only the full listing after the search is broken
-    (tools / "ps").write_text('#!/bin/sh\ncase " $* " in *" -A "*) ' + listing
+    (tools / "ps").write_text('#!/bin/sh\ncase " $* " in *" -A "*) ' + listing.replace("{child}", str(child.pid))
                               + ' ;; *) echo "$MCS_TEST_ROOT_PID" ;; esac\n')
     (tools / "ps").chmod(0o755)
     env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
     found = subprocess.run(["pgrep", "-f", token], env=env, capture_output=True, text=True)
     assert child.poll() is None
     assert found.returncode == 3 and found.stdout == ""
+
+
+def test_pgrep_drops_a_match_whose_ancestry_reaches_init(tmp_path, processes):
+    # proven outside this run is "no match", not "unverified"
+    token, child, decoy, _group = processes
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    # every match is listed, each directly under init
+    (tools / "ps").write_text('#!/bin/sh\ncase " $* " in *" -A "*) printf "%s 1\\n' + f"{child.pid} 1\\n{decoy} 1\\n"
+                              + '" "$MCS_TEST_ROOT_PID" ;; *) echo "$MCS_TEST_ROOT_PID" ;; esac\n')
+    (tools / "ps").chmod(0o755)
+    env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
+    found = subprocess.run(["pgrep", "-f", token], env=env, capture_output=True, text=True)
+    assert (found.returncode, found.stdout) == (1, "")
 
 
 def test_system_process_matchers_cannot_be_started_directly():

@@ -78,18 +78,24 @@ verdict="$(printf '%s\n' "$table" | MCS_PGREP_MATCHES="$out" awk -v root="$root"
             pid = field[1]
             if (pid !~ /^[0-9]+$/ || pid == self) continue
             if (!(pid in parent)) { print "MISSING " pid; continue }
+            # Three outcomes: inside this run, proven outside (the walk reached
+            # init), or not placed (an ancestor is not listed, or the walk is too deep).
             walk = pid
-            for (depth = 0; depth < 64 && walk > 1; depth++) {
-                if (walk == root) { print "KEEP " line[i]; break }
+            placed = 0
+            for (depth = 0; depth < 64; depth++) {
+                if (walk == root) { print "KEEP " line[i]; placed = 1; break }
+                if (walk <= 1) { placed = 1; break }
                 if (!(walk in parent)) break
                 walk = parent[walk]
             }
+            if (!placed) print "UNPLACED " pid
         }
     }')" || { echo 'pgrep: awk failed' >&2; exit 3; }
 found=1
 while IFS=' ' read -r kind rest; do
     case "$kind" in
         UNVERIFIED) echo 'pgrep: unreadable ps output or unknown test root' >&2; exit 3 ;;
+        UNPLACED) echo 'pgrep: the ancestry of a match could not be followed' >&2; exit 3 ;;
         KEEP) printf '%s\n' "$rest"; found=0 ;;
         MISSING)
             # Drop a match only when it is proven gone; alive but not listed is unverifiable.
