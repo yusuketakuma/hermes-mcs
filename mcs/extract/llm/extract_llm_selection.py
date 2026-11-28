@@ -518,9 +518,11 @@ def _focus_patients(ledger, scope_sql: str = "") -> list:
             " AND COALESCE(p.is_archived,0)!=0)"
             f" AND {pending_pred(ledger.db)} AND ({_retry_budget_sql()}){scope_sql}"
             f" AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?"
-            # focus selects re-extraction only, so a patient whose rest is all
-            # new arrivals would hold a place it cannot use
-            f" GROUP BY m.project_id HAVING SUM(CASE WHEN {_FRESH_SQL} THEN 0 ELSE 1 END) > 0"
+            # focus selects re-extraction only, and never an update-released
+            # hold, so a patient whose rest is all new arrivals or released
+            # holds would hold a place it cannot use
+            f" GROUP BY m.project_id HAVING SUM(CASE WHEN {_FRESH_SQL} OR {_rehold_sql()}"
+            " THEN 0 ELSE 1 END) > 0"
             " ORDER BY COUNT(*), m.project_id LIMIT ?",
             (time.time(), _FOCUS_PATIENTS))]
         hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids, "scope": scope_sql}
@@ -537,7 +539,7 @@ def patient_progress_counts(db) -> dict:
     remaining, focus = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id "
         f"AND {pending} AND ({_retry_budget_sql()}) AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
-        f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL})), 0) "
+        f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL} AND NOT {_rehold_sql()})), 0) "
         "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
         f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",
         (time.time(),)).fetchone()
@@ -1004,20 +1006,20 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         for fresh in ((None,) if oldest_first or prioritize_patients else (True, False)):
             if fresh is False and not archived:
                 # the patients nearest completion re-extract first, one by one;
-                # their released holds too, since the patient completes only
-                # once those re-runs settle under the current contract
+                # their update-released holds wait with everyone else's behind
+                # every re-extraction that can land, since those re-runs
+                # mostly end held again
                 for pid in focus:
-                    for rehold in (False, True):
-                        if len(rows) >= limit:
-                            return rows, fresh_selected
-                        rows += _select(False, limit - len(rows), False, rehold,
-                                        scope=" AND m.project_id=?", scope_params=(pid,))
+                    if len(rows) >= limit:
+                        return rows, fresh_selected
+                    rows += _select(False, limit - len(rows), False, False,
+                                    scope=" AND m.project_id=?", scope_params=(pid,))
             # a never-extracted body has no hold, so fresh needs no split
             for rehold in ((None,) if fresh or (oldest_first and fair_oldest)
                            else (False, True)):
                 if len(rows) >= limit:
                     return rows, fresh_selected
-                scoped = fresh is False and not archived and focus
+                scoped = fresh is False and not archived and rehold is False and focus
                 selected = _select(fresh, limit - len(rows), archived, rehold,
                                    scope=rest if scoped else "",
                                    scope_params=focus if scoped else ())

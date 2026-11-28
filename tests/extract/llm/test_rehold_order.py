@@ -32,14 +32,14 @@ def _corpus(tmp_path):
 
 
 def _hold(db, mid, prior, *, reason="protected_loss", invalidated=False,
-          contract="older-code", current_inference=True):
+          contract="older-code", current_inference=True, project_id=1):
     meta = {VERSION_KEY: CURRENT_VERSION} if current_inference else {}
     if invalidated:
         meta["invalidated"] = 1
     db.artifact_add(UPGRADE_KIND, json.dumps({
         "state": "held_prior", "reason": reason, "hash": _hash(db, mid),
         "prior_artifact_id": prior, "target_version": EXTRACT_VERSION, "contract": contract}),
-        project_id=1, message_id=mid, meta=meta)
+        project_id=project_id, message_id=mid, meta=meta)
 
 
 def _order(db, limit=3):
@@ -116,3 +116,81 @@ def test_stale_invalidated_and_human_holds_are_not_pushed_back(tmp_path, hold):
     prior = priors[1] if hold.pop("prior", None) else priors[3]
     _hold(db, 3, prior, **hold)
     assert _order(db) == [3, 2, 1]
+
+
+def _focus_one(monkeypatch):
+    monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, "_FOCUS_PATIENTS", 1)
+
+
+def _previous(db, mid, pid):
+    return db.artifact_add(KIND, json.dumps({"summary": "s"}), project_id=pid, message_id=mid,
+                           meta={"hash": _hash(db, mid), "extract_version": EXTRACT_VERSION - 1})
+
+
+def _focus_corpus(tmp_path, hold=None):
+    """Patient 1 has three re-extractions; patient 2, the focus patient,
+    has one ordinary re-extraction (4) and one released hold (5)."""
+    db, _priors = _corpus(tmp_path)
+    db.save_messages([_message(mid=mid, project_id=2, body=f"体温は36度です。経過観察 {mid}",
+                               posted_at=f"2026-08-0{6 - mid}T00:00:00+09:00") for mid in (4, 5)])
+    _previous(db, 4, 2)
+    prior = _previous(db, 5, 2)
+    _hold(db, 5, prior, project_id=2, **(hold or {}))
+    return db, prior
+
+
+def test_a_focus_patients_released_hold_waits_behind_rows_that_can_land(tmp_path, monkeypatch):
+    _focus_one(monkeypatch)
+    db, prior = _focus_corpus(tmp_path)
+    try:
+        assert extract_llm._focus_patients(db) == [2]
+        # the focus patient's ordinary row still leads; its released hold
+        # follows every row that can land, other patients' included
+        assert _order(db, limit=5) == [4, 3, 2, 1, 5]
+        assert _order(db, limit=2) == [4, 3]
+        for mid, pid in ((1, 1), (2, 1), (3, 1), (4, 2)):
+            db.artifact_add(KIND, json.dumps({"summary": "s"}), project_id=pid, message_id=mid,
+                            meta={"hash": _hash(db, mid), "extract_version": EXTRACT_VERSION,
+                                  VERSION_KEY: CURRENT_VERSION})
+        # once nothing else can land, the released hold runs
+        assert _order(db, limit=1) == [5]
+        # a re-run that ends held under the current contract is not taken again
+        _hold(db, 5, prior, project_id=2, contract=extract_llm._upgrade_contract())
+        assert _order(db, limit=1) == []
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("hold", [{"invalidated": True}, {"reason": "human_failed"}])
+def test_a_focus_patients_invalidated_and_human_holds_keep_the_focus_place(
+        tmp_path, monkeypatch, hold):
+    _focus_one(monkeypatch)
+    db, _prior = _focus_corpus(tmp_path, hold)
+    try:
+        assert _order(db, limit=5) == [4, 5, 3, 2, 1]
+    finally:
+        db.close()
+
+
+def test_a_patient_with_only_released_holds_holds_no_focus_place(tmp_path, monkeypatch):
+    _focus_one(monkeypatch)
+    db, _priors = _corpus(tmp_path)
+    try:
+        # patient 2: one released hold only; patient 3: two older re-extractions
+        db.save_messages([_message(mid=4, project_id=2, body="体温は36度です。経過観察 4",
+                                   posted_at="2026-08-09T00:00:00+09:00")]
+                         + [_message(mid=mid, project_id=3, body=f"体温は35度です。経過観察 {mid}",
+                                     posted_at=f"2026-07-0{mid}T00:00:00+09:00") for mid in (5, 6)])
+        _hold(db, 4, _previous(db, 4, 2), project_id=2)
+        _previous(db, 5, 3)
+        _previous(db, 6, 3)
+        for pid in (1, 2, 3):
+            db.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)",
+                          (pid, f"synthetic-{pid}"))
+        db.db.commit()
+        assert extract_llm._focus_patients(db) == [3]
+        assert _order(db, limit=6) == [6, 5, 3, 2, 1, 4]
+        assert extract_llm.patient_progress_counts(db.db)["focus_eligible"] == 2
+    finally:
+        db.close()
