@@ -17,7 +17,10 @@ stray sweep and verification code run unmodified. Launch paths of one run:
   preflight version probes of the services python): the guard ``.pth`` is in
   the interpreter's own site-packages, which ``-I`` still reads.
 - Services python ``~/.hermes/hermes-agent/venv/bin/python{,3}``: a /bin/sh
-  wrapper that execs the guard interpreter.
+  wrapper that execs the guard interpreter. The recovery python3.14
+  (Homebrew or /usr/bin, runtime_inspection) is only written into plists,
+  which the fake launchctl never starts. No tree passes ``-S``, so no
+  interpreter started from the guard interpreter skips its site-packages.
 - Shell children: the synthetic one-line install.sh, the services wrapper, and
   ``/bin/sh -c RELOAD_SCRIPT`` (only for the caller's own launchd label or a
   bootout that never completes; the fake launchctl always completes it). They
