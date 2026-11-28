@@ -314,8 +314,71 @@ EOF
     fi
     _lock_data="$MCS_ROOT/data"
     _lock_file="$_lock_data/update.lock"
+    _claim_record="$MCS_ROOT/.install-claim.json"
     _install_lock_held=0
     _fresh_data_info=""
+    # The first-install evidence is a single noclobber record written outside
+    # data/ before data/ exists. Because data/ was absent when the record was
+    # written, any data/ found alongside the record is part of the same first
+    # install — never a legacy install. The record is removed once the marker
+    # inside data/ is confirmed; after that the marker itself is the evidence.
+    _claim_record_text_for() {
+        _ct_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の確保記録を確認できません"
+        IFS=' ' read -r _ct_dev _ct_ino _ct_uid _ct_mode _ct_links <<EOF
+$_ct_root_info
+EOF
+        if ! { [ "$_ct_root_info" = "$_ct_dev $_ct_ino $_ct_uid $_ct_mode $_ct_links" ]; }; then
+            die "初回導入の確保記録を確認できません"
+        fi
+        for _number in "$_ct_dev" "$_ct_ino" "$_ct_uid" "$_ct_mode" "$_ct_links"; do
+            case "$_number" in ''|*[!0-9]*) die "初回導入の確保記録を確認できません" ;; esac
+        done
+        [ "$_ct_uid" = "$_lock_uid" ] || die "初回導入の確保記録を確認できません"
+        _claim_record_text="$(printf '{"version":1,"root":[%s,%s,%s,%s]}'             "$_ct_dev" "$_ct_ino" "$_ct_uid" "$((0$_ct_mode))")"
+    }
+    # A present record is trusted only when it is a regular file owned by this
+    # user whose stored root identity still matches the live root.
+    _validate_claim_record() {
+        if [ -L "$_claim_record" ] || [ ! -f "$_claim_record" ]; then
+            die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
+        fi
+        _cr_info="$(_lock_info "$_claim_record")" || die "初回導入の確保記録を確認できません"
+        IFS=' ' read -r _cr_dev _cr_ino _cr_uid _cr_mode _cr_links <<EOF
+$_cr_info
+EOF
+        if ! { [ "$_cr_info" = "$_cr_dev $_cr_ino $_cr_uid $_cr_mode $_cr_links" ]             && [ "$_cr_uid" = "$_lock_uid" ] && [ "$_cr_mode" = 600 ] && [ "$_cr_links" = 1 ]; }; then
+            die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
+        fi
+        _claim_record_text_for
+        if ! printf '%s
+' "$_claim_record_text" | cmp -s - "$_claim_record"; then
+            die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
+        fi
+    }
+    _fresh_marker_text_for() {
+        _fmt_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
+        _fmt_data_info="$(_lock_info "$1")" || die "初回導入の保存先を確認できません"
+        IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
+$_fmt_root_info
+EOF
+        IFS=' ' read -r _fd_dev _fd_ino _fd_uid _fd_mode _fd_links <<EOF
+$_fmt_data_info
+EOF
+        if ! { [ "$_fmt_root_info" = "$_fr_dev $_fr_ino $_fr_uid $_fr_mode $_fr_links" ] \
+            && [ "$_fmt_data_info" = "$_fd_dev $_fd_ino $_fd_uid $_fd_mode $_fd_links" ]; }; then
+            die "初回導入の保存先を確認できません"
+        fi
+        for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
+            case "$_number" in ''|*[!0-9]*) die "初回導入の保存先を確認できません" ;; esac
+        done
+        if ! { [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ]; }; then
+            die "初回導入の保存先を確認できません"
+        fi
+        _fresh_data_info="$_fmt_data_info"
+        _fresh_marker_text="$(printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}' \
+            "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
+            "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))")"
+    }
     acquire_install_lock() {
     [ "$_install_lock_held" -eq 0 ] || return 0
     _check_install_dirs
@@ -325,12 +388,50 @@ EOF
         mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
     fi
     _safe_dir "$MCS_ROOT" || _unsafe_dir "設定フォルダー"
-    if [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
+    _claiming=0
+    if [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
+        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+            die "初回導入の確保記録と設定ファイルが両方あります。記録を保持して担当者に確認してください"
+        fi
+        # The record outranks any state of data/: it was written while data/
+        # was absent, so a present data/ belongs to the same interrupted
+        # first install and can never be a legacy install.
+        _validate_claim_record
+        _claiming=1
+    elif [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ] && [ "${CONFIG_ABSENT:-0}" -ne 1 ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
         mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
-        _fresh_data_info="$(_lock_info "$_lock_data")" || die "新規データフォルダーを確認できません"
+    elif [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
+        [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
+        # First install: prove the absence of both data/ and config.json on
+        # the spot, then write the evidence record exactly once. Only the
+        # noclobber winner proceeds; a loser revalidates the winner's record
+        # and funnels into the same lock arbitration below.
+        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] \
+                || [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
+            die "初回導入の確保中に保存先が作成されました。保持したまま中止しました。担当者に確認してください"
+        fi
+        _claim_record_text_for
+        if (set -C; printf '%s\n' "$_claim_record_text" > "$_claim_record") 2>/dev/null; then
+            _claiming=1
+        elif [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
+            _validate_claim_record
+            _claiming=1
+        else
+            die "初回導入の確保記録を保存できません。データを保持してください"
+        fi
     fi
-    _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
+    if [ "$_claiming" -eq 1 ]; then
+        # The record proves data/ was absent when the first install started,
+        # so a present data/ is part of the same install and is never merged
+        # into or treated as legacy. Creating it here is idempotent.
+        if [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
+            mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
+        fi
+        _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
+    else
+        _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
+    fi
     if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
         _lock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
             || die "更新の排他制御を確認する Python を実行できません（venv の Python と python3 のどちらも起動しません）"
@@ -412,6 +513,26 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
         fi
         [ "$(_lock_info "$_lock_file")" = "$(_held_info "$_install_lock_fd")" ] \
             || die "排他制御ファイルが変更されました。担当者に確認してください"
+    fi
+    if [ "$_claiming" -eq 1 ]; then
+        _fresh_marker_text_for "$_lock_data"
+        # A crashed earlier attempt can leave its tmp behind; it stays inside
+        # the private data directory and is replaced atomically.
+        rm -f "$_lock_data/.provider-bootstrap-fresh.json.tmp" \
+            || die "初回導入の記録を保存できません。データを保持してください"
+        (set -C; printf '%s\n' "$_fresh_marker_text" > "$_lock_data/.provider-bootstrap-fresh.json.tmp") \
+            || die "初回導入の記録を保存できません。データを保持してください"
+        mv -f "$_lock_data/.provider-bootstrap-fresh.json.tmp" "$_lock_data/.provider-bootstrap-fresh.json" \
+            || die "初回導入の記録を保存できません。データを保持してください"
+        # APFS counts entries in a directory's link count, so the identity
+        # comparison token is captured only after every claim file exists.
+        # The marker itself anchors only dev/inode/uid/mode and stays valid.
+        _fresh_data_info="$(_lock_info "$_lock_data")" || die "初回導入の保存先を確認できません"
+        # The marker inside data/ is now the evidence of the interrupted first
+        # install; the pre-acquisition record has exactly this one deletion point.
+        rm -f "$_claim_record" \
+            || die "初回導入の確保記録を削除できません。記録を保持して担当者に確認してください"
+        _fresh_claimed=1
     fi
     _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
     MCS_INSTALL_UPDATE_LOCK_FD="$_install_lock_fd"
@@ -1355,6 +1476,22 @@ if [ -t 0 ] && [ -t 1 ]; then
     [ "$_answer" = 1 ] || { printf '導入を中止しました。\n'; exit 130; }
 fi
 
+_refuse_prior_fresh_state() {
+    # Refuse known prior state before writing the hold. The clone itself is
+    # permitted; these paths indicate prior runtime credentials or data.
+    for _prior in .env chrome-profile token_cache.json backups exports mcs-exports .install-options-migration.pending; do
+        if [ -e "$MCS_ROOT/$_prior" ] || [ -L "$MCS_ROOT/$_prior" ]; then
+            die "以前の設定またはデータがあるため初回導入できません。更新・復旧の手順を確認してください"
+        fi
+    done
+    for _prior in "$MCS_ROOT"/.env.* "$MCS_ROOT"/.env-*; do
+        case "$_prior" in "$MCS_ROOT/.env.example"|"$MCS_ROOT/.env.template") continue ;; esac
+        if [ -e "$_prior" ] || [ -L "$_prior" ]; then
+            die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
+        fi
+    done
+}
+
 # All read-only guards have passed. Hold the lock before any software or
 # settings change; creating the lock alone is not an existing opt-out record.
 _prechecks_locked="$_install_lock_held"
@@ -1375,13 +1512,20 @@ _fresh_marker="$MCS_DATA/.provider-bootstrap-fresh.json"
 _fresh_authorized=0
 _legacy_uninitialized=0
 _fresh_resumed=0
+[ -n "${_fresh_claimed:-}" ] || _fresh_claimed=0
 if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
     # A first install stopped before it saved any settings (network, Homebrew
     # or Ctrl-C during software preparation) resumes as the same fresh install.
     _resume_py="${MODE_PY:-}"
     [ -n "$_resume_py" ] || _resume_py="$(find_py || command -v python3 || true)"
-    [ -n "$_resume_py" ] || die "初回導入の続きを確かめる Python がありません。brew install python@3.14 を実行してから、同じコマンドを再実行してください"
-    if [ "$CONFIG_ABSENT" -eq 1 ] && [ -z "$_fresh_data_info" ] && [ -n "$_resume_py" ] \
+    if [ "$_fresh_claimed" -eq 1 ]; then
+        # The claim in this run wrote and verified the marker before the atomic
+        # rename while holding the lock; the strict content check below
+        # re-verifies it before any mutation.
+        _fresh_resumed=0
+    elif [ -z "$_resume_py" ]; then
+        die "初回導入の続きを確かめる Python がありません。brew install python@3.14 を実行してから、同じコマンドを再実行してください"
+    elif [ "$CONFIG_ABSENT" -eq 1 ] && [ -z "$_fresh_data_info" ] \
             && "$_resume_py" -B "$REPO/mcs/ops/install_options.py" fresh-resume "$MCS_ROOT/config.json" \
                 "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD"; then
         _fresh_data_info="$(_lock_info "$MCS_DATA")" || die "初回導入の保存先を確認できません"
@@ -1432,38 +1576,18 @@ verify_split_runtime() {
 }
 _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
 if [ -n "$_fresh_data_info" ] && [ "$CONFIG_ABSENT" -eq 1 ]; then
-    # Refuse known prior state before writing the hold. The clone itself is
-    # permitted; these paths indicate prior runtime credentials or data.
-    for _prior in .env chrome-profile token_cache.json backups exports mcs-exports .install-options-migration.pending; do
-        if [ -e "$MCS_ROOT/$_prior" ] || [ -L "$MCS_ROOT/$_prior" ]; then
-            die "以前の設定またはデータがあるため初回導入できません。更新・復旧の手順を確認してください"
+    _refuse_prior_fresh_state
+    # A marker written by this run's claim is byte-compared against the live
+    # anchors. A resumed marker instead keeps the structural validation that
+    # fresh-resume already applied, since older writers may order keys or use
+    # whitespace differently while carrying the same meaning.
+    if [ "$_fresh_claimed" -eq 1 ]; then
+        _fresh_marker_text_for "$MCS_DATA"
+        if [ -L "$_fresh_marker" ] || [ ! -f "$_fresh_marker" ] \
+                || ! printf '%s\n' "$_fresh_marker_text" | cmp -s - "$_fresh_marker"; then
+            die "初回導入の記録を確認できません。データを保持してください"
         fi
-    done
-    for _prior in "$MCS_ROOT"/.env.* "$MCS_ROOT"/.env-*; do
-        case "$_prior" in "$MCS_ROOT/.env.example"|"$MCS_ROOT/.env.template") continue ;; esac
-        if [ -e "$_prior" ] || [ -L "$_prior" ]; then
-            die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
-        fi
-    done
-    _fresh_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
-    IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
-$_fresh_root_info
-EOF
-    IFS=' ' read -r _fd_dev _fd_ino _fd_uid _fd_mode _fd_links <<EOF
-$_fresh_data_info
-EOF
-    for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
-        case "$_number" in ''|*[!0-9]*) die "初回導入の保存先を確認できません" ;; esac
-    done
-    if ! { [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ]; }; then
-        die "初回導入の保存先を確認できません"
     fi
-    # A resumed install keeps the marker fresh-resume has just verified.
-    [ "$_fresh_resumed" -eq 1 ] \
-        || (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
-        "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
-        "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))" > "$_fresh_marker") \
-        || die "初回導入の記録を保存できません。データを保持してください"
     _fresh_authorized=1
 elif [ "$CONFIG_ABSENT" -eq 1 ]; then
     _legacy_py="${MODE_PY:-}"
