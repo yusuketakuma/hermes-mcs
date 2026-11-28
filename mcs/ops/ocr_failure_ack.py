@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing, suppress
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -66,6 +66,32 @@ def _receipt(db, command_id, digest):
             or receipt['payload_hash'] != digest or receipt['command_id'] != command_id):
         raise ValueError('ocr_ack_receipt_unverified')
     return receipt
+
+
+def _cleanup_diagnostic(archive, name, error):
+    diagnostic = {'error': 'backup_cleanup_failed', 'backup': Path(name).name,
+                  'os_error': type(error).__name__, 'detail': str(error)}
+    try:
+        atomic_write(str(archive / 'backup-cleanup-error.json'),
+                     lambda f: json.dump(diagnostic, f, ensure_ascii=False, indent=2), mode=0o600)
+        fsync_dir(str(archive))
+    except (OSError, ValueError):
+        pass
+
+
+def _remove_uncommitted_backup(db, request, digest, archive, name):
+    try:
+        committed = _receipt(db, request['command_id'], digest) is not None
+    except (sqlite3.Error, ValueError, TypeError, RecursionError):
+        committed = True
+    if committed:
+        return
+    try:
+        os.unlink(name)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        _cleanup_diagnostic(archive, name, error)
 
 
 def apply(root, request, *, wait_seconds=0):
@@ -156,8 +182,7 @@ def apply(root, request, *, wait_seconds=0):
                         raise
                 except BaseException:
                     if name is not None:
-                        with suppress(OSError):
-                            os.unlink(name)
+                        _remove_uncommitted_backup(db, request, digest, archive, name)
                     raise
             # Everything after DB commit is a receipt copy, never another ack.
             try:
@@ -267,7 +292,7 @@ def main(argv=None):
             'ocr_ack_target_invalid', 'ocr_ack_target_changed', 'ocr_ack_source_unverified',
             'ocr_ack_database_unverified', 'ocr_ack_snapshot_required', 'ocr_ack_targets_invalid',
             'ocr_ack_already_acknowledged', 'ocr_ack_receipt_unverified', 'ocr_ack_restore_conflict',
-            'ocr_ack_state_changed'}
+            'ocr_ack_state_changed', 'backup_disk_low'}
         code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
         print(json.dumps({'outcome': 'rejected', 'error': code if code in allowed else 'ocr_ack_invalid'}))
         return 2
