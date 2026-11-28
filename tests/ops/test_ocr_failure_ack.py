@@ -150,7 +150,7 @@ def test_borrowed_plan_success_and_failure_do_not_end_callers_transaction(case):
     assert case.db.execute("SELECT 1 FROM artifacts WHERE kind='synthetic_outer'").fetchone() is None
 
 
-def test_transaction_failure_is_atomic_and_keeps_backup(case):
+def test_transaction_failure_is_atomic_and_removes_backup(case):
     req = request(case)
     case.db.execute("CREATE TRIGGER reject_ocr_receipt BEFORE INSERT ON command_receipts "
                     "BEGIN SELECT RAISE(ABORT,'synthetic receipt rejection'); END")
@@ -158,7 +158,88 @@ def test_transaction_failure_is_atomic_and_keeps_backup(case):
         operator.apply(case.root, req)
     assert not case.ledger.artifacts(ack.KIND)
     assert not case.db.execute('SELECT 1 FROM command_receipts').fetchone()
-    assert len(list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db'))) == 1
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
+
+
+def test_stale_plan_after_backup_removes_the_copy(case, monkeypatch):
+    req = request(case)
+    real = ack.build_plan
+    calls = 0
+
+    def stale_second_read(db, ids):
+        nonlocal calls
+        calls += 1
+        current = real(db, ids)
+        return current if calls == 1 else {**current, 'targets': []}
+
+    monkeypatch.setattr(operator.ack, 'build_plan', stale_second_read)
+    with pytest.raises(ValueError, match='stale_plan'):
+        operator.apply(case.root, req)
+    assert not case.ledger.artifacts(ack.KIND)
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
+
+
+def test_low_disk_rejects_before_creating_backup(case, monkeypatch):
+    req = request(case)
+    monkeypatch.setattr(operator.shutil, 'disk_usage', lambda _path: SimpleNamespace(free=0))
+    with pytest.raises(ValueError, match='backup_disk_low'):
+        operator.apply(case.root, req)
+    assert not case.ledger.artifacts(ack.KIND)
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
+
+
+def test_interruption_after_commit_keeps_the_committed_backup(case, monkeypatch):
+    req = request(case)
+    real_connect = operator.sqlite3.connect
+
+    class CommittedInterrupt:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __setattr__(self, name, value):
+            if name == '_inner':
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._inner, name, value)
+
+        def commit(self):
+            self._inner.commit()
+            raise KeyboardInterrupt('synthetic interruption after commit')
+
+    def connect(path, *args, **kwargs):
+        inner = real_connect(path, *args, **kwargs)
+        if kwargs.get('uri') and 'mode=rw' in str(path):
+            return CommittedInterrupt(inner)
+        return inner
+
+    monkeypatch.setattr(operator.sqlite3, 'connect', connect)
+    with pytest.raises(KeyboardInterrupt):
+        operator.apply(case.root, req)
+    backups = list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db'))
+    assert len(backups) == 1
+    assert case.db.execute('SELECT 1 FROM command_receipts WHERE command_id=?',
+                           (req['command_id'],)).fetchone()
+
+    monkeypatch.undo()
+    replay = operator.apply(case.root, req)
+    assert replay['replayed'] and replay['receipt_state'] == 'saved'
+    assert backups[0].is_file()
+
+
+def test_cli_reports_low_backup_disk_without_a_copy(case, monkeypatch, tmp_path, capsys):
+    req = request(case)
+    plan_path = tmp_path / 'plan.json'
+    plan_path.write_text(json.dumps(req['plan']))
+    monkeypatch.setattr(operator.shutil, 'disk_usage', lambda _path: SimpleNamespace(free=0))
+    rc = operator.main(['--root', str(case.root), 'apply', '--plan', str(plan_path),
+                        '--command-id', req['command_id'], '--actor', req['actor'],
+                        '--reason', req['reason'], '--confirm-human'])
+    assert rc == 2
+    assert json.loads(capsys.readouterr().out) == {'outcome': 'rejected', 'error': 'backup_disk_low'}
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
 
 
 def test_receipt_copy_failure_reports_applied_and_replays_only_copy(case, monkeypatch):
