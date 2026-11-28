@@ -1169,6 +1169,10 @@ def context_status_lines(db, project_id, ev, *, now=None, history=True) -> list[
                          f"未点検 {attachments.get('unscanned', 0)}ページ")
             if processing.get("mode") == "on":
                 state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
+                pruned = processing.get("original_pruned")
+                if type(pruned) is int and pruned > 0:
+                    # Settled as not obtained, never as reviewed: say so beside the completion.
+                    state += f"・原本未取得 {pruned}件"
             status.append(f"添付 {attachments['count']}件（{state}）")
     return status
 

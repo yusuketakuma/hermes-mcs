@@ -131,8 +131,10 @@ def _plain_file(path: str) -> bool:
         return False
 
 
-def ocr_retained_payloads(con, rows, cfg, config_state) -> set[int]:
-    """Downloaded payloads OCR may still need; unknown or invalid settings keep them all."""
+def ocr_retained_payloads(con, rows, cfg, config_state, *, deadline=None) -> set[int]:
+    """Downloaded payloads OCR may still need; unknown or invalid settings keep them all.
+
+    A ``deadline`` (monotonic) raises TimeoutError instead of returning a partial set."""
     import attachment_ocr
     downloaded = [row["attachment_id"] for row in rows if row["state"] == "downloaded"]
     if config_state == "unreadable" or attachment_ocr.config_error(cfg):
@@ -141,6 +143,8 @@ def ocr_retained_payloads(con, rows, cfg, config_state) -> set[int]:
         return set()
     keep = set()
     for attachment_id in downloaded:
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError("ocr_retained_deadline")
         try:
             awaiting = attachment_ocr.awaiting_result(con, attachment_id, cfg=cfg)
         except Exception:

@@ -272,6 +272,36 @@ def test_full_observation_window_is_rendered_as_a_lower_bound(tmp_path, monkeypa
     db.close()
 
 
+def test_retained_count_stops_at_its_deadline_instead_of_after_every_row(tmp_path, monkeypatch):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    with db.db:
+        db.db.executemany(
+            "INSERT INTO attachments(attachment_id,message_id,name,state,downloaded_at) "
+            "VALUES(?,1,'extra.pdf','downloaded',?)",
+            [(n, time.time() - 50 * DAY) for n in range(2, 6)])
+    _aged(db, 50)
+    _healthy_ocr_status(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    calls = []
+    real = attachment_ocr.awaiting_result
+
+    def slow_row(*args, **kwargs):
+        # The real check runs; the synthetic clock then passes the 2-second budget.
+        calls.append(args[1])
+        try:
+            return real(*args, **kwargs)
+        finally:
+            clock[0] = 10.0
+
+    monkeypatch.setattr(attachment_ocr, "awaiting_result", slow_row)
+    report = _ocr_health(tmp_path)
+    assert len(calls) == 1                 # without the per-row deadline every row is visited
+    assert "retained_originals" not in report
+    db.close()
+
+
 def test_unreadable_ledger_is_not_reported_as_zero_or_as_a_warning(tmp_path):
     _healthy_ocr_status(tmp_path)
     assert not (tmp_path / "ledger.db").exists()

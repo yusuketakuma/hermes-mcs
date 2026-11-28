@@ -124,8 +124,9 @@ def _ocr_retained(data, cfg, now):
                               "WHERE state='downloaded' AND downloaded_at < ? "
                               "ORDER BY downloaded_at, attachment_id LIMIT 257",
                               (now - warn_days * 86400,)).fetchall()
-            # The same predicate prune_attachments uses, so what it keeps is what is counted.
-            kept = maintenance.ocr_retained_payloads(db, rows[:256], cfg, "read")
+            # The same predicate prune_attachments uses, so what it keeps is what is counted;
+            # the per-row deadline stops it (TimeoutError) rather than after every row.
+            kept = maintenance.ocr_retained_payloads(db, rows[:256], cfg, "read", deadline=until)
             ages = [now - row["downloaded_at"] for row in rows[:256] if row["attachment_id"] in kept]
             if time.monotonic() >= until:
                 return None

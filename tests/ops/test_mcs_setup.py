@@ -150,6 +150,15 @@ def test_semantic_block_delegates_to_production_validator():
     assert any("semantic" in e for e in errors)
 
 
+@pytest.mark.parametrize(("value", "valid"), [(10, True), (3650, True), ("10", False), (0, False),
+                                              (3651, False), (True, False)])
+def test_ocr_retained_warning_days_are_validated(value, valid):
+    errors, _ = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack",
+        "health": {"attachment_ocr_retained_warn_days": value}})
+    assert any("health.attachment_ocr_retained_warn_days" in e for e in errors) is not valid
+
+
 def test_health_block_validates_types_and_ranges():
     errors, warnings = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",

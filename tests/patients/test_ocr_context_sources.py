@@ -133,6 +133,19 @@ def test_pruned_attachment_without_ocr_completes_coverage_as_original_pruned(sou
     assert coverage['signature'] != before['signature']
 
 
+def test_patient_context_status_shows_the_original_pruned_count(source_store):
+    import notify_views
+    led, key, _ = source_store
+    with led.db:
+        led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (original_source_keys.parse(key)[1],))
+    _prune(led)
+    processing = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    ev = {'coverage': {'context': {'attachments': {'count': 1, 'analysis': 'complete', 'processing': processing}}}}
+    lines = notify_views.context_status_lines(led.db, 1, ev, history=False)
+    # Complete coverage must not read as a reviewed attachment: the unobtained count is shown.
+    assert '添付 1件（内容の点検完了・OCR文字起こし完了 0件・原本未取得 1件）' in lines
+
+
 @pytest.mark.parametrize(('state', 'pruned', 'complete', 'excluded'), [
     # A due retry on a retained original is still OCR work, whatever the record calls it.
     ('unavailable', False, False, 0),
