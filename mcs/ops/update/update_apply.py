@@ -610,8 +610,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # Check the migration source before stopping writers, using the
                 # same evidence required of the post-merge child.
                 if bridge_needed and not _provider_bridge_verified(_head_sha(), sha):
-                    return bail("provider_update_bridge_required: 現在の版から設定を移行できることを確認できません。"
-                                "docs/guides/UPGRADE_AGENT.md で移行元の版を確認してください（変更はありません）")
+                    return bail("provider_update_bridge_required: 現在の版からは設定を移行できることを確認できません。"
+                                "一度 v1.3.0 へ更新し、その更新が正常に終わってからこの版へ更新してください"
+                                "（詳細は docs/guides/UPGRADE_AGENT.md。変更はありません）")
                 # The same guard refuses any untracked file in the source trees
                 # (ignored ones such as .DS_Store included); name it while nothing changed.
                 extras = _split_source_extras()
