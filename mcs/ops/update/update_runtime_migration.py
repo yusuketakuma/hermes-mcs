@@ -117,7 +117,8 @@ def _rewind_before_provider_migration(state: dict) -> None:
         # cannot prove a rollback beside split settings. The child has now
         # proved the exact pre-update tree and the unchanged pre-publication
         # layout, so that older parent's rollback preflight is exact-tree rather
-        # than witness-based. Keep a positive marker for the fixed recovery path.
+        # than witness-based. The rewound flag only records this in the journal;
+        # no code reads it back, and recovery classifies the rewound HEAD itself.
         applying.pop("provider_settings_migration_required", None)
         applying["provider_settings_migration_rewound"] = True
         journal_store.save_state(STATE_PATH, state)

@@ -413,7 +413,22 @@ def test_split_parent_without_requirement_adopted_only_for_reviewed_source(legac
         assert authority['version'] == 2 and 'provider_settings_migration_required' not in state['applying']
 
 
+def _hermes_without_jobs(fixture):
+    # Service retirement lists Hermes cron jobs; the conftest guard-bin hermes
+    # exits 97, which recovery rightly escalates as cron_list_unverifiable.
+    # A synthetic CLI answering an empty listing lets the real retirement run.
+    hermes = fixture['runtime'].parent / 'synthetic-bin' / 'hermes'
+    hermes.parent.mkdir(mode=0o700)
+    hermes.write_text('#!/bin/sh\n[ "$1 $2" = "cron list" ] || exit 1\n'
+                      'echo "No scheduled jobs in profile \'default\'."\n')
+    hermes.chmod(0o700)
+    conf = fixture['runtime'] / 'config.json'
+    conf.write_text(json.dumps({**json.loads(conf.read_text()), 'hermes_bin': str(hermes)}))
+    conf.chmod(0o600)
+
+
 def test_split_parent_crash_journals_rollback_ready_rewind(legacy_entry):
+    _hermes_without_jobs(legacy_entry)
     _previous_split(legacy_entry)
     path = legacy_entry['data'] / 'update_state.json'
     state = update_journal.load_state(path)
@@ -428,8 +443,18 @@ def test_split_parent_crash_journals_rollback_ready_rewind(legacy_entry):
     assert crashing['provider_settings_migration_deferred'] is True
     authority = legacy_entry['data'] / '.provider-settings-authority.json'
     assert json.loads(authority.read_text())['version'] == 2
+    # The parent died before its rollback. Recovery (this tree's code) finds
+    # HEAD on the previous tree after post_merge and finishes the revert:
+    # services re-rendered, writers back, journal cleared, settings untouched.
     outcome = _run_recovery(legacy_entry, 'v2_reviewed')
-    assert outcome['result'] == 1, outcome
+    assert outcome['result'] == 0, outcome
+    assert outcome['reports'][-1]['result'] == 'post_merge_reverted', outcome
+    assert outcome['events'] == ['services', 'restart'], outcome
+    assert outcome['notices'] == ['recovery_completed'], outcome
+    assert not legacy_entry['marker'].exists()
+    recovered = update_journal.load_state(path)
+    assert recovered['applying'] is None and recovered['stages'] == []
+    assert _git(legacy_entry['repo'], 'rev-parse', 'HEAD') == legacy_entry['previous']
     assert json.loads(authority.read_text())['version'] == 2
     assert json.loads((legacy_entry['runtime'] / 'config.json').read_text()).get('provider_settings') is None
 
@@ -516,7 +541,7 @@ update.restart_services=recovery.restart_services=lambda *_a,**_k:events.append(
 update._postcheck=recovery._postcheck=lambda *_a,**_k:[]
 update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:notices.append(str(_k.get('notice_code'))) or True
 notices=[]
-update._report=recovery._report=lambda result,detail,**extra:reports.append({'result':result,**extra})
+update._report=recovery._report=lambda result,detail,**extra:reports.append({'result':result,'detail':detail,**extra})
 if case=='runtime_reinstall_done':
     update._use_migrated_runtime=recovery._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
 if case=='bad_fd':
