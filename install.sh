@@ -355,6 +355,19 @@ EOF
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
         fi
     }
+    # The record outranks any state of data/: it was written while data/ was
+    # absent, so a present data/ belongs to the same interrupted first install
+    # and can never be a legacy install. Sets _claim_found from the live state.
+    _read_claim_state() {
+        _claim_found=0
+        if [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
+            if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+                die "初回導入の確保記録と設定ファイルが両方あります。記録を保持して担当者に確認してください"
+            fi
+            _validate_claim_record
+            _claim_found=1
+        fi
+    }
     _fresh_marker_text_for() {
         _fmt_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
         _fmt_data_info="$(_lock_info "$1")" || die "初回導入の保存先を確認できません"
@@ -388,37 +401,30 @@ EOF
         mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
     fi
     _safe_dir "$MCS_ROOT" || _unsafe_dir "設定フォルダー"
-    _claiming=0
-    if [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
-        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
-            die "初回導入の確保記録と設定ファイルが両方あります。記録を保持して担当者に確認してください"
-        fi
-        # The record outranks any state of data/: it was written while data/
-        # was absent, so a present data/ belongs to the same interrupted
-        # first install and can never be a legacy install.
-        _validate_claim_record
-        _claiming=1
-    elif [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ] && [ "${CONFIG_ABSENT:-0}" -ne 1 ]; then
+    _read_claim_state
+    _claiming="$_claim_found"
+    if [ "$_claiming" -eq 0 ] && [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
-        mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
-    elif [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
-        [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
-        # First install: prove the absence of both data/ and config.json on
-        # the spot, then write the evidence record exactly once. Only the
-        # noclobber winner proceeds; a loser revalidates the winner's record
-        # and funnels into the same lock arbitration below.
-        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] \
-                || [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
-            die "初回導入の確保中に保存先が作成されました。保持したまま中止しました。担当者に確認してください"
-        fi
-        _claim_record_text_for
-        if (set -C; printf '%s\n' "$_claim_record_text" > "$_claim_record") 2>/dev/null; then
-            _claiming=1
-        elif [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
-            _validate_claim_record
-            _claiming=1
+        if [ "${CONFIG_ABSENT:-0}" -ne 1 ]; then
+            mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
         else
-            die "初回導入の確保記録を保存できません。データを保持してください"
+            # First install: prove the absence of both data/ and config.json on
+            # the spot, then write the evidence record exactly once. Only the
+            # noclobber winner proceeds; a loser revalidates the winner's record
+            # and funnels into the same lock arbitration below.
+            if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] \
+                    || [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
+                die "初回導入の確保中に保存先が作成されました。保持したまま中止しました。担当者に確認してください"
+            fi
+            _claim_record_text_for
+            if (set -C; printf '%s\n' "$_claim_record_text" > "$_claim_record") 2>/dev/null; then
+                _claiming=1
+            elif [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
+                _validate_claim_record
+                _claiming=1
+            else
+                die "初回導入の確保記録を保存できません。データを保持してください"
+            fi
         fi
     fi
     if [ "$_claiming" -eq 1 ]; then
@@ -514,6 +520,13 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
         [ "$(_lock_info "$_lock_file")" = "$(_held_info "$_install_lock_fd")" ] \
             || die "排他制御ファイルが変更されました。担当者に確認してください"
     fi
+    # Nothing classified before the lock is trusted after it. A run that held
+    # the lock meanwhile may have consumed the record (its marker or config
+    # now stands for the install) or written one; when the live state
+    # disagrees, stop before any write so the rerun classifies afresh.
+    _read_claim_state
+    [ "$_claim_found" -eq "$_claiming" ] \
+        || die "導入の確認中に別の導入が先に進みました。記録を保持して中止しました。同じコマンドを再実行してください"
     if [ "$_claiming" -eq 1 ]; then
         _fresh_marker_text_for "$_lock_data"
         # A crashed earlier attempt can leave its tmp behind; it stays inside

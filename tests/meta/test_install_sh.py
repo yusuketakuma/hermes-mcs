@@ -281,6 +281,124 @@ def test_interrupted_claim_before_marker_resumes_on_rerun(tmp_path):
     assert external_transfer.status(root)["state"] == "pending"
 
 
+def _gate_lockf(stub_root):
+    """Park a run marked STUB_LOCK_GATE after it opened the lock file and
+    before it locks; every run then takes the real lock through the existing
+    flock fallback (EX_USAGE), on macOS and Linux alike."""
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text('''#!/bin/sh
+echo "lockf $*" >> "$STUB_LOG"
+if [ -n "${STUB_LOCK_GATE:-}" ]; then
+    touch "$STUB_STATE/lock-reached"
+    n=0
+    while [ ! -e "$STUB_STATE/lock-release" ]; do
+        n=$((n + 1))
+        [ "$n" -le 1800 ] || exit 1
+        sleep 0.1
+    done
+fi
+exit 64
+''')
+    lockf.chmod(0o755)
+
+
+def _start_parked(env, hermes_home, stub_root):
+    import time
+    late = subprocess.Popen(
+        ['sh', str(INSTALL), str(hermes_home)], env={**env, 'STUB_LOCK_GATE': '1'},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 60
+    while not (stub_root / 'state/lock-reached').exists():
+        if late.poll() is not None or time.monotonic() > deadline:
+            out, err = late.communicate(timeout=60) if late.poll() is not None else ('', '')
+            late.kill()
+            raise AssertionError('late run never reached the lock: ' + out + err)
+        time.sleep(0.05)
+    return late
+
+
+def _release_parked(late, stub_root):
+    (stub_root / 'state/lock-release').touch()
+    try:
+        out, err = late.communicate(timeout=60)
+    finally:
+        late.kill()
+    return late.returncode, out, err
+
+
+def test_late_claimant_after_completed_first_install_writes_nothing(tmp_path):
+    """Two first installs start together and both classify as claimants
+    before the lock. The first completes (install, facility-confirmation
+    hold, marker consumed); only then does the late one get the lock. The
+    late run must re-read the live state, write no marker and stop, and the
+    next run is an ordinary existing install."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_lockf(stub_root)
+    root = home / '.mcs'
+    data = root / 'data'
+    marker = data / '.provider-bootstrap-fresh.json'
+    late = _start_parked(env, hermes_home, stub_root)
+    try:
+        # the late run wrote the record and parked before locking
+        assert (root / '.install-claim.json').is_file()
+        first = _run(env, hermes_home)
+    except BaseException:
+        _release_parked(late, stub_root)
+        raise
+    assert first.returncode == 0, first.stdout + first.stderr
+    config_after_first = (root / 'config.json').read_bytes()
+    assert not marker.exists()
+    rc, out, err = _release_parked(late, stub_root)
+    assert rc != 0, out + err
+    assert '別の導入が先に進みました' in err
+    # the stale pre-lock decision must not re-create the consumed marker
+    assert not marker.exists()
+    assert not (root / '.install-claim.json').exists()
+    assert (root / 'config.json').read_bytes() == config_after_first
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+    following = _run(env, hermes_home)
+    assert following.returncode == 0, following.stdout + following.stderr
+    assert not marker.exists()
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_record_appearing_while_waiting_for_lock_is_not_legacy(tmp_path):
+    """A run that found data/ without a record before the lock (a peer wrote
+    the record between its two checks) finds the record once it holds the
+    lock. The pre-lock legacy decision is not trusted: the run stops without
+    writing, and the rerun resumes the same first install with the hold."""
+    import os as _os
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_lockf(stub_root)
+    root = home / '.mcs'
+    data = root / 'data'
+    data.mkdir(mode=0o700, parents=True)
+    _os.chmod(root, 0o700)
+    (data / 'update.lock').touch(mode=0o600)
+    late = _start_parked(env, hermes_home, stub_root)
+    try:
+        record = _write_claim_record(root)
+    except BaseException:
+        _release_parked(late, stub_root)
+        raise
+    rc, out, err = _release_parked(late, stub_root)
+    assert rc != 0, out + err
+    assert '別の導入が先に進みました' in err
+    assert record.is_file()
+    assert not (data / '.provider-bootstrap-fresh.json').exists()
+    assert not (root / 'config.json').exists()
+    following = _run(env, hermes_home)
+    assert following.returncode == 0, following.stdout + following.stderr
+    assert not record.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
 def test_python_format_marker_resumes_without_byte_identity(tmp_path):
     """A valid first-install record written by the Python writer (sorted keys)
     passes the structural fresh-resume validation and is not rejected for key
