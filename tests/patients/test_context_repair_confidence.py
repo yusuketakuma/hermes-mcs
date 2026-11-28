@@ -34,11 +34,11 @@ def _coverage_requests(led):
 
 
 def _run_until(runtime, done, steps=90):
-    """Step the real lane, moving the clock only past waits, until ``done`` holds."""
+    """Step the real lane, moving the clock only past waits, until ``done(result)`` holds."""
     _, clock, _ = runtime
     for _ in range(steps):
         result = step(runtime)
-        if done():
+        if done(result):
             return
         if result['status'] != 'progressed' and result.get('reason') not in _PENDING:
             clock.wall += 61
@@ -47,7 +47,7 @@ def _run_until(runtime, done, steps=90):
 
 def _until_fail(runtime):
     led, _, _ = runtime
-    _run_until(runtime, lambda: bool(led.artifacts('patient_context_source_quality_fail_v1', project_id=1)), steps=20)
+    _run_until(runtime, lambda _: bool(led.artifacts('patient_context_source_quality_fail_v1', project_id=1)), steps=20)
     rows = led.db.execute('SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id',
                           (patient_context_refresh_state.CHUNK,)).fetchall()
     return {fact['id']: fact for (content,) in rows for fact in json.loads(content)['facts']}
@@ -120,39 +120,47 @@ def _v131_repair_inputs(db, pid, captured, threshold):
     return patient_context_artifacts.source_repair_inputs(db, pid, captured, threshold)
 
 
-@pytest.mark.parametrize('qa_fault', ['low_confidence', 'ambiguous'])
-def test_a_hold_from_the_previous_rule_is_re_evaluated_exactly_once(runtime, source_repair, monkeypatch, qa_fault):
+def _settled(led, source_repair):
+    return (len(led.synthetic_jev_requests), len(source_repair['sent']),
+            len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)),
+            len(led.artifacts('cloud_usage_reserve', project_id=1)))
+
+
+@pytest.mark.parametrize('qa_fault,fault', [
+    ('low_confidence', None),  # now repairable: proceeds to the one repair
+    ('ambiguous', None),       # still names no finding: held again
+    (None, 'omit_bed'),        # repaired to the same candidate: held again
+])
+def test_a_hold_from_the_previous_rule_is_re_evaluated_exactly_once(runtime, source_repair, monkeypatch, qa_fault, fault):
     led, clock, _ = runtime
-    source_repair['qa_fault'] = qa_fault
+    source_repair.update(qa_fault=qa_fault, fault=fault)
     with monkeypatch.context() as previous_release:
         previous_release.setattr(patient_context_artifacts, 'SOURCE_REPAIR_RULE', 1)
         with monkeypatch.context() as previous_rule:
             previous_rule.setattr(patient_context_refresh_sources, '_source_repair_inputs', _v131_repair_inputs)
-            _run_until(runtime, lambda: bool(_held(led)))
+            _run_until(runtime, lambda _: bool(_held(led)))
         [held] = _held(led)
-        jev = len(led.synthetic_jev_requests)
-        assert not source_repair['sent'] and not led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)
+        stored = _settled(led, source_repair)
+        assert len(source_repair['sent']) == (2 if fault == 'omit_bed' else 0)
         # Under the old hold key the stored hold stays: nothing is asked or sent again.
         for _ in range(4):
             clock.wall += 61
             step(runtime)
         assert [scan['quality_hold_key'] for scan in _held(led)] == [held['quality_hold_key']]
-        assert len(led.synthetic_jev_requests) == jev and not source_repair['sent']
+        assert _settled(led, source_repair) == stored
     if qa_fault == 'low_confidence':
-        _run_until(runtime, lambda: bool(patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)), steps=40)
+        _run_until(runtime, lambda result: result['status'] == 'complete', steps=40)
         assert len(source_repair['sent']) == 2
+        assert len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)) == 1
         assert {fact['text'] for fact in _published_facts(led)} == {_REPAIR_HOME, _REPAIR_BED}
     else:
-        _run_until(runtime, lambda: [scan['quality_hold_key'] for scan in _held(led)] not in ([], [held['quality_hold_key']]),
-                   steps=40)
-        # The ambiguous answer still cannot name a finding: held again from the stored answers.
-        assert len(led.synthetic_jev_requests) == jev and not source_repair['sent']
-        assert not led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)
-        assert not led.artifacts('cloud_usage_reserve', project_id=1)
-    settled = (len(led.synthetic_jev_requests), len(source_repair['sent']),
-               len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)))
+        _run_until(runtime, lambda _: [scan['quality_hold_key'] for scan in _held(led)]
+                   not in ([], [held['quality_hold_key']]), steps=40)
+        # Re-evaluated from the stored answers and the spent repair: nothing is asked, reserved or sent.
+        assert _settled(led, source_repair) == stored
+        assert not patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    settled = _settled(led, source_repair)
     for _ in range(4):
         clock.wall += 61
         step(runtime)
-    assert (len(led.synthetic_jev_requests), len(source_repair['sent']),
-            len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1))) == settled
+    assert _settled(led, source_repair) == settled
