@@ -327,8 +327,10 @@ def _current_scans_snapshot(db, pid, sources, route, *, cfg=None, check_quality=
                 scan.update(held=True, failure="patient_context_chunk_proof_invalid")
         if scan.get("quality_state") in ("held", "failed", "unknown"):
             scan["_quality_held"] = (cfg is None or scan.get("quality_hold_key") ==
-                _source_quality_state_key(db, pid, cfg, by_key[key], scan["_chunks_sig"], scan["quality_state"]))
-            if not scan["_quality_held"]:
+                _source_quality_state_key(db, pid, cfg, by_key[key], scan["_chunks_sig"],
+                                          unknown=scan["quality_state"] == "unknown"))
+            # A released unknown keeps its state: it is still reported until it is checked again.
+            if not scan["_quality_held"] and scan["quality_state"] != "unknown":
                 scan["quality_state"] = None
         if (check_quality and quality_required and scan.get("audited")
                 and (cfg is None or not _source_quality_verified(db, pid, by_key[key], route, cfg, scan,
@@ -344,14 +346,15 @@ def _current_scans_snapshot(db, pid, sources, route, *, cfg=None, check_quality=
     return result
 
 
-def _source_quality_state_key(db, pid, cfg, source, chunks_sig, quality_state):
-    """Bind a held, failed or unknown source quality state to the inputs that could change its result.
+def _source_quality_state_key(db, pid, cfg, source, chunks_sig, *, unknown=False):
+    """Bind a source quality state to the inputs that could change its result.
 
-    An unknown result comes only from a request whose outcome stays unknown,
-    so it waits like a hold. Its own key also releases every unknown recorded
-    before unknowns were held, whose requests the one-time disposition answered."""
+    ``unknown`` names an unknown that only a changed input can clear: a
+    question whose earlier request outcome stays unknown. It waits like a hold
+    under its own key. Every other unknown, and each one recorded before
+    unknowns were held, has the plain key and is retried."""
     key = patient_context_refresh_state._source_quality_hold_key(db, pid, cfg, source, chunks_sig)
-    return patient_context_refresh_state._digest(["unknown/1", key]) if quality_state == "unknown" else key
+    return patient_context_refresh_state._digest(["unknown/1", key]) if unknown else key
 
 
 def _scan_ready(scan):

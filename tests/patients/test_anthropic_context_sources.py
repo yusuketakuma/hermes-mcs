@@ -597,14 +597,14 @@ def test_unknown_source_quality_waits_while_the_next_source_is_audited(runtime, 
     led, clock, _ = runtime
     seed(led, mid=1, body='合成の居住記録その一。')
     seed(led, mid=2, body='合成の居住記録その二。')
-    sent, lost = [], []
+    sent, lost, answered = [], [], []
 
     def post(body, timeout):
         assert not led.db.in_transaction and timeout > 0
         source = body['state']['context'][0]['source_key']
         sent.append(source)
         lost[:] = lost or [source]
-        if source == lost[0]:
+        if source == lost[0] and source not in answered:
             raise TimeoutError('synthetic response lost')   # sent, so its outcome stays unknown
         answers = {}
         for qid, question in body['questions'].items():
@@ -632,6 +632,27 @@ def test_unknown_source_quality_waits_while_the_next_source_is_audited(runtime, 
     assert waiting.get('quality_state') == 'unknown' and waiting.get('_quality_held') and not waiting.get('audited')
     assert not patient_context_refresh_readiness._ready(waiting, clock.wall)
     assert sent.count(lost[0]) == 1
+
+    # The same rows in an install upgraded from v1.3.1: no disposition record yet, and the
+    # unknown row carries the plain hold key v1.3.1 wrote, never the unknown key.
+    (unresolved,) = [row['artifact_id'] for row in led.artifacts('semantic_usage', project_id=1)
+                     if 'quality_result' not in json.loads(row['meta'])]
+    row = led.db.execute('SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=1 AND message_id=? '
+                         'ORDER BY artifact_id DESC LIMIT 1', (patient_context_refresh_state.SCAN, lost[0])).fetchone()
+    content = json.loads(row['content'])
+    content['quality_hold_key'] = '0' * 64
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), row['artifact_id']))
+        led.db.execute("DELETE FROM fetch_jobs WHERE kind='patient_source_quality_supersede'")
+    answered.append(lost[0])
+    for _ in range(40):
+        step(runtime)
+        clock.wall += 61
+        if patient_context_refresh_sources._scan_ready(scans()[lost[0]]):
+            break
+    assert patient_context_refresh_sources._scan_ready(scans()[lost[0]]), 'the superseded question is asked again'
+    sealed = json.loads(led.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (unresolved,)).fetchone()[0])
+    assert sealed['quality_result'] == {'answers': {}, 'invalid': [], 'superseded': 'unresolved_before_upgrade'}
 
 
 def test_source_question_reuses_original_receipts_when_an_unrelated_fact_is_added(runtime, cloud):

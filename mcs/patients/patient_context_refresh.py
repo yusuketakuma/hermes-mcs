@@ -1117,6 +1117,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     source_quality_keys = None
     quality_skipped = False
     source_quality_skipped = False
+    source_quality_unknown_held = False
     write_proof = [selected_proof]
     readiness_state = ["verified"]
     # Fixed code of the last guard refusal that became patient_context_cloud_not_sent.
@@ -1813,6 +1814,15 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     source_candidate_ref=quality_result)
                             if quality_status not in ("passed", "skipped"):
                                 result = None
+                                if quality_status == "unknown" and quality_result is not None:
+                                    import semantic_runtime
+                                    # Only a request outcome that stays unknown waits for a changed input.
+                                    try:
+                                        source_quality_unknown_held = semantic_runtime.patient_summary_request_problem(
+                                            ledger.db, pid, quality_result, quality_result["fact_ids"],
+                                            purpose="source") is not None
+                                    except (ValueError, KeyError, TypeError):
+                                        source_quality_unknown_held = False
                                 raise patient_context_refresh_state.Deferred("source_quality_" + quality_status)
                             source_quality_keys = quality_result.pop("_keys")
                             source_quality_skipped = quality_status == "skipped"
@@ -2117,7 +2127,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
                     "quality_hold_key": patient_context_refresh_sources._source_quality_state_key(
-                        ledger.db, pid, cfg, source, saved["_chunks_sig"], deferred_reason[len("source_quality_"):]),
+                        ledger.db, pid, cfg, source, saved["_chunks_sig"],
+                        unknown=deferred_reason == "source_quality_unknown" and source_quality_unknown_held),
                     "next_try": now + (0 if deferred_reason == "source_quality_pending" else 60)}, meta, source["message_id"])
             if not failure and result is not None:
                 proof_changed = lane != "A"
