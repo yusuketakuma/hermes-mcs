@@ -305,6 +305,8 @@ rm -r "$WORK"
 
 施設設定の集約が更新中に止まった場合は、`"$PY" "$REPO/mcs/ops/mcs_update.py" recover` で復旧を再確認します。更新記録・移行元・ロック・処理の停止状態を確認でき、条件がそろった場合に移行を再開します。再導入が未完了の場合は、§3の `reinstall_incomplete` に従って手動で完了し、`"$PY" "$REPO/mcs/ops/mcs_update.py" reinstall-done` で完了を記録して復旧を再確認します。
 
+v1.3.0 の更新処理を親にして v1.3.1 か v1.3.2 へ更新した導入先（standalone の `mcs update apply`・Slack での承認・自動更新）では、新しい版への更新と設定の統合は終わっているのに、`data/update_in_progress.marker` が残って書込みが止まっていることがあります。更新時に「更新は適用されましたが、その後の記録処理を完了できませんでした。mcs recover で後始末を完了してください。」と表示され、`data/recovery_report.json` の `result` が `recovery_incomplete`、`detail` が `after_done:` で始まり、`data/update_state.json` の `applying` が `null` で `stages` の最後が `done` なら、この状態です。`"$PY" "$REPO/mcs/ops/mcs_update.py" recover`（`mcs recover` と同じ）を1回実行してください。統合済みの設定と版は変えず、親が残した後始末だけを完了します。そのうえで marker を取り除き、書込みを再開します。復旧レポートの結果は `resumed_done` になり、「中断された更新の後処理を完了しました」と通知されます。marker や更新記録を手で削除しないでください。
+
 自動処理と、§3-Aで配置と起動を確認した新しい独立復旧監視は、未検証の設定移行を進めず保留します。設定がpendingの場合、移行元や停止状態を確認できない場合、再導入が未完了の場合も記録と保留を維持します。markerや記録を削除して迂回しないでください。
 
 提供元別設定を分離済みの導入先では、独立復旧監視は次の条件をすべて確認できた場合だけ復旧を進めます。
