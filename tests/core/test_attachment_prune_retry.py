@@ -7,6 +7,8 @@ import time
 import pytest
 
 import attachment_ocr
+import health_report
+import health_watch
 import maintenance
 import notify_flush
 from ingest_testkit import _ledger, _message
@@ -146,6 +148,135 @@ def test_deleted_parent_payload_is_not_retained_for_ocr(tmp_path, monkeypatch):
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
     assert not path.exists()
     db.close()
+
+
+DAY = 86400
+
+
+def _aged(db, days, attachment_id=1):
+    with db.db:
+        db.db.execute("UPDATE attachments SET downloaded_at=? WHERE attachment_id=?",
+                      (time.time() - days * DAY - 60, attachment_id))
+
+
+def _healthy_ocr_status(data, **updates):
+    """A fresh private OCR run record that on its own reads as healthy."""
+    path = data / "attachment_ocr_status.json"
+    path.write_text(json.dumps({"at": time.time(), "complete": 0, "empty": 0, "failed": 0,
+                                "unsupported": 0, "deferred": 0, "pending_failed": 0,
+                                "queue_status": "known", **updates}))
+    path.chmod(0o600)
+
+
+def _ocr_health(tmp_path, cfg=OCR_CFG):
+    return health_report.attachment_ocr_health(str(tmp_path), cfg, time.time())
+
+
+def _complete_record(db, path):
+    pages = [{"page": 1, "engine": "pdf_text", "text": "合成"}]
+    pages[0]["text_hash"] = attachment_ocr._hash(pages[0]["text"])
+    _ocr_record(db, path, "complete", engine_version=attachment_ocr.ENGINE_VERSION, pages=pages,
+                text_hash=attachment_ocr._hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)))
+
+
+@pytest.mark.parametrize(("days", "warned"), [(31, True), (29, False)])
+def test_original_kept_for_ocr_past_warning_age_is_reported_by_count_only(tmp_path, monkeypatch, days, warned):
+    db, path = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, days)
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 0 and path.exists()
+    if warned:
+        assert (report["state"], report["reason"]) == ("deferred", "attachment_ocr_original_retained")
+        assert report["retained_originals"] == {"count": 1, "lower_bound": False,
+                                                "oldest_days": 31, "warn_days": 30}
+        text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+        assert "30日を超えて残っている原本が1件あります（最も古いものは取得から31日）" in text
+        assert "自動では削除しません" in text
+        assert "file.pdf" not in text + json.dumps(report) and "attachment_id" not in json.dumps(report)
+    else:
+        assert report["state"] == "ok" and "retained_originals" not in report
+    db.close()
+
+
+@pytest.mark.parametrize(("state", "counted"), [("complete", False), ("unsupported", False), ("failed", True)])
+def test_counted_originals_are_exactly_the_ones_retention_keeps(tmp_path, monkeypatch, state, counted):
+    db, path = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 40)
+    if state == "complete":
+        _complete_record(db, path)
+    else:
+        _ocr_record(db, path, state, attempts=3, next_try=0, reason="timeout")
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    assert ("retained_originals" in report) is counted
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == int(not counted)
+    assert path.exists() is counted
+    db.close()
+
+
+@pytest.mark.parametrize(("setting", "warn_days"), [(10, 10), ("10", None), (0, None)])
+def test_warning_age_follows_the_health_setting_and_defaults_when_invalid(tmp_path, monkeypatch, setting, warn_days):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 11)
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path, {**OCR_CFG, "health": {"attachment_ocr_retained_warn_days": setting}})
+    if warn_days is None:   # an invalid value falls back to the 30-day default
+        assert report["state"] == "ok"
+    else:
+        assert report["retained_originals"]["warn_days"] == warn_days
+        assert report["reason"] == "attachment_ocr_original_retained"
+    db.close()
+
+
+@pytest.mark.parametrize("cfg", [{"attachment_ocr": {"enabled": False}}, {"attachment_ocr": None}])
+def test_disabled_or_invalid_ocr_settings_never_read_the_ledger(tmp_path, monkeypatch, cfg):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 40)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retained originals were read without valid enabled OCR")
+
+    monkeypatch.setattr(health_report, "_ocr_ledger_snapshot", forbidden)
+    assert "retained_originals" not in _ocr_health(tmp_path, cfg)
+    db.close()
+
+
+def test_retained_count_rides_along_when_another_ocr_reason_wins(tmp_path, monkeypatch):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 31)
+    missing = _ocr_health(tmp_path)
+    assert missing["reason"] == "attachment_ocr_status_missing" and missing["retained_originals"]["count"] == 1
+    _healthy_ocr_status(tmp_path, failed=1)
+    failed = _ocr_health(tmp_path)
+    assert failed["reason"] == "attachment_ocr_processing_failed" and failed["retained_originals"]["count"] == 1
+    for report in (missing, failed, {**failed, "state": "failed", "reason": "attachment_ocr_acknowledged_gap"}):
+        text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+        assert "残っている原本が1件あります" in text
+    db.close()
+
+
+def test_full_observation_window_is_rendered_as_a_lower_bound(tmp_path, monkeypatch):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    with db.db:
+        db.db.executemany(
+            "INSERT INTO attachments(attachment_id,message_id,name,state,downloaded_at) "
+            "VALUES(?,1,'extra.pdf','downloaded',?)",
+            [(n, time.time() - 50 * DAY) for n in range(2, 259)])
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    assert report["retained_originals"] == {"count": 256, "lower_bound": True,
+                                            "oldest_days": 50, "warn_days": 30}
+    text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+    assert "256件以上あります" in text
+    db.close()
+
+
+def test_unreadable_ledger_is_not_reported_as_zero_or_as_a_warning(tmp_path):
+    _healthy_ocr_status(tmp_path)
+    assert not (tmp_path / "ledger.db").exists()
+    report = _ocr_health(tmp_path)
+    assert report["state"] == "ok" and "retained_originals" not in report
 
 
 def test_crash_after_unlink_is_resumable_and_does_not_count_missing_payload(tmp_path, monkeypatch):

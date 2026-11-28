@@ -607,6 +607,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
 | `health.max_missed_runs` | int | `2` | 欠測許容回数。10分間隔の予定実行と完了猶予から判定 |
+| `health.attachment_ocr_retained_warn_days` | int | `30` | OCRの結果が無いまま残る添付の原本を警告するまでの日数（1〜3650）。範囲外は既定値。警告は件数と最も古い日数だけで、原本は自動で削除しない |
 
 ## 5. 秘密情報の配置
 

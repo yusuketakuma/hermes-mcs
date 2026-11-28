@@ -131,7 +131,7 @@ def _plain_file(path: str) -> bool:
         return False
 
 
-def _ocr_open_payloads(con, rows, cfg, config_state) -> set[int]:
+def ocr_retained_payloads(con, rows, cfg, config_state) -> set[int]:
     """Downloaded payloads OCR may still need; unknown or invalid settings keep them all."""
     import attachment_ocr
     downloaded = [row["attachment_id"] for row in rows if row["state"] == "downloaded"]
@@ -197,7 +197,7 @@ def prune_attachments(db_path: str) -> int:
           (cutoff,)).fetchall()
           if a["message_id"] not in keep_mids
           and a["attachment_id"] not in keep_ids]
-        keep_ids.update(_ocr_open_payloads(con, rows, *config_read_state()))
+        keep_ids.update(ocr_retained_payloads(con, rows, *config_read_state()))
         rows = [a for a in rows if a["attachment_id"] not in keep_ids]
         pruned = 0
         failed = False
