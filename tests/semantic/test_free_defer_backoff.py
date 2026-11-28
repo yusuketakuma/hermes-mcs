@@ -50,7 +50,8 @@ def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, mod
         if job['message_id'] == 999:
             assert runtime.transition(db, runtime.JobToken.from_row(job), 'done')
             return 'done'
-        semantic_drain._why(kw['diagnostics'], code)
+        if code is not None:
+            semantic_drain._why(kw['diagnostics'], code)
         if model:
             llm_fn('synthetic scheduler control')
         kw['diagnostics']['not_sent'] = not_sent
@@ -236,3 +237,18 @@ def test_real_processor_reports_every_target_hold(tmp_path, monkeypatch, second_
         assert row['next_try'] == row['updated_at'] + wait
     finally:
         db.close()
+
+
+def test_cloud_unit_unresolved_hold_waits_backoff_and_yields_tail(jobs_db, monkeypatch):
+    """#417: unresolved not-sent head jobs must not re-head the queue every minute."""
+    first = _job(jobs_db, 100)
+    second = _job(jobs_db, 101)
+    _job(jobs_db, 999)
+    served = _processor(monkeypatch, code=None, not_sent='cloud_unit_unresolved')
+    out = _run(jobs_db)
+    assert served == [100, 101, 999]
+    assert out['done'] == 1 and out['deferred'] == 2
+    for held in (first, second):
+        row = _row(jobs_db, held)
+        assert row['state'] == 'pending' and row['attempts'] == 0
+        assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
