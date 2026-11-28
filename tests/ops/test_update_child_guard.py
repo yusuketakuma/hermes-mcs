@@ -41,6 +41,19 @@ def _child(guard, *args):
     return subprocess.run([str(guard.python), *args], capture_output=True, text=True, timeout=60)
 
 
+def test_real_parent_harness_runs_only_when_explicitly_requested():
+    # importing the harness module runs none of its tests
+    import test_update_parent_v130 as harness
+    opt_in = update_child_guard_testkit.HARNESS_OPT_IN
+    for environ, wanted in (({}, False), ({opt_in: ""}, False), ({opt_in: "0"}, False),
+                            ({opt_in: "true"}, False), ({opt_in: "1"}, True)):
+        assert update_child_guard_testkit.harness_requested(environ) is wanted, environ
+    mark = harness.pytestmark
+    assert mark.name == "skipif"
+    assert mark.args == (not update_child_guard_testkit.harness_requested(os.environ),)
+    assert opt_in + "=1" in mark.kwargs["reason"]
+
+
 def test_isolated_and_nested_children_load_the_guard(guard):
     nested = ("import subprocess, sys; print(subprocess.run([sys.executable, '-I', '-c', "
               "'import sys; print(\"mcs_harness_child_guard\" in sys.modules)'], "

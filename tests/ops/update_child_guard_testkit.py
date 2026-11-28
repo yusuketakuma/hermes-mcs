@@ -26,6 +26,15 @@ import subprocess
 import sys
 
 GUARD_MODULE = "mcs_harness_child_guard"
+# The real-parent harness runs an old updater as a process. It runs only when
+# this is exactly "1": the dedicated CI job sets it on a disposable runner, and
+# a plain test run on an operator machine never does, whatever tags it has.
+HARNESS_OPT_IN = "MCS_RUN_UPDATE_PARENT_HARNESS"
+
+
+def harness_requested(environ) -> bool:
+    """Return True only when `environ` explicitly asks for the real-parent harness."""
+    return environ.get(HARNESS_OPT_IN) == "1"
 
 _GUARD_SOURCE = r'''
 """Harness boundary: signals reach only synthetic targets this test run owns."""

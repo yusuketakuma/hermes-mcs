@@ -9,6 +9,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/development/ci_local.sh"
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
+# never run locally: the merge-gate request acts on GitHub, and the real-parent
+# update harness may run only on a disposable hosted runner
+GITHUB_ONLY = "merge-gate-request update-parent-harness"
 
 # setup lines replaced by prerequisite checks, the PR-only generated-docs step
 # (it needs the PR's merge base) replaced by update_readme.py --check, and the
@@ -54,16 +57,16 @@ def test_runner_lists_ci_jobs_in_order():
     listed = subprocess.run([str(RUNNER), "--list-jobs"], capture_output=True,
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
-    assert len(listed) == 12
+    assert len(listed) == 13
     runner = RUNNER.read_text()
     assert '全${job_count} job pass' in runner
     count_line = next(line.strip() for line in runner.splitlines() if line.strip().startswith("job_count="))
     result = subprocess.run(["bash", "-c", count_line + '; printf "%s" "$job_count"'],
-                            env={"JOBS": " ".join(listed), "GITHUB_ONLY": "merge-gate-request"},
+                            env={"JOBS": " ".join(listed), "GITHUB_ONLY": GITHUB_ONLY},
                             text=True, capture_output=True, check=True)
     # a GitHub-only job is reported as not run locally, never counted as passed
-    assert int(result.stdout) == len(listed) - 1
-    assert 'GITHUB_ONLY="merge-gate-request"' in runner and "GitHub専用" in runner
+    assert int(result.stdout) == len(listed) - 2
+    assert f'GITHUB_ONLY="{GITHUB_ONLY}"' in runner and "GitHub専用" in runner
 
 
 def test_runner_contains_every_ci_run_line():
@@ -290,13 +293,14 @@ def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
     result = subprocess.run(
         ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
-             "out": str(tmp_path), "JOBS": " ".join(jobs), "GITHUB_ONLY": "merge-gate-request"},
+             "out": str(tmp_path), "JOBS": " ".join(jobs), "GITHUB_ONLY": GITHUB_ONLY},
         capture_output=True, text=True, errors="replace", timeout=10)
     assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
     assert "CI の実行成功ではない" in result.stdout
     if all_pass == "1":
-        # the GitHub-only job is named as not run, never counted as passed
-        assert f"全{len(jobs) - 1} job pass、GitHub 専用の merge-gate-request は未実行（{sha}）" in result.stdout
+        # the GitHub-only jobs are named as not run, never counted as passed
+        assert (f"全{len(jobs) - 2} job pass、GitHub 専用の merge-gate-request update-parent-harness"
+                f" は未実行（{sha}）") in result.stdout
     else:
         assert "未成立" in result.stdout
     assert (tmp_path / "meta.txt").read_text() == result.stdout

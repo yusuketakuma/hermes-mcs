@@ -24,7 +24,8 @@ def _world(tmp_path, available_kb):
     python = tmp_path / "python"
     # The runner starts Python under `env -i`, so the wait is requested by a
     # file: an environment flag never reaches this stub.
-    python.write_text('#!/bin/sh\necho "home=$HOME tmp=$TMPDIR"\n'
+    python.write_text('#!/bin/sh\necho "home=$HOME tmp=$TMPDIR'
+                      ' harness=${MCS_RUN_UPDATE_PARENT_HARNESS-unset} other=${MCS_UNRELATED_SETTING-unset}"\n'
                       f'[ ! -e "{tmp_path}/stub-wait" ] || exec sleep 30\n')
     python.chmod(0o755)
     shm = tmp_path / "shm"
@@ -102,6 +103,19 @@ def test_unusable_mcs_test_tmpdir_is_refused(tmp_path, kind):
     result = _run({**env, "MCS_TEST_TMPDIR": str(chosen)})
     assert result.returncode == 2
     assert "MCS_TEST_TMPDIR" in result.stderr and "home=" not in result.stdout
+
+
+@pytest.mark.parametrize("value,seen", [(None, "unset"), ("1", "1")])
+def test_only_the_real_parent_harness_opt_in_passes_through(tmp_path, value, seen):
+    # env -i drops every other caller setting; the opt-in arrives only when set
+    shm, env = _world(tmp_path, SIX_GIB_KB)
+    env["MCS_UNRELATED_SETTING"] = "1"
+    if value is not None:
+        env["MCS_RUN_UPDATE_PARENT_HARNESS"] = value
+    result = _run(env)
+    _home(result)
+    assert f" harness={seen} " in result.stdout
+    assert " other=unset" in result.stdout
 
 
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])

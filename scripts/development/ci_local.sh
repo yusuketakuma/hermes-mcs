@@ -26,11 +26,13 @@
 # Exit: 0 only when every ci.yml job passes on a clean clone; 1 otherwise; 2 usage.
 set -u
 
-JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration merge-gate-request"
+JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration update-parent-harness merge-gate-request"
 # jobs that only decide or judge in CI; locally they run no tests of their own
 JUDGES="scope lint-test macos"
-# jobs that act only on GitHub; locally they are listed as not run, never as passed
-GITHUB_ONLY="merge-gate-request"
+# jobs that act only on GitHub, or must run only on a disposable hosted runner
+# (update-parent-harness starts an old updater as a process, never on an
+# operator machine); locally they are listed as not run, never as passed
+GITHUB_ONLY="merge-gate-request update-parent-harness"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -292,6 +294,10 @@ job_macos() {
 job_hermes_integration() {
     MCS_TEST_PYTHON=$hermes/.venv/bin/python MCS_HERMES_SOURCE=$hermes MCS_HERMES_REFERENCE=$hermes \
         sh scripts/development/check_pinned_sdks.sh hermes
+}
+job_update_parent_harness() {
+    # never called (GITHUB_ONLY): only a hosted runner without MCS services may run the real v1.3.0 updater
+    :
 }
 job_merge_gate_request() {
     # never called (GITHUB_ONLY): ci.yml asks agent-control.yml for the merge-gate of a head main-sync started

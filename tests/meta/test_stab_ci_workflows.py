@@ -38,9 +38,11 @@ def test_ci_reports_every_failure_and_runs_weekly():
 def test_ci_has_a_macos_lane_with_the_pinned_actions():
     text = (ROOT / ".github/workflows/ci.yml").read_text()
     jobs = _jobs(text)
-    mac = [name for name, block in jobs.items() if "runs-on: macos-latest" in block]
-    # only the test slices pay macOS minutes; the macos gate judges on ubuntu
-    assert mac == ["pytest-macos"]
+    # a matrix runner list counts too, so no job slips onto macOS unnoticed
+    mac = [name for name, block in jobs.items() if "macos-latest" in block]
+    # only the test slices and the real-parent update harness pay macOS
+    # minutes; the macos gate judges on ubuntu
+    assert mac == ["pytest-macos", "update-parent-harness"]
     assert "runs-on: ubuntu-latest" in jobs["macos"]
     linux = jobs["pytest-linux"]
     for action in ("actions/checkout@", "actions/setup-python@"):
@@ -190,6 +192,29 @@ def test_test_matrices_finish_every_slice_with_their_own_artifacts():
         assert "fail-fast: false" in block
         assert f"name: pytest-report-{lane}-${{{{ matrix.slice }}}}" in block
         assert f"name: pytest-{lane}-${{{{ matrix.slice }}}}-${{{{ github.run_attempt }}}}" in block
+
+
+def test_real_parent_update_harness_runs_only_in_its_own_full_history_job():
+    # The harness runs an old updater as a process: only this job opts in, on
+    # hosted Linux and macOS runners, from a checkout that has the v1.3.0 tag.
+    text = (ROOT / ".github/workflows/ci.yml").read_text()
+    jobs = _jobs(text)
+    block = jobs["update-parent-harness"]
+    assert "MCS_RUN_UPDATE_PARENT_HARNESS" not in text.replace(block, "")
+    assert '    env:\n      MCS_RUN_UPDATE_PARENT_HARNESS: "1"\n' in block
+    assert "runner: [ubuntu-latest, macos-latest]" in block and "fail-fast: false" in block
+    assert "fetch-depth: 0" in block and "fetch-tags: true" in block
+    assert "persist-credentials: false" in block
+    assert "needs: scope" in block and "if: needs.scope.outputs.mode == 'full'" in block
+    run_lines = [line.strip() for line in block.splitlines() if "run_tests.sh" in line]
+    assert run_lines == ["sh scripts/run_tests.sh tests/ops/test_update_parent_v130.py -r fEs"]
+    # the six release lanes are unchanged and none of them depends on it
+    for name in ("lint-test", "hygiene", "standalone-sdk", "incident-gates", "macos", "hermes-integration"):
+        assert name in jobs and "update-parent-harness" not in jobs[name]
+    # a local CI-equivalent run on an operator machine never starts it
+    runner = (ROOT / "scripts/development/ci_local.sh").read_text()
+    github_only = re.search(r'^GITHUB_ONLY="([^"]*)"$', runner, re.M).group(1).split()
+    assert "update-parent-harness" in github_only
 
 
 def test_perf_budgets_run_serially_after_the_shards_on_slice_one_only():

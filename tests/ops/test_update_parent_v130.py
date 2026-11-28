@@ -1,5 +1,9 @@
 """Real v1.3.0 parent update harness using the repository's actual tagged source.
 
+It runs only with MCS_RUN_UPDATE_PARENT_HARNESS=1, which only the ci.yml
+update-parent-harness job sets (full history and tags, hosted Linux and
+macOS runners); every other run skips the whole module before any test body.
+
 Only the search and signal boundary is isolated; the old updater's quiesce,
 stray sweep and verification code run unmodified. Launch paths of one run:
 
@@ -78,6 +82,14 @@ import run_log_install
 import semantic_jev
 import update_child_guard_testkit
 
+
+# Opt-in only (see update_child_guard_testkit.HARNESS_OPT_IN): decided before
+# any test body, so a plain run never starts the old updater or a sleeper.
+pytestmark = pytest.mark.skipif(
+    not update_child_guard_testkit.harness_requested(os.environ),
+    reason=(f"runs the real v1.3.0 updater as a process; set "
+            f"{update_child_guard_testkit.HARNESS_OPT_IN}=1 only on a disposable runner "
+            f"(the ci.yml update-parent-harness job), never on an operator machine"))
 
 SOURCE = Path(__file__).resolve().parents[2]
 # git grep -E has no portable \b; the evaluation benches never run in an update
@@ -260,9 +272,10 @@ def _split_settings(home):
 def _world(tmp_path, *, failing_install=False):
     tagged = _git(SOURCE, 'rev-parse', '--verify', '--quiet', 'v1.3.0^{commit}', check=False)
     if tagged.returncode != 0:
-        # the parent is the real tagged code; a shallow checkout without tags
-        # (the CI default) cannot provide it, and no fixture can stand in
-        pytest.skip('needs the v1.3.0 tag and the history from it to HEAD')
+        # the parent is the real tagged code and no fixture can stand in. The
+        # run asked for this harness, so a shallow checkout without tags fails
+        # instead of passing with nothing exercised.
+        pytest.fail('needs the v1.3.0 tag and the history from it to HEAD (checkout with fetch-depth: 0)')
     base = tagged.stdout.strip()
     target = _git(SOURCE, 'rev-parse', 'HEAD').stdout.strip()
     repo = tmp_path / 'repo'

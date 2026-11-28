@@ -479,6 +479,48 @@ jobs:
           MCS_HERMES_REFERENCE: ${{ github.workspace }}/hermes-agent
         run: sh scripts/development/check_pinned_sdks.sh hermes
 
+  update-parent-harness:
+    # The real v1.3.0 updater runs as the parent process of an update to this
+    # head (tests/ops/test_update_parent_v130.py). Only a disposable hosted
+    # runner, where no MCS service runs, may start it: the opt-in variable is
+    # set nowhere else (ci_local.sh lists this job as GitHub-only), and inside
+    # the run the conftest guard and the harness's child guard let signals
+    # reach only the test's own synthetic processes. The parent is the tagged
+    # code itself, so the checkout keeps the full history and tags.
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+    env:
+      MCS_RUN_UPDATE_PARENT_HARNESS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          version: "0.13.6"
+          cache-python: true
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
+      # -r fEs lists every skip: with the opt-in set, a skip here means the harness did not run
+      - name: real v1.3.0 parent update harness
+        run: |
+          uv venv --python 3.14 --managed-python .venv
+          uv pip install --python .venv/bin/python "pytest==9.2.0"
+          sh scripts/run_tests.sh tests/ops/test_update_parent_v130.py -r fEs
+
   merge-gate-request:
     # GITHUB_TOKEN-started runs do not raise workflow_run. Ask the trusted
     # default-branch controller to re-read this completed run after required jobs.

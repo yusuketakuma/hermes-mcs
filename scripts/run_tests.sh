@@ -90,6 +90,9 @@ if test_uv=$(command -v uv); then
     ln -s "$test_uv" "$test_home/tool-bin/uv"
 fi
 
+# Besides MCS_TEST_TIMEOUT, one caller setting passes through: the explicit
+# opt-in of the real-parent update harness (tests/ops/test_update_parent_v130.py),
+# forwarded only when the caller set it, so a plain run keeps that harness skipped.
 env -i \
     HOME="$test_home" \
     TMPDIR="$test_home/tmp" \
@@ -103,4 +106,5 @@ env -i \
     PYTHONDONTWRITEBYTECODE=1 \
     MCS_TEST_SANDBOX=1 \
     MCS_TEST_TIMEOUT="${MCS_TEST_TIMEOUT:-300}" \
+    ${MCS_RUN_UPDATE_PARENT_HARNESS:+"MCS_RUN_UPDATE_PARENT_HARNESS=$MCS_RUN_UPDATE_PARENT_HARNESS"} \
     "$test_python" -m pytest "$@"

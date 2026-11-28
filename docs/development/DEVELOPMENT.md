@@ -1065,10 +1065,15 @@ setup/teardownの失敗時に領域が残る保証はなく、runner終了時に
 
 ### CIの構成と実行範囲
 
-`ci.yml`の job は12個です。必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・
+`ci.yml`の job は13個です。必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・
 `incident-gates`・`macos`・`hermes-integration`）の名前は変えず、「全6ジョブ」はこの6 lane を指します。
 テストは matrix job の`pytest-linux`（`tests/`・`integration/`）と`pytest-macos`（`tests/meta`・`tests/ops`）が実行し、
-`lint-test`と`macos`はそれらの結果を判定するだけの gate job です。ruff・同梱医薬品マスター・生成文書の検査は
+`lint-test`と`macos`はそれらの結果を判定するだけの gate job です。
+`update-parent-harness`は、v1.3.0 の実際の更新処理を親プロセスとして動かしてこの head へ更新する試験
+（`tests/ops/test_update_parent_v130.py`）だけを、full mode のときに Linux と macOS の runner で実行します。
+旧版のタグが要るので、この job は履歴とタグをすべて取得します。この試験は`MCS_RUN_UPDATE_PARENT_HARNESS=1`のときだけ動き、
+この変数を設定するのはこの job だけです。`ci_local.sh`もこの job を GitHub 専用として扱って実行しないため、稼働中の Mac では動きません。
+6 lane にも merge-gate にも含めていないので、この job が失敗しても merge は止まりません。ruff・同梱医薬品マスター・生成文書の検査は
 並行する`lint` job が行います。`macos` gate は判定と報告の照合だけなので ubuntu で動かします（macOS runner の課金は10倍）。
 
 最初の`scope` job が実行の mode を決めます。タグの push・週次 schedule・手動実行は、ci.yml の式だけで常に`full`です
