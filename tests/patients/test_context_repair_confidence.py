@@ -3,11 +3,18 @@ import json
 
 import pytest
 
+import extract_llm
+import extract_llm_context
+import extract_llm_qc
+import extract_llm_resident
 import mcs_queries
 import patient_context_artifacts
+import patient_context_plan
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
+import semantic_candidate
+import semantic_policy
 import semantic_runtime
 from anthropic_context_testkit import (
     CFG, _REPAIR_BED, _REPAIR_HOME, cloud, drain, runtime, source_repair, step
@@ -164,3 +171,78 @@ def test_a_hold_from_the_previous_rule_is_re_evaluated_exactly_once(runtime, sou
         clock.wall += 61
         step(runtime)
     assert _settled(led, source_repair) == settled
+
+
+_PASS_FILLER, _HELD_FILLER = '合成の申し送りです。', '合成の連絡事項です。'
+
+
+def _source_pages(requests, filler):
+    """Source quality requests about the one source whose text holds ``filler``."""
+    return [body for body in requests if body['state']['target']['id'] in ('source_coverage', 'source_facts')
+            and filler in json.dumps(body['state']['context'], ensure_ascii=False)]
+
+
+def _source_texts(led, key):
+    snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
+    [source] = [value for value in snapshot['sources'] if patient_context_plan.source_key(value) == key]
+    scan = patient_context_refresh_sources._current_scans(
+        led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)[key]
+    assert scan['accepted_candidate_ref'] and scan['audited']
+    return {fact['text'] for fact in patient_context_refresh_sources._scan_facts(
+        led.db, 1, source, snapshot['route'], scan)}
+
+
+def _passed(scan):
+    return {key: scan.get(key) for key in ('audited', 'accepted_candidate_ref', 'source_quality_audit_key')}
+
+
+def test_an_upgrade_re_evaluates_only_the_held_source_and_keeps_the_stored_pass(runtime, source_repair, monkeypatch):
+    """Legacy fact source: the edited files' digests move, a stored PASS stays and one held source repairs once."""
+    led, clock, _ = runtime
+    assert CFG['semantic'].get('fact_source', 'legacy') == 'legacy'
+    # Message 1 (fixture) is answered surely; message 2 gets the low-confidence missing answer.
+    seed(led, mid=2, body=_REPAIR_HOME + _HELD_FILLER * 310 + _REPAIR_BED)
+    source_repair.update(qa_fault='low_confidence', qa_fault_marker=_HELD_FILLER)
+    scfg = semantic_policy.semantic_config(CFG, key_present=True)[0]
+    fingerprint = semantic_candidate.candidate_fingerprint({})
+    assessment = patient_context_refresh_state._quality_assessment(scfg)
+    with monkeypatch.context() as previous_release:
+        # Setup only: the v1.3.1 rule and file digests build the stored PASS and hold.
+        previous_release.setattr(patient_context_artifacts, 'SOURCE_REPAIR_RULE', 1)
+        previous_release.setattr(patient_context_refresh_sources, '_source_repair_inputs', _v131_repair_inputs)
+        old = {**extract_llm._LOADED_SOURCE_DIGESTS,
+               'patient_context_artifacts': '0' * 64, 'patient_context_refresh_state': '1' * 64}
+        for module in (extract_llm, extract_llm_context, extract_llm_qc, extract_llm_resident):
+            previous_release.setattr(module, '_LOADED_SOURCE_DIGESTS', old)
+        assert semantic_candidate.candidate_fingerprint({}) != fingerprint
+        _run_until(runtime, lambda _: _scans(led).get(1, {}).get('audited') and [
+            key for key, scan in _scans(led).items() if scan.get('quality_state') == 'held'] == [2], steps=120)
+        for _ in range(4):
+            clock.wall += 61
+            step(runtime)
+        stored = _settled(led, source_repair)
+        # Only the surely answered source spent its one repair; the held one sent nothing.
+        assert stored[1] == 2 and stored[2] == 1
+        passed, [held] = _passed(_scans(led)[1]), _held(led)
+        requests = len(led.synthetic_jev_requests)
+    assert semantic_candidate.candidate_fingerprint({}) == fingerprint
+    # Under the legacy fact source the PASS binding ignores the candidate fingerprint.
+    assert patient_context_refresh_state._quality_assessment(scfg) == assessment
+    _run_until(runtime, lambda result: result['status'] == 'complete', steps=60)
+    after, new = _settled(led, source_repair), led.synthetic_jev_requests[requests:]
+    # The stored PASS is neither asked again nor re-verified into a new audit.
+    assert not _source_pages(new, _PASS_FILLER)
+    assert _passed(_scans(led)[1]) == passed
+    # The one held source is re-evaluated once: one repair of the same finite plan and cost.
+    assert after[1] - stored[1] == stored[1] and after[2] == 2 and after[3] - stored[3] == stored[3]
+    assert not _held(led) and held['quality_hold_key']
+    # Stored answers about the original candidate are reused; only the repaired candidate is audited.
+    coverage = [body for body in _source_pages(new, _HELD_FILLER) if body['state']['target']['id'] == 'source_coverage']
+    assert coverage and all({_REPAIR_HOME, _REPAIR_BED} <= {fact['text'] for fact in body['state']['target']['candidate_facts']}
+                            for body in coverage)
+    assert _source_texts(led, 1) == _source_texts(led, 2) == {_REPAIR_HOME, _REPAIR_BED}
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    for _ in range(4):
+        clock.wall += 61
+        step(runtime)
+    assert _settled(led, source_repair) == after
