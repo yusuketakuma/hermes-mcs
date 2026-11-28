@@ -17,7 +17,8 @@ _CODES = (
     'recovery_completed', 'recovery_required', 'runtime_rolled_back',
     'gateway_restart_failed', 'lineworks_restart_failed',
     'standalone_restart_failed', 'delivery_reconcile_held',
-    'drug_master_changed', 'drug_insert_changed', 'unknown',
+    'drug_master_changed', 'drug_insert_changed', 'provider_migration_blocked',
+    'unknown',
 )
 _HEADERS = {
     'available': 'ℹ️ 新しいバージョンがあります',
@@ -34,6 +35,7 @@ _HEADERS = {
     'delivery_reconcile_held': '🟠 DB復元後の通知を照合待ちにしています',
     'drug_master_changed': 'ℹ️ 医薬品マスターの確認が必要です',
     'drug_insert_changed': 'ℹ️ 添付文書の改訂を検出しました',
+    'provider_migration_blocked': '🔴 設定の統合を確認できないため更新を保留しています',
     'unknown': '🟠 更新通知の結果を判定できません',
 }
 _PRIVATE = 'SYNTHETIC_PRIVATE_TOKEN_DO_NOT_TRANSMIT'

@@ -64,11 +64,14 @@ def migrate_provider_settings(root, *, before_publication=None, allow_legacy_ret
             except (OSError, ValueError, TypeError, RecursionError):
                 recorded, legacy_digest = None, None
             if allow_legacy_retire and embedded and recorded is not None and central == recorded:
-                if before_publication is not None:
-                    before_publication()
                 with config_edit._edit_lock(config):
                     if provider_settings.read(root, **options) != before:
                         raise MigrationError("provider_settings_changed")
+                    # The start record belongs after every read-only check: a
+                    # failure above left nothing mutated and must recover as
+                    # never-started.
+                    if before_publication is not None:
+                        before_publication()
                     install_options.retire_legacy(legacy, legacy_digest)
                 return True
             return False
@@ -80,8 +83,6 @@ def migrate_provider_settings(root, *, before_publication=None, allow_legacy_ret
             raise MigrationError("provider_settings_invalid")
         common, providers = ((raw, before["providers"]) if before["mode"] == "split" else
                              provider_settings.split_legacy(raw, owners, jev_model=semantic_jev.JEV_MODEL))
-        if before_publication is not None:
-            before_publication()
         config = Path(root) / "config.json"
         legacy = Path(root) / "data" / "install_options.json"
         with config_edit._edit_lock(config) as lock_fd:
@@ -91,14 +92,23 @@ def migrate_provider_settings(root, *, before_publication=None, allow_legacy_ret
             if recorded is not None and recorded != central:
                 # The pre-merge receipt must prove the old choice made it to config first.
                 raise MigrationError("settings_migration_unverified")
+            # The start record is durable only once every verification toward
+            # the first settings write has passed: a failure above mutated
+            # nothing and must recover as never-started.
+            if before_publication is not None:
+                before_publication()
             saved = provider_settings.consolidate_locked(root, before["snapshot"],
                 selected_provider=settings["provider"], lock_fd=lock_fd, **options)
+            # Retire the legacy records only after the consolidation readback
+            # verifies inside the lock: they are the receipt that the old
+            # choice reached config, and losing them to an unverified commit
+            # would destroy that evidence.
+            checked = provider_settings.read(root, **options)
+            if (saved != checked or checked.get("layout") != "single" or checked["common"] != common
+                    or checked["providers"] != providers):
+                raise MigrationError("provider_settings_readback_unverified")
             if recorded is not None:
                 install_options.retire_legacy(legacy, legacy_digest)
-        checked = provider_settings.read(root, **options)
-        if (saved != checked or checked.get("layout") != "single" or checked["common"] != common
-                or checked["providers"] != providers):
-            raise MigrationError("provider_settings_readback_unverified")
         return True
     except MigrationError:
         raise

@@ -268,11 +268,18 @@ def _provider_migration_recovery_hold(*, allow_resume=False, expected_mode=None)
     # recovery passes idempotent; a lost enqueue retries on the next pass).
     print("[MCS] 設定の統合が完了したか確認できないため、更新を保留し書込みを止めています。"
           "mcs recover で復旧できます。状態は status と recovery_report.json を確認してください。")
+    hold_update = None
+    try:
+        hold_applying = journal_store.load_state(STATE_PATH).get("applying")
+        if isinstance(hold_applying, dict) and isinstance(hold_applying.get("sha"), str):
+            hold_update = hold_applying["sha"][:12]
+    except (OSError, ValueError, TypeError, KeyError):
+        hold_update = None
     _enqueue_notice(
         "[MCS] 設定の統合が完了したか確認できないため、更新を保留し書込みを止めています。"
         "mcs recover で復旧してください（要手動対応）",
         notice_code="provider_migration_blocked",
-        notice_id="provider-migration-blocked")
+        notice_id="provider-migration-blocked" + ("-" + hold_update if hold_update else ""))
     return 1
 
 
