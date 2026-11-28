@@ -641,8 +641,9 @@ def supersede_unresolved_source_requests_tx(db, now):
     is run again whole. Each is
     sealed once, which lets its questions be asked again. A later answer for it
     is refused by ``patient_source_answer_binding``. One pass over the usage
-    rows reads every reservation id, so the cost does not grow with the
-    number of unresolved reservations of one patient.
+    rows reads every reservation id and each candidate is matched by its
+    primary key: the cost grows with the number of rows, but no patient's
+    rows are scanned again per candidate.
     Returns the number sealed, or None when the record already exists."""
     if not db.in_transaction:
         raise RuntimeError("patient_source_transaction_required")
