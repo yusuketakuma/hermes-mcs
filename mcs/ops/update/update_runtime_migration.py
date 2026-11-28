@@ -439,11 +439,38 @@ def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=
         raise update_migrations.MigrationError("provider_update_evidence_unverified") from error
 
 
+
+def _provider_migration_deferred(state: dict) -> bool:
+    """True when consolidation must wait for the v3-aware generation.
+
+    The journal carries no parent-written migration requirement only when the
+    parent is a v2-generation updater (v3-aware parents journal it pre-merge).
+    A v2 parent's own post-child verification reads settings with a reader that
+    accepts only authority version 2, so any consolidation visible after the
+    child exits crashes the parent into a permanent writer-blocked hold. The
+    layout read is only a decision hint: when in doubt the guarded in-update
+    path runs and its own verification decides."""
+    applying = state.get("applying")
+    if not isinstance(applying, dict) or "provider_settings_migration_required" in applying:
+        return False
+    try:
+        owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+        current = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+        return False
+    return current.get("layout") != "single" and current.get("mode") == "split"
+
+
 def _post_merge(state: dict, *, native_provider_migration: bool = False,
                 legacy_provider_migration: bool = False) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     holds both locks (--locks-held)."""
     applying = state["applying"]
+    # The migration guard still runs when deferring: its witness verification
+    # of the split parent and the requirement adoption must happen in the
+    # child. Only the consolidation itself waits for the v3-aware generation.
+    defer_migration = (legacy_provider_migration and "release_ref" not in applying
+                       and _provider_migration_deferred(state))
     try:
         with ExitStack() as guards:
             before_publication = (guards.enter_context(_legacy_provider_migration_guard(state))
@@ -468,7 +495,13 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
             if applying.get("runtime_migration"):
                 _use_migrated_runtime(applying["runtime_migration"])
             allow_retire = applying.get("provider_settings_migration_required") is True
-            if legacy_provider_migration:
+            if defer_migration:
+                # Durable evidence that consolidation still owes: the applied
+                # record keeps it, and the measured split layout converges the
+                # install through the completion path.
+                applying["provider_settings_migration_deferred"] = True
+                journal_store.save_state(STATE_PATH, state)
+            elif legacy_provider_migration:
                 update_migrations.migrate_provider_settings(
                     HOME, before_publication=before_publication, allow_legacy_retire=allow_retire)
             elif native_provider_migration:
@@ -506,6 +539,8 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
         **({"target_kind": "release"} if applying.get('target_kind') == 'release' else {}),
         **({"release_ref": applying["release_ref"]} if "release_ref" in applying else {}),
         **({"release_child": applying["release_child"]} if "release_child" in applying else {}),
+        **({"provider_settings_migration_deferred": True}
+           if applying.get("provider_settings_migration_deferred") is True else {}),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None

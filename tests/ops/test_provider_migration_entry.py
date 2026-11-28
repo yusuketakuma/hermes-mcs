@@ -134,10 +134,15 @@ def quiesce(mode):
         path.write_text(json.dumps(saved)); path.chmod(0o600)
     return []
 def services():
-    assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==3
-    assert set(json.loads(Path(home,'config.json').read_text())['provider_settings'])=={'anthropic','openai','jev'}
-    assert not list((Path(update.DATA)/'provider_settings').glob('*.json'))
-    if case=='service_failure':raise update.UpdateError('synthetic service failure')
+    saved=json.loads(Path(update.STATE_PATH).read_text())
+    if (saved.get('applying') or {}).get('provider_settings_migration_deferred'):
+        assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==2
+        assert json.loads(Path(home,'config.json').read_text()).get('provider_settings') is None
+    else:
+        assert json.loads(Path(home,'data','.provider-settings-authority.json').read_text())['version']==3
+        assert set(json.loads(Path(home,'config.json').read_text())['provider_settings'])=={'anthropic','openai','jev'}
+        assert not list((Path(update.DATA)/'provider_settings').glob('*.json'))
+    if case in ('service_failure','v2_reviewed_service_failure'):raise update.UpdateError('synthetic service failure')
     events.append('services')
 update._quiesce_for_mode=migration._quiesce_for_mode=quiesce
 update._plan_runtime_migration=migration._plan_runtime_migration=lambda *_a,**_k:None
@@ -389,15 +394,20 @@ def _previous_split(fixture):
 
 @pytest.mark.parametrize('reviewed', [False, True])
 def test_split_parent_without_requirement_adopted_only_for_reviewed_source(legacy_entry, reviewed):
-    providers = _previous_split(legacy_entry)
+    _previous_split(legacy_entry)
     outcome = _run_child(legacy_entry, 'v2_reviewed' if reviewed else 'v2_unknown')
     root = legacy_entry['runtime']
     authority = json.loads((legacy_entry['data'] / '.provider-settings-authority.json').read_text())
     state = update_journal.load_state(legacy_entry['data'] / 'update_state.json')
     if reviewed:
-        assert outcome == {'result': 0, 'events': ['quiesce:hermes', 'quiesce:hermes', 'services', 'restart']}
-        assert authority['version'] == 3 and state['applying'] is None
-        assert json.loads((root / 'config.json').read_text())['provider_settings'] == providers
+        # A v2-generation parent cannot read the v3 authority in its own
+        # post-child verification, so the child defers consolidation: the
+        # update completes with the split layout intact and the deferral
+        # journaled for the completion path.
+        assert outcome == {'result': 0, 'events': ['quiesce:hermes', 'services', 'restart']}
+        assert authority['version'] == 2 and state['applying'] is None
+        assert state['applied'][-1]['provider_settings_migration_deferred'] is True
+        assert json.loads((root / 'config.json').read_text()).get('provider_settings') is None
     else:
         assert outcome['result'] != 0 and not outcome['events']
         assert authority['version'] == 2 and 'provider_settings_migration_required' not in state['applying']
@@ -409,10 +419,12 @@ def test_split_parent_crash_keeps_requirement_for_manual_recovery(legacy_entry):
     state = update_journal.load_state(path)
     state['stages'].insert(0, {'stage': 'merge', 'at': 0})
     update_journal.save_state(path, state)
-    outcome = _run_child(legacy_entry, 'v2_reviewed_second_stop_failure')
+    outcome = _run_child(legacy_entry, 'v2_reviewed_service_failure')
     assert outcome['result'] != 0 and 'services' not in outcome['events']
     assert legacy_entry['marker'].is_file()
-    assert update_journal.load_state(path)['applying']['provider_settings_migration_required'] is True
+    crashing = update_journal.load_state(path)['applying']
+    assert crashing['provider_settings_migration_required'] is True
+    assert crashing['provider_settings_migration_deferred'] is True
     authority = legacy_entry['data'] / '.provider-settings-authority.json'
     assert json.loads(authority.read_text())['version'] == 2
     assert _run_recovery(legacy_entry, 'v2_reviewed')['result'] == 0
