@@ -8,6 +8,7 @@ used by the synthetic CLI tests available.
 from __future__ import annotations
 
 import atexit
+import errno
 import ipaddress
 import os
 import shlex
@@ -40,6 +41,44 @@ _SENSITIVE_ENV = (
 )
 _ORIGINALS: list[tuple[object, str, object]] = []
 _TEST_HOME = tempfile.mkdtemp(prefix="mcs-test-home-")
+# The pytest process that owns this run. Process matching and signals stay
+# inside its own tree (2026-11-28: an update test's stray sweep matched the
+# live drainers of the same user by command line and stopped them).
+_TEST_ROOT_PID = os.getpid()
+_PGREP_SHIM = r"""#!/bin/sh
+# Real pgrep, narrowed to the process tree of this test run. A match on any
+# other process of the same user is dropped, so callers never learn its pid.
+root="${MCS_TEST_ROOT_PID:-}"
+case "$root" in ''|*[!0-9]*) echo 'pgrep: the MCS test root is unknown' >&2; exit 3 ;; esac
+real=''
+for candidate in /usr/bin/pgrep /bin/pgrep; do
+    if [ -x "$candidate" ]; then real="$candidate"; break; fi
+done
+[ -n "$real" ] || { echo 'pgrep: not available in MCS tests' >&2; exit 3; }
+out="$("$real" "$@")"
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+found=1
+while IFS=' ' read -r pid rest; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$pid" != "$$" ] || continue
+    parent="$pid"
+    depth=0
+    while [ "$parent" -gt 1 ] && [ "$depth" -lt 64 ]; do
+        if [ "$parent" = "$root" ]; then
+            printf '%s%s\n' "$pid" "${rest:+ $rest}"
+            found=0
+            break
+        fi
+        parent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
+        case "$parent" in ''|*[!0-9]*) break ;; esac
+        depth=$((depth + 1))
+    done
+done <<MCS_PGREP_OUTPUT
+$out
+MCS_PGREP_OUTPUT
+exit "$found"
+"""
 
 
 def _reset_environment() -> None:
@@ -70,11 +109,17 @@ def _reset_environment() -> None:
     # fail-closed guards first (a bare-name call only; an absolute path is not caught).
     guard = os.path.join(_TEST_HOME, "guard-bin")
     os.makedirs(guard, exist_ok=True)
-    for name in ("hermes", "launchctl", "security"):
+    for name in ("hermes", "launchctl", "security", "pkill", "killall"):
         script = os.path.join(guard, name)
         with open(script, "w") as stream:
             stream.write("#!/bin/sh\necho 'real %s is disabled in MCS tests' >&2\nexit 97\n" % name)
         os.chmod(script, 0o755)
+    # pgrep stays usable, but a child process sees only this run's own tree.
+    os.environ["MCS_TEST_ROOT_PID"] = str(_TEST_ROOT_PID)
+    script = os.path.join(guard, "pgrep")
+    with open(script, "w") as stream:
+        stream.write(_PGREP_SHIM)
+    os.chmod(script, 0o755)
     os.environ["PATH"] = os.pathsep.join([guard] + [
         d for d in os.environ.get("PATH", "").split(os.pathsep)
         if d and d != guard and not os.access(os.path.join(d, "hermes"), os.X_OK)])
@@ -127,11 +172,12 @@ def _blocked_process(command, env=None) -> bool:
     executable = os.path.basename(parts[0]).casefold()
     if executable == "security":
         return True
-    if executable in {"hermes", "launchctl"}:
+    if executable in {"hermes", "launchctl", "pgrep", "pkill", "killall"}:
         # A real Hermes CLI or launchd writes the user's LaunchAgents and
         # services even under a temp HOME (2026-10-04: a services test
-        # replaced the live gateway plist). Only stubs under the test
-        # temp tree may run.
+        # replaced the live gateway plist). Real pgrep/pkill/killall match
+        # every process of the user, the live services included. Only stubs
+        # and shims under the test temp tree may run.
         path = (env or os.environ).get("PATH") if isinstance(env, dict) else None
         found = parts[0] if os.sep in parts[0] else shutil.which(parts[0], path=path)
         if found is None:
@@ -202,6 +248,65 @@ def _guarded_getaddrinfo(host, *args, **kwargs):
 _install(socket, "getaddrinfo", _guarded_getaddrinfo)
 _install(subprocess, "run", _guarded_run)
 _install(subprocess, "Popen", _guarded_popen)
+
+_ORIGINAL_KILL = os.kill
+_ORIGINAL_KILLPG = os.killpg
+_SIGNAL_REFUSED = "signalling a process outside this test run is disabled in MCS tests"
+
+
+def _process_parent(pid: int):
+    # The saved Popen class, not subprocess.run: a test that replaces
+    # subprocess.Popen to record its own calls must not see this lookup.
+    try:
+        with _ORIGINAL_POPEN(["ps", "-o", "ppid=", "-p", str(pid)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as process:
+            value = process.communicate(timeout=10)[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return int(value) if process.returncode == 0 and value.isdigit() else None
+
+
+def _in_test_tree(pid: int) -> bool:
+    for _ in range(64):
+        if pid == _TEST_ROOT_PID:
+            return True
+        if pid is None or pid <= 1:
+            return False
+        pid = _process_parent(pid)
+    return False
+
+
+def _signal_allowed(pid: int) -> bool:
+    """True for the caller, its own group, a process of this run, or a pid the
+    kernel will refuse or not find by itself. A negative pid names the group
+    led by that process."""
+    if pid == 0 or pid == os.getpid():
+        return True
+    if pid == -1:
+        return False
+    target = abs(pid)
+    try:
+        _ORIGINAL_KILL(target, 0)
+    except OSError:
+        return True       # absent or not ours: the real call reports it
+    return _in_test_tree(target)
+
+
+def _guarded_kill(pid, sig):
+    if sig != 0 and not _signal_allowed(pid):
+        raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+    return _ORIGINAL_KILL(pid, sig)
+
+
+def _guarded_killpg(pgid, sig):
+    if sig != 0 and not _signal_allowed(-pgid if pgid > 0 else pgid):
+        raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+    return _ORIGINAL_KILLPG(pgid, sig)
+
+
+# Popen.terminate/kill/send_signal and multiprocessing all go through os.kill.
+_install(os, "kill", _guarded_kill)
+_install(os, "killpg", _guarded_killpg)
 
 # The bounded-http transport spawns a fresh interpreter for every
 # request, so the in-process socket guard cannot reach it — a call that

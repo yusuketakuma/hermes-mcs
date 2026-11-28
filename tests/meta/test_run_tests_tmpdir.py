@@ -22,8 +22,10 @@ def _world(tmp_path, available_kb):
                   f"echo 'tmpfs {available_kb + 1} 1 {available_kb} 1% /dev/shm'\n")
     df.chmod(0o755)
     python = tmp_path / "python"
+    # The runner starts Python under `env -i`, so the wait is requested by a
+    # file: an environment flag never reaches this stub.
     python.write_text('#!/bin/sh\necho "home=$HOME tmp=$TMPDIR"\n'
-                      '[ -z "${STUB_WAIT:-}" ] || exec sleep 30\n')
+                      f'[ ! -e "{tmp_path}/stub-wait" ] || exec sleep 30\n')
     python.chmod(0o755)
     shm = tmp_path / "shm"
     shm.mkdir()
@@ -105,7 +107,8 @@ def test_unusable_mcs_test_tmpdir_is_refused(tmp_path, kind):
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
 def test_signalled_runner_still_removes_the_test_home(tmp_path, signum):
     shm, env = _world(tmp_path, SIX_GIB_KB)
-    process = subprocess.Popen(["/bin/sh", str(RUNNER)], cwd=ROOT, env={**env, "STUB_WAIT": "1"},
+    (tmp_path / "stub-wait").write_text("")
+    process = subprocess.Popen(["/bin/sh", str(RUNNER)], cwd=ROOT, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                start_new_session=True)
     try:
