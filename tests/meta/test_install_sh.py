@@ -294,7 +294,7 @@ if [ -n "${STUB_LOCK_GATE:-}" ]; then
     while [ ! -e "$STUB_STATE/lock-release" ]; do
         n=$((n + 1))
         [ "$n" -le 1800 ] || exit 1
-        sleep 0.1
+        /bin/sleep 0.1
     done
 fi
 exit 64
@@ -326,42 +326,58 @@ def _release_parked(late, stub_root):
     return late.returncode, out, err
 
 
-def test_late_claimant_after_completed_first_install_writes_nothing(tmp_path):
+@pytest.mark.parametrize('first_outcome', ['completed', 'interrupted'])
+def test_late_claimant_after_first_install_took_the_lock_writes_nothing(tmp_path, first_outcome):
     """Two first installs start together and both classify as claimants
-    before the lock. The first completes (install, facility-confirmation
-    hold, marker consumed); only then does the late one get the lock. The
-    late run must re-read the live state, write no marker and stop, and the
-    next run is an ordinary existing install."""
+    before the lock. The first takes the lock, consumes the record and either
+    completes (install, facility-confirmation hold, marker consumed) or stops
+    after its marker (clone failure); only then does the late one get the
+    lock. The late run must re-read the live state, write nothing and stop;
+    the next run is an ordinary existing install or resumes the same first
+    install with the hold."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     _gate_lockf(stub_root)
     root = home / '.mcs'
     data = root / 'data'
     marker = data / '.provider-bootstrap-fresh.json'
+    first_env = env if first_outcome == 'completed' else {**env, 'STUB_FAIL_CLONE': '1'}
     late = _start_parked(env, hermes_home, stub_root)
     try:
         # the late run wrote the record and parked before locking
         assert (root / '.install-claim.json').is_file()
-        first = _run(env, hermes_home)
+        first = _run(first_env, hermes_home)
     except BaseException:
         _release_parked(late, stub_root)
         raise
-    assert first.returncode == 0, first.stdout + first.stderr
-    config_after_first = (root / 'config.json').read_bytes()
-    assert not marker.exists()
+    if first_outcome == 'completed':
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert not marker.exists()
+        after_first = (root / 'config.json').read_bytes()
+    else:
+        assert first.returncode != 0
+        assert not (root / 'config.json').exists()
+        after_first = marker.read_bytes()
+    assert not (root / '.install-claim.json').exists()
     rc, out, err = _release_parked(late, stub_root)
     assert rc != 0, out + err
     assert '別の導入が先に進みました' in err
-    # the stale pre-lock decision must not re-create the consumed marker
-    assert not marker.exists()
+    # the stale pre-lock decision must neither re-create a consumed marker
+    # nor rewrite the one the first run left
     assert not (root / '.install-claim.json').exists()
-    assert (root / 'config.json').read_bytes() == config_after_first
-    sys.path.insert(0, str(ROOT / "mcs"))
-    import _mcs_path  # noqa: F401
-    import external_transfer
-    assert external_transfer.status(root)["state"] == "pending"
+    if first_outcome == 'completed':
+        assert not marker.exists()
+        assert (root / 'config.json').read_bytes() == after_first
+    else:
+        assert marker.read_bytes() == after_first
+        assert not (root / 'config.json').exists()
     following = _run(env, hermes_home)
     assert following.returncode == 0, following.stdout + following.stderr
     assert not marker.exists()
+    if first_outcome == 'interrupted':
+        assert '再開します' in following.stdout
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
     assert external_transfer.status(root)["state"] == "pending"
 
 
