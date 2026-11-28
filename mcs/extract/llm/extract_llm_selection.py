@@ -534,15 +534,17 @@ def patient_progress_counts(db) -> dict:
 
     Completion counts pending posts even after retries are exhausted;
     only focus eligibility follows the worker's retry budget. The caller bounds time.
-    A patient left with only released holds has every row probed, so the
-    CASE settles a released hold before the costlier pending test runs."""
+    A patient without a focus row has every row probed, so the index-only
+    fresh test rejects a new arrival first and the CASE settles a released
+    hold before the costlier pending test runs (SQLite evaluates correlated
+    terms in written order)."""
     active = db.execute("SELECT COUNT(*) FROM patients WHERE COALESCE(is_archived,0)=0").fetchone()[0]
     pending = pending_pred(db)
     remaining, focus = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id "
-        f"AND CASE WHEN {_rehold_sql()} THEN 0 ELSE {pending} END AND ({_retry_budget_sql()}) "
-        f"AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ? "
-        f"AND NOT {_FRESH_SQL})), 0) "
+        f"AND NOT {_FRESH_SQL} AND CASE WHEN {_rehold_sql()} THEN 0 ELSE {pending} END "
+        f"AND ({_retry_budget_sql()}) "
+        f"AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?)), 0) "
         "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
         f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",
         (time.time(),)).fetchone()
