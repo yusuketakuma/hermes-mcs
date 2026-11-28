@@ -448,8 +448,10 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
     # exits or crashes, so it never goes stale. It is held from the claim
     # decision until the record is consumed and closed before any software
     # preparation or long-lived child starts. Its descriptor avoids the
-    # updater's inherited run lock, as the install lock below does. A swapped
-    # folder is caught by the root identity the record and marker carry.
+    # updater's inherited run lock, as the install lock below does. It only
+    # excludes concurrent installs on the same folder: the held descriptor is
+    # not compared with the path, and the identity the record and marker carry
+    # is read from the current path, so a swapped folder is not detected here.
     _claim_lock_take() {
         if [ "${MCS_UPDATE_RUN_LOCK_FD:-}" = 7 ]; then
             exec 6<"$MCS_ROOT" || die "設定フォルダーを開けません"
