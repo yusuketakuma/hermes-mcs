@@ -656,10 +656,9 @@ propcache==0.5.4 \
 slack-bolt==1.30.0 \
     --hash=sha256:81f5bc46e79516d23d5e2a31dded6304dd1b8b6b72c0083f2f31d5d801e262c4 \
     --hash=sha256:af38258d41f801ad9c74503090e0f39accd66c49f667f7e55c97fcdb0e51b886
-# PENDING HASHES: the sha256 of the slack-sdk 3.48.0 sdist and wheel are not recorded yet (no network when this pin was bumped).
-# Until `uv pip compile` (command above) writes them here, this entry has no --hash line, so install.sh --require-hashes and
-# tests/meta/test_standalone_sdk_hashes.py both refuse it. Never copy the 3.47.0 hashes.
-slack-sdk==3.48.0
+slack-sdk==3.48.0 \
+    --hash=sha256:1213726e5b8015eeded608fcb3665c4e9b48af7f7f383ecc1b90af886d6aaa03 \
+    --hash=sha256:e54389b4b9b221c9d57f1d98bc1e28f4918e4e0bc435cc5d430216cb1ab6ad7c
 yarl==1.25.1 \
     --hash=sha256:0136d640dfa9b0523853e411430a99f8a91eca85774c6420285a33b755bc6de3 \
     --hash=sha256:03dd38de09bc213e9a8b29761eec33ee1d5318dac0e49d8af36e4d27830e23a7 \
