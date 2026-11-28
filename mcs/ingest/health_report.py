@@ -112,30 +112,44 @@ def _diagnostic_block(value) -> bool:
         for key, item in value.items())
 
 
+OCR_RETAINED_LIMIT = 256
+OCR_RETAINED_UNVERIFIED = {"unverified": True}
+
+
 def _ocr_retained(data, cfg, now):
-    """Count originals kept for OCR past the warning age, or None when none were observed."""
+    """Count originals kept for OCR past the warning age; None when none were observed.
+
+    A walk the deadline cut short returns OCR_RETAINED_UNVERIFIED, never a count or None."""
     warn_days = ocr_retained_warn_days(cfg)
     until = time.monotonic() + 2.0
     if not finite_number(now) or any(os.path.lexists(path) for path in _ocr_markers(data)):
         return None
+    ages, more = [], False
     try:
         with _ocr_ledger_snapshot(data, until) as db:
-            rows = db.execute("SELECT attachment_id, state, downloaded_at FROM attachments "
-                              "WHERE state='downloaded' AND downloaded_at < ? "
-                              "ORDER BY downloaded_at, attachment_id LIMIT 257",
-                              (now - warn_days * 86400,)).fetchall()
-            # The same predicate prune_attachments uses, so what it keeps is what is counted;
-            # the per-row deadline stops it (TimeoutError) rather than after every row.
-            kept = maintenance.ocr_retained_payloads(db, rows[:256], cfg, "read", deadline=until)
-            ages = [now - row["downloaded_at"] for row in rows[:256] if row["attachment_id"] in kept]
+            # The rows prune_attachments selects (a stored original only), oldest first.
+            cursor = db.execute("SELECT attachment_id, state, downloaded_at FROM attachments "
+                                "WHERE state='downloaded' AND local_path IS NOT NULL AND downloaded_at < ? "
+                                "ORDER BY downloaded_at, attachment_id", (now - warn_days * 86400,))
+            # Narrow each batch with the predicate retention uses and walk on, so rows it
+            # would not keep never hide a kept one; the deadline bounds the walk.
+            while not more and (rows := cursor.fetchmany(OCR_RETAINED_LIMIT)):
+                kept = maintenance.ocr_retained_payloads(db, rows, cfg, "read", deadline=until)
+                for row in rows:
+                    if row["attachment_id"] in kept:
+                        if len(ages) == OCR_RETAINED_LIMIT:
+                            more = True
+                            break
+                        ages.append(now - row["downloaded_at"])
             if time.monotonic() >= until:
-                return None
+                return OCR_RETAINED_UNVERIFIED
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, RecursionError):
-        return None
+        # Only a walk the deadline stopped is unconfirmed; an unreadable ledger is not observed.
+        return OCR_RETAINED_UNVERIFIED if time.monotonic() >= until else None
     if not ages:
         return None
     # Counts and the oldest age only: never an attachment, message or patient identifier.
-    return {"count": len(ages), "lower_bound": len(rows) > 256,
+    return {"count": len(ages), "lower_bound": more,
             "oldest_days": int(max(ages) // 86400), "warn_days": warn_days}
 
 
@@ -148,11 +162,14 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     retained = _ocr_retained(data, cfg, now)
     if retained is None:
         return detail
-    # One reason per observation: the warning replaces only 'ok'; under any other
-    # reason the count rides along in the detail and its rendered text.
-    detail = {**detail, "retained_originals": retained}
+    # One reason per observation: the warning, or an unconfirmed walk, replaces only
+    # 'ok'; under any other reason the result rides along in the detail and its text.
+    detail = {**detail, "retained_originals": dict(retained)}
     if detail["state"] == "ok":
-        detail.update(state="deferred", reason="attachment_ocr_original_retained")
+        state, reason = (("unknown", "attachment_ocr_original_retained_unverified")
+                         if retained == OCR_RETAINED_UNVERIFIED
+                         else ("deferred", "attachment_ocr_original_retained"))
+        detail.update(state=state, reason=reason)
     return detail
 
 

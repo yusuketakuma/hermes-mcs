@@ -256,13 +256,19 @@ def test_retained_count_rides_along_when_another_ocr_reason_wins(tmp_path, monke
     db.close()
 
 
-def test_full_observation_window_is_rendered_as_a_lower_bound(tmp_path, monkeypatch):
-    db, _ = _ocr_asset(tmp_path, monkeypatch)
+def _stored_originals(db, tmp_path, ids, days, message_id=1):
+    """Downloaded rows with a stored original path (no file is needed to be counted)."""
     with db.db:
         db.db.executemany(
-            "INSERT INTO attachments(attachment_id,message_id,name,state,downloaded_at) "
-            "VALUES(?,1,'extra.pdf','downloaded',?)",
-            [(n, time.time() - 50 * DAY) for n in range(2, 259)])
+            "INSERT INTO attachments(attachment_id,message_id,name,local_path,state,downloaded_at) "
+            "VALUES(?,?,'extra.pdf',?,'downloaded',?)",
+            [(n, message_id, str(tmp_path / "attachments" / str(n)), time.time() - days * DAY)
+             for n in ids])
+
+
+def test_full_observation_window_is_rendered_as_a_lower_bound(tmp_path, monkeypatch):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    _stored_originals(db, tmp_path, range(2, 259), 50)
     _healthy_ocr_status(tmp_path)
     report = _ocr_health(tmp_path)
     assert report["retained_originals"] == {"count": 256, "lower_bound": True,
@@ -272,13 +278,9 @@ def test_full_observation_window_is_rendered_as_a_lower_bound(tmp_path, monkeypa
     db.close()
 
 
-def test_retained_count_stops_at_its_deadline_instead_of_after_every_row(tmp_path, monkeypatch):
+def test_retained_count_stops_at_its_deadline_and_reports_it_as_unconfirmed(tmp_path, monkeypatch):
     db, _ = _ocr_asset(tmp_path, monkeypatch)
-    with db.db:
-        db.db.executemany(
-            "INSERT INTO attachments(attachment_id,message_id,name,state,downloaded_at) "
-            "VALUES(?,1,'extra.pdf','downloaded',?)",
-            [(n, time.time() - 50 * DAY) for n in range(2, 6)])
+    _stored_originals(db, tmp_path, range(2, 6), 50)
     _aged(db, 50)
     _healthy_ocr_status(tmp_path)
     clock = [0.0]
@@ -298,7 +300,65 @@ def test_retained_count_stops_at_its_deadline_instead_of_after_every_row(tmp_pat
     monkeypatch.setattr(attachment_ocr, "awaiting_result", slow_row)
     report = _ocr_health(tmp_path)
     assert len(calls) == 1                 # without the per-row deadline every row is visited
-    assert "retained_originals" not in report
+    # A walk the deadline stopped is neither a count nor healthy: it is reported as unconfirmed.
+    assert (report["state"], report["reason"]) == ("unknown", "attachment_ocr_original_retained_unverified")
+    assert report["retained_originals"] == {"unverified": True}
+    text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+    assert "時間内に確認できませんでした" in text and "件あります" not in text
+    db.close()
+
+
+def test_unconfirmed_walk_rides_along_when_another_ocr_reason_wins(tmp_path, monkeypatch):
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 31)
+    _healthy_ocr_status(tmp_path, failed=1)
+    clock = [0.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    real = attachment_ocr.awaiting_result
+
+    def slow_row(*args, **kwargs):
+        try:
+            return real(*args, **kwargs)
+        finally:
+            clock[0] = 10.0
+
+    monkeypatch.setattr(attachment_ocr, "awaiting_result", slow_row)
+    report = _ocr_health(tmp_path)
+    assert report["reason"] == "attachment_ocr_processing_failed"
+    assert report["retained_originals"] == {"unverified": True}
+    text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+    assert "件数は、時間内に確認できませんでした" in text
+    db.close()
+
+
+def test_row_without_a_stored_original_is_not_counted_as_kept(tmp_path, monkeypatch):
+    # Still 'downloaded' but its stored path was cleared and the original is gone:
+    # retention never selects it, so the warning must not count it either.
+    db, path = _ocr_asset(tmp_path, monkeypatch)
+    _aged(db, 31)
+    path.unlink()
+    with db.db:
+        db.db.execute("UPDATE attachments SET local_path=NULL WHERE attachment_id=1")
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    assert report["state"] == "ok" and "retained_originals" not in report
+    db.close()
+
+
+def test_rows_retention_would_not_keep_never_hide_a_kept_original(tmp_path, monkeypatch):
+    # 256 older originals of a deleted post are not OCR work; the walk goes past them.
+    db, _ = _ocr_asset(tmp_path, monkeypatch)
+    db.save_messages([_message(2)])
+    with db.db:
+        db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=2")
+    _stored_originals(db, tmp_path, range(2, 258), 50, message_id=2)
+    _aged(db, 31)
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    assert (report["state"], report["reason"]) == ("deferred", "attachment_ocr_original_retained")
+    assert report["retained_originals"] == {"count": 1, "lower_bound": False,
+                                            "oldest_days": 31, "warn_days": 30}
     db.close()
 
 
