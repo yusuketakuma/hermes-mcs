@@ -141,11 +141,21 @@ abspath() {
 }
 # data/ that holds only a first install's hold (and the update lock) is still a
 # fresh install for choosing the runtime; fresh-resume verifies it exactly later.
+# A first-install claim record predates data/, so data/ beside it is part of
+# the same first install even before the marker exists; the install lock
+# validates the record before any write.
 _data_is_fresh_hold() {
-    [ ! -L "$MCS_ROOT/data" ] && [ -f "$MCS_ROOT/data/.provider-bootstrap-fresh.json" ] || return 1
+    [ ! -L "$MCS_ROOT/data" ] || return 1
+    _hold_claimed=0
+    if [ -f "$MCS_ROOT/.install-claim.json" ] && [ ! -L "$MCS_ROOT/.install-claim.json" ]; then
+        _hold_claimed=1
+    elif [ ! -f "$MCS_ROOT/data/.provider-bootstrap-fresh.json" ]; then
+        return 1
+    fi
     for _entry in "$MCS_ROOT/data"/* "$MCS_ROOT/data"/.[!.]* "$MCS_ROOT/data"/..?*; do
         case "${_entry##*/}" in
             update.lock|.provider-bootstrap-fresh.json) ;;
+            .provider-bootstrap-fresh.json.tmp) [ "$_hold_claimed" -eq 1 ] || return 1 ;;
             *) [ -e "$_entry" ] || [ -L "$_entry" ] || continue; return 1 ;;
         esac
     done
@@ -350,6 +360,15 @@ EOF
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
         fi
         _claim_record_text_for
+        # The record is created empty (noclobber) and filled by one write that
+        # fits a single block, so an interrupted claim leaves it empty. While
+        # data/ and config.json are still absent, filling it is the same as a
+        # fresh claim (every writer writes these identical bytes).
+        if [ ! -s "$_claim_record" ] && [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ] \
+                && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ]; then
+            printf '%s\n' "$_claim_record_text" > "$_claim_record" \
+                || die "初回導入の確保記録を保存できません。データを保持してください"
+        fi
         if ! printf '%s
 ' "$_claim_record_text" | cmp -s - "$_claim_record"; then
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
@@ -1507,6 +1526,7 @@ _refuse_prior_fresh_state() {
             die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
         fi
     done
+    return 0
 }
 
 # All read-only guards have passed. Hold the lock before any software or
@@ -1533,6 +1553,8 @@ _fresh_resumed=0
 if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
     # A first install stopped before it saved any settings (network, Homebrew
     # or Ctrl-C during software preparation) resumes as the same fresh install.
+    # Prior settings that fresh-resume would reject are named first, so a
+    # rerun shows the same reason as the run that was refused.
     _resume_py="${MODE_PY:-}"
     [ -n "$_resume_py" ] || _resume_py="$(find_py || command -v python3 || true)"
     if [ "$_fresh_claimed" -eq 1 ]; then
@@ -1543,6 +1565,7 @@ if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
     elif [ -z "$_resume_py" ]; then
         die "初回導入の続きを確かめる Python がありません。brew install python@3.14 を実行してから、同じコマンドを再実行してください"
     elif [ "$CONFIG_ABSENT" -eq 1 ] && [ -z "$_fresh_data_info" ] \
+            && _refuse_prior_fresh_state \
             && "$_resume_py" -B "$REPO/mcs/ops/install_options.py" fresh-resume "$MCS_ROOT/config.json" \
                 "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD"; then
         _fresh_data_info="$(_lock_info "$MCS_DATA")" || die "初回導入の保存先を確認できません"

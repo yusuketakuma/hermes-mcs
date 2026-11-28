@@ -116,6 +116,74 @@ def test_interrupted_claim_resume_writes_the_hold(tmp_path):
     assert external_transfer.status(root)["state"] == "pending"
 
 
+@pytest.mark.parametrize('claim_state', ['record_only', 'empty_data', 'lock_only'])
+def test_interrupted_default_claim_resumes_with_the_same_runtime(tmp_path, claim_state):
+    """A first install run without a Hermes home (default standalone) that
+    stopped after its claim record resumes as standalone in every interrupted
+    state, including data/ created without the lock yet; data/ beside the
+    record never makes the rerun pick Hermes as for an existing install."""
+    home, _, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    _write_claim_record(root)
+    data = root / 'data'
+    if claim_state != 'record_only':
+        data.mkdir(mode=0o700)
+    if claim_state == 'lock_only':
+        (data / 'update.lock').touch(mode=0o600)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((root / 'config.json').read_text())['runtime_mode'] == 'standalone'
+    assert not (home / '.hermes').exists()
+    assert not any(call.startswith('git clone') for call in _calls(stub_root))
+    assert not (root / '.install-claim.json').exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_empty_claim_record_left_by_interrupted_write_resumes(tmp_path):
+    """The record is created empty before its single write; a stop in
+    between leaves a zero-length record and no data/. The rerun fills it and
+    completes the same first install with the hold instead of refusing."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = root / '.install-claim.json'
+    record.touch(mode=0o600)
+    os.chmod(record, 0o600)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / 'config.json').is_file()
+    assert not record.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_empty_claim_record_beside_data_refuses_before_writes(tmp_path):
+    """An empty record is filled only while data/ is still absent; once
+    data/ exists the record is no longer proof of an interrupted write, so
+    the run keeps it and stops before any write."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = root / '.install-claim.json'
+    record.touch(mode=0o600)
+    os.chmod(record, 0o600)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    result = _run(env, hermes_home)
+    assert result.returncode != 0
+    assert '確保記録を確認できません' in result.stderr
+    assert record.read_bytes() == b''
+    assert list(data.iterdir()) == []
+    assert not (root / 'config.json').exists()
+    assert not any(c.startswith(('brew', 'git clone', 'uv ')) for c in _calls(stub_root))
+
+
 def test_claim_marker_survives_until_bootstrap(tmp_path):
     """Interrupt software preparation after the claim; the strict trio stays
     in place and a rerun resumes the same first install."""

@@ -129,14 +129,19 @@ def test_prior_env_refusal_then_removal_resumes_fresh_with_hold(tmp_path):
 
 def test_prior_env_kept_keeps_refusing(tmp_path):
     """While the prior .env remains, every rerun keeps refusing instead of
-    silently proceeding as either a fresh or a legacy install."""
+    silently proceeding as either a fresh or a legacy install, and names the
+    prior settings as the reason rather than a generic interrupted-install
+    stop, so the operator knows what to resolve."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     (home / ".mcs").mkdir()
     (home / ".mcs/.env").write_text("SYNTHETIC=1\n")
     first = _run(env, hermes_home)
     assert first.returncode != 0
+    assert "以前の設定またはデータがあるため初回導入できません" in first.stderr
     second = _run(env, hermes_home)
     assert second.returncode != 0
+    assert "以前の設定またはデータがあるため初回導入できません" in second.stderr
+    assert "初回導入が中断された記録があります" not in second.stderr
     assert not (home / ".mcs/config.json").exists()
 
 
