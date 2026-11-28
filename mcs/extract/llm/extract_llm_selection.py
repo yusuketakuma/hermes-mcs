@@ -171,8 +171,15 @@ def _left_estimate_key(ledger) -> str:
         return ""
 
 
-_FRESH_SQL = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
-              + "' AND x.message_id=m.message_id AND (x.project_id IS NULL OR x.project_id=m.project_id))")
+# Never extracted: no extraction of this message scoped to its patient or
+# unscoped. The OR over project_id kept the planner on a kind-only prefix of
+# idx_artifacts_lookup when the ledger has no statistics, so every probe
+# walked every extraction; two exact (kind, project_id, message_id) seeks
+# decide the same rows.
+_FRESH_SQL = ("(NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
+              + "' AND x.project_id=m.project_id AND x.message_id=m.message_id)"
+              " AND NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
+              + "' AND x.project_id IS NULL AND x.message_id=m.message_id))")
 
 
 def _rehold_sql() -> str:
@@ -534,16 +541,15 @@ def patient_progress_counts(db) -> dict:
 
     Completion counts pending posts even after retries are exhausted;
     only focus eligibility follows the worker's retry budget. The caller bounds time.
-    A patient without a focus row has every row probed, so the index-only
-    fresh test rejects a new arrival first and the CASE settles a released
-    hold before the costlier pending test runs (SQLite evaluates correlated
-    terms in written order)."""
+    A patient without a focus row has every row probed (SQLite evaluates
+    correlated terms in written order): pending first rejects the extracted
+    rows of a mature ledger, the index-only fresh test then rejects a new
+    arrival, and only a pending re-extraction reaches the released-hold test."""
     active = db.execute("SELECT COUNT(*) FROM patients WHERE COALESCE(is_archived,0)=0").fetchone()[0]
     pending = pending_pred(db)
     remaining, focus = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id "
-        f"AND NOT {_FRESH_SQL} AND CASE WHEN {_rehold_sql()} THEN 0 ELSE {pending} END "
-        f"AND ({_retry_budget_sql()}) "
+        f"AND {pending} AND NOT {_FRESH_SQL} AND NOT {_rehold_sql()} AND ({_retry_budget_sql()}) "
         f"AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?)), 0) "
         "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
         f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",

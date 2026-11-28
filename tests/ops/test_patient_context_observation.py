@@ -72,6 +72,93 @@ def test_large_pending_corpus_uses_fewer_sql_steps(tmp_path):
     ledger.close()
 
 
+# The fresh probe as it read when focus first excluded released holds; frozen
+# so the control keeps that release's plan.
+_RELEASED_HOLD_FRESH = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + extract_llm.KIND
+                        + "' AND x.message_id=m.message_id AND (x.project_id IS NULL OR x.project_id=m.project_id))")
+
+
+def _released_hold_counts(db):
+    """patient_progress_counts as it read when focus first excluded released holds."""
+    active = db.execute("SELECT COUNT(*) FROM patients WHERE COALESCE(is_archived,0)=0").fetchone()[0]
+    pending = extract_llm.pending_pred(db)
+    remaining, focus = db.execute(
+        f"SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id "
+        f"AND {pending} AND ({extract_llm._retry_budget_sql()}) AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
+        f"{extract_llm._ERROR_ROWS_SQL}), 0) <= ? AND NOT {_RELEASED_HOLD_FRESH} "
+        f"AND NOT {extract_llm._rehold_sql()})), 0) "
+        "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
+        f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",
+        (time.time(),)).fetchone()
+    return {"active_patients": active, "extraction_complete": max(0, active - remaining),
+            "focus_eligible": focus, "focus_targets": min(focus, extract_llm._FOCUS_PATIENTS)}
+
+
+def _shaped_ledger(path, shape, per):
+    """20 patients x ``per`` posts in one ledger shape, plus one focus patient
+    (an earlier-generation row) and one patient with every post extracted."""
+    path.mkdir()
+    ledger = _ledger(path)
+    db = ledger.db
+    current = {VERSION_KEY: CURRENT_VERSION, 'extract_version': extract_llm.EXTRACT_VERSION}
+    earlier = {VERSION_KEY: CURRENT_VERSION, 'extract_version': extract_llm.EXTRACT_VERSION - 1}
+    posts = [(pid, pid * 1000 + i) for pid in range(1, 21) for i in range(per)]
+    with db:
+        db.executemany("INSERT INTO patients(project_id,patient_name) VALUES (?,'synthetic')",
+                       [(pid,) for pid in range(1, 23)])
+        db.executemany("INSERT INTO messages(message_id,project_id,body_text,body_state,content_hash) "
+                       "VALUES (?,?,'合成','full',?)",
+                       [(mid, pid, f'h{mid}') for pid, mid in posts + [(21, 21000), (22, 22000)]])
+        ledger.artifact_add_tx(extract_llm.KIND, '{}', project_id=21, message_id=21000,
+                               meta={**earlier, 'hash': 'h21000'})
+        ledger.artifact_add_tx(extract_llm.KIND, '{}', project_id=22, message_id=22000,
+                               meta={**current, 'hash': 'h22000'})
+        for pid, mid in posts:
+            last = mid == pid * 1000 + per - 1
+            if shape == 'new' or (shape == 'mature' and last):
+                continue
+            if shape == 'released':
+                prior = ledger.artifact_add_tx(extract_llm.KIND, '{}', project_id=pid, message_id=mid,
+                                               meta={**earlier, 'hash': f'h{mid}'})
+                ledger.artifact_add_tx(extract_llm.UPGRADE_KIND, json.dumps({
+                    'state': 'held_prior', 'reason': 'protected_loss', 'hash': f'h{mid}',
+                    'prior_artifact_id': prior, 'target_version': extract_llm.EXTRACT_VERSION,
+                    'contract': 'older-code'}), project_id=pid, message_id=mid,
+                    meta={VERSION_KEY: CURRENT_VERSION})
+            else:
+                ledger.artifact_add_tx(extract_llm.KIND, '{}', project_id=pid, message_id=mid,
+                                       meta={**current, 'hash': f'h{mid}'})
+    return ledger
+
+
+@pytest.mark.parametrize('shape', ['new', 'released', 'mature'])
+def test_focus_count_stays_linear_on_every_ledger_shape(tmp_path, shape):
+    """Every post new, every post an update-released hold, or a mature ledger
+    whose patients each have one new post: the counts stay exact and the cost
+    grows with the posts, never with posts x extractions.
+
+    The fresh probe's OR over project_id kept the planner on a kind-only index
+    prefix, so each probe walked every extraction: on the mature shape a count
+    that tested freshness first cost 42 M steps against 2.4 M at 4,000 posts
+    (1,011 M at 20,000), and the released-hold shape was quadratic even with
+    the old term order."""
+    expected = {'active_patients': 22, 'extraction_complete': 1, 'focus_eligible': 1, 'focus_targets': 1}
+    measured = {}
+    for per in (50, 200):
+        ledger = _shaped_ledger(tmp_path / str(per), shape, per)
+        counts, steps = _steps(ledger.db, extract_llm.patient_progress_counts)
+        assert counts == expected
+        if per == 50 or shape == 'mature':
+            control, control_steps = _steps(ledger.db, _released_hold_counts)
+            assert control == expected
+            if shape == 'mature':
+                assert steps <= control_steps, (per, control_steps, steps)
+        measured[per] = steps
+        ledger.close()
+    # 4x the posts: linear growth is about 4x, a walk of every extraction per row 16x.
+    assert measured[200] < 6 * measured[50], measured
+
+
 def test_lane_counts_exclude_archived_and_count_invalid_current_json(tmp_path):
     ledger = _ledger(tmp_path)
     db = ledger.db
