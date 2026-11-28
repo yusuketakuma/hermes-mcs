@@ -150,6 +150,7 @@ def test_recorded_ocr_outcome_is_never_counted_as_original_pruned(source_store, 
     assert coverage['complete'] is complete
     assert coverage['excluded'] == excluded and coverage['pending'] == 1 - excluded
     assert 'original_pruned' not in coverage
+    assert 'unavailable' not in coverage
 
 
 @pytest.mark.parametrize(('row_state', 'record', 'identity_state', 'view_state'), [
@@ -168,10 +169,12 @@ def test_unchanged_pending_attachment_keeps_its_coverage_signature(source_store,
     expected = {'complete': False, 'mode': 'on', 'total': 1, 'eligible': 1, 'excluded': 0,
                 'ocr_complete': 0, 'clinical_pending': 0, 'pending': 1}
     assert {key: value for key, value in coverage.items() if key != 'signature'} == expected
+    stored = list(led.db.execute('SELECT sha256,bytes,downloaded_at FROM attachments '
+                                 'WHERE attachment_id=1').fetchone())
     # The signature recipe as released: an attachment whose classification did not change
     # must not send its patient context back for re-evaluation.
     assert coverage['signature'] == payload_hash(
-        [expected, [[1, identity_state, 'a' * 64, 32, 1, view_state]]])
+        [expected, [[1, identity_state, *stored, view_state]]])
 
 
 def test_image_only_post_readiness_releases_after_ocr_inference(source_store, monkeypatch):
