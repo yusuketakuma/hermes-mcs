@@ -12,6 +12,7 @@ from semantic_due_selection import (
 )
 from semantic_job_processor import (
     NOT_SENT_BACKOFF_S,
+    UNSENT_HOLD_STAGES,
     _jev_error_brief,
 )
 from semantic_scheduler_state import (
@@ -65,28 +66,40 @@ def _defer_note(out: dict, reason: str) -> None:
     counts[reason] = counts.get(reason, 0) + 1
 
 
-# Deterministic holds whose answer only an input change can alter.
-_FREE_HOLD_CODES = ('empty_repair_candidate_binding', 'audit_empty_unverified')
+# Holds that consumed nothing and do not wait on an unavailable LLM. A cloud
+# refusal of UNSENT_HOLD_STAGES arrives as the job's code: the processor
+# holds it per member target and never lets it reach not_sent.
+_FREE_HOLD_CODES = ('empty_repair_candidate_binding', 'audit_empty_unverified',
+                    *sorted(UNSENT_HOLD_STAGES))
 
 
-def _free_hold(job, lane, cloud_only: bool, status, diagnostics: dict,
-               used: int, llm_s: float, progressed: bool) -> bool:
-    """True for a backlog semantic defer that spent no model time, no Jev
-    request and saved no stage, held by a deterministic gate rather than
-    an unavailable LLM; its slot goes back to independent due jobs."""
-    return (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
+def _free_hold(job, lane, status, diagnostics: dict,
+               used: int, dispatched: bool, progressed: bool) -> bool:
+    """True for a backlog semantic defer that made no call that may have run
+    a model or sent a request, no Jev request and saved no stage, held by a
+    gate rather than an unavailable LLM; its slot goes back to independent
+    due jobs, in the cloud-only lane too."""
+    return (lane == 'backlog' and job['kind'] == JOB_KIND
             and status == 'deferred' and diagnostics.get('not_sent') is None
             and diagnostics.get('code') in _FREE_HOLD_CODES
-            and used == 0 and llm_s == 0 and not progressed)
+            and used == 0 and not dispatched and not progressed)
 
 
 def _hold_waits_for_input(job, diagnostics: dict) -> bool:
     """True when a free hold is known to wait on an input change only.
 
+    A pre-send cloud refusal qualifies only when every one of the pass was
+    proven a settled repeat (``unsent_settled``): a history read failure or
+    an owner's send wait may clear without any input change.
+
     ``code`` keeps just the first cause, so for a multi-target job a later
     target might wait on a resource without a code. Such a job qualifies
     only when the processor accounted for every target and each held one
     carries a deterministic cause of its own (``held_target_codes``)."""
+    settled = diagnostics.get('unsent_settled')
+    if settled is False or (settled is None
+                            and diagnostics.get('code') in UNSENT_HOLD_STAGES):
+        return False
     targets = runtime.parse_payload(job).get('targets')
     if not isinstance(targets, list) or not targets:
         return False

@@ -236,6 +236,11 @@ MEMBER_HOLD_STAGES = frozenset({
     "cloud_fallback_unavailable", "cloud_capacity", "cloud_guard",
     "cloud_profile_unavailable"})
 
+# Guard verdicts (cloud_policy.REPEAT_REFUSALS) whose earlier result of the
+# same request is settled. ``repeat_unsettled`` also refuses the send, but its
+# outcome may still settle without any input change.
+_SETTLED_REPEAT_REFUSALS = frozenset({"repeat_success", "repeat_failed"})
+
 
 @contextmanager
 def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_fallback=None,
@@ -479,7 +484,17 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                 # replace any paid unit of its own. local() re-checks the same
                 # member binding and persisted-chunk provenance.
                 return local(prompt, timeout)
-            raise runtime.LLMNotSent("cloud_not_sent" if reason == "not_sent" else reason) from error
+            not_sent = runtime.LLMNotSent("cloud_not_sent" if reason == "not_sent" else reason)
+            # Only this call's guard verdict that the same request already
+            # settled, with no unit work begun, proves a stop that lasts until
+            # the input changes; a history read failure or an unsettled
+            # earlier result may clear by itself.
+            refusal = getattr(provider, "refusal", None)
+            not_sent.settled_repeat = (getattr(provider, "replacement_eligible", False) is True
+                                       and type(refusal) is tuple and len(refusal) == 2
+                                       and refusal[0] == "history"
+                                       and refusal[1] in _SETTLED_REPEAT_REFUSALS)
+            raise not_sent from error
         except cloud_inference.CloudObservationIncomplete:
             raise runtime.LLMNotSent('cloud_guard') from None
         except cloud_inference.CloudBusy:

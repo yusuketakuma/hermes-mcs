@@ -1383,6 +1383,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
 
 
 NOT_SENT_BACKOFF_S = 3600
+# Cloud refusals semantic_transport raises before any reservation or send
+# (CloudNotSent, or a send blocked before reservation). A refused call of
+# these stages is timed like any call but is not evidence that a model ran
+# or a request left; only one the transport marks ``settled_repeat`` is
+# known to wait on an input change.
+UNSENT_HOLD_STAGES = frozenset({"cloud_unit_unresolved"})
 
 
 _LLM_DOWN_REASONS = frozenset({"llm_unreachable", "llm_unavailable"})
@@ -1473,13 +1479,27 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                     def cloud_call(prompt, timeout=None):
                         started = time.perf_counter()
                         before = llm_timing["s"] if llm_timing is not None else 0.0
+                        unsent = False
                         try:
                             return cloud(prompt, timeout=timeout)
+                        except runtime.LLMNotSent as error:
+                            unsent = getattr(error, "stage", None) in UNSENT_HOLD_STAGES
+                            if unsent:
+                                # The long wait needs every such refusal of
+                                # this pass proven a settled repeat.
+                                diagnostics["unsent_settled"] = (
+                                    diagnostics.get("unsent_settled", True)
+                                    and getattr(error, "settled_repeat", False) is True)
+                            raise
                         finally:
                             if llm_timing is not None:
                                 elapsed = time.perf_counter() - started
                                 # A fallback can already have charged this same accumulator.
                                 llm_timing["s"] += max(0.0, elapsed - (llm_timing["s"] - before))
+                                # The refusal's time is still charged; only a
+                                # call that may have run or sent is evidence.
+                                if not unsent:
+                                    llm_timing["dispatched"] = True
                     llm_fn = cloud_call
             status = _process_job_inner(
                 ledger, scfg, job, jev_client, tracked_llm, deadline,
@@ -1561,8 +1581,9 @@ def _timed_llm(fn):
     """Wrap an injected llm_fn so wall time accumulates without
     changing its signature contract — ``timeout`` is forwarded only
     when the inner callable accepts it (``llm_call`` inspects the
-    signature the same way)."""
-    acc = {"s": 0.0}
+    signature the same way). ``dispatched`` records, apart from the
+    measured time, that a call was made that may have run a model."""
+    acc = {"s": 0.0, "dispatched": False}
     if runtime.accepts_timeout(fn):
         def timed(prompt, timeout=None):
             started = time.perf_counter()
@@ -1570,6 +1591,7 @@ def _timed_llm(fn):
                 return fn(prompt, timeout=timeout)
             finally:
                 acc["s"] += time.perf_counter() - started
+                acc["dispatched"] = True
     else:
         def timed(prompt):
             started = time.perf_counter()
@@ -1577,4 +1599,5 @@ def _timed_llm(fn):
                 return fn(prompt)
             finally:
                 acc["s"] += time.perf_counter() - started
+                acc["dispatched"] = True
     return timed, acc
