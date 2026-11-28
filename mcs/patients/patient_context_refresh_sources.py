@@ -325,9 +325,9 @@ def _current_scans_snapshot(db, pid, sources, route, *, cfg=None, check_quality=
             scan.update(complete=False, audited=False, cursor=0)
             if any(span is None for span in ranges.get(key, [])):
                 scan.update(held=True, failure="patient_context_chunk_proof_invalid")
-        if scan.get("quality_state") in ("held", "failed"):
+        if scan.get("quality_state") in ("held", "failed", "unknown"):
             scan["_quality_held"] = (cfg is None or scan.get("quality_hold_key") ==
-                patient_context_refresh_state._source_quality_hold_key(db, pid, cfg, by_key[key], scan["_chunks_sig"]))
+                _source_quality_state_key(db, pid, cfg, by_key[key], scan["_chunks_sig"], scan["quality_state"]))
             if not scan["_quality_held"]:
                 scan["quality_state"] = None
         if (check_quality and quality_required and scan.get("audited")
@@ -342,6 +342,16 @@ def _current_scans_snapshot(db, pid, sources, route, *, cfg=None, check_quality=
                 scan_proof=(db, pid, context_plan.source_signature(by_key[key]), route,
                             changes, scan, hydrate_ids.get(key, [])))
     return result
+
+
+def _source_quality_state_key(db, pid, cfg, source, chunks_sig, quality_state):
+    """Bind a held, failed or unknown source quality state to the inputs that could change its result.
+
+    An unknown result comes only from a request whose outcome stays unknown,
+    so it waits like a hold. Its own key also releases every unknown recorded
+    before unknowns were held, whose requests the one-time disposition answered."""
+    key = patient_context_refresh_state._source_quality_hold_key(db, pid, cfg, source, chunks_sig)
+    return patient_context_refresh_state._digest(["unknown/1", key]) if quality_state == "unknown" else key
 
 
 def _scan_ready(scan):

@@ -707,6 +707,97 @@ def test_window_ending_after_the_reservation_seals_it_unsent_and_the_page_can_be
         db.close()
 
 
+@pytest.mark.parametrize("purpose", ["summary", "source"])
+@pytest.mark.parametrize("stop", ["guard", "sent_timeout"])
+def test_only_a_reservation_whose_post_never_started_is_sealed_unsent(tmp_path, purpose, stop):
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"semantic": {"until": "2999-01-01T00:00:00+00:00"}}))
+    db = _ledger(tmp_path)
+    try:
+        identity, wire, ids = source_case() if purpose == "source" else (IDENTITY, body(), [FACT0, FACT1])
+        reserver = runtime.patient_summary_usage_reserver(db, project_id=1, guard=lambda _stage: None,
+            daily_request_budget=100, identity=identity, purpose=purpose)
+        reserved, posted = [], []
+
+        def reserve_fn(payload, timeout):
+            reserved.append(reserver(payload, timeout))
+            return reserved[-1]
+
+        def guard(stage):
+            # The input changes after the reservation, before the client's POST.
+            if stop == "guard" and stage == "jev_attempt" and reserved:
+                raise runtime.RuntimeStale(stage)
+
+        def post(payload, timeout):
+            posted.append(payload)
+            raise TimeoutError("synthetic response lost")
+
+        def seal(unsent, reason):
+            db.db.execute("BEGIN IMMEDIATE")
+            with db.db:
+                runtime.patient_summary_resolve_request_tx(db, unsent, identity, {}, set(), project_id=1,
+                                                           purpose=purpose, not_sent=reason)
+
+        client = semantic_jev.JevClient(api_key="synthetic-jev-key", max_attempts=1, post_fn=post)
+        bound = runtime.bind_jev(client, guard, reserve_fn, config_path=conf, not_sent=seal)
+        with pytest.raises((runtime.RuntimeStale, semantic_jev.JevError)):
+            bound.evaluate(wire["state"], wire["questions"], time.monotonic() + 60)
+        (meta,) = [json.loads(row[0]) for row in db.db.execute(
+            "SELECT meta FROM artifacts WHERE kind='semantic_usage'")]
+        problem = runtime.patient_summary_request_problem(db.db, 1, identity, ids, purpose=purpose)
+        if stop == "guard":
+            assert not posted
+            assert meta["quality_result"] == {"answers": {}, "invalid": [], "not_sent": "stopped_before_send"}
+            assert problem is None and reserver(wire, 10) is not None
+        else:
+            # Sent with an unknown outcome: it stays unresolved and is never asked again.
+            assert len(posted) == 1 and "quality_result" not in meta
+            assert problem == "patient_summary_request_unknown"
+            with pytest.raises(semantic_jev.JevError):
+                reserver(wire, 10)
+    finally:
+        db.close()
+
+
+def test_source_reservation_unresolved_before_upgrade_is_superseded_once(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        identity, wire, ids = source_case()
+        old = reserve_source(db, identity, wire)
+        # A database from before the disposition: its record does not exist yet.
+        with db.db:
+            db.db.execute("DELETE FROM fetch_jobs WHERE kind='patient_source_quality_supersede'")
+        assert not runtime.source_requests_superseded(db.db)
+        assert runtime.patient_summary_request_problem(db.db, 1, identity, ids, purpose="source") == \
+            "patient_summary_request_unknown"
+        again = reserve_source(db, identity, wire)     # asked again under the daily limit
+        assert again.artifact_id != old.artifact_id
+        sealed = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                          (old.artifact_id,)).fetchone()[0])
+        assert sealed["quality_result"] == {"answers": {}, "invalid": [], "superseded": "unresolved_before_upgrade"}
+        (marker,) = db.db.execute("SELECT state,payload FROM fetch_jobs "
+                                  "WHERE kind='patient_source_quality_supersede'").fetchall()
+        assert marker[0] == "done" and json.loads(marker[1]) == {"v": 1, "superseded": 1}
+        # A late answer for the superseded request is never bound.
+        db.db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(ValueError):
+            runtime.patient_source_answer_binding(db.db, 1, identity, old, [ids[0]])
+        db.db.rollback()
+        # The new request's outcome is unknown: it is never released automatically.
+        assert runtime.patient_summary_request_problem(db.db, 1, identity, ids, purpose="source") == \
+            "patient_summary_request_unknown"
+        with pytest.raises(semantic_jev.JevError):
+            reserve_source(db, identity, wire)
+        db.db.execute("BEGIN IMMEDIATE")
+        assert runtime.supersede_unresolved_source_requests_tx(db.db, time.time()) is None
+        db.db.rollback()
+        meta = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                        (again.artifact_id,)).fetchone()[0])
+        assert "quality_result" not in meta
+    finally:
+        db.close()
+
+
 def test_not_sent_is_only_a_seal_without_answers(tmp_path):
     db = _ledger(tmp_path)
     try:

@@ -152,14 +152,33 @@ def _quality_bound(meta):
     return request
 
 
-_NOT_SENT_REASONS = frozenset({"semantic_until_expired", "semantic_until_invalid", "semantic_config_unreadable"})
+# A reservation whose POST never started, for a reason other than the Jev window.
+STOPPED_BEFORE_SEND = "stopped_before_send"
+_NOT_SENT_REASONS = frozenset({"semantic_until_expired", "semantic_until_invalid", "semantic_config_unreadable",
+                               STOPPED_BEFORE_SEND})
+# The one-time disposition of a source reservation left without a result before
+# provably unsent requests were sealed. It may have been sent, so no late answer
+# is bound to it, and its questions may be asked once more.
+SUPERSEDED_UNRESOLVED = "unresolved_before_upgrade"
+_UNASKED_RESULTS = {"not_sent": _NOT_SENT_REASONS, "superseded": frozenset({SUPERSEDED_UNRESOLVED})}
+# fetch_jobs (kind, project_id, message_id) of the record that the disposition ran
+_SUPERSEDE_MARKER = ("patient_source_quality_supersede", 0, 0)
+
+
+def _unasked_key(result):
+    """Name the key of a sealed result that records no asked question, or None."""
+    if not isinstance(result, dict):
+        return None
+    return next((key for key in _UNASKED_RESULTS if set(result) == {"answers", "invalid", key}), None)
 
 
 def _quality_result_parts(meta, request):
     result = meta.get("quality_result")
-    if isinstance(result, dict) and set(result) == {"answers", "invalid", "not_sent"}:
-        # nothing was asked: no question is answered or counted invalid
-        if result["answers"] == {} and result["invalid"] == [] and result["not_sent"] in _NOT_SENT_REASONS:
+    unasked = _unasked_key(result)
+    if unasked is not None:
+        # nothing was asked, or the unresolved request was superseded: no question is answered or counted invalid
+        if (result["answers"] == {} and result["invalid"] == [] and result[unasked] in _UNASKED_RESULTS[unasked]
+                and (unasked != "superseded" or request["v"] == 2)):
             return {}, []
         return None
     if not isinstance(result, dict) or set(result) != {"answers", "invalid"}:
@@ -400,7 +419,7 @@ def patient_source_question_evidence(db, pid, identity, fact_ids):
         if parts is None:
             result["problems"].update(dict.fromkeys(matching, "unknown"))
             continue
-        if "not_sent" in meta["quality_result"]:
+        if _unasked_key(meta["quality_result"]) is not None:
             continue
         answers, invalid = parts
         checked = {fid: _source_answer_record(db, pid, usage_id, meta, request, fid, ref)
@@ -597,6 +616,48 @@ def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, i
     if updated != 1 or not saved or _quality_json(saved[0]) != candidate:
         raise ValueError("patient_summary_result_unverified")
     return updated
+
+
+def source_requests_superseded(db):
+    """Whether the one-time disposition of unresolved source reservations has run in this database."""
+    return db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=?",
+                      _SUPERSEDE_MARKER).fetchone() is not None
+
+
+def supersede_unresolved_source_requests_tx(db, now):
+    """Once per database, seal each source reservation still without a result as superseded.
+
+    The source reserver runs this first in the write transaction of each new
+    reservation, so only reservations made before the disposition record exists
+    are reached, however many callers run it. Each is sealed once, which lets its
+    questions be asked again. A later answer for it is refused by
+    ``patient_source_answer_binding``. Returns the number sealed, or None when
+    the record already exists."""
+    if not db.in_transaction:
+        raise RuntimeError("patient_source_transaction_required")
+    if source_requests_superseded(db):
+        return None
+    sealed = 0
+    rows = db.execute("SELECT artifact_id,project_id,meta FROM artifacts WHERE kind='semantic_usage' AND CASE "
+                      "WHEN typeof(meta)='text' AND length(meta)<=32768 AND json_valid(meta) THEN "
+                      "json_extract(meta,'$.operation')='patient_source_quality' "
+                      "AND json_type(meta,'$.quality_result') IS NULL END").fetchall()
+    for artifact_id, project_id, raw in rows:
+        meta = _quality_json(raw)
+        request = _quality_bound(meta)
+        # A malformed or v1 reservation stays unknown: no seal could make its evidence valid.
+        if (request is None or request["v"] != 2 or meta.get("operation") != "patient_source_quality"
+                or "quality_result" in meta or type(project_id) is not int or project_id <= 0):
+            continue
+        candidate = {**meta, "quality_result": {"answers": {}, "invalid": [], "superseded": SUPERSEDED_UNRESOLVED}}
+        if not _quality_result(db, project_id, candidate, request):
+            continue
+        sealed += db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=? AND kind='semantic_usage' AND meta=?",
+                             (json.dumps(candidate, separators=(",", ":")), artifact_id, raw)).rowcount
+    db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,payload,state,next_try,created_at,updated_at) "
+               "VALUES(?,?,?,NULL,?,'done',NULL,?,?)",
+               (*_SUPERSEDE_MARKER, json.dumps({"v": 1, "superseded": sealed}, separators=(",", ":")), now, now))
+    return sealed
 
 
 _SOURCE_PASS_POLICY_KEYS = ('model', 'match_threshold', 'nomatch_threshold',

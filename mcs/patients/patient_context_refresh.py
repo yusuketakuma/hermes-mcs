@@ -2116,7 +2116,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if lane == "C" and chosen and deferred_reason and deferred_reason.startswith("source_quality_"):
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
-                    "quality_hold_key": patient_context_refresh_state._source_quality_hold_key(ledger.db, pid, cfg, source, saved["_chunks_sig"]),
+                    "quality_hold_key": patient_context_refresh_sources._source_quality_state_key(
+                        ledger.db, pid, cfg, source, saved["_chunks_sig"], deferred_reason[len("source_quality_"):]),
                     "next_try": now + (0 if deferred_reason == "source_quality_pending" else 60)}, meta, source["message_id"])
             if not failure and result is not None:
                 proof_changed = lane != "A"
