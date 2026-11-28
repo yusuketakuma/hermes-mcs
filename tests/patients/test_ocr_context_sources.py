@@ -87,6 +87,7 @@ def test_attachment_coverage_distinguishes_pending_ready_and_opt_out(source_stor
     led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (original_source_keys.parse(key)[1],))
     unknown = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert not unknown['complete'] and unknown['pending'] == 1
+    assert 'unavailable' not in unknown
 
 
 def test_observed_unsupported_is_excluded_but_failed_is_pending(source_store, monkeypatch):
@@ -97,9 +98,27 @@ def test_observed_unsupported_is_excluded_but_failed_is_pending(source_store, mo
     monkeypatch.setattr(attachment_ocr, 'view', lambda *a, **kw: state)
     excluded = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert excluded['complete'] and excluded['excluded'] == 1 and excluded['eligible'] == 0
+    state['state'] = 'unavailable'
+    unavailable = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    assert unavailable['complete'] and unavailable['excluded'] == 1
+    assert unavailable['eligible'] == 0 and unavailable['pending'] == 0
+    assert unavailable['unavailable'] == 1
     state['state'] = 'failed'
     failed = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert not failed['complete'] and failed['pending'] == 1
+
+
+def test_pruned_attachment_without_ocr_completes_coverage_as_unavailable(source_store):
+    led, key, _ = source_store
+    before = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    artifact_id = original_source_keys.parse(key)[1]
+    with led.db:
+        led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,))
+        led.db.execute("UPDATE attachments SET state='pruned',local_path=NULL WHERE attachment_id=1")
+    coverage = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    assert coverage['complete'] and coverage['excluded'] == 1
+    assert coverage['unavailable'] == 1 and coverage['pending'] == 0
+    assert coverage['signature'] != before['signature']
 
 
 def test_image_only_post_readiness_releases_after_ocr_inference(source_store, monkeypatch):

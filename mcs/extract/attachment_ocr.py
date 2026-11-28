@@ -30,7 +30,7 @@ MAX_PAGES = 30
 MAX_TABLE_ENTRIES = 10000
 FAILURE_RETRY_S = 86400
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
-EXCLUDED_STATES = frozenset({"unsupported", "rejected_by_policy"})
+EXCLUDED_STATES = frozenset({"unsupported", "unavailable", "rejected_by_policy"})
 # Every state view() can report: stored document states plus not-yet-run and policy rejection.
 VIEW_STATES = frozenset(_STATES | {"unprocessed", "rejected_by_policy"})
 
@@ -158,7 +158,7 @@ def _hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _source(db, attachment_id, project_id=None):
+def _source(db, attachment_id, project_id=None, *, include_deleted=False):
     if (type(attachment_id) is not int or attachment_id <= 0
             or project_id is not None and (type(project_id) is not int or project_id <= 0)):
         return None
@@ -171,7 +171,7 @@ def _source(db, attachment_id, project_id=None):
     if (project_id is not None and row["project_id"] != project_id
             or not patient_scope_valid(db, row['project_id'])):
         return None
-    return row if row["body_state"] != "deleted" else None
+    return row if include_deleted or row["body_state"] != "deleted" else None
 
 
 
@@ -304,7 +304,10 @@ def rejected_failure(db, attachment_id, project_id=None, *, cfg=None):
 
 def view(db, attachment_id, project_id=None, include_text=False, *, cfg=None):
     """Expose status without attachment text outside an explicit detail read."""
-    source = _source(db, attachment_id, project_id)
+    source = _source(db, attachment_id, project_id, include_deleted=True)
+    if source is not None and (source["state"] in ("pending", "failed")
+            or source["body_state"] == "deleted" and source["state"] != "pruned"):
+        return {"state": "unprocessed", "page_count": 0}
     if source is None or source["state"] not in ("downloaded", "pruned"):
         return {"state": "unavailable", "page_count": 0}
     doc = current(db, attachment_id, project_id)

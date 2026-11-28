@@ -942,6 +942,8 @@ def attachment_report_view(db, project_id, message_ids, *, cursor=None, cfg=None
             "表構造を検証できず、設定によりOCR採用対象から除外。原本内容は未評価です。\n"
             + '原本の投稿: ' + excluded['original_project_url']})
     view['notes'] = ['該当ページの「誤りを報告」から、見落しを含む解析の訂正を依頼できます。原文・元画像は変更しません。']
+    if result.get('unavailable'):
+        view['notes'].append(f"原本未取得の添付 {result['unavailable']}件")
     if result['limited'] or result['pending']:
         view['notes'].append(f"点検未完了・今回の確認範囲に未解析 {result['pending']}件"
                              + ('。続きのページで確認してください。' if result['limited'] else '。'))
@@ -1594,6 +1596,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             status.append(f"紹介状: 確認対象の添付 {document_coverage.get('attachments_examined', 0)}件 / "
                           f"紹介状 {document_coverage.get('documents', 0)}件 / "
                           f"未解析 {document_coverage.get('pending', 0)}件"
+                          + (f" / 原本未取得 {document_coverage.get('unavailable', 0)}件"
+                             if document_coverage.get('unavailable') else "")
                           + ("（表示上限あり）" if document_coverage.get("limited") else "")
                           + ("・点検未完了" if not document_coverage.get("complete") else ""))
     if document_coverage and document_coverage.get("policy_rejected"):

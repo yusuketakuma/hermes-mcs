@@ -10,7 +10,7 @@ CFG = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
 
 
 @pytest.mark.parametrize('state', ['unsupported', 'failed', 'unprocessed', 'unavailable', 'deferred'])
-def test_shared_reader_only_excludes_explicitly_unsupported_attachments(tmp_path, monkeypatch, state):
+def test_shared_reader_excludes_confirmed_unavailable_attachments(tmp_path, monkeypatch, state):
     ledger, _ = seeded(tmp_path)
     try:
         monkeypatch.setattr(attachment_ocr, 'current', lambda *args, **kwargs: None)
@@ -19,9 +19,11 @@ def test_shared_reader_only_excludes_explicitly_unsupported_attachments(tmp_path
         ledger.db.execute('PRAGMA query_only=ON')
         reader = ocr_document_reader.read(ledger.db, 1, cfg=CFG)['coverage']
         core = mcs_queries.attachment_ocr_coverage(ledger.db, 1, CFG)
-        assert reader['excluded'] == core['excluded'] == int(state == 'unsupported')
-        assert reader['pending'] == core['pending'] == int(state != 'unsupported')
-        assert reader['complete'] == core['complete'] == (state == 'unsupported')
+        excluded = state in attachment_ocr.EXCLUDED_STATES
+        assert reader['excluded'] == core['excluded'] == int(excluded)
+        assert reader['pending'] == core['pending'] == int(not excluded)
+        assert reader['unavailable'] == core.get('unavailable', 0) == int(state == 'unavailable')
+        assert reader['complete'] == core['complete'] == excluded
         assert not reader['limited'] and ledger.db.total_changes == before
     finally:
         ledger.close()

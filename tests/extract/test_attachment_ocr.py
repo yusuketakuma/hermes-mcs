@@ -110,6 +110,16 @@ def test_source_change_during_processing_rejects_result(setup, monkeypatch, muta
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
 
 
+def test_attachment_download_retry_state_is_unprocessed_not_unavailable(setup):
+    ledger, cfg, _, _, _ = setup
+    with ledger.db:
+        ledger.db.execute("UPDATE attachments SET state='pending' WHERE attachment_id=1")
+    assert ocr.view(ledger.db, 1)["state"] == "unprocessed"
+    with ledger.db:
+        ledger.db.execute("UPDATE attachments SET state='failed' WHERE attachment_id=1")
+    assert ocr.view(ledger.db, 1)["state"] == "unprocessed"
+
+
 def test_empty_is_completed_not_unprocessed(setup):
     ledger, cfg, pages, _, _ = setup
     pages[0].update(text="", text_hash=ocr._hash(""))

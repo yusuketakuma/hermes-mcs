@@ -35,7 +35,7 @@ def bind(item, sources, *, schema, field_label):
 
 def _read(db, project_id, cfg, limit):
     coverage = {'state': 'unknown', 'attachments_examined': 0, 'documents': 0, 'excluded': 0,
-                'pending': 0, 'limited': False, 'complete': False}
+                'pending': 0, 'unavailable': 0, 'limited': False, 'complete': False}
     result = {'project_id': project_id, 'documents': [], 'coverage': coverage, 'excluded_documents': []}
     policy = attachment_ocr.rejection_policy(cfg)
     if policy:
@@ -62,6 +62,8 @@ def _read(db, project_id, cfg, limit):
             status = attachment_ocr.view(db, row['attachment_id'], project_id=project_id, cfg=cfg)
             state = status['state']
             coverage['excluded' if state in attachment_ocr.EXCLUDED_STATES else 'pending'] += 1
+            if state == 'unavailable':
+                coverage['unavailable'] += 1
             if state == 'rejected_by_policy':
                 coverage['policy_rejected'] += 1
                 result['excluded_documents'].append(status)
