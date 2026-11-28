@@ -142,8 +142,8 @@ abspath() {
 # data/ that holds only a first install's hold (and the update lock) is still a
 # fresh install for choosing the runtime; fresh-resume verifies it exactly later.
 # A first-install claim record predates data/, so data/ beside it is part of
-# the same first install even before the marker exists; the install lock
-# validates the record before any write.
+# the same first install even before the marker exists; the claim lock
+# re-validates the record before any write.
 _data_is_fresh_hold() {
     [ ! -L "$MCS_ROOT/data" ] || return 1
     _hold_claimed=0
@@ -326,12 +326,15 @@ EOF
     _lock_file="$_lock_data/update.lock"
     _claim_record="$MCS_ROOT/.install-claim.json"
     _install_lock_held=0
+    _claim_lock_fd=""
     _fresh_data_info=""
-    # The first-install evidence is a single noclobber record written outside
-    # data/ before data/ exists. Because data/ was absent when the record was
+    # The first-install evidence is a single record written outside data/
+    # before data/ exists. Because data/ was absent when the record was
     # written, any data/ found alongside the record is part of the same first
     # install — never a legacy install. The record is removed once the marker
     # inside data/ is confirmed; after that the marker itself is the evidence.
+    # Checking, publishing and removing the record happen only under the
+    # claim lock, so no run acts on a state another run has changed.
     _claim_record_text_for() {
         _ct_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の確保記録を確認できません"
         IFS=' ' read -r _ct_dev _ct_ino _ct_uid _ct_mode _ct_links <<EOF
@@ -344,10 +347,13 @@ EOF
             case "$_number" in ''|*[!0-9]*) die "初回導入の確保記録を確認できません" ;; esac
         done
         [ "$_ct_uid" = "$_lock_uid" ] || die "初回導入の確保記録を確認できません"
-        _claim_record_text="$(printf '{"version":1,"root":[%s,%s,%s,%s]}'             "$_ct_dev" "$_ct_ino" "$_ct_uid" "$((0$_ct_mode))")"
+        _claim_record_text="$(printf '{"version":1,"root":[%s,%s,%s,%s]}' \
+            "$_ct_dev" "$_ct_ino" "$_ct_uid" "$((0$_ct_mode))")"
     }
     # A present record is trusted only when it is a regular file owned by this
-    # user whose stored root identity still matches the live root.
+    # user whose stored root identity still matches the live root. Records are
+    # published complete by an atomic rename, so an empty or partial record is
+    # never one of ours: it is kept and the install stops.
     _validate_claim_record() {
         if [ -L "$_claim_record" ] || [ ! -f "$_claim_record" ]; then
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
@@ -356,21 +362,12 @@ EOF
         IFS=' ' read -r _cr_dev _cr_ino _cr_uid _cr_mode _cr_links <<EOF
 $_cr_info
 EOF
-        if ! { [ "$_cr_info" = "$_cr_dev $_cr_ino $_cr_uid $_cr_mode $_cr_links" ]             && [ "$_cr_uid" = "$_lock_uid" ] && [ "$_cr_mode" = 600 ] && [ "$_cr_links" = 1 ]; }; then
+        if ! { [ "$_cr_info" = "$_cr_dev $_cr_ino $_cr_uid $_cr_mode $_cr_links" ] \
+            && [ "$_cr_uid" = "$_lock_uid" ] && [ "$_cr_mode" = 600 ] && [ "$_cr_links" = 1 ]; }; then
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
         fi
         _claim_record_text_for
-        # The record is created empty (noclobber) and filled by one write that
-        # fits a single block, so an interrupted claim leaves it empty. While
-        # data/ and config.json are still absent, filling it is the same as a
-        # fresh claim (every writer writes these identical bytes).
-        if [ ! -s "$_claim_record" ] && [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ] \
-                && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ]; then
-            printf '%s\n' "$_claim_record_text" > "$_claim_record" \
-                || die "初回導入の確保記録を保存できません。データを保持してください"
-        fi
-        if ! printf '%s
-' "$_claim_record_text" | cmp -s - "$_claim_record"; then
+        if ! printf '%s\n' "$_claim_record_text" | cmp -s - "$_claim_record"; then
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
         fi
     }
@@ -411,6 +408,64 @@ EOF
             "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
             "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))")"
     }
+    # Take an exclusive lock on an open descriptor without waiting.
+    _lock_fd_nowait() {
+        if command -v lockf >/dev/null 2>&1; then
+            # Only EX_TEMPFAIL means the lock is held. A lockf without descriptor
+            # support (macOS 13-14, EX_USAGE) falls back to the same flock the
+            # reinstall branch takes on the inherited descriptor.
+            _lock_status=0
+            lockf -s -t 0 "$1" || _lock_status=$?
+            case "$_lock_status" in
+                0) ;;
+                75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                *)
+                    _flock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+                        || die "排他制御（lockf）を実行できず（終了コード ${_lock_status}）、代わりに使う Python も起動しません。変更は行っていません。担当者に確認してください"
+                    _lock_status=0
+                    "$_flock_py" -I -c '
+# mcs-installer-flock-fallback
+import fcntl, sys
+try: fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError: raise SystemExit(75) from None
+except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
+' "$1" || _lock_status=$?
+                    case "$_lock_status" in
+                        0) ;;
+                        75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                        *) die "排他制御を実行できません（lockf と Python の flock のどちらも使えません）。変更は行っていません。担当者に確認してください" ;;
+                    esac ;;
+            esac
+        elif command -v flock >/dev/null 2>&1; then
+            flock -n "$1" || die "別の導入または更新が進行中です。完了後に再実行してください"
+        else
+            die "排他制御を行う lockf または flock が必要です。導入してから再実行してください"
+        fi
+    }
+    # The claim lock is a kernel lock on the settings folder itself: it exists
+    # before data/, writes nothing, and the kernel drops it when its holder
+    # exits or crashes, so it never goes stale. It is held from the claim
+    # decision until the record is consumed and closed before any software
+    # preparation or long-lived child starts. Its descriptor avoids the
+    # updater's inherited run lock, as the install lock below does. A swapped
+    # folder is caught by the root identity the record and marker carry.
+    _claim_lock_take() {
+        if [ "${MCS_UPDATE_RUN_LOCK_FD:-}" = 7 ]; then
+            exec 6<"$MCS_ROOT" || die "設定フォルダーを開けません"
+            _claim_lock_fd=6
+        else
+            exec 7<"$MCS_ROOT" || die "設定フォルダーを開けません"
+            _claim_lock_fd=7
+        fi
+        _lock_fd_nowait "$_claim_lock_fd"
+    }
+    _claim_lock_release() {
+        case "$_claim_lock_fd" in
+            6) exec 6<&- ;;
+            7) exec 7<&- ;;
+        esac
+        _claim_lock_fd=""
+    }
     acquire_install_lock() {
     [ "$_install_lock_held" -eq 0 ] || return 0
     _check_install_dirs
@@ -420,34 +475,42 @@ EOF
         mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
     fi
     _safe_dir "$MCS_ROOT" || _unsafe_dir "設定フォルダー"
+    # The updater already holds update.lock with data/ present, which no claim
+    # can be published beside, so a reinstall needs no claim lock.
+    [ -n "${MCS_UPDATE_REINSTALL:-}" ] || _claim_lock_take
+    # The read-only checks judged this install from the state seen when they
+    # began. If another run has since published or consumed a record or
+    # created data/, stop before any write so the rerun judges afresh.
+    _now_claim=0
+    if [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then _now_claim=1; fi
+    _now_data=0
+    if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then _now_data=1; fi
+    if [ "$_now_claim" -ne "$_seen_claim" ] || [ "$_now_data" -ne "$_seen_data" ]; then
+        die "導入の確認中に別の導入が先に進みました。記録を保持して中止しました。同じコマンドを再実行してください"
+    fi
     _read_claim_state
     _claiming="$_claim_found"
-    if [ "$_claiming" -eq 0 ] && [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
+    if [ "$_claiming" -eq 0 ] && [ "$_now_data" -eq 0 ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
         if [ "${CONFIG_ABSENT:-0}" -ne 1 ]; then
             mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
         else
-            # First install: prove the absence of both data/ and config.json on
-            # the spot, then write the evidence record exactly once. Only the
-            # noclobber winner proceeds; a loser revalidates the winner's record
-            # and funnels into the same lock arbitration below. A config.json
-            # that appeared during the read-only checks keeps the reason the
-            # post-lock check reports for the same race.
+            # First install: data/ and the record are absent under the claim
+            # lock, so this run alone writes the evidence. It is published
+            # complete by a rename in the same folder; a crash before the
+            # rename leaves only the private temporary file, which the next
+            # claim under the lock replaces.
             if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
                 die "導入前の確認中に設定が作成されました。設定を保持して中止したため、内容を確認して再実行してください"
             fi
-            if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
-                die "初回導入の確保中に保存先が作成されました。保持したまま中止しました。担当者に確認してください"
-            fi
             _claim_record_text_for
-            if (set -C; printf '%s\n' "$_claim_record_text" > "$_claim_record") 2>/dev/null; then
-                _claiming=1
-            elif [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then
-                _validate_claim_record
-                _claiming=1
-            else
-                die "初回導入の確保記録を保存できません。データを保持してください"
-            fi
+            rm -f "$_claim_record.tmp" \
+                || die "初回導入の確保記録を保存できません。データを保持してください"
+            (set -C; printf '%s\n' "$_claim_record_text" > "$_claim_record.tmp") \
+                || die "初回導入の確保記録を保存できません。データを保持してください"
+            mv -f "$_claim_record.tmp" "$_claim_record" \
+                || die "初回導入の確保記録を保存できません。データを保持してください"
+            _claiming=1
         fi
     fi
     if [ "$_claiming" -eq 1 ]; then
@@ -509,44 +572,13 @@ EOF
             && [ "$_lock_owner" = "$_lock_uid" ] && [ "$_lock_mode" = 600 ] && [ "$_lock_links" = 1 ]; }; then
             die "排他制御ファイルの所有者または権限を確認できません"
         fi
-        if command -v lockf >/dev/null 2>&1; then
-            # Only EX_TEMPFAIL means the lock is held. A lockf without descriptor
-            # support (macOS 13-14, EX_USAGE) falls back to the same flock the
-            # reinstall branch takes on the inherited descriptor.
-            _lock_status=0
-            lockf -s -t 0 "$_install_lock_fd" || _lock_status=$?
-            case "$_lock_status" in
-                0) ;;
-                75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
-                *)
-                    _flock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
-                        || die "排他制御（lockf）を実行できず（終了コード ${_lock_status}）、代わりに使う Python も起動しません。変更は行っていません。担当者に確認してください"
-                    _lock_status=0
-                    "$_flock_py" -I -c '
-# mcs-installer-flock-fallback
-import fcntl, sys
-try: fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError: raise SystemExit(75) from None
-except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
-' "$_install_lock_fd" || _lock_status=$?
-                    case "$_lock_status" in
-                        0) ;;
-                        75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
-                        *) die "排他制御を実行できません（lockf と Python の flock のどちらも使えません）。変更は行っていません。担当者に確認してください" ;;
-                    esac ;;
-            esac
-        elif command -v flock >/dev/null 2>&1; then
-            flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
-        else
-            die "排他制御を行う lockf または flock が必要です。導入してから再実行してください"
-        fi
+        _lock_fd_nowait "$_install_lock_fd"
         [ "$(_lock_info "$_lock_file")" = "$(_held_info "$_install_lock_fd")" ] \
             || die "排他制御ファイルが変更されました。担当者に確認してください"
     fi
-    # Nothing classified before the lock is trusted after it. A run that held
-    # the lock meanwhile may have consumed the record (its marker or config
-    # now stands for the install) or written one; when the live state
-    # disagrees, stop before any write so the rerun classifies afresh.
+    # Writers that take only update.lock (the updater) are not excluded by the
+    # claim lock, so the record is read once more under update.lock; when the
+    # live state disagrees, stop before any write so the rerun judges afresh.
     _read_claim_state
     [ "$_claim_found" -eq "$_claiming" ] \
         || die "導入の確認中に別の導入が先に進みました。記録を保持して中止しました。同じコマンドを再実行してください"
@@ -570,11 +602,18 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
             || die "初回導入の確保記録を削除できません。記録を保持して担当者に確認してください"
         _fresh_claimed=1
     fi
+    [ -z "$_claim_lock_fd" ] || _claim_lock_release
     _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
     MCS_INSTALL_UPDATE_LOCK_FD="$_install_lock_fd"
     export MCS_INSTALL_UPDATE_LOCK_FD
     _install_lock_held=1
     }
+    # The view the read-only checks start from; acquire_install_lock writes
+    # only while the live claim record and data/ still match it.
+    _seen_claim=0
+    if [ -e "$_claim_record" ] || [ -L "$_claim_record" ]; then _seen_claim=1; fi
+    _seen_data=0
+    if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then _seen_data=1; fi
     _check_install_dirs
     # Check interrupted provider migrations before creating or opening a lock.
     if [ -e "$_lock_data/.provider-settings-pending.json" ] || [ -L "$_lock_data/.provider-settings-pending.json" ] \
