@@ -119,14 +119,16 @@ OCR_RETAINED_UNVERIFIED = {"unverified": True}
 def _ocr_retained(data, cfg, now):
     """Count originals kept for OCR past the warning age; None when none were observed.
 
-    A walk the deadline cut short returns OCR_RETAINED_UNVERIFIED, never a count or None."""
+    A walk the deadline cut short, or a read that failed once the ledger was open,
+    returns OCR_RETAINED_UNVERIFIED, never a count or None."""
     warn_days = ocr_retained_warn_days(cfg)
     until = time.monotonic() + 2.0
     if not finite_number(now) or any(os.path.lexists(path) for path in _ocr_markers(data)):
         return None
-    ages, more = [], False
+    ages, more, opened = [], False, False
     try:
         with _ocr_ledger_snapshot(data, until) as db:
+            opened = True
             # The rows prune_attachments selects (a stored original only), oldest first.
             cursor = db.execute("SELECT attachment_id, state, downloaded_at FROM attachments "
                                 "WHERE state='downloaded' AND local_path IS NOT NULL AND downloaded_at < ? "
@@ -144,8 +146,9 @@ def _ocr_retained(data, cfg, now):
             if time.monotonic() >= until:
                 return OCR_RETAINED_UNVERIFIED
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, RecursionError):
-        # Only a walk the deadline stopped is unconfirmed; an unreadable ledger is not observed.
-        return OCR_RETAINED_UNVERIFIED if time.monotonic() >= until else None
+        # A ledger that cannot be opened is not observed; a failed read of an open ledger,
+        # or a walk the deadline stopped, leaves retention unconfirmed.
+        return OCR_RETAINED_UNVERIFIED if opened or time.monotonic() >= until else None
     if not ages:
         return None
     # Counts and the oldest age only: never an attachment, message or patient identifier.

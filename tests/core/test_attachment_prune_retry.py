@@ -2,7 +2,9 @@
 import json
 import os
 import hashlib
+import sqlite3
 import time
+from contextlib import closing
 
 import pytest
 
@@ -304,7 +306,7 @@ def test_retained_count_stops_at_its_deadline_and_reports_it_as_unconfirmed(tmp_
     assert (report["state"], report["reason"]) == ("unknown", "attachment_ocr_original_retained_unverified")
     assert report["retained_originals"] == {"unverified": True}
     text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
-    assert "時間内に確認できませんでした" in text and "件あります" not in text
+    assert "確認できませんでした" in text and "件あります" not in text
     db.close()
 
 
@@ -328,7 +330,7 @@ def test_unconfirmed_walk_rides_along_when_another_ocr_reason_wins(tmp_path, mon
     assert report["reason"] == "attachment_ocr_processing_failed"
     assert report["retained_originals"] == {"unverified": True}
     text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
-    assert "件数は、時間内に確認できませんでした" in text
+    assert "件数は、確認できませんでした" in text
     db.close()
 
 
@@ -367,6 +369,24 @@ def test_unreadable_ledger_is_not_reported_as_zero_or_as_a_warning(tmp_path):
     assert not (tmp_path / "ledger.db").exists()
     report = _ocr_health(tmp_path)
     assert report["state"] == "ok" and "retained_originals" not in report
+
+
+@pytest.mark.parametrize("schema", [
+    "CREATE TABLE attachments(attachment_id INTEGER PRIMARY KEY)",  # the columns retention reads are missing
+    "CREATE TABLE unrelated(x INTEGER)",                              # no attachments table at all
+])
+def test_failed_read_of_an_opened_ledger_is_unconfirmed_not_healthy(tmp_path, schema):
+    # The ledger opens, but the retention read fails long before the 2-second deadline.
+    with closing(sqlite3.connect(tmp_path / "ledger.db")) as db:
+        db.execute(schema)
+        db.commit()
+    _healthy_ocr_status(tmp_path)
+    report = _ocr_health(tmp_path)
+    # Without the fix the read error returned "not observed" and the result stayed 'ok'.
+    assert (report["state"], report["reason"]) == ("unknown", "attachment_ocr_original_retained_unverified")
+    assert report["retained_originals"] == {"unverified": True}
+    text = "\n".join(health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]))
+    assert "確認できませんでした" in text and "時間内" not in text and "件あります" not in text
 
 
 def test_crash_after_unlink_is_resumable_and_does_not_count_missing_payload(tmp_path, monkeypatch):
