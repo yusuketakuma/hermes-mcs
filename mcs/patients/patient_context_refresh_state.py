@@ -469,7 +469,7 @@ def _source_quality_hold_key(db, pid, cfg, source, chunks_sig):
         **({"source_key": context_plan.source_key(source)} if isinstance(context_plan.source_key(source), str) else {}))
     scope = context_queries.patient_context_scope(db, pid)
     return _digest([cfg, _quality_assessment_code(), scope, binding, source.get("first_seen"),
-                    context_plan.source_signature(source), chunks_sig])
+                    context_plan.source_signature(source), chunks_sig, context_artifacts.SOURCE_REPAIR_RULE])
 
 
 def _comparison_context(value, sources, *, facts=None, prefix_ids=()):

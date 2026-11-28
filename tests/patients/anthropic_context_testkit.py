@@ -296,7 +296,12 @@ def source_repair(runtime, cloud, monkeypatch):
         led.synthetic_jev_requests.append(body)
         answers = {}
         target = body['state']['target']
-        if target['id'] == 'source_coverage' and control['qa_fault'] == 'unknown':
+        # An optional marker confines the answer fault to the sources whose text holds it.
+        marker = control.get('qa_fault_marker')
+        qa_fault = (control['qa_fault'] if marker is None
+                    or marker in json.dumps(body['state'].get('context'), ensure_ascii=False) else None)
+        sent = [prompt for prompt in control['sent'] if marker is None or marker in prompt['source']]
+        if target['id'] == 'source_coverage' and qa_fault == 'unknown':
             raise TimeoutError('synthetic Jev result unknown')
         for qid, question in body['questions'].items():
             options = question['criteria']
@@ -305,12 +310,15 @@ def source_repair(runtime, cloud, monkeypatch):
                 choice = 'complete' if {_REPAIR_HOME, _REPAIR_BED} <= texts else 'missing'
             else:
                 choice = 'supports' if 'supports' in options else 'omission_ok'
-            if target['id'] == 'source_coverage' and control['qa_fault'] == 'ambiguous':
+            if target['id'] == 'source_coverage' and qa_fault == 'ambiguous':
                 choice = 'ambiguous'
+            # Low-confidence faults answer the original candidate only; a repaired one is answered surely.
+            low = not sent and (qa_fault == 'low_confidence' if target['id'] == 'source_coverage'
+                                else qa_fault == 'low_confidence_support')
             answers[qid] = {'type':'choice','choice':choice,
-                'confidence':.1 if target['id'] == 'source_coverage' and control['qa_fault'] == 'low_confidence' else 1.0,
+                'confidence':.1 if low else 1.0,
                 'probabilities':{option:float(option == choice) for option in options}}
-        if target['id'] == 'source_coverage' and control['qa_fault'] == 'invalid':
+        if target['id'] == 'source_coverage' and qa_fault == 'invalid':
             answers = {}
         return 200, {}, json.dumps({'model':_source_repair_jev.JEV_MODEL, 'answers':answers,
                                    'usage':{'input_tokens':1,'output_tokens':1}}).encode()
