@@ -1,4 +1,35 @@
-"""Real v1.3.0 parent update harness using the repository's actual tagged source."""
+"""Real v1.3.0 parent update harness using the repository's actual tagged source.
+
+Only the search and signal boundary is isolated; the old updater's quiesce,
+stray sweep and verification code run unmodified. Launch paths of one run:
+
+- Driver: ``<guard>/venv/bin/python3 -c _PARENT_DRIVER repo home base target
+  notices``. Its PATH is ``<tmp>/bin`` (fake pgrep, launchctl, hermes) ahead of
+  the inherited PATH, whose first entry is the conftest guard-bin (pkill and
+  killall exit 97). XPC_SERVICE_NAME and MCS_JOB_PID are removed, so the
+  services step never hands a reload to a detached waiter.
+- Post-merge child: v1.3.0 ``_run_post_merge`` starts ``[sys.executable,
+  REPO/mcs/ops/mcs_update.py, --post-merge]`` with the inherited PATH in a new
+  session. sys.executable is the guard interpreter, so the child loads the
+  signal guard and finds the fake pgrep.
+- Python with isolation options (``sys.executable -I ...``: the planning
+  source probe, run_log ``_drain`` and helper ``exec``, snapshot workers, the
+  preflight version probes of the services python): the guard ``.pth`` is in
+  the interpreter's own site-packages, which ``-I`` still reads.
+- Services python ``~/.hermes/hermes-agent/venv/bin/python{,3}``: a /bin/sh
+  wrapper that execs the guard interpreter.
+- Shell children: the synthetic one-line install.sh, the services wrapper, and
+  ``/bin/sh -c RELOAD_SCRIPT`` (only for the caller's own launchd label or a
+  bootout that never completes; the fake launchctl always completes it). They
+  call launchctl by bare name (the fake); their ``kill -0`` is signal 0.
+- Absolute-path commands: ``/bin/ps -axo``, ``/bin/launchctl list``,
+  ``/bin/ps -o lstart``, ``/usr/sbin/sysctl`` (read-only observations of the
+  host) and ``/usr/bin/git`` (on the temporary clone). None can send a signal;
+  the harness refuses to run if either tree gains an absolute-path pgrep,
+  pkill, killall or kill.
+- Synthetic targets are children of the pytest process and stay unreaped
+  until the run ends, so their pids cannot be reused by another process.
+"""
 import json
 import os
 from pathlib import Path
@@ -13,9 +44,11 @@ import ledger
 import provider_settings
 import run_log_install
 import semantic_jev
+import update_child_guard_testkit
 
 
 SOURCE = Path(__file__).resolve().parents[2]
+_UNGUARDED_SIGNAL_TOOLS = r"/(usr/)?s?bin/(pgrep|pkill|killall|kill)\b"
 
 
 def _git(repo, *args, check=True):
@@ -110,27 +143,12 @@ sys.exit(0)
     path.chmod(0o755)
 
 
-def _fake_pgrep(path):
-    # pgrep exit 1 is the updater's documented "no stray drainers" answer.
-    path.write_text('#!/bin/sh\nexit 1\n')
-    path.chmod(0o755)
-
-
 _PARENT_DRIVER = r'''
-import importlib.util, json, os, re, subprocess, sys
+import importlib.util, json, os, sys
 from pathlib import Path
-repo, home, base, target = sys.argv[1:]
-_real_kill = os.kill
-def _guarded_kill(pid, sig):
-    probe = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
-                           capture_output=True, text=True, timeout=2)
-    command = probe.stdout.strip()
-    if probe.returncode != 0 or not command:
-        raise RuntimeError('synthetic kill guard: target process unverifiable')
-    if re.search(r'(^|/)[Pp]ython[0-9.]*\s+\S*(extract_llm|semantic_drain)[.]py(\s|$)', command):
-        raise RuntimeError('synthetic kill guard: drainer-shaped process')
-    return _real_kill(pid, sig)
-os.kill = _guarded_kill
+repo, home, base, target, notices = sys.argv[1:]
+if 'mcs_harness_child_guard' not in sys.modules:
+    sys.exit('harness: the signal guard is not loaded')
 os.environ['HOME'] = home
 os.environ['MCS_ROOT'] = home
 os.environ['MCS_UPDATE_REPO'] = repo
@@ -184,7 +202,11 @@ patch('precheck_local', lambda *a, **k: [])
 patch('_standalone_drainer_problems', lambda: [])
 patch('restart_services', lambda *a, **k: None)
 patch('_migrate_log_tail', lambda: None)
-patch('_enqueue_notice', lambda *a, **k: True)
+def _notice(text, *a, **k):
+    with open(notices, 'a') as stream:
+        stream.write(json.dumps({'text': text, 'notice_code': k.get('notice_code')}) + '\n')
+    return True
+patch('_enqueue_notice', _notice)
 result = updater.apply(None, None, None, reinstall=True, install_args=('--no-llm',),
                        candidate_sha=target, base_sha=base,
                        confirm_human=True, reason='synthetic real-parent validation')
@@ -228,6 +250,10 @@ def _world(tmp_path, *, failing_install=False):
     _git(repo, 'commit', '-qm', 'synthetic installer boundary')
     target = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
     _git(repo, 'checkout', '-q', '--detach', base)
+    for rev in (base, target):
+        found = _git(repo, 'grep', '-nE', _UNGUARDED_SIGNAL_TOOLS, rev, '--', '.',
+                     ':!tests', ':!integration', ':!docs', ':!changes', check=False)
+        assert found.returncode == 1, 'a launch path this harness does not guard:\n' + found.stdout
 
     home = tmp_path / 'home'
     bin_dir = tmp_path / 'bin'
@@ -253,12 +279,12 @@ def _world(tmp_path, *, failing_install=False):
     db.close()
     run_log_install.prepare(str(home), str(SOURCE), str(home / '.mcs-recovery'), promote=True)
 
-    bin_dir.mkdir()
+    guard = update_child_guard_testkit.create(tmp_path / 'guard', bin_dir)
     _fake_launchctl(bin_dir / 'launchctl')
     _fake_hermes(bin_dir / 'hermes')
-    _fake_pgrep(bin_dir / 'pgrep')
     fake_state = tmp_path / 'fake-launchd'
-    env = dict(os.environ)
+    env = {key: value for key, value in os.environ.items()
+           if key not in ('XPC_SERVICE_NAME', 'MCS_JOB_PID')}
     env.update({
         'HOME': str(home), 'MCS_ROOT': str(home), 'MCS_UPDATE_REPO': str(repo),
         'MCS_TEST_SANDBOX': '1', 'PYTHONDONTWRITEBYTECODE': '1',
@@ -267,29 +293,48 @@ def _world(tmp_path, *, failing_install=False):
         'PATH': str(bin_dir) + os.pathsep + os.environ.get('PATH', ''),
     })
     # Service generation validates the Hermes runtime before writing plists.
-    # The real test interpreter sits behind the expected venv path. The
+    # The guard interpreter sits behind the expected venv path. The
     # operator-requested reinstall already reaches install.sh before settings.
     python = home / '.hermes/hermes-agent/venv/bin/python3'
     python.parent.mkdir(mode=0o700, parents=True)
-    python.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+    python.write_text(f'#!/bin/sh\nexec {guard.python} "$@"\n')
     python.chmod(0o755)
     (python.parent / 'python').write_text((python).read_text())
     (python.parent / 'python').chmod(0o755)
-    return repo, home, base, target, env
+    return repo, home, base, target, env, guard
 
 
 def _run_parent(world):
-    repo, home, base, target, env = world
-    result = subprocess.run([sys.executable, '-c', textwrap.dedent(_PARENT_DRIVER),
-                             str(repo), str(home), base, target],
+    repo, home, base, target, env, guard = world
+    result = subprocess.run([str(guard.python), '-c', textwrap.dedent(_PARENT_DRIVER),
+                             str(repo), str(home), base, target, str(guard.root / 'notices.jsonl')],
                             env=env, capture_output=True, text=True, timeout=120)
     return result
 
 
+def _synthetic_process():
+    # A plain sleeper, not drainer-shaped: only the fake pgrep makes it a stray.
+    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+
+
+def _stop(process):
+    # an unreaped child of this test: its pid is still ours to signal
+    if process.poll() is None:
+        process.kill()
+    process.wait(timeout=10)
+
+
 def test_real_v130_parent_applies_current_target_without_writer_block(tmp_path):
-    repo, home, base, target, _ = _world(tmp_path)
-    result = _run_parent((repo, home, base, target, _))
+    world = _world(tmp_path)
+    repo, home, base, target, _env, guard = world
+    result = _run_parent(world)
     assert result.returncode == 0, result.stdout + result.stderr
+    # the new-code child and the driver both ran behind the signal guard
+    installed = guard.records('installed')
+    assert any('--post-merge' in row['argv'] for row in installed), installed
+    assert any(row['argv'][1:2] == ['-c'] for row in installed), installed
     assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == target
     assert not (home / 'data/update_in_progress.marker').exists()
     state = json.loads((home / 'data/update_state.json').read_text())
@@ -300,9 +345,10 @@ def test_real_v130_parent_applies_current_target_without_writer_block(tmp_path):
 
 
 def test_real_v130_parent_rolls_back_when_child_fails_before_settings(tmp_path):
-    repo, home, base, target, env = _world(tmp_path, failing_install=True)
+    world = _world(tmp_path, failing_install=True)
+    repo, home, base, target, _env, _guard = world
     before_authority = (home / 'data/.provider-settings-authority.json').read_bytes()
-    result = _run_parent((repo, home, base, target, env))
+    result = _run_parent(world)
     assert result.returncode == 1, result.stdout + result.stderr
     assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
     assert not (home / 'data/update_in_progress.marker').exists()
@@ -312,16 +358,45 @@ def test_real_v130_parent_rolls_back_when_child_fails_before_settings(tmp_path):
     assert 'provider_settings_migration_started' not in json.dumps(state)
 
 
-def test_real_v130_harness_cannot_kill_drainer_shaped_process(tmp_path):
-    script = tmp_path / 'extract_llm.py'
-    script.write_text('import time\ntime.sleep(60)\n')
-    stray = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def test_real_v130_child_refuses_a_stray_outside_the_allow_list(tmp_path):
+    # The old sweep finds the decoy and signals it; the guard refuses every
+    # signal, so the decoy survives and the update stops before the merge.
+    decoy = _synthetic_process()
     try:
         world = _world(tmp_path)
+        repo, home, base, _target, _env, guard = world
+        guard.report(decoy.pid)
         result = _run_parent(world)
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert stray.poll() is None
+        assert decoy.poll() is None
+        signals = guard.records('signal')
+        # three TERM passes and a final KILL, each refused inside the child
+        assert [(row['signal'], row['allowed']) for row in signals if row['target'] == decoy.pid] == [
+            (15, False), (15, False), (15, False), (9, False)], signals
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
+        assert not (home / 'data/update_in_progress.marker').exists()
+        notices = (guard.root / 'notices.jsonl').read_text()
+        assert 'stray_drainer_survived' in notices, notices
     finally:
-        if stray.poll() is None:
-            stray.terminate()
-            stray.wait(timeout=5)
+        _stop(decoy)
+
+
+def test_real_v130_child_stops_an_allowed_synthetic_stray(tmp_path):
+    # The legitimate target: listed for both the search and the signal.
+    stray = _synthetic_process()
+    try:
+        world = _world(tmp_path)
+        repo, home, _base, target, _env, guard = world
+        guard.report(stray.pid)
+        guard.allow(stray.pid)
+        result = _run_parent(world)
+        assert stray.wait(timeout=10) == -15
+        signals = guard.records('signal')
+        assert [(row['signal'], row['allowed']) for row in signals if row['target'] == stray.pid] == [
+            (15, True)], signals
+        assert all(row['allowed'] for row in signals), signals
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == target
+        assert not (home / 'data/update_in_progress.marker').exists()
+    finally:
+        _stop(stray)
