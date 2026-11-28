@@ -20,7 +20,12 @@ import pytest
 from test_mcs_update import updater  # noqa: F401
 
 
-@pytest.mark.parametrize("hold", ["runtime", "stop_unverified", "provider_migration", "journal_unwritable"])
+# provider_migration: the child journaled the consolidation start, then failed
+# (hold for recovery). provider_migration_unstarted: a migration was required
+# but the child failed before that record, so settings are untouched and the
+# parent takes the rollback route like any other failure.
+@pytest.mark.parametrize("hold", ["runtime", "stop_unverified", "provider_migration",
+                                  "provider_migration_unstarted", "journal_unwritable"])
 def test_post_merge_failure_survives_early_recovery_hold(
         updater, monkeypatch, capsys, hold):  # noqa: F811
     previous, target = "a" * 40, "b" * 40
@@ -78,7 +83,8 @@ def test_post_merge_failure_survives_early_recovery_hold(
     monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater.update_migrations, "apply", lambda *_a: False)
-    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: hold == "provider_migration")
+    monkeypatch.setattr(updater, "_provider_migration_needed",
+                        lambda: hold in ("provider_migration", "provider_migration_unstarted"))
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     # This test starts after the merge; the pre-merge bridge refusal is tested separately.
     monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a: True)
@@ -104,6 +110,9 @@ def test_post_merge_failure_survives_early_recovery_hold(
         # The child can advance beyond the parent's post_merge snapshot.
         current["stages"].append({"stage": "reinstall", "at": 123})
         current["applying"]["runtime_snapshot"] = {"synthetic": True}
+        if hold == "provider_migration":
+            # the child's durable start record, written before its first settings write
+            current["applying"]["provider_settings_migration_started"] = True
         updater.journal_store.save_state(updater.STATE_PATH, current)
         applying_at_failure.append(copy.deepcopy(current["applying"]))
         applying_at_failure.append(copy.deepcopy(current["stages"]))
