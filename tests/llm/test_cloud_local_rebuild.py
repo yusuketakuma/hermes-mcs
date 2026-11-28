@@ -325,10 +325,14 @@ def test_an_unregistered_contract_turns_the_permit_into_proof_changed(legacy, mo
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
 
 
-def test_a_frame_only_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
+@pytest.mark.parametrize('frame_only', [
+    'c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65',
+    '5cb44f05e7f891c08c2c5fbbaf4552c0756de69afd7e7b98707f8d546f2d6d85',
+    '68b3a528d6257790a36504d31b6c29ed4a82a2069f946981f715ee36454fe1a1',
+])
+def test_a_frame_only_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch, frame_only):
     ledger, _ = legacy
     current = local_rebuild._context_contract
-    frame_only = 'c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65'
     monkeypatch.setattr(local_rebuild, '_context_contract', lambda: frame_only)
     plan = local_rebuild.preview(ledger)['plan']
     _, receipt = _approve(ledger, plan)
