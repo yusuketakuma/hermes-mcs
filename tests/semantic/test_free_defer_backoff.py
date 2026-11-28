@@ -1,23 +1,29 @@
 """A free deterministic semantic hold (no call that may have run a model or
 sent a request, no Jev request, no saved stage) waits NOT_SENT_BACKOFF_S and
 hands its slot to the next due job, while LLM-availability defers and holds
-that ran a model keep the one-minute retry.
+that ran a model keep the one-minute retry. A pre-send cloud refusal hands
+its slot on but waits the hour only when proven a settled repeat.
 
 Synthetic fixtures and temp DB only; the processor or, for the real-path
 tests, only the transport boundary is stubbed."""
 import json
+import sqlite3
 import time
 from contextlib import contextmanager
 
 import pytest
 
+import anthropic_client
+import cloud_policy
 import semantic_drain
 import semantic_job_processor
 import semantic_llm
 import semantic_runtime as runtime
 import semantic_transport
 from inference_version import CURRENT_VERSION, VERSION_KEY
+from semantic_cloud_testkit import cloud as cloud, rows as rows, snapshot as snapshot
 from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.fixture
@@ -289,13 +295,13 @@ def _job_id(db, mid):
 
 @pytest.mark.parametrize('stage', ['cloud_unit_unresolved', 'llm_turn_busy'])
 def test_real_unsent_cloud_holds_yield_to_the_tail(tmp_path, monkeypatch, stage):
-    """#417 through the real run_due and _process_job, only the transport
+    """Through the real run_due and _process_job with the cloud context
     replaced: head jobs whose cloud send is refused as unresolved before any
-    reservation stop re-heading the queue every minute, and the job behind
-    them runs. Before the fix the refusal's measured time (llm_s > 0) and its
-    member-level code kept the minute retry and the only slot, so the
-    measured pass served [100] and left next_try = updated_at + 60. A busy
-    GPU turn can clear within a minute and keeps both."""
+    reservation hand their slot to the job behind them. Before the fix the
+    refusal's measured time (llm_s > 0) kept the only slot, so the measured
+    pass served [100]. A refusal that carries no proof of a settled repeat
+    keeps the minute retry: the stage name alone never grants the hour. A
+    busy GPU turn can clear within a minute and keeps both."""
     def answer(root, prompt):
         if root == _TAIL:
             return _llm(prompt)
@@ -340,12 +346,7 @@ def test_real_unsent_cloud_holds_yield_to_the_tail(tmp_path, monkeypatch, stage)
             assert metric['retry_reason'] == 'cloud_unit_unresolved'
             assert metric['llm_s'] > 0
             assert row['state'] == 'pending' and row['attempts'] == 0
-            assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
-        # a re-seed after an input change makes the hold due again
-        db.save_messages([_message(_HELD[0], body="合成の別本文です。")], project_id=1)
-        db.semantic_seed(1, [_HELD[0]], {"source": "synthetic"})
-        row = _row(db, held[0])
-        assert row['state'] == 'pending' and row['next_try'] <= time.time()
+            assert row['next_try'] == row['updated_at'] + 60
     finally:
         db.close()
 
@@ -359,7 +360,7 @@ def test_answered_cloud_call_before_an_unsent_refusal_keeps_minute_and_slot(
     repair reservation is refunded), so nothing is paid or saved. The answered
     call may have been billed, so this is no free hold: the job keeps the
     minute retry and the only slot. Treating every cloud call as unsent would
-    give next_try = updated_at + NOT_SENT_BACKOFF_S and serve the tail too."""
+    serve the tail too."""
     head = _HELD[0]
     repairs = []
 
@@ -406,3 +407,114 @@ def test_answered_cloud_call_before_an_unsent_refusal_keeps_minute_and_slot(
         assert _row(db, tail)['state'] == 'pending'
     finally:
         db.close()
+
+
+_CLOUD_HEADS = (1, 2)    # message 1 is the cloud fixture's own seeded job
+_CLOUD_TAIL = 3
+
+
+def _answer_every_send(monkeypatch):
+    """The provider's HTTP boundary answers each prompt synthetically."""
+    sent = []
+
+    def request(self, method, body, timeout, **kw):
+        content = body["messages"][0]["content"]
+        prompt = content if isinstance(content, str) else "".join(b["text"] for b in content)
+        sent.append(prompt)
+        return 200, {}, json.dumps({
+            "model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": _llm(prompt)}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    return sent
+
+
+def _refuse_heads(monkeypatch, kind):
+    """The shared send-history check refuses the head members' fresh sends:
+    a verified repeat of an already settled request, a locked read, or (for
+    a member that owns a paid unit) a budget wait that can lift by itself."""
+    real = cloud_policy.request_send_block_reason
+    seen = []
+
+    def guard(ledger, cfg, body, **kwargs):
+        mid = kwargs.get("message_id")
+        if mid not in _CLOUD_HEADS:
+            return real(ledger, cfg, body, **kwargs)
+        seen.append(mid)
+        if kind == "settled_repeat":
+            raise cloud_policy._classified(cloud_policy.AnthropicError(
+                "budget_exceeded", "cloud_unit_unresolved"), "repeat_failed")
+        if kind == "read_locked":
+            raise sqlite3.OperationalError("database is locked")
+        return "daily_cap"
+
+    monkeypatch.setattr(cloud_policy, "request_send_block_reason", guard)
+    if kind == "owned_send_wait":
+        owns = cloud_policy.owns_member_request
+        monkeypatch.setattr(cloud_policy, "owns_member_request", lambda db, **kw: (
+            kw.get("target_id") in _CLOUD_HEADS or owns(db, **kw)))
+    return seen
+
+
+@pytest.mark.parametrize("cloud_only", [True, False])
+@pytest.mark.parametrize("kind", ["settled_repeat", "read_locked", "owned_send_wait"])
+def test_real_cloud_unresolved_heads_yield_and_only_settled_repeats_wait(
+        cloud, monkeypatch, kind, cloud_only):
+    """Through the real run_due, _process_job, backlog_inference and
+    CloudInferenceUnit with only the HTTP send and the send-history verdict
+    replaced: head jobs refused as cloud_unit_unresolved before any
+    reservation hand their slot on, in the resident cloud-only lane
+    (max_jobs=1) as in the mixed lane, and the tail is done in the same pass.
+    Only a verified settled repeat waits NOT_SENT_BACKOFF_S; a locked read or
+    an owned member's send wait may clear by itself and keeps the minute.
+
+    Without the fix the cloud-only lane kept the slot (out['done'] == 0) and
+    the mixed lane gave every refusal the hour by its name alone (next_try ==
+    updated_at + NOT_SENT_BACKOFF_S for read_locked and owned_send_wait)."""
+    led, cfg, _, _ = cloud
+    cfg.clear()
+    cfg.update({**_cfg("shadow"), "cloud_llm": {"mode": "on", "project_ids": [1]}})
+    monkeypatch.setattr(semantic_transport, "llm_chat", _no_local_model)
+    sent = _answer_every_send(monkeypatch)
+    seen = _refuse_heads(monkeypatch, kind)
+
+    def drain(max_jobs):
+        with legacy_cloud_routes():
+            return semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 300,
+                                          jev_client=_FakeJev(), lane="backlog",
+                                          max_jobs=max_jobs, cloud_only=cloud_only)
+
+    led.save_messages([_message(_CLOUD_HEADS[1])])
+    led.semantic_seed(1, [_CLOUD_HEADS[1]], {"source": "history_import"})
+    snapshot(led)
+    heads = [_job_id(led, mid) for mid in _CLOUD_HEADS]
+    # First pass: the heads save what precedes their refused call.
+    drain(len(_CLOUD_HEADS))
+    assert not sent
+    led.save_messages([_message(_CLOUD_TAIL)])
+    led.semantic_seed(1, [_CLOUD_TAIL], {"source": "history_import"})
+    snapshot(led)
+    tail = _job_id(led, _CLOUD_TAIL)
+    with led.db:
+        led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+    del seen[:]
+    out = drain(1)
+    assert set(seen) == set(_CLOUD_HEADS)
+    assert out["done"] == 1 and _row(led, tail)["state"] == "done"
+    assert sent    # only the tail reached the provider
+    assert not [r for r in rows(led, "cloud_usage_reserve") if r["message_id"] in _CLOUD_HEADS]
+    wait = semantic_drain.NOT_SENT_BACKOFF_S if kind == "settled_repeat" else 60
+    metrics = {m["job_id"]: m for m in out["job_metrics"]}
+    for job_id in heads:
+        metric, row = metrics[job_id], _row(led, job_id)
+        assert metric["status"] == "deferred" and metric["jev_requests"] == 0
+        assert metric["retry_reason"] == "cloud_unit_unresolved"
+        assert row["state"] == "pending" and row["attempts"] == 0
+        assert row["next_try"] == row["updated_at"] + wait
+    if kind == "settled_repeat":
+        # a re-seed after an input change makes the hold due again
+        led.save_messages([_message(_CLOUD_HEADS[0], body="合成の別本文です。")])
+        led.semantic_seed(1, [_CLOUD_HEADS[0]], {"source": "history_import"})
+        row = _row(led, heads[0])
+        assert row["state"] == "pending" and row["next_try"] <= time.time()

@@ -1384,9 +1384,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
 
 NOT_SENT_BACKOFF_S = 3600
 # Cloud refusals semantic_transport raises before any reservation or send
-# (CloudNotSent, or a send blocked before reservation) whose answer only an
-# input change can alter. A refused call of these stages is timed like any
-# call but is not evidence that a model ran or a request left.
+# (CloudNotSent, or a send blocked before reservation). A refused call of
+# these stages is timed like any call but is not evidence that a model ran
+# or a request left; only one the transport marks ``settled_repeat`` is
+# known to wait on an input change.
 UNSENT_HOLD_STAGES = frozenset({"cloud_unit_unresolved"})
 
 
@@ -1483,6 +1484,12 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                             return cloud(prompt, timeout=timeout)
                         except runtime.LLMNotSent as error:
                             unsent = getattr(error, "stage", None) in UNSENT_HOLD_STAGES
+                            if unsent:
+                                # The long wait needs every such refusal of
+                                # this pass proven a settled repeat.
+                                diagnostics["unsent_settled"] = (
+                                    diagnostics.get("unsent_settled", True)
+                                    and getattr(error, "settled_repeat", False) is True)
                             raise
                         finally:
                             if llm_timing is not None:
