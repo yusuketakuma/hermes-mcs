@@ -8,11 +8,13 @@ used by the synthetic CLI tests available.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import errno
 import ipaddress
 import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -56,32 +58,46 @@ for candidate in /usr/bin/pgrep /bin/pgrep; do
     if [ -x "$candidate" ]; then real="$candidate"; break; fi
 done
 [ -n "$real" ] || { echo 'pgrep: not available in MCS tests' >&2; exit 3; }
-self_parent="$(ps -o ppid= -p "$$" 2>/dev/null | tr -d ' ')"
-case "$self_parent" in ''|*[!0-9]*) echo 'pgrep: ps cannot report process parents' >&2; exit 3 ;; esac
+# The run's root must be a live, listable process before any answer is trusted.
+seen="$(ps -o pid= -p "$root" 2>/dev/null)" || { echo 'pgrep: the MCS test root cannot be listed' >&2; exit 3; }
+[ "$(printf '%s' "$seen" | tr -d ' \n')" = "$root" ] || { echo 'pgrep: the MCS test root cannot be listed' >&2; exit 3; }
 out="$("$real" "$@")"
 rc=$?
 [ "$rc" -eq 0 ] || exit "$rc"
+# One listing taken after the search; its exit status is kept (no pipe).
+table="$(ps -A -o pid=,ppid=)" || { echo 'pgrep: ps failed' >&2; exit 3; }
+verdict="$(printf '%s\n' "$table" | MCS_PGREP_MATCHES="$out" awk -v root="$root" -v self="$$" '
+    NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad = 1; next }
+    { parent[$1] = $2 }
+    END {
+        if (bad || !(root in parent)) { print "UNVERIFIED"; exit }
+        count = split(ENVIRON["MCS_PGREP_MATCHES"], line, "\n")
+        for (i = 1; i <= count; i++) {
+            if (line[i] == "") continue
+            split(line[i], field, " ")
+            pid = field[1]
+            if (pid !~ /^[0-9]+$/ || pid == self) continue
+            if (!(pid in parent)) { print "MISSING " pid; continue }
+            walk = pid
+            for (depth = 0; depth < 64 && walk > 1; depth++) {
+                if (walk == root) { print "KEEP " line[i]; break }
+                if (!(walk in parent)) break
+                walk = parent[walk]
+            }
+        }
+    }')" || { echo 'pgrep: awk failed' >&2; exit 3; }
 found=1
-while IFS=' ' read -r pid rest; do
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    [ "$pid" != "$$" ] || continue
-    parent="$pid"
-    depth=0
-    while [ "$parent" -gt 1 ] && [ "$depth" -lt 64 ]; do
-        if [ "$parent" = "$root" ]; then
-            printf '%s%s\n' "$pid" "${rest:+ $rest}"
-            found=0
-            break
-        fi
-        parent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
-        # an empty answer is a process that ended meanwhile; anything else that
-        # is not a pid means ps cannot be trusted
-        case "$parent" in '') break ;; *[!0-9]*) echo 'pgrep: unreadable ps output' >&2; exit 3 ;; esac
-        depth=$((depth + 1))
-    done
-done <<MCS_PGREP_OUTPUT
-$out
-MCS_PGREP_OUTPUT
+while IFS=' ' read -r kind rest; do
+    case "$kind" in
+        UNVERIFIED) echo 'pgrep: unreadable ps output or unknown test root' >&2; exit 3 ;;
+        KEEP) printf '%s\n' "$rest"; found=0 ;;
+        MISSING)
+            # Drop a match only when it is proven gone; alive but not listed is unverifiable.
+            if kill -0 "$rest" 2>/dev/null; then echo 'pgrep: a match is alive but not listed' >&2; exit 3; fi ;;
+    esac
+done <<MCS_PGREP_VERDICT
+$verdict
+MCS_PGREP_VERDICT
 exit "$found"
 """
 
@@ -264,9 +280,19 @@ def _process_table():
     # The saved Popen class, not subprocess.run: a test that replaces
     # subprocess.Popen to record its own calls must not see this lookup.
     try:
-        with _ORIGINAL_POPEN(["ps", "-A", "-o", "pid=,ppid=,pgid="], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as process:
-            output = process.communicate(timeout=20)[0]
+        process = _ORIGINAL_POPEN(["ps", "-A", "-o", "pid=,ppid=,pgid="], stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+    try:
+        output = process.communicate(timeout=20)[0]
+    except subprocess.TimeoutExpired:
+        # Reap only the helper this call started; the saved kill avoids re-entering the guard.
+        with contextlib.suppress(OSError):
+            _ORIGINAL_KILL(process.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            process.communicate(timeout=20)
+        return None
     except (OSError, subprocess.SubprocessError):
         return None
     if process.returncode != 0:
@@ -294,43 +320,61 @@ def _in_test_tree(pid: int, table=None) -> bool:
     return False
 
 
-def _signal_allowed(pid: int) -> bool:
-    """Decide whether a real signal may be sent.
+def _refuse():
+    raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+
+
+def _check_signal(pid: int) -> None:
+    """Return when a real signal may be sent to `pid`; raise otherwise.
 
     A single process must belong to this run. A process group (pid 0, a
-    negative pid, killpg) is allowed only when every live member belongs to
-    this run: a descendant in the group does not vouch for the others, and a
-    group outlives its leader. A target that does not exist is left to the
-    kernel, which reports it."""
+    negative pid, killpg) needs every live member to belong to this run: a
+    descendant in the group does not vouch for the others, and a group
+    outlives its leader. A target the process table does not show is probed
+    with signal 0: the kernel's own error (no such process, not permitted) is
+    raised as it is, and a target that exists without being listed is refused.
+    Nothing is sent on an unproven target."""
     if pid == os.getpid():
-        return True
+        return
     if pid == -1:
-        return False
+        _refuse()
     table = _process_table()
     if table is None:
-        return False
+        _refuse()
     if pid > 0:
         if pid in table:
-            return _in_test_tree(pid, table)
-        try:
-            _ORIGINAL_KILL(pid, 0)
-        except OSError:
-            return True       # absent or not ours: the real call reports it
-        return False          # alive but not in the snapshot: not provably ours
+            if _in_test_tree(pid, table):
+                return
+            _refuse()
+        _ORIGINAL_KILL(pid, 0)      # raises the kernel's answer for an absent target
+        _refuse()                   # alive but not listed: not provably ours
     group = os.getpgrp() if pid == 0 else -pid
     members = [member for member, (_parent, member_group) in table.items() if member_group == group]
-    return all(_in_test_tree(member, table) for member in members)
+    if not members:
+        _ORIGINAL_KILLPG(group, 0)  # raises the kernel's answer for an absent group
+        _refuse()                   # the group exists but none of it is listed
+    if not all(_in_test_tree(member, table) for member in members):
+        _refuse()
+
+
+def _signal_allowed(pid: int) -> bool:
+    """The decision of `_check_signal` as a value, for tests that must not send."""
+    try:
+        _check_signal(pid)
+    except OSError:
+        return False
+    return True
 
 
 def _guarded_kill(pid, sig):
-    if sig != 0 and not _signal_allowed(pid):
-        raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+    if sig != 0:
+        _check_signal(pid)
     return _ORIGINAL_KILL(pid, sig)
 
 
 def _guarded_killpg(pgid, sig):
-    if sig != 0 and not _signal_allowed(-pgid if pgid > 0 else 0 if pgid == 0 else -1):
-        raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+    if sig != 0:
+        _check_signal(-pgid if pgid > 0 else 0 if pgid == 0 else -1)
     return _ORIGINAL_KILLPG(pgid, sig)
 
 

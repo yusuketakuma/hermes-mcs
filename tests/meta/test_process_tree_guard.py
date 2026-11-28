@@ -20,8 +20,10 @@ import pytest
 import mcs_test_guard
 
 _SLEEP = "import time; time.sleep(30)"
-# Blocks until the test opens the FIFO, then exits when the test closes it.
-_DECOY = "import sys; open(sys.argv[2]).read()"
+# Blocks until the test opens the FIFO, then exits when the test closes it. If the
+# test never opens it (an error or an interruption before the handshake), the
+# alarm ends the decoy by itself.
+_DECOY = "import signal, sys; signal.alarm(30); stream = open(sys.argv[2]); signal.alarm(0); stream.read()"
 
 
 def _exists(pid):
@@ -112,9 +114,12 @@ def test_pgrep_reports_no_match_when_only_outside_processes_match(processes):
 
 
 @pytest.mark.parametrize("ps_body,root", [
-    ("exit 1\n", None),                # ps fails
-    ("echo not-a-pid\n", None),        # ps answers something that is not a pid
+    ("exit 1\n", None),               # ps fails
+    ("exit 2\n", None),               # ps fails without output
+    ("exit 0\n", None),               # ps succeeds but lists nothing
+    ("echo not-a-pid\n", None),       # ps answers something that is not a pid
     (None, "x"),                       # the run's root is unknown
+    (None, "9999999"),                 # the run's root is a number that is not a live process
 ])
 def test_pgrep_that_cannot_verify_is_not_a_no_match(tmp_path, ps_body, root):
     # update_services treats exit 1 as "none left" and anything above as unverifiable
@@ -127,6 +132,25 @@ def test_pgrep_that_cannot_verify_is_not_a_no_match(tmp_path, ps_body, root):
     if root is not None:
         env["MCS_TEST_ROOT_PID"] = root
     found = subprocess.run(["pgrep", "-f", "mcs-guard-none"], env=env, capture_output=True, text=True)
+    assert found.returncode == 3 and found.stdout == ""
+
+
+@pytest.mark.parametrize("listing", [
+    "exit 2",                                   # the listing after the search fails
+    "exit 0",                                   # ... or is empty
+    'echo "$MCS_TEST_ROOT_PID 1"',              # ... or does not show a live match
+])
+def test_pgrep_with_a_match_it_cannot_place_is_unverified(tmp_path, processes, listing):
+    token, child, _decoy, _group = processes
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    # the root check (`-p`) answers; only the full listing after the search is broken
+    (tools / "ps").write_text('#!/bin/sh\ncase " $* " in *" -A "*) ' + listing
+                              + ' ;; *) echo "$MCS_TEST_ROOT_PID" ;; esac\n')
+    (tools / "ps").chmod(0o755)
+    env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"])
+    found = subprocess.run(["pgrep", "-f", token], env=env, capture_output=True, text=True)
+    assert child.poll() is None
     assert found.returncode == 3 and found.stdout == ""
 
 
@@ -195,3 +219,54 @@ def test_unreadable_process_table_refuses_instead_of_allowing(monkeypatch):
     assert not mcs_test_guard._signal_allowed(os.getppid())
     assert not mcs_test_guard._signal_allowed(0)
     assert mcs_test_guard._signal_allowed(os.getpid())
+
+
+def _recording_signals(monkeypatch, probe):
+    """Replace both real senders: record every call, answer signal 0 with `probe`."""
+    sent = []
+
+    def kill(pid, sig):
+        sent.append(("kill", pid, sig))
+        if sig == 0:
+            probe()
+
+    def killpg(group, sig):
+        sent.append(("killpg", group, sig))
+        if sig == 0:
+            probe()
+
+    monkeypatch.setattr(mcs_test_guard, "_ORIGINAL_KILL", kill)
+    monkeypatch.setattr(mcs_test_guard, "_ORIGINAL_KILLPG", killpg)
+    return sent
+
+
+def _raise(error):
+    def probe():
+        raise error
+    return probe
+
+
+@pytest.mark.parametrize("send,target", [
+    (os.kill, 4242), (os.kill, -4242), (os.killpg, 4242)])
+def test_target_missing_from_the_process_table_is_never_signalled(monkeypatch, send, target):
+    # a readable table that does not show the target proves nothing about who owns it
+    table = {os.getpid(): (os.getppid(), os.getpgrp())}
+    monkeypatch.setattr(mcs_test_guard, "_process_table", lambda: table)
+
+    # it exists after all: refused
+    sent = _recording_signals(monkeypatch, lambda: None)
+    with pytest.raises(PermissionError, match="disabled in MCS tests"):
+        send(target, signal.SIGTERM)
+    assert [call[2] for call in sent] == [0]
+
+    # it does not exist: the kernel's own answer, and still nothing is sent
+    sent = _recording_signals(monkeypatch, _raise(ProcessLookupError(errno.ESRCH, "No such process")))
+    with pytest.raises(ProcessLookupError):
+        send(target, signal.SIGTERM)
+    assert [call[2] for call in sent] == [0]
+
+    # any other failure of the probe is not turned into permission to send
+    sent = _recording_signals(monkeypatch, _raise(OSError(errno.EIO, "Input/output error")))
+    with pytest.raises(OSError) as raised:
+        send(target, signal.SIGTERM)
+    assert raised.value.errno == errno.EIO and [call[2] for call in sent] == [0]
