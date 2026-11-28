@@ -307,8 +307,11 @@ def source_repair(runtime, cloud, monkeypatch):
                 choice = 'supports' if 'supports' in options else 'omission_ok'
             if target['id'] == 'source_coverage' and control['qa_fault'] == 'ambiguous':
                 choice = 'ambiguous'
+            # Low-confidence faults answer the original candidate only; a repaired one is answered surely.
+            low = not control['sent'] and (control['qa_fault'] == 'low_confidence' if target['id'] == 'source_coverage'
+                                           else control['qa_fault'] == 'low_confidence_support')
             answers[qid] = {'type':'choice','choice':choice,
-                'confidence':.1 if target['id'] == 'source_coverage' and control['qa_fault'] == 'low_confidence' else 1.0,
+                'confidence':.1 if low else 1.0,
                 'probabilities':{option:float(option == choice) for option in options}}
         if target['id'] == 'source_coverage' and control['qa_fault'] == 'invalid':
             answers = {}

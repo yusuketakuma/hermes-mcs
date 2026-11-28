@@ -620,8 +620,18 @@ def source_occurrence(db, pid, source):
             "scope":{key:scope.get(key) for key in ("project_id","project_type","karte_id","is_archived")}}
 
 
+# Bump when source_repair_inputs accepts different answers: it is part of the
+# source quality hold key, so every held source is re-evaluated once.
+SOURCE_REPAIR_RULE = 2
+
+
 def source_repair_inputs(db, pid, captured, threshold):
-    """Only explicit, confident normal FAIL permits one extraction repair."""
+    """Return the protected facts, finding codes and evidence digest of one explicit source FAIL.
+
+    A negative answer names a finding at any confidence, as it already records the FAIL;
+    confidence only decides which supported facts the repair keeps. A supported fact
+    below the threshold is re-extracted and audited again like any other new fact. An
+    ambiguous answer names no finding and holds the source."""
     import semantic_runtime
     identity, protected, codes = captured['identity'], {}, set()
     by_id = {fact['id']:fact for fact in captured['facts']}
@@ -633,11 +643,12 @@ def source_repair_inputs(db, pid, captured, threshold):
             raise ValueError('patient_context_source_repair_unresolved')
         for fid in ids:
             answer = evidence['answers'][fid]
-            if answer['confidence'] < threshold or answer['choice'] == 'ambiguous':
+            if answer['choice'] == 'ambiguous':
                 raise ValueError('patient_context_source_repair_unresolved')
             evidence_hash.update(bytes.fromhex(_digest([fid, evidence['references'][fid]])))
             if fid in by_id and answer['choice'] == 'supports':
-                protected[fid] = by_id[fid]
+                if answer['confidence'] >= threshold:
+                    protected[fid] = by_id[fid]
             elif fid in by_id and answer['choice'] in ('not_supported','contradicts'):
                 codes.add(answer['choice'])
             elif fid not in by_id and answer['choice'] == 'missing':
