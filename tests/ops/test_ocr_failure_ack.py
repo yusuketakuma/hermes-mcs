@@ -150,7 +150,7 @@ def test_borrowed_plan_success_and_failure_do_not_end_callers_transaction(case):
     assert case.db.execute("SELECT 1 FROM artifacts WHERE kind='synthetic_outer'").fetchone() is None
 
 
-def test_transaction_failure_is_atomic_and_keeps_backup(case):
+def test_transaction_failure_is_atomic_and_removes_backup(case):
     req = request(case)
     case.db.execute("CREATE TRIGGER reject_ocr_receipt BEFORE INSERT ON command_receipts "
                     "BEGIN SELECT RAISE(ABORT,'synthetic receipt rejection'); END")
@@ -158,7 +158,34 @@ def test_transaction_failure_is_atomic_and_keeps_backup(case):
         operator.apply(case.root, req)
     assert not case.ledger.artifacts(ack.KIND)
     assert not case.db.execute('SELECT 1 FROM command_receipts').fetchone()
-    assert len(list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db'))) == 1
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
+
+
+def test_stale_plan_after_backup_removes_the_copy(case, monkeypatch):
+    req = request(case)
+    real = ack.build_plan
+    calls = 0
+
+    def stale_second_read(db, ids):
+        nonlocal calls
+        calls += 1
+        current = real(db, ids)
+        return current if calls == 1 else {**current, 'targets': []}
+
+    monkeypatch.setattr(operator.ack, 'build_plan', stale_second_read)
+    with pytest.raises(ValueError, match='stale_plan'):
+        operator.apply(case.root, req)
+    assert not case.ledger.artifacts(ack.KIND)
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
+
+
+def test_low_disk_rejects_before_creating_backup(case, monkeypatch):
+    req = request(case)
+    monkeypatch.setattr(operator.shutil, 'disk_usage', lambda _path: SimpleNamespace(free=0))
+    with pytest.raises(ValueError, match='backup_disk_low'):
+        operator.apply(case.root, req)
+    assert not case.ledger.artifacts(ack.KIND)
+    assert list(case.data.glob('ocr_alert_acknowledgements/*/before-*.db')) == []
 
 
 def test_receipt_copy_failure_reports_applied_and_replays_only_copy(case, monkeypatch):

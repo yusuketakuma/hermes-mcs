@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, suppress
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 
 import attachment_ocr_ack as ack  # noqa: E402
+from local_backup import backup_need_mb  # noqa: E402
 from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
 from mcs_util import strict_json, valid_text  # noqa: E402
 from notify_cards import mark_snapshot_dirty  # noqa: E402
@@ -106,46 +108,56 @@ def apply(root, request, *, wait_seconds=0):
                 finally:
                     db.rollback()
                 archive.mkdir(mode=0o700, parents=True, exist_ok=True)
-                fd, name = tempfile.mkstemp(prefix='before-', suffix='.db', dir=archive)
-                os.close(fd)
-                with closing(sqlite3.connect(name)) as backup:
-                    db.backup(backup)
-                    if backup.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-                        raise ValueError('backup_verification_failed')
-                with open(name, 'rb') as stream:
-                    os.fsync(stream.fileno())
-                fsync_dir(str(archive))
-                db.execute('BEGIN IMMEDIATE')
+                ledger_path = str(data / 'ledger.db')
+                if shutil.disk_usage(archive).free / (1024 * 1024) < backup_need_mb(ledger_path):
+                    raise ValueError('backup_disk_low')
+                name = None
                 try:
-                    if _receipt(db, request['command_id'], digest) is not None:
-                        raise ValueError('ocr_ack_state_changed')
-                    if ack.build_plan(db, ids) != request['plan']:
-                        raise ValueError('stale_plan')
-                    now = time.time()
-                    acknowledgement_ids = []
-                    for item in request['plan']['targets']:
-                        source = db.execute('SELECT project_id,message_id FROM artifacts WHERE artifact_id=?',
-                                            (item['artifact_id'],)).fetchone()
-                        content = {'schema': ack.SCHEMA, 'target': item,
-                                   'command_id': request['command_id'], 'request_hash': digest}
-                        cursor = db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) '
-                            'VALUES(?,?,?,?,?,?)', (ack.KIND, source[0], source[1], canonical(content).decode(),
-                            canonical({'failure_artifact_id': item['artifact_id']}).decode(), now))
-                        acknowledgement_ids.append(cursor.lastrowid)
-                    receipt = {'kind': ack.COMMAND, 'command_id': request['command_id'],
-                        'payload_hash': digest, 'outcome': 'applied', 'actor': request['actor'],
-                        'reason': request['reason'], 'human_confirmed': True, 'processed_at': now,
-                        'plan': request['plan'], 'targets': request['plan']['targets'],
-                        'acknowledgement_ids': acknowledgement_ids,
-                        'backup': str(Path(name).relative_to(data)),
-                        'ocr_outcome': 'failed', 'source_coverage': 'unrecovered',
-                        'clinical_review': 'not_proven', 'original_file_availability': 'not_rechecked'}
-                    db.execute('INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)',
-                        (request['command_id'], digest, None, None, 'applied', canonical(receipt).decode(), now))
-                    mark_snapshot_dirty(db)
-                    db.commit()
+                    fd, name = tempfile.mkstemp(prefix='before-', suffix='.db', dir=archive)
+                    os.close(fd)
+                    with closing(sqlite3.connect(name)) as backup:
+                        db.backup(backup)
+                        if backup.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                            raise ValueError('backup_verification_failed')
+                    with open(name, 'rb') as stream:
+                        os.fsync(stream.fileno())
+                    fsync_dir(str(archive))
+                    db.execute('BEGIN IMMEDIATE')
+                    try:
+                        if _receipt(db, request['command_id'], digest) is not None:
+                            raise ValueError('ocr_ack_state_changed')
+                        if ack.build_plan(db, ids) != request['plan']:
+                            raise ValueError('stale_plan')
+                        now = time.time()
+                        acknowledgement_ids = []
+                        for item in request['plan']['targets']:
+                            source = db.execute('SELECT project_id,message_id FROM artifacts WHERE artifact_id=?',
+                                                (item['artifact_id'],)).fetchone()
+                            content = {'schema': ack.SCHEMA, 'target': item,
+                                       'command_id': request['command_id'], 'request_hash': digest}
+                            cursor = db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) '
+                                'VALUES(?,?,?,?,?,?)', (ack.KIND, source[0], source[1], canonical(content).decode(),
+                                canonical({'failure_artifact_id': item['artifact_id']}).decode(), now))
+                            acknowledgement_ids.append(cursor.lastrowid)
+                        receipt = {'kind': ack.COMMAND, 'command_id': request['command_id'],
+                            'payload_hash': digest, 'outcome': 'applied', 'actor': request['actor'],
+                            'reason': request['reason'], 'human_confirmed': True, 'processed_at': now,
+                            'plan': request['plan'], 'targets': request['plan']['targets'],
+                            'acknowledgement_ids': acknowledgement_ids,
+                            'backup': str(Path(name).relative_to(data)),
+                            'ocr_outcome': 'failed', 'source_coverage': 'unrecovered',
+                            'clinical_review': 'not_proven', 'original_file_availability': 'not_rechecked'}
+                        db.execute('INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)',
+                            (request['command_id'], digest, None, None, 'applied', canonical(receipt).decode(), now))
+                        mark_snapshot_dirty(db)
+                        db.commit()
+                    except BaseException:
+                        db.rollback()
+                        raise
                 except BaseException:
-                    db.rollback()
+                    if name is not None:
+                        with suppress(OSError):
+                            os.unlink(name)
                     raise
             # Everything after DB commit is a receipt copy, never another ack.
             try:
