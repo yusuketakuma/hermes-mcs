@@ -474,14 +474,15 @@ def test_real_cloud_unresolved_heads_yield_and_only_settled_repeats_wait(
     updated_at + NOT_SENT_BACKOFF_S for read_locked and owned_send_wait)."""
     led, cfg, _, _ = cloud
     cfg.clear()
-    cfg.update({**_cfg("shadow"), "cloud_llm": {"mode": "on", "project_ids": [1]}})
+    cfg.update({**_cfg("shadow", job_budget_seconds=1260),
+                "cloud_llm": {"mode": "on", "project_ids": [1]}})
     monkeypatch.setattr(semantic_transport, "llm_chat", _no_local_model)
     sent = _answer_every_send(monkeypatch)
     seen = _refuse_heads(monkeypatch, kind)
 
     def drain(max_jobs):
         with legacy_cloud_routes():
-            return semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 300,
+            return semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
                                           jev_client=_FakeJev(), lane="backlog",
                                           max_jobs=max_jobs, cloud_only=cloud_only)
 
