@@ -31,6 +31,10 @@ from semantic_usage_receipts import (
     _quality_request as _quality_request,
     _quality_bound as _quality_bound,
     _NOT_SENT_REASONS as _NOT_SENT_REASONS,
+    STOPPED_BEFORE_SEND as STOPPED_BEFORE_SEND,
+    PRE_SEND_STOPS as PRE_SEND_STOPS,
+    source_requests_superseded as source_requests_superseded,
+    supersede_unresolved_source_requests_tx as supersede_unresolved_source_requests_tx,
     _quality_result_parts as _quality_result_parts,
     _quality_answer_evidence as _quality_answer_evidence,
     _source_quality_rows as _source_quality_rows,
@@ -887,6 +891,9 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
         def check():
             nonlocal day
             guard("jev_reserve")
+            if purpose == "source":
+                # No source reservation precedes the one-time disposition of earlier unresolved ones.
+                supersede_unresolved_source_requests_tx(ledger.db, time.time())
             ids = ([value["fact_id"] for value in request["questions"].values()] if purpose == "source"
                    else list(request["questions"].values()))
             evidence = patient_source_question_evidence(ledger.db, project_id, identity, ids) if purpose == "source" else None
@@ -1047,14 +1054,30 @@ def _can_bind_call(fn, *args, **kwargs):
     return True
 
 
+def _not_sent_reason(error):
+    """Name the stop that ended an attempt after its reservation and before its POST."""
+    from semantic_jev import JevError
+    if isinstance(error, RuntimeGuardError):
+        reason = ("runtime_budget" if isinstance(error, RuntimeBudget) else
+                  "runtime_off" if isinstance(error, RuntimeOff) else
+                  "runtime_stale" if isinstance(error, RuntimeStale) else None)
+    else:
+        reason = error.detail if isinstance(error, JevError) else None
+    return reason if reason in PRE_SEND_STOPS else STOPPED_BEFORE_SEND
+
+
 class JevEvaluation:
     """Bind one job's evaluation guards, reservation and timing without client mutation."""
     def __init__(self, client, guard, reserve, cutoff, transport, timing, config_path=None, not_sent=None):
         self._client = client
+        self._not_sent = not_sent
         unsent = [None]   # committed by reserve, not yet past its pre-POST attempt hook
+        # The last reservation with the client's started-POST count when it was committed.
+        self._undispatched = undispatched = [None]
 
         def reserving(body, timeout):
             unsent[0] = reserve(body, timeout)
+            undispatched[0] = (unsent[0], getattr(client, "requests_made", None))
             return unsent[0]
 
         def windowed(stage):
@@ -1073,6 +1096,7 @@ class JevEvaluation:
             try:
                 _jev_window_check(True, config_path=config_path)
             except JevError as error:
+                undispatched[0] = None   # settled here with the window's own reason
                 if not_sent is not None:
                     with suppress(Exception):   # unsealed, it stays unresolved: fail closed
                         not_sent(pending, error.detail)
@@ -1121,6 +1145,24 @@ class JevEvaluation:
         self._guard("jev_result")
         return result
 
+    def _settle_undispatched(self, error):
+        """Seal the last reservation as not sent when the client proves its POST never started.
+
+        Only a client whose ``counts_dispatch`` is true qualifies: its
+        ``requests_made`` rises right before a POST starts and falls back only
+        for a refusal raised before any byte is sent. An unchanged count since
+        the reservation is that proof. Any other exit keeps the reservation
+        unresolved, so a request that may have been sent is never asked again.
+        The seal names the stop ``error`` that ended the attempt."""
+        entry, self._undispatched[0] = self._undispatched[0], None
+        if entry is None or self._not_sent is None or getattr(self._client, "counts_dispatch", False) is not True:
+            return
+        reservation, made = entry
+        if type(made) is not int or getattr(self._client, "requests_made", None) != made:
+            return
+        with suppress(Exception):   # unsealed, it stays unresolved: fail closed
+            self._not_sent(reservation, _not_sent_reason(error))
+
     def _evaluate(self, state, questions, deadline, **hooks):
         started = time.perf_counter()
         try:
@@ -1130,6 +1172,7 @@ class JevEvaluation:
                 self._timing["s"] += time.perf_counter() - started
 
     def evaluate(self, state, questions, deadline):
+        self._undispatched[0] = None
         try:
             if not getattr(self._client, "supports_attempt_hooks", False):
                 if self._reserve is not None:
@@ -1152,6 +1195,7 @@ class JevEvaluation:
             if hasattr(error, "kind") and hasattr(error, "retryable"):
                 with suppress(Exception):
                     self._client.last_error = error
+            self._settle_undispatched(error)
             raise
 
 

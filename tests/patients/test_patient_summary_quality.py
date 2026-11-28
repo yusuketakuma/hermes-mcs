@@ -1021,6 +1021,130 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
     assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS)
 
 
+def test_reservation_stopped_before_its_post_is_sealed_and_asked_again(quality_owner, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    led, clock, cfg, doc, sends, _ = quality_owner
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+
+    def key(*_):
+        # The key rotates once the reservation is committed, before the client's POST.
+        with closing(sqlite3.connect(path)) as other:
+            committed = other.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0]
+        return 'synthetic-rotated-key' if committed else 'synthetic-jev-key'
+    monkeypatch.setattr(semantic_jev, 'api_key', key)
+    with pytest.raises(semantic_runtime.RuntimeStale):
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+            lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert not sends
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    assert meta['quality_result'] == {'answers': {}, 'invalid': [], 'not_sent': 'runtime_stale'}
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'pending' and len(sends) == 1
+    assert len(led.artifacts('semantic_usage')) == 2
+
+
+def test_unsent_reservation_is_not_rewritten_once_the_writer_generation_expires(quality_owner, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    led, clock, cfg, doc, sends, _ = quality_owner
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+
+    def generation(**_):
+        # An update replaces this code once the reservation is committed, before the client's POST.
+        with closing(sqlite3.connect(path)) as other:
+            committed = other.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0]
+        return not committed
+    monkeypatch.setattr(worker, '_writer_current', generation)
+    with pytest.raises(semantic_runtime.RuntimeStale):
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+            lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert not sends
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    # The expired generation does not seal it: it stays unresolved, as code from before this release left it.
+    assert 'quality_result' not in meta
+    monkeypatch.setattr(worker, '_writer_current', lambda **_: True)
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    # Its outcome is unknown to the current generation, so the question is never sent again.
+    assert status == 'unknown' and not sends
+    assert len(led.artifacts('semantic_usage')) == 1
+
+
+def test_answer_received_after_the_deadline_is_kept_and_reused(quality_owner, monkeypatch):
+    led, clock, cfg, doc, sends, _ = quality_owner
+    post = semantic_jev.JevClient
+
+    def slow(**kwargs):
+        client = post(**kwargs)
+        sent = client._post_fn
+
+        def late(body, timeout):
+            # The answer arrives once the step's deadline has passed.
+            clock.mono += 601
+            clock.wall += 601
+            return sent(body, timeout)
+        client._post_fn = late
+        return client
+    monkeypatch.setattr(semantic_jev, 'JevClient', slow)
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'pending' and len(sends) == 1
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    assert semantic_runtime.patient_summary_usage_resolved(led.db, 1, meta)
+    monkeypatch.setattr(semantic_jev, 'JevClient', post)
+    status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'passed' and len(sends) == 1
+    assert patient_context_quality_receipts._quality_passed(led.db, 1, identity)
+
+
+@pytest.mark.parametrize('moment', ['entrance', 'inserted'])
+def test_reservation_reaching_the_commit_margin_is_rolled_back_and_asked_next_run(quality_owner, monkeypatch, moment):
+    led, clock, cfg, doc, sends, _ = quality_owner
+    deadline = clock.mono + 600
+    add, reserver = led.artifact_add_tx, semantic_runtime.patient_summary_usage_reserver
+    inserted = []
+
+    def margin_reached():
+        clock.mono = deadline - patient_context_refresh_state.COMMIT_MARGIN + 0.25
+
+    def spied(kind, *args, **kwargs):
+        artifact_id = add(kind, *args, **kwargs)
+        if kind == 'semantic_usage':
+            inserted.append(artifact_id)
+            if moment == 'inserted':
+                margin_reached()
+        return artifact_id
+
+    def reserving(*args, **kwargs):
+        reserve = reserver(*args, **kwargs)
+
+        def entered(body, timeout):
+            if moment == 'entrance':
+                margin_reached()
+            return reserve(body, timeout)
+        return entered
+    monkeypatch.setattr(led, 'artifact_add_tx', spied)
+    monkeypatch.setattr(semantic_runtime, 'patient_summary_usage_reserver', reserving)
+    with pytest.raises(patient_context_refresh_state.Deferred, match='patient_summary_quality_lock'):
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, deadline,
+            lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    # Without the commit-margin check the reservation commits and is then sealed as not sent.
+    assert not sends and not led.artifacts('semantic_usage')
+    # Reached at the entrance, the reservation is refused before its INSERT runs.
+    assert len(inserted) == (moment == 'inserted')
+    monkeypatch.setattr(led, 'artifact_add_tx', add)
+    monkeypatch.setattr(semantic_runtime, 'patient_summary_usage_reserver', reserver)
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'pending' and len(sends) == 1
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    assert semantic_runtime.patient_summary_usage_resolved(led.db, 1, meta)
+
+
 @pytest.mark.parametrize("code,reason,failure,child_wait,expected", [
     ("deadline", "source_quality_unavailable:deadline", None, False, {"quality_detail": "deadline"}),
     ("deadline", "summary_quality_deferred", None, False, {"quality_detail": "deadline"}),

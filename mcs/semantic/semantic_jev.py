@@ -621,6 +621,11 @@ class JevClient:
     def supports_attempt_hooks(self):
         return True
 
+    @property
+    def counts_dispatch(self):
+        """evaluate() counts a request right before its POST and uncounts only pre-send refusals."""
+        return True
+
     def _check_key_current(self):
         if self._key_current is None:
             return

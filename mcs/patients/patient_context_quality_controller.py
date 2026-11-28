@@ -1,5 +1,6 @@
 """Patient context quality audit and finite source or summary repair execution."""
 import copy
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -615,6 +616,89 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
     return 'source_candidate', ref
 
 
+class _WriterDeadline(Exception):
+    """The SQLite writer wait or a statement was cut off at the deadline before anything committed."""
+
+
+@contextmanager
+def _writer_within(db, deadline):
+    """Bound the SQLite writer wait and every statement run inside to ``deadline`` less the commit margin.
+
+    A wait or statement cut off there raises ``_WriterDeadline`` once the
+    transaction it ran in is rolled back; any other error propagates."""
+    clock = patient_context_refresh_state.time.monotonic
+    until = deadline - patient_context_refresh_state.COMMIT_MARGIN
+    db.set_progress_handler(lambda: int(clock() >= until), 1000)
+    try:
+        with patient_context_refresh_sources._scan_writer_wait(db, deadline):
+            yield until
+    except sqlite3.OperationalError as error:
+        code = getattr(error, "sqlite_errorcode", 0) & 255
+        if not db.in_transaction and (code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                                      or code == sqlite3.SQLITE_INTERRUPT and clock() >= until):
+            raise _WriterDeadline() from None
+        raise
+    finally:
+        db.set_progress_handler(None, 0)
+
+
+def _generation_write(ledger, deadline, write):
+    """Commit one write under the run lock only while this process is the current writer generation.
+
+    The generation is checked inside the writer transaction before ``write``
+    and again before the commit, so code an update or restore has replaced
+    never commits it. The run lock, the SQLite writer wait and ``write``
+    itself end before ``deadline`` less the commit margin. Returns False when
+    the lock, the deadline or the generation refuses; the write is then
+    rolled back."""
+    import extract_llm
+
+    db = ledger.db
+    clock = patient_context_refresh_state.time.monotonic
+
+    def refused(code):
+        _note(code)
+        if db.in_transaction:
+            db.rollback()
+        return False
+
+    fd = patient_context_quality_receipts._acquire(deadline=deadline)
+    if fd is None:
+        return False
+    try:
+        with _writer_within(db, deadline) as until:
+            if clock() >= until:
+                return refused("deadline")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if not extract_llm._writer_current(full=True):
+                    return refused("writer_changed")
+                write()
+                if not extract_llm._writer_current(full=True):
+                    return refused("writer_changed")
+                if clock() >= until:
+                    return refused("deadline")
+                db.commit()
+                return True
+            except BaseException:
+                db.rollback()
+                raise
+    except _WriterDeadline:
+        return refused("deadline")
+    finally:
+        os.close(fd)
+
+
+def _supersede_unresolved_source_requests(ledger, deadline):
+    """Make sure the one-time disposition of unresolved source reservations has run; False if it cannot run now."""
+    import semantic_runtime
+
+    if semantic_runtime.source_requests_superseded(ledger.db):
+        return True
+    return _generation_write(ledger, deadline, lambda: semantic_runtime.supersede_unresolved_source_requests_tx(
+        ledger.db, patient_context_refresh_state.time.time()))
+
+
 def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_mode, base_doc=None, base_meta=None,
                   source=None, source_candidate_ref=None):
     """Audit one bounded page of the current candidate outside DB and run locks.
@@ -731,7 +815,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         _note(code)
         return False
 
-    def authorized(reader, live):
+    def authorized(reader, live, receiving=False):
         live_key = semantic_jev.api_key()
         live_semantic, problems = semantic_policy.semantic_config(live, key_present=bool(live_key))
         if no_send is not None:
@@ -760,10 +844,12 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     return refused("skip_condition_changed")
             except (semantic_jev.JevError, ValueError, sqlite3.Error):
                 return refused("skip_condition_unread")
-        # Checked in this order, each only after every earlier one held.
-        if patient_context_refresh_state.time.monotonic() >= deadline:
+        # Checked in this order, each only after every earlier one held. The
+        # deadline and admission bound new sends only: an answer already
+        # received is stored while every later check still holds.
+        if not receiving and patient_context_refresh_state.time.monotonic() >= deadline:
             return refused("deadline")
-        if not admit():
+        if not receiving and not admit():
             return refused("admission")
         if not extract_llm._writer_current(full=True):
             return refused("writer_changed")
@@ -791,8 +877,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             return refused("assessment_changed")
         return True
 
-    def inputs_current(reader, live):
-        if not authorized(reader, live):
+    def inputs_current(reader, live, receiving=False):
+        if not authorized(reader, live, receiving):
             return False
         if source is None:
             latest, latest_meta = patient_context_refresh_state._latest(reader.db, patient_context_refresh_state.KIND, pid)
@@ -814,21 +900,24 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             return refused("scope_excluded")
         return True
 
-    def current(own_writes=0):
+    def current(own_writes=0, receiving=False):
         nonlocal denied, fence, observed_config
         if denied:
             return False
         try:
             live = extract_llm.load_config()
             if not ledger.db.in_transaction:
+                # A received answer may be stored within the claim's lease, which already
+                # covers one call past the deadline; the read fence is bounded by it.
+                until = deadline + patient_context_refresh_state.CALL_SECONDS if receiving else deadline
                 allowed, fence = patient_context_quality_receipts._quality_read(
-                    ledger, deadline, lambda reader: inputs_current(reader, live))
+                    ledger, until, lambda reader: inputs_current(reader, live, receiving))
                 observed_config = copy.deepcopy(live)
             else:
                 same = fence is not None and extract_llm._same_but_operating_limits(live, observed_config)
                 if fence is not None and not same:
                     _note("config_changed")
-                allowed = same and authorized(ledger, live)
+                allowed = same and authorized(ledger, live, receiving)
             denied = not (allowed and fence(own_writes))
         except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as exc:
             _note(safe_error_code(exc))
@@ -836,8 +925,11 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         return not denied
 
     claim = None
+    def received_current(own_writes=0):
+        return current(own_writes, receiving=True)
+
     def guard(stage):
-        if not current(1 if stage == "jev_reserved" else 0):
+        if not current(1 if stage == "jev_reserved" else 0, receiving=stage == "jev_result"):
             raise semantic_runtime.RuntimeStale(stage)
         if claim is None:
             _note("claim_lost")
@@ -845,6 +937,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         if not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity["input_key"], claim):
             raise semantic_runtime.RuntimeStale(stage)
 
+    # Before any source question is judged unknown, earlier unresolved source
+    # reservations get their one-time disposition (its own commit, outside every fence).
+    if source is not None and not _supersede_unresolved_source_requests(ledger, deadline):
+        return "deferred", None
     claim = patient_context_quality_receipts._quality_claim(ledger, pid, identity["input_key"], deadline, current)
     if claim is None:
         _note("claim_unavailable")
@@ -883,8 +979,17 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": skip_reason,
                 **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                    if purpose == "source" else {})}
+        def reserve_guard(stage):
+            # Run inside the reservation's transaction at its entrance and after its last
+            # guard: one that would end within the commit margin of the deadline rolls back.
+            guard(stage)
+            if (patient_context_refresh_state.time.monotonic()
+                    >= deadline - patient_context_refresh_state.COMMIT_MARGIN):
+                raise _WriterDeadline()
+
         reserve = semantic_runtime.patient_summary_usage_reserver(
-            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity, purpose=purpose)
+            ledger, project_id=pid, guard=reserve_guard, daily_request_budget=scfg["daily_request_budget"],
+            identity=identity, purpose=purpose)
         reservation = [None]
 
         def reserve_locked(body, timeout):
@@ -897,7 +1002,14 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 live_cfg, problems = semantic_policy.semantic_config(extract_llm.load_config(), key_present=bool(key))
                 if problems or live_cfg["daily_request_budget"] < scfg["daily_request_budget"]:
                     raise patient_context_refresh_state.Deferred("patient_summary_quality_budget_changed")
-                reservation[0] = reserve(body, timeout)
+                try:
+                    # The SQLite writer wait, the reservation's statements and its commit end
+                    # within the deadline less the commit margin; a cut-off one was rolled back.
+                    with _writer_within(ledger.db, deadline):
+                        reservation[0] = reserve(body, timeout)
+                except _WriterDeadline:
+                    _note("deadline")
+                    raise patient_context_refresh_state.Deferred("patient_summary_quality_lock") from None
                 return reservation[0]
             finally:
                 os.close(fd)
@@ -915,17 +1027,12 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             _note("jev_client_hooks")
             return "deferred", None
         def seal_not_sent(unsent, reason):
-            # committed, but its POST never started: settle it so the page can be asked again
-            fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
-            if fd is None:
-                return
-            try:
-                ledger.db.execute("BEGIN IMMEDIATE")
-                with ledger.db:
-                    semantic_runtime.patient_summary_resolve_request_tx(
-                        ledger, unsent, identity, {}, set(), project_id=pid, purpose=purpose, not_sent=reason)
-            finally:
-                os.close(fd)
+            # Committed, but its POST never started: settle it so the page can be asked again.
+            # The stop that ended the attempt (a stale input, the deadline) cannot void this
+            # seal, so it waits within the claim's lease and needs only the writer generation.
+            _generation_write(ledger, deadline + patient_context_refresh_state.CALL_SECONDS,
+                lambda: semantic_runtime.patient_summary_resolve_request_tx(
+                    ledger, unsent, identity, {}, set(), project_id=pid, purpose=purpose, not_sent=reason))
 
         client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline, not_sent=seal_not_sent)
         by_id = {fact["id"]: fact for fact in initial["facts"]}
@@ -959,8 +1066,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             def persist(answers, invalid_ids):
                 if reservation[0] is None:
                     raise ValueError("patient_summary_request_missing")
-                patient_context_quality_receipts._quality_store_answers(ledger, pid, identity, claim, answers, current,
-                                       scfg["match_threshold"], selected,
+                patient_context_quality_receipts._quality_store_answers(ledger, pid, identity, claim, answers,
+                                       received_current, scfg["match_threshold"], selected,
                                        reservation=reservation[0], invalid_ids=invalid_ids)
                 return True
             outcome = (semantic_audit.audit_patient_quality_page(client, page, deadline, scfg["match_threshold"],
