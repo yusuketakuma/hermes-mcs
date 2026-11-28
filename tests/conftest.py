@@ -8,10 +8,13 @@ used by the synthetic CLI tests available.
 from __future__ import annotations
 
 import atexit
+import contextlib
+import errno
 import ipaddress
 import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -40,6 +43,69 @@ _SENSITIVE_ENV = (
 )
 _ORIGINALS: list[tuple[object, str, object]] = []
 _TEST_HOME = tempfile.mkdtemp(prefix="mcs-test-home-")
+# The pytest process that owns this run. Process matching and signals stay
+# inside its own tree (2026-11-28: an update test's stray sweep matched the
+# live drainers of the same user by command line and stopped them).
+_TEST_ROOT_PID = os.getpid()
+_PGREP_SHIM = r"""#!/bin/sh
+# Real pgrep, narrowed to the process tree of this test run. A match on any
+# other process of the same user is dropped, so callers never learn its pid.
+# Exit 1 means "no match in this run"; 3 means the answer could not be verified.
+root="${MCS_TEST_ROOT_PID:-}"
+case "$root" in ''|*[!0-9]*) echo 'pgrep: the MCS test root is unknown' >&2; exit 3 ;; esac
+real=''
+for candidate in /usr/bin/pgrep /bin/pgrep; do
+    if [ -x "$candidate" ]; then real="$candidate"; break; fi
+done
+[ -n "$real" ] || { echo 'pgrep: not available in MCS tests' >&2; exit 3; }
+# The run's root must be a live, listable process before any answer is trusted.
+seen="$(ps -o pid= -p "$root" 2>/dev/null)" || { echo 'pgrep: the MCS test root cannot be listed' >&2; exit 3; }
+[ "$(printf '%s' "$seen" | tr -d ' \n')" = "$root" ] || { echo 'pgrep: the MCS test root cannot be listed' >&2; exit 3; }
+out="$("$real" "$@")"
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+# One listing taken after the search; its exit status is kept (no pipe).
+table="$(ps -A -o pid=,ppid=)" || { echo 'pgrep: ps failed' >&2; exit 3; }
+verdict="$(printf '%s\n' "$table" | MCS_PGREP_MATCHES="$out" awk -v root="$root" -v self="$$" '
+    NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad = 1; next }
+    { parent[$1] = $2 }
+    END {
+        if (bad || !(root in parent)) { print "UNVERIFIED"; exit }
+        count = split(ENVIRON["MCS_PGREP_MATCHES"], line, "\n")
+        for (i = 1; i <= count; i++) {
+            if (line[i] == "") continue
+            split(line[i], field, " ")
+            pid = field[1]
+            if (pid !~ /^[0-9]+$/ || pid == self) continue
+            if (!(pid in parent)) { print "MISSING " pid; continue }
+            # Three outcomes: inside this run, proven outside (the walk reached
+            # init), or not placed (an ancestor is not listed, or the walk is too deep).
+            walk = pid
+            placed = 0
+            for (depth = 0; depth < 64; depth++) {
+                if (walk == root) { print "KEEP " line[i]; placed = 1; break }
+                if (walk <= 1) { placed = 1; break }
+                if (!(walk in parent)) break
+                walk = parent[walk]
+            }
+            if (!placed) print "UNPLACED " pid
+        }
+    }')" || { echo 'pgrep: awk failed' >&2; exit 3; }
+found=1
+while IFS=' ' read -r kind rest; do
+    case "$kind" in
+        UNVERIFIED) echo 'pgrep: unreadable ps output or unknown test root' >&2; exit 3 ;;
+        UNPLACED) echo 'pgrep: the ancestry of a match could not be followed' >&2; exit 3 ;;
+        KEEP) printf '%s\n' "$rest"; found=0 ;;
+        MISSING)
+            # Drop a match only when it is proven gone; alive but not listed is unverifiable.
+            if kill -0 "$rest" 2>/dev/null; then echo 'pgrep: a match is alive but not listed' >&2; exit 3; fi ;;
+    esac
+done <<MCS_PGREP_VERDICT
+$verdict
+MCS_PGREP_VERDICT
+exit "$found"
+"""
 
 
 def _reset_environment() -> None:
@@ -70,11 +136,17 @@ def _reset_environment() -> None:
     # fail-closed guards first (a bare-name call only; an absolute path is not caught).
     guard = os.path.join(_TEST_HOME, "guard-bin")
     os.makedirs(guard, exist_ok=True)
-    for name in ("hermes", "launchctl", "security"):
+    for name in ("hermes", "launchctl", "security", "pkill", "killall"):
         script = os.path.join(guard, name)
         with open(script, "w") as stream:
             stream.write("#!/bin/sh\necho 'real %s is disabled in MCS tests' >&2\nexit 97\n" % name)
         os.chmod(script, 0o755)
+    # pgrep stays usable, but a child process sees only this run's own tree.
+    os.environ["MCS_TEST_ROOT_PID"] = str(_TEST_ROOT_PID)
+    script = os.path.join(guard, "pgrep")
+    with open(script, "w") as stream:
+        stream.write(_PGREP_SHIM)
+    os.chmod(script, 0o755)
     os.environ["PATH"] = os.pathsep.join([guard] + [
         d for d in os.environ.get("PATH", "").split(os.pathsep)
         if d and d != guard and not os.access(os.path.join(d, "hermes"), os.X_OK)])
@@ -127,11 +199,12 @@ def _blocked_process(command, env=None) -> bool:
     executable = os.path.basename(parts[0]).casefold()
     if executable == "security":
         return True
-    if executable in {"hermes", "launchctl"}:
+    if executable in {"hermes", "launchctl", "pgrep", "pkill", "killall"}:
         # A real Hermes CLI or launchd writes the user's LaunchAgents and
         # services even under a temp HOME (2026-10-04: a services test
-        # replaced the live gateway plist). Only stubs under the test
-        # temp tree may run.
+        # replaced the live gateway plist). Real pgrep/pkill/killall match
+        # every process of the user, the live services included. Only stubs
+        # and shims under the test temp tree may run.
         path = (env or os.environ).get("PATH") if isinstance(env, dict) else None
         found = parts[0] if os.sep in parts[0] else shutil.which(parts[0], path=path)
         if found is None:
@@ -202,6 +275,118 @@ def _guarded_getaddrinfo(host, *args, **kwargs):
 _install(socket, "getaddrinfo", _guarded_getaddrinfo)
 _install(subprocess, "run", _guarded_run)
 _install(subprocess, "Popen", _guarded_popen)
+
+_ORIGINAL_KILL = os.kill
+_ORIGINAL_KILLPG = os.killpg
+_SIGNAL_REFUSED = "signalling a process outside this test run is disabled in MCS tests"
+
+
+def _process_table():
+    """Return {pid: (parent, group)} for every visible process, or None when ps fails."""
+    # The saved Popen class, not subprocess.run: a test that replaces
+    # subprocess.Popen to record its own calls must not see this lookup.
+    try:
+        process = _ORIGINAL_POPEN(["ps", "-A", "-o", "pid=,ppid=,pgid="], stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+    try:
+        output = process.communicate(timeout=20)[0]
+    except subprocess.TimeoutExpired:
+        # Reap only the helper this call started; the saved kill avoids re-entering the guard.
+        with contextlib.suppress(OSError):
+            _ORIGINAL_KILL(process.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            process.communicate(timeout=20)
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if process.returncode != 0:
+        return None
+    table = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or not all(field.isdigit() for field in fields):
+            return None
+        table[int(fields[0])] = (int(fields[1]), int(fields[2]))
+    return table or None
+
+
+def _in_test_tree(pid: int, table=None) -> bool:
+    """True when `pid` is this test run's root or one of its descendants."""
+    table = _process_table() if table is None else table
+    if table is None:
+        return False
+    for _ in range(64):
+        if pid == _TEST_ROOT_PID:
+            return True
+        if pid not in table or pid <= 1:
+            return False
+        pid = table[pid][0]
+    return False
+
+
+def _refuse():
+    raise PermissionError(errno.EPERM, _SIGNAL_REFUSED)
+
+
+def _check_signal(pid: int) -> None:
+    """Return when a real signal may be sent to `pid`; raise otherwise.
+
+    A single process must belong to this run. A process group (pid 0, a
+    negative pid, killpg) needs every live member to belong to this run: a
+    descendant in the group does not vouch for the others, and a group
+    outlives its leader. A target the process table does not show is probed
+    with signal 0: the kernel's own error (no such process, not permitted) is
+    raised as it is, and a target that exists without being listed is refused.
+    Nothing is sent on an unproven target."""
+    if pid == os.getpid():
+        return
+    if pid == -1:
+        _refuse()
+    table = _process_table()
+    if table is None:
+        _refuse()
+    if pid > 0:
+        if pid in table:
+            if _in_test_tree(pid, table):
+                return
+            _refuse()
+        _ORIGINAL_KILL(pid, 0)      # raises the kernel's answer for an absent target
+        _refuse()                   # alive but not listed: not provably ours
+    group = os.getpgrp() if pid == 0 else -pid
+    members = [member for member, (_parent, member_group) in table.items() if member_group == group]
+    if not members:
+        _ORIGINAL_KILLPG(group, 0)  # raises the kernel's answer for an absent group
+        _refuse()                   # the group exists but none of it is listed
+    if not all(_in_test_tree(member, table) for member in members):
+        _refuse()
+
+
+def _signal_allowed(pid: int) -> bool:
+    """The decision of `_check_signal` as a value, for tests that must not send."""
+    try:
+        _check_signal(pid)
+    except OSError:
+        return False
+    return True
+
+
+def _guarded_kill(pid, sig):
+    if sig != 0:
+        _check_signal(pid)
+    return _ORIGINAL_KILL(pid, sig)
+
+
+def _guarded_killpg(pgid, sig):
+    if sig != 0:
+        _check_signal(-pgid if pgid > 0 else 0 if pgid == 0 else -1)
+    return _ORIGINAL_KILLPG(pgid, sig)
+
+
+# Popen.terminate/kill/send_signal and multiprocessing all go through os.kill.
+_install(os, "kill", _guarded_kill)
+_install(os, "killpg", _guarded_killpg)
 
 # The bounded-http transport spawns a fresh interpreter for every
 # request, so the in-process socket guard cannot reach it — a call that
