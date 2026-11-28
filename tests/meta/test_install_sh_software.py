@@ -105,6 +105,46 @@ def test_fresh_hold_with_other_data_is_not_resumed(tmp_path):
     assert not (home / ".mcs/config.json").exists()
 
 
+def test_prior_env_refusal_then_removal_resumes_fresh_with_hold(tmp_path):
+    """IA-1: a first run refused for a leftover .env must still resume as the
+    same fresh install once the .env is removed — the marker is written inside
+    the first lock, before the refusal, so the rerun enters fresh-resume and
+    the bootstrap writes the external-transfer hold."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    (home / ".mcs").mkdir()
+    (home / ".mcs/.env").write_text("SYNTHETIC=1\n")
+    refused = _run(env, hermes_home)
+    assert refused.returncode != 0
+    assert "初回導入できません" in refused.stderr or "以前の設定" in refused.stderr
+    (home / ".mcs/.env").unlink()
+    retried = _run(env, hermes_home)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert "同じ初回導入として再開します" in retried.stdout
+    import sys
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(home / ".mcs")["state"] == "pending"
+
+
+def test_prior_env_kept_keeps_refusing(tmp_path):
+    """While the prior .env remains, every rerun keeps refusing instead of
+    silently proceeding as either a fresh or a legacy install, and names the
+    prior settings as the reason rather than a generic interrupted-install
+    stop, so the operator knows what to resolve."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    (home / ".mcs").mkdir()
+    (home / ".mcs/.env").write_text("SYNTHETIC=1\n")
+    first = _run(env, hermes_home)
+    assert first.returncode != 0
+    assert "以前の設定またはデータがあるため初回導入できません" in first.stderr
+    second = _run(env, hermes_home)
+    assert second.returncode != 0
+    assert "以前の設定またはデータがあるため初回導入できません" in second.stderr
+    assert "初回導入が中断された記録があります" not in second.stderr
+    assert not (home / ".mcs/config.json").exists()
+
+
 def test_failed_pip_install_converges_on_rerun(tmp_path):
     """F2: `uv venv` succeeded, `uv pip install` failed — the re-run
     reuses the venv and retries only the install."""

@@ -54,6 +54,573 @@ def test_fresh_install_reaches_bootstrap_without_python(tmp_path, prior_state):
             line for line in calls if line.startswith('brew ')]
 
 
+def _claim_marker_text(root, data):
+    root_stat, data_stat = root.stat(), data.stat()
+    return ('{"version":1,"root":[%d,%d,%d,%d],"data":[%d,%d,%d,%d],"config":null}\n'
+            % (root_stat.st_dev, root_stat.st_ino, root_stat.st_uid, root_stat.st_mode & 0o7777,
+               data_stat.st_dev, data_stat.st_ino, data_stat.st_uid, data_stat.st_mode & 0o7777))
+
+
+def _claim_record_text(root):
+    root_stat = root.stat()
+    return ('{"version":1,"root":[%d,%d,%d,%d]}\n'
+            % (root_stat.st_dev, root_stat.st_ino, root_stat.st_uid, root_stat.st_mode & 0o7777))
+
+
+def _write_claim_record(root):
+    import os as _os
+    record = root / '.install-claim.json'
+    record.write_text(_claim_record_text(root))
+    _os.chmod(record, 0o600)
+    return record
+
+
+@pytest.mark.parametrize('claim_state', ['record_only', 'empty_data', 'lock_only', 'partial_tmp'])
+def test_interrupted_claim_resumes_as_same_fresh_install(tmp_path, claim_state):
+    """A crash after the evidence record but before the marker leaves any of
+    these states; the next run completes the same first install instead of
+    refusing, because the record proves data/ was absent at claim time."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = _write_claim_record(root)
+    data = root / 'data'
+    if claim_state != 'record_only':
+        data.mkdir(mode=0o700)
+    if claim_state in ('lock_only', 'partial_tmp'):
+        (data / 'update.lock').touch(mode=0o600)
+    if claim_state == 'partial_tmp':
+        (data / '.provider-bootstrap-fresh.json.tmp').write_text('{"version":1,partial')
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (data / 'update.lock').is_file()
+    assert (root / 'config.json').is_file()
+    # a completed install consumes the bootstrap marker and the evidence
+    # record by design; the record only needs to survive until the marker
+    # inside data/ is confirmed
+    assert not record.exists()
+
+
+def test_interrupted_claim_resume_writes_the_hold(tmp_path):
+    """The resumed first install writes the external-transfer hold: an
+    interrupted claim never becomes a legacy install without the hold."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    _write_claim_record(root)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+@pytest.mark.parametrize('claim_state', ['record_only', 'empty_data', 'lock_only'])
+def test_interrupted_default_claim_resumes_with_the_same_runtime(tmp_path, claim_state):
+    """A first install run without a Hermes home (default standalone) that
+    stopped after its claim record resumes as standalone in every interrupted
+    state, including data/ created without the lock yet; data/ beside the
+    record never makes the rerun pick Hermes as for an existing install."""
+    home, _, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    _write_claim_record(root)
+    data = root / 'data'
+    if claim_state != 'record_only':
+        data.mkdir(mode=0o700)
+    if claim_state == 'lock_only':
+        (data / 'update.lock').touch(mode=0o600)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((root / 'config.json').read_text())['runtime_mode'] == 'standalone'
+    assert not (home / '.hermes').exists()
+    assert not any(call.startswith('git clone') for call in _calls(stub_root))
+    assert not (root / '.install-claim.json').exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+@pytest.mark.parametrize('partial', [b'', b'{"version":1,"ro'])
+def test_crash_before_record_publication_resumes_with_the_hold(tmp_path, partial):
+    """The record is written to a private temporary name and renamed into
+    place, so a crash mid-write leaves only that temporary file and never a
+    visible partial record. The rerun replaces it under the claim lock and
+    completes the same first install with the facility-confirmation hold."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    stale = root / '.install-claim.json.tmp'
+    stale.write_bytes(partial)
+    os.chmod(stale, 0o600)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / 'config.json').is_file()
+    assert not (root / '.install-claim.json').exists()
+    assert not stale.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_empty_claim_record_beside_data_refuses_before_writes(tmp_path):
+    """Publication is atomic, so a visible empty record is never one of ours;
+    beside data/ it is kept and the run stops before any write."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = root / '.install-claim.json'
+    record.touch(mode=0o600)
+    os.chmod(record, 0o600)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    result = _run(env, hermes_home)
+    assert result.returncode != 0
+    assert '確保記録を確認できません' in result.stderr
+    assert record.read_bytes() == b''
+    assert list(data.iterdir()) == []
+    assert not (root / 'config.json').exists()
+    assert not any(c.startswith(('brew', 'git clone', 'uv ')) for c in _calls(stub_root))
+
+
+def test_claim_marker_survives_until_bootstrap(tmp_path):
+    """Interrupt software preparation after the claim; the strict trio stays
+    in place and a rerun resumes the same first install."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    first = _run({**env, 'STUB_FAIL_CLONE': '1'}, hermes_home)
+    assert first.returncode != 0
+    data = root / 'data'
+    assert (data / 'update.lock').is_file()
+    marker = data / '.provider-bootstrap-fresh.json'
+    assert marker.read_text() == _claim_marker_text(root, data)
+    assert not (root / '.install-claim.json').exists()
+    second = _run(env, hermes_home)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert '再開します' in second.stdout
+
+
+@pytest.mark.parametrize('corrupt', ['content', 'empty', 'partial', 'symlink', 'not_file'])
+def test_invalid_claim_record_refuses_before_writes(tmp_path, corrupt):
+    """A claim record that fails validation (not a regular file, a symlink,
+    empty or partial, or content that does not match the live root) stops
+    the install before any write and is kept as found. Records are published
+    complete, so an empty or partial one is never repaired."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = root / '.install-claim.json'
+    if corrupt in ('content', 'empty', 'partial'):
+        record.write_text({'content': '{"version":1,"root":[0,0,0,0]}\n', 'empty': '',
+                           'partial': _claim_record_text(root)[:12]}[corrupt])
+        os.chmod(record, 0o600)
+    elif corrupt == 'symlink':
+        target = root / 'elsewhere.json'
+        target.write_text(_claim_record_text(root))
+        record.symlink_to(target)
+    else:
+        record.mkdir(mode=0o700)
+    before = record.read_bytes() if record.is_file() and not record.is_symlink() else None
+    result = _run(env, hermes_home)
+    assert result.returncode != 0
+    assert '確保記録を確認できません' in result.stderr
+    if before is not None:
+        assert record.read_bytes() == before
+    assert not (root / 'data').exists()
+    assert not (root / 'config.json').exists()
+    assert not any(c.startswith(('brew', 'git clone', 'uv ')) for c in _calls(stub_root))
+
+
+def test_claim_record_and_config_coexisting_refuses(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    _write_claim_record(root)
+    (root / 'config.json').write_text('{}')
+    result = _run(env, hermes_home)
+    assert result.returncode != 0
+    assert '両方あります' in result.stderr
+
+
+def test_foreign_data_after_claim_record_is_same_fresh_install(tmp_path):
+    """codex1 race: another process creates data/ after the evidence record
+    was written. Because the record proves data/ was absent at claim time,
+    the foreign data/ cannot be a legacy install: the run proceeds as the
+    same first install and writes the hold. Pin the state right after the
+    interrupt point and after the completing rerun."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = _write_claim_record(root)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / 'config.json').is_file()
+    assert not record.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_foreign_content_in_claimed_data_stops_without_destroying(tmp_path):
+    """A foreign data/ carrying actual content is not a bare race artifact:
+    the bootstrap inventory keeps protecting it. The install stops without
+    touching the foreign file, and the rerun stops the same way instead of
+    ever classifying it as a legacy install."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    _write_claim_record(root)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    (data / 'foreign.txt').write_text('foreign\n')
+    first = _run(env, hermes_home)
+    assert first.returncode != 0
+    assert (data / 'foreign.txt').read_text() == 'foreign\n'
+    second = _run(env, hermes_home)
+    assert second.returncode != 0
+    assert (data / 'foreign.txt').read_text() == 'foreign\n'
+    # never completed as a legacy install either: no completion evidence,
+    # no bootstrap of the foreign data root
+    assert not (data / '.provider-bootstrap-complete.json').exists()
+
+
+def test_root_stat_failure_in_claim_window_resumes_on_rerun(tmp_path):
+    """codex1 reproduction: the first root identity probe fails once. In the
+    pre-acquisition design the probe happens before the evidence record is
+    written, so the interrupted run leaves nothing at all — no record, no
+    data/, no config — and the rerun completes the same first install with
+    the external-transfer hold."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    stat_stub = stub_root / 'bin/stat'
+    stat_stub.write_text("""#!/bin/sh
+# fail the first identity-format probe of the exact root path, once
+last=""
+for arg in "$@"; do last="$arg"; done
+if [ ! -f "$STUB_STATE/rootstat-failed" ] && [ "$last" = "$HOME/.mcs" ]; then
+    case " $* " in
+        *" %d %i %u "*)
+            if /usr/bin/stat "$@" >/dev/null 2>&1; then
+                touch "$STUB_STATE/rootstat-failed"
+                exit 1
+            fi ;;
+    esac
+fi
+exec /usr/bin/stat "$@"
+""")
+    stat_stub.chmod(0o755)
+    first = _run(env, hermes_home)
+    assert first.returncode != 0
+    root = home / '.mcs'
+    assert not (root / 'data').exists()
+    assert not (root / 'config.json').exists()
+    assert not (root / '.install-claim.json').exists()
+    second = _run(env, hermes_home)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert (root / 'config.json').is_file()
+    assert not (root / '.install-claim.json').exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_interrupted_claim_before_marker_resumes_on_rerun(tmp_path):
+    """An interrupt after the evidence record but before the marker (the
+    move-back-failure equivalent in the rename design) leaves record+lock
+    without a marker; pin the state right after and the completing rerun."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = _write_claim_record(root)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    (data / 'update.lock').touch(mode=0o600)
+    # right after the interrupt: record present, no marker anywhere
+    assert record.exists()
+    assert not (data / '.provider-bootstrap-fresh.json').exists()
+    assert not (root / 'config.json').exists()
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / 'config.json').is_file()
+    assert not record.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+_PARK = """touch "$STUB_STATE/gate-reached"
+    n=0
+    while [ ! -e "$STUB_STATE/gate-release" ]; do
+        n=$((n + 1))
+        [ "$n" -le 1800 ] || exit 1
+        /bin/sleep 0.1
+    done"""
+
+
+def _gate_lockf(stub_root):
+    """Park a run marked STUB_LOCK_GATE=<fd> right before it locks that
+    descriptor (7: the claim lock on the settings folder, 9: update.lock);
+    every run then takes the real lock through the existing flock fallback
+    (EX_USAGE), on macOS and Linux alike."""
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text("""#!/bin/sh
+echo "lockf $*" >> "$STUB_LOG"
+fd=""
+for arg in "$@"; do fd="$arg"; done
+if [ -n "${STUB_LOCK_GATE:-}" ] && [ "$fd" = "$STUB_LOCK_GATE" ]; then
+    %s
+fi
+exit 64
+""" % _PARK)
+    lockf.chmod(0o755)
+
+
+def _gate_claim_publication(stub_root):
+    """Park a run marked STUB_PUBLISH_GATE once, at its first identity probe
+    of the settings folder: the probe that builds the record, after the run
+    found no record, data/ or config.json and before it publishes."""
+    stat_stub = stub_root / 'bin/stat'
+    stat_stub.write_text("""#!/bin/sh
+last=""
+for arg in "$@"; do last="$arg"; done
+if [ -n "${STUB_PUBLISH_GATE:-}" ] && [ ! -e "$STUB_STATE/publish-gated" ] && [ "$last" = "$HOME/.mcs" ]; then
+    case " $* " in
+        *" %%d %%i %%u "*)
+            touch "$STUB_STATE/publish-gated"
+            %s ;;
+    esac
+fi
+exec /usr/bin/stat "$@"
+""" % _PARK)
+    stat_stub.chmod(0o755)
+
+
+def _start_parked(env, hermes_home, stub_root, gate):
+    import time
+    late = subprocess.Popen(
+        ['sh', str(INSTALL), str(hermes_home)], env={**env, **gate},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 60
+    while not (stub_root / 'state/gate-reached').exists():
+        if late.poll() is not None or time.monotonic() > deadline:
+            out, err = late.communicate(timeout=60) if late.poll() is not None else ('', '')
+            late.kill()
+            raise AssertionError('late run never reached the gate: ' + out + err)
+        time.sleep(0.05)
+    return late
+
+
+def _release_parked(late, stub_root):
+    (stub_root / 'state/gate-release').touch()
+    try:
+        out, err = late.communicate(timeout=60)
+    finally:
+        late.kill()
+    return late.returncode, out, err
+
+
+def _hold_state(root):
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    return external_transfer.status(root)["state"]
+
+
+def _assert_later_runs_proceed(env, hermes_home, root):
+    """After the race neither a normal install nor an updater reinstall is
+    refused for a leftover record beside the settings."""
+    following = _run(env, hermes_home)
+    assert following.returncode == 0, following.stdout + following.stderr
+    assert '両方あります' not in following.stderr
+    reinstall = _run_reinstall(env, hermes_home, '--no-llm', '--no-plugin', '--no-services')
+    assert reinstall.returncode == 0, reinstall.stdout + reinstall.stderr
+    assert '両方あります' not in reinstall.stderr
+    assert not (root / '.install-claim.json').exists()
+    assert _hold_state(root) == 'pending'
+    return following
+
+
+@pytest.mark.parametrize('first_outcome', ['completed', 'interrupted'])
+def test_late_run_paused_before_the_claim_lock_writes_nothing(tmp_path, first_outcome):
+    """The late run finished its read-only checks with no record, data/ or
+    config.json and pauses right before the claim lock, so the absence it
+    checked is stale. The other install runs meanwhile and either completes
+    (config, facility-confirmation hold) or stops after its marker (clone
+    failure). Under the lock the late run sees data/ that its checks did not
+    see, writes nothing and leaves no record; later runs proceed."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_lockf(stub_root)
+    root = home / '.mcs'
+    data = root / 'data'
+    marker = data / '.provider-bootstrap-fresh.json'
+    first_env = env if first_outcome == 'completed' else {**env, 'STUB_FAIL_CLONE': '1'}
+    late = _start_parked(env, hermes_home, stub_root, {'STUB_LOCK_GATE': '7'})
+    try:
+        assert not (root / '.install-claim.json').exists()
+        assert not data.exists()
+        first = _run(first_env, hermes_home)
+    except BaseException:
+        _release_parked(late, stub_root)
+        raise
+    if first_outcome == 'completed':
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert not marker.exists()
+        after_first = (root / 'config.json').read_bytes()
+        assert _hold_state(root) == 'pending'
+    else:
+        assert first.returncode != 0
+        assert not (root / 'config.json').exists()
+        after_first = marker.read_bytes()
+    assert not (root / '.install-claim.json').exists()
+    rc, out, err = _release_parked(late, stub_root)
+    assert rc != 0, out + err
+    assert '別の導入が先に進みました' in err
+    assert not (root / '.install-claim.json').exists()
+    assert not (root / '.install-claim.json.tmp').exists()
+    if first_outcome == 'completed':
+        assert not marker.exists()
+        assert (root / 'config.json').read_bytes() == after_first
+        assert _hold_state(root) == 'pending'
+    else:
+        assert marker.read_bytes() == after_first
+        assert not (root / 'config.json').exists()
+    following = _assert_later_runs_proceed(env, hermes_home, root)
+    if first_outcome == 'interrupted':
+        assert '再開します' in following.stdout
+
+
+def test_claim_publication_window_excludes_another_install(tmp_path):
+    """The late run pauses between its absence check and the publication of
+    the record. That window is inside the claim lock, so the other install
+    is refused with the reason and writes nothing; the paused run then
+    completes the first install with the hold, and later runs proceed.
+    Without the claim lock the other install completes during the pause and
+    the late run re-creates a record beside its settings, which the
+    no-record assertions and every later run then trip over."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_claim_publication(stub_root)
+    root = home / '.mcs'
+    late = _start_parked(env, hermes_home, stub_root, {'STUB_PUBLISH_GATE': '1'})
+    try:
+        other = _run(env, hermes_home)
+        assert other.returncode != 0
+        assert '別の導入または更新が進行中です' in other.stderr
+        assert not (root / 'data').exists()
+        assert not (root / 'config.json').exists()
+        assert not (root / '.install-claim.json').exists()
+        assert not (root / '.install-claim.json.tmp').exists()
+        assert not any(c.startswith(('brew', 'git clone', 'uv ')) for c in _calls(stub_root))
+    finally:
+        rc, out, err = _release_parked(late, stub_root)
+    assert rc == 0, out + err
+    assert (root / 'config.json').is_file()
+    assert not (root / '.install-claim.json').exists()
+    assert not (root / '.install-claim.json.tmp').exists()
+    assert _hold_state(root) == 'pending'
+    _assert_later_runs_proceed(env, hermes_home, root)
+
+
+def test_late_run_that_saw_a_crashed_claim_writes_nothing_once_resumed(tmp_path):
+    """A first install crashed right after publishing its record. The late
+    run saw that record in its read-only checks and pauses before the claim
+    lock; another run resumes the first install, consumes the record and
+    completes with the hold. Under the lock the late run sees the record
+    gone, writes nothing and re-creates no record; later runs proceed."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_lockf(stub_root)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700, parents=True)
+    record = _write_claim_record(root)
+    late = _start_parked(env, hermes_home, stub_root, {'STUB_LOCK_GATE': '7'})
+    try:
+        resumed = _run(env, hermes_home)
+    except BaseException:
+        _release_parked(late, stub_root)
+        raise
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert not record.exists()
+    after_resume = (root / 'config.json').read_bytes()
+    assert _hold_state(root) == 'pending'
+    rc, out, err = _release_parked(late, stub_root)
+    assert rc != 0, out + err
+    assert '別の導入が先に進みました' in err
+    assert not record.exists()
+    assert (root / 'config.json').read_bytes() == after_resume
+    assert _hold_state(root) == 'pending'
+    _assert_later_runs_proceed(env, hermes_home, root)
+
+
+@pytest.mark.parametrize('gate_fd', ['7', '9'])
+def test_record_appearing_while_waiting_for_lock_is_not_legacy(tmp_path, gate_fd):
+    """A run that found data/ without a record in its read-only checks finds
+    a record once it holds the lock: written before the claim lock (fd 7),
+    or by a writer that takes only update.lock (fd 9). The earlier legacy
+    decision is not trusted: the run stops without writing, and the rerun
+    resumes the same first install with the hold."""
+    import os as _os
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _gate_lockf(stub_root)
+    root = home / '.mcs'
+    data = root / 'data'
+    data.mkdir(mode=0o700, parents=True)
+    _os.chmod(root, 0o700)
+    (data / 'update.lock').touch(mode=0o600)
+    late = _start_parked(env, hermes_home, stub_root, {'STUB_LOCK_GATE': gate_fd})
+    try:
+        record = _write_claim_record(root)
+    except BaseException:
+        _release_parked(late, stub_root)
+        raise
+    rc, out, err = _release_parked(late, stub_root)
+    assert rc != 0, out + err
+    assert '別の導入が先に進みました' in err
+    assert record.is_file()
+    assert not (data / '.provider-bootstrap-fresh.json').exists()
+    assert not (root / 'config.json').exists()
+    following = _run(env, hermes_home)
+    assert following.returncode == 0, following.stdout + following.stderr
+    assert not record.exists()
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import external_transfer
+    assert external_transfer.status(root)["state"] == "pending"
+
+
+def test_python_format_marker_resumes_without_byte_identity(tmp_path):
+    """A valid first-install record written by the Python writer (sorted keys)
+    passes the structural fresh-resume validation and is not rejected for key
+    order or whitespace differences."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    root = home / '.mcs'
+    data = root / 'data'
+    data.mkdir(mode=0o700, parents=True)
+    import os as _os
+    _os.chmod(root, 0o700)
+    _os.chmod(data, 0o700)
+    (data / 'update.lock').touch()
+    _os.chmod(data / 'update.lock', 0o600)
+    root_stat, data_stat = root.stat(), data.stat()
+    marker = {
+        'version': 1,
+        'root': [root_stat.st_dev, root_stat.st_ino, root_stat.st_uid, root_stat.st_mode & 0o7777],
+        'data': [data_stat.st_dev, data_stat.st_ino, data_stat.st_uid, data_stat.st_mode & 0o7777],
+        'config': None,
+    }
+    (data / '.provider-bootstrap-fresh.json').write_text(
+        json.dumps(marker, sort_keys=True) + '\n')
+    _os.chmod(data / '.provider-bootstrap-fresh.json', 0o600)
+    result = _run(env, hermes_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '再開します' in result.stdout
+
+
 @pytest.mark.parametrize("root_value", ["empty", "different"])
 def test_install_refuses_unsupported_data_root_before_writes(tmp_path, root_value):
     home, hermes_home, stub_root, env = _world(tmp_path)
