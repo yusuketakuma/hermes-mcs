@@ -22,17 +22,21 @@ stray sweep and verification code run unmodified. Launch paths of one run:
   and ``python_problem`` ``[exe, -c, <version or sqlite probe>]``) load the
   guard as well.
 - Host interpreters outside the guard, each running a fixed read-only script
-  that starts no process and sends no signal: update_preflight ``_python314``
-  runs ``shutil.which('python3.14')`` (then ``python3``) on the harness PATH
-  as ``[exe, -I, -c, <version check>]`` and, for the runtime plan,
-  ``[exe, -I, mcs/ops/requires_python_admits.py, <pyproject.toml>]`` (re,
-  sys and tomllib only). The recovery python3.14 (Homebrew, /usr/local,
-  /usr/bin or ``which``) is written into the recovery plist; service
-  management probes it with ``probe_python`` once that plist exists. The
-  fake launchctl never starts it.
-- ``-S`` (skip site-packages, so no guard): only release_dependency_lock and
-  release_quarantine build such argv, in both trees, and only the release
-  route reaches them. This harness takes the local-candidate route.
+  that starts no process and sends no signal. The recovery python3.14
+  (Homebrew, /usr/local, /usr/bin or ``which``) is written into the recovery
+  plist; service management probes it with ``probe_python`` once that plist
+  exists, and the fake launchctl never starts it. update_preflight
+  ``_python314`` would run ``shutil.which('python3.14')`` (then ``python3``)
+  as ``[exe, -I, -c, <version check>]`` and ``[exe, -I,
+  mcs/ops/requires_python_admits.py, <pyproject.toml>]`` (re, sys and tomllib
+  only), but only ``_migration_checkout_problem`` calls it, and only when
+  MCS_UPDATE_KEEP_HERMES_CHECKOUT names a kept checkout; the harness sets none.
+- ``-S`` (skip site-packages, so no guard): in both trees only
+  release_dependency_lock and release_quarantine build such argv (searched over
+  every .py and .sh outside tests, integration and the evaluation benches).
+  Only the release route loads them (update_apply and update_execution import
+  release_apply_owner only with a release capability); this harness takes the
+  local-candidate route.
 - Shell children: the synthetic one-line install.sh, the services wrapper, and
   ``/bin/sh -c RELOAD_SCRIPT`` (only for the caller's own launchd label or a
   bootout that never completes; the fake launchctl always completes it). They
