@@ -3,7 +3,7 @@
  "synthetic": true,
  "origins": "origins.json",
  "target": {
-  "version": "v1.3.1",
+  "version": "v1.3.2",
   "code": "current workspace updater",
   "schema": "ledger.SCHEMA_VERSION"
  },
@@ -725,6 +725,18 @@
   },
   {
    "source": "v1.3.0",
+   "runtime": "standalone",
+   "entry": "host",
+   "external_plan": "standalone_external_apply"
+  },
+  {
+   "source": "v1.3.1",
+   "runtime": "hermes",
+   "entry": "target_bootstrap",
+   "external_plan": null
+  },
+  {
+   "source": "v1.3.1",
    "runtime": "standalone",
    "entry": "host",
    "external_plan": "standalone_external_apply"
