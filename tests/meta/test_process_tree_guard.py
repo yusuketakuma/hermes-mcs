@@ -97,10 +97,13 @@ def test_pgrep_returns_only_processes_of_this_run(processes):
     assert found.returncode == 0
     assert {int(line) for line in found.stdout.split()} == {child.pid}
 
-    # a child interpreter has no in-process guard: the PATH shim still narrows it
-    code = ("import subprocess, sys; r = subprocess.run(['pgrep', '-f', sys.argv[1]], capture_output=True, text=True); "
-            "print(r.returncode, r.stdout.split())")
-    nested = subprocess.run([sys.executable, "-c", code, token], capture_output=True, text=True, timeout=30)
+    # a child interpreter has no in-process guard: the PATH shim still narrows it.
+    # The token reaches it through the environment: on its command line the
+    # interpreter itself would match (Linux pgrep lists its own ancestors).
+    code = ("import os, subprocess; r = subprocess.run(['pgrep', '-f', os.environ['MCS_GUARD_TOKEN']], "
+            "capture_output=True, text=True); print(r.returncode, r.stdout.split())")
+    nested = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, MCS_GUARD_TOKEN=token),
+                            capture_output=True, text=True, timeout=30)
     assert nested.stdout.strip() == f"0 ['{child.pid}']"
 
 
