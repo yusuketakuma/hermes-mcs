@@ -419,6 +419,42 @@ def test_split_parent_crash_keeps_requirement_for_manual_recovery(legacy_entry):
     assert json.loads((legacy_entry['runtime'] / 'config.json').read_text())['provider_settings'] == providers
 
 
+def test_recover_returns_an_install_left_blocked_by_a_v130_parent(legacy_entry):
+    # The v1.3.1/v1.3.2 child consolidated the settings into one file,
+    # journaled 'done' and restarted the writers; the v1.3.0 parent then rejected the
+    # v3 authority in its own verification and exited 1 keeping the marker.
+    # Its after-done bail writes nothing more, so what remains is exactly the
+    # child's finished journal beside the marker.
+    assert update_migrations.migrate_provider_settings(legacy_entry['runtime']) is True
+    authority = legacy_entry['data'] / '.provider-settings-authority.json'
+    settings = authority.read_bytes()
+    assert json.loads(settings)['version'] == 3
+    path = legacy_entry['data'] / 'update_state.json'
+    state = update_journal.load_state(path)
+    applying = state['applying']
+    state['applying'] = None
+    state['applied'] = [{'tag': applying['tag'], 'sha': applying['sha'], 'prev_sha': applying['prev_sha'],
+                         'plugin_changed': False, 'command_id': 'synthetic-approval', 'at': 2}]
+    state['stages'] = [{'stage': name, 'at': 1} for name in (
+        'quiesce', 'merge', 'post_merge', 'services', 'restart', 'postcheck', 'done')]
+    update_journal.save_state(path, state)
+    assert legacy_entry['marker'].is_file()
+    outcome = _run_recovery(legacy_entry, 'recover')
+    # Only the parent's bookkeeping is finished: no stop, no rollback, no
+    # second consolidation, and the marker that blocked the writers is gone.
+    assert outcome['result'] == 0, outcome
+    assert outcome['reports'][-1]['result'] == 'resumed_done', outcome
+    assert outcome['notices'] == ['recovery_completed'], outcome
+    assert outcome['events'] == ['restart-services'], outcome
+    assert not legacy_entry['marker'].exists()
+    recovered = update_journal.load_state(path)
+    assert recovered['applying'] is None and recovered['stages'] == []
+    assert recovered['applied'] == state['applied']
+    assert recovered['executed']['synthetic-approval']['result'] == 'applied'
+    assert _git(legacy_entry['repo'], 'rev-parse', 'HEAD') == legacy_entry['target']
+    assert authority.read_bytes() == settings
+
+
 @pytest.mark.parametrize('case', ['v2_reviewed', 'v2_unknown', 'default_recovery'])
 def test_recover_split_parent_interrupted_before_postmerge(legacy_entry, case):
     _previous_split(legacy_entry)
@@ -461,7 +497,9 @@ update.UPDATE_LOCK=str(Path(update.DATA)/'update.lock')
 update.RUN_LOCK=str(Path(update.DATA)/'run.lock')
 update.MARKER_PATH=str(Path(update.DATA)/__import__('writer_lock').UPDATE_MARKER_NAME)
 update.REPORT_PATH=str(Path(update.DATA)/'recovery_report.json')
-previous=json.loads(Path(update.STATE_PATH).read_text())['applying']['prev_sha']
+saved=json.loads(Path(update.STATE_PATH).read_text())
+# a finished child clears applying; its applied record keeps the same prev_sha
+previous=(saved['applying'] or saved['applied'][-1])['prev_sha']
 update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
     update._split_source_tree(previous),ensure_ascii=True,separators=(',',':')).encode('ascii')).hexdigest()})
 repository._SPLIT_PARENT_SOURCE_WITNESSES=(
@@ -498,8 +536,12 @@ update._last_report=recovery._last_report=lambda:{}
 update._services_reconcile=recovery._services_reconcile=services
 update.restart_agents=recovery.restart_agents=lambda *_a,**_k:events.append('restart') or []
 update.restart_services=recovery.restart_services=lambda *_a,**_k:events.append('restart-services')
+# _gateway_restart_if_needed reads restart_services from its own module
+import update_services
+update_services.restart_services=recovery.restart_services
 update._postcheck=recovery._postcheck=lambda *_a,**_k:[]
-update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:True
+notices=[]
+update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:notices.append(str(_k.get('notice_code'))) or True
 update._report=recovery._report=lambda result,detail,**extra:reports.append({'result':result,**extra})
 if case=='runtime_reinstall_done':
     update._use_migrated_runtime=recovery._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
@@ -526,7 +568,7 @@ try:
     else:result=update.main(['recover'])
 except Exception as exc:
     result='error:'+type(exc).__name__
-print(json.dumps({'result':result,'events':events,'reports':reports}))
+print(json.dumps({'result':result,'events':events,'reports':reports,'notices':notices}))
 '''
 
 
