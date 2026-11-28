@@ -4,8 +4,8 @@
   "summary": "v1.2.1やv1.3.0で承認したローカル作り直しは、データベース・入力・証明が変わっていなければv1.3.1以降でも有効なまま扱います。未登録のcontractや別データベースでは従来どおり無効です。",
   "upgrade": "追加操作は不要です。既存の承認は再承認なしで判定されます。",
   "details": [
-    "承認判定では現在のcontractだけでなく、公開版で使われた登録済みcontractの集合を受け付けます。",
-    "将来contractが変わるときは、現在値を登録集合へ残すことをテストで必須にしました。"
+    "承認判定では現在のcontractだけでなく、公開版で承認機能を持つwriterが使った登録済みcontractの集合を受け付けます。frameの履歴だけに現れるcontractは承認の根拠にしません。",
+    "将来contractが変わるときは、現在値を登録集合へ残すことをテストで必須にしました。v1.3.1の値も独立した旧値として固定しています。"
   ],
   "refs": ["mcs/extract/llm/extract_llm_local_rebuild.py", "tests/llm/test_cloud_local_rebuild.py"]
 }

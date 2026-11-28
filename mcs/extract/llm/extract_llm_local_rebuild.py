@@ -32,7 +32,6 @@ import inference_dependency_loss
 import inference_version as inference
 import mcs_queries
 from extract_llm_context import _context_contract, _context_contracts
-from extraction_context import _RETIRED_FRAME_CONTRACTS
 from extract_llm_qc import _current, pending_pred
 from extract_llm_source_contract import KIND, _INFERENCE_VERSION
 from mcs_queries import json_or_null
@@ -70,7 +69,7 @@ _APPROVED_CONTRACTS = (
 
 
 def _approval_contracts():
-    return frozenset({*_context_contracts(), *_RETIRED_FRAME_CONTRACTS, *_APPROVED_CONTRACTS})
+    return frozenset({*_context_contracts(), *_APPROVED_CONTRACTS})
 
 
 # The states whose unit runs under its approval's own local guards and tag: an adopted unit that

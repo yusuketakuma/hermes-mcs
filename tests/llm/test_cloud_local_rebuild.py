@@ -299,6 +299,7 @@ def test_an_approval_that_cannot_reverify_in_time_rejects_the_whole_bundle(legac
 
 
 @pytest.mark.parametrize('old_contract', [
+    '88b7f0dd6ac7a73e1f8185ec19108889592e60f805d41758be3ccb3476653f92',  # v1.3.1
     '5e0fbf99023ecc18e1d005c0d591ab1e6435aa82907da1885c011d263ee862c2',  # v1.3.0
     '5659ec26c1dbf34d07cbd876c04ae77ea67826aa9b38e862b9a1184ef38c6e46',  # v1.2.1
 ])
@@ -317,6 +318,18 @@ def test_an_unregistered_contract_turns_the_permit_into_proof_changed(legacy, mo
     ledger, _ = legacy
     current = local_rebuild._context_contract
     monkeypatch.setattr(local_rebuild, '_context_contract', lambda: 'c' * 64)
+    plan = local_rebuild.preview(ledger)['plan']
+    _, receipt = _approve(ledger, plan)
+    monkeypatch.setattr(local_rebuild, '_context_contract', current)
+    assert receipt['outcome'] == 'applied'
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+def test_a_frame_only_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
+    ledger, _ = legacy
+    current = local_rebuild._context_contract
+    frame_only = 'c1cd5098eca786d07480f74f4404004003f2926dd95f0a793aec04fdf37cbb65'
+    monkeypatch.setattr(local_rebuild, '_context_contract', lambda: frame_only)
     plan = local_rebuild.preview(ledger)['plan']
     _, receipt = _approve(ledger, plan)
     monkeypatch.setattr(local_rebuild, '_context_contract', current)
