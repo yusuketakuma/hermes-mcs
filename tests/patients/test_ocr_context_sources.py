@@ -1,4 +1,5 @@
 """OCR pages enter patient context only as ready, independently grounded originals."""
+import json
 from types import SimpleNamespace
 import sys
 
@@ -87,7 +88,7 @@ def test_attachment_coverage_distinguishes_pending_ready_and_opt_out(source_stor
     led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (original_source_keys.parse(key)[1],))
     unknown = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert not unknown['complete'] and unknown['pending'] == 1
-    assert 'unavailable' not in unknown
+    assert 'original_pruned' not in unknown
 
 
 def test_observed_unsupported_is_excluded_but_failed_is_pending(source_store, monkeypatch):
@@ -98,27 +99,79 @@ def test_observed_unsupported_is_excluded_but_failed_is_pending(source_store, mo
     monkeypatch.setattr(attachment_ocr, 'view', lambda *a, **kw: state)
     excluded = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert excluded['complete'] and excluded['excluded'] == 1 and excluded['eligible'] == 0
-    state['state'] = 'unavailable'
-    unavailable = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
-    assert unavailable['complete'] and unavailable['excluded'] == 1
-    assert unavailable['eligible'] == 0 and unavailable['pending'] == 0
-    assert unavailable['unavailable'] == 1
     state['state'] = 'failed'
     failed = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert not failed['complete'] and failed['pending'] == 1
 
 
-def test_pruned_attachment_without_ocr_completes_coverage_as_unavailable(source_store):
+def _ocr_record(led, state):
+    """Store a newer OCR outcome for the seeded attachment; it supersedes the complete one."""
+    import attachment_ocr
+    doc = {'schema': attachment_ocr.SCHEMA, 'runtime_contract': attachment_ocr.RUNTIME_CONTRACT,
+           'attachment_id': 1, 'input_sha256': 'a' * 64, 'input_bytes': 32, 'state': state,
+           'pages': [], 'attempts': 1, 'next_try': 0, 'reason': 'timeout'}
+    led.artifact_add(attachment_ocr.KIND, json.dumps(doc), project_id=1, message_id=10,
+                     meta={'attachment_id': 1})
+    led.db.commit()
+
+
+def _prune(led):
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='pruned',local_path=NULL WHERE attachment_id=1")
+
+
+def test_pruned_attachment_without_ocr_completes_coverage_as_original_pruned(source_store):
     led, key, _ = source_store
     before = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     artifact_id = original_source_keys.parse(key)[1]
     with led.db:
         led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,))
-        led.db.execute("UPDATE attachments SET state='pruned',local_path=NULL WHERE attachment_id=1")
+    _prune(led)
     coverage = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
     assert coverage['complete'] and coverage['excluded'] == 1
-    assert coverage['unavailable'] == 1 and coverage['pending'] == 0
+    assert coverage['original_pruned'] == 1 and coverage['pending'] == 0
     assert coverage['signature'] != before['signature']
+
+
+@pytest.mark.parametrize(('state', 'pruned', 'complete', 'excluded'), [
+    # A due retry on a retained original is still OCR work, whatever the record calls it.
+    ('unavailable', False, False, 0),
+    # A recorded failure is not a confirmed loss even after the original is gone.
+    ('failed', True, False, 0),
+    # The runtime already refused the format; pruning does not turn it into a loss.
+    ('unsupported', True, True, 1),
+])
+def test_recorded_ocr_outcome_is_never_counted_as_original_pruned(source_store, state, pruned, complete, excluded):
+    led, _, _ = source_store
+    _ocr_record(led, state)
+    if pruned:
+        _prune(led)
+    coverage = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    assert coverage['complete'] is complete
+    assert coverage['excluded'] == excluded and coverage['pending'] == 1 - excluded
+    assert 'original_pruned' not in coverage
+
+
+@pytest.mark.parametrize(('row_state', 'record', 'identity_state', 'view_state'), [
+    ('pending', None, 'pending', 'unavailable'),
+    ('failed', None, 'failed', 'unavailable'),
+    ('downloaded', 'failed', 'retained', 'failed'),
+])
+def test_unchanged_pending_attachment_keeps_its_coverage_signature(source_store, row_state, record,
+                                                                   identity_state, view_state):
+    led, _, _ = source_store
+    if record:
+        _ocr_record(led, record)
+    with led.db:
+        led.db.execute('UPDATE attachments SET state=? WHERE attachment_id=1', (row_state,))
+    coverage = mcs_queries.attachment_ocr_coverage(led.db, 1, OCR_CFG)
+    expected = {'complete': False, 'mode': 'on', 'total': 1, 'eligible': 1, 'excluded': 0,
+                'ocr_complete': 0, 'clinical_pending': 0, 'pending': 1}
+    assert {key: value for key, value in coverage.items() if key != 'signature'} == expected
+    # The signature recipe as released: an attachment whose classification did not change
+    # must not send its patient context back for re-evaluation.
+    assert coverage['signature'] == payload_hash(
+        [expected, [[1, identity_state, 'a' * 64, 32, 1, view_state]]])
 
 
 def test_image_only_post_readiness_releases_after_ocr_inference(source_store, monkeypatch):

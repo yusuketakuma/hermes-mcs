@@ -67,12 +67,12 @@ def test_before_selects_five_then_reverses_without_losing_the_lookahead(led, mon
     assert _pages(reader.read_page(led.db, 1, [100], cfg=cfg, cursor=first['next_cursor'])) == _pages(middle)
 
 
-def test_unavailable_attachment_is_excluded_and_counted(led, monkeypatch, pinned_clock):
+def test_original_pruned_attachment_is_excluded_and_counted(led, monkeypatch, pinned_clock):
     _, cfg, _ = _seed(led, monkeypatch, count=1)
     monkeypatch.setattr(attachment_ocr, 'current', lambda *args, **kwargs: None)
-    monkeypatch.setattr(attachment_ocr, 'view', lambda *args, **kwargs: {'state': 'unavailable'})
+    monkeypatch.setattr(attachment_ocr, 'view', lambda *args, **kwargs: {'state': 'original_pruned'})
     result = reader.read_page(led.db, 1, [100], cfg=cfg)
-    assert result['excluded'] == result['unavailable'] == 1
+    assert result['excluded'] == result['original_pruned'] == 1
     assert result['pending'] == 0
 
 

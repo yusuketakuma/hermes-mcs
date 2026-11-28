@@ -145,10 +145,10 @@ def test_unavailable_document_coverage_is_visible(monkeypatch, db, state, expect
     assert f'紹介状: {expected}' in ui['notes']
 
 
-def test_unavailable_document_count_is_visible(monkeypatch, db):
+def test_original_pruned_document_count_is_visible(monkeypatch, db):
     payload = {'documents': [], 'events': [], 'coverage': {
         'state': 'observed', 'attachments_examined': 2, 'documents': 0,
-        'pending': 0, 'unavailable': 2, 'limited': False, 'complete': True}}
+        'pending': 0, 'original_pruned': 2, 'limited': False, 'complete': True}}
     monkeypatch.setattr(views, 'document_timelines', lambda *a, **k: (payload, {'events': [], 'coverage': {}}))
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')

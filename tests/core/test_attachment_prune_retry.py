@@ -57,67 +57,90 @@ def test_failed_unlink_keeps_retry_path_without_a_sendable_payload(
     db.close()
 
 
-@pytest.mark.parametrize(("view_state", "expected"), [
-    ("unprocessed", 0), ("failed", 0),
-    ("complete", 1), ("empty", 1), ("unsupported", 1),
-    ("unavailable", 1), ("rejected_by_policy", 1),
-])
-def test_ocr_open_original_is_retained_until_terminal_state(tmp_path, monkeypatch, view_state, expected):
+OCR_CFG = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/ocr"}}
+
+
+def _ocr_asset(tmp_path, monkeypatch, cfg=OCR_CFG, state="read"):
+    """An expired original of a valid patient whose OCR settings are read as given."""
     db, path = _asset(tmp_path)
-    monkeypatch.setattr(maintenance, "config_read_state", lambda: (
-        {"attachment_ocr": {"enabled": True}}, "read"))
-    monkeypatch.setattr(attachment_ocr, "view", lambda *a, **k: {"state": view_state})
+    db.ensure_patient(1)
+    blob = path.read_bytes()
+    db.db.execute("UPDATE attachments SET sha256=?,bytes=? WHERE attachment_id=1",
+                  (hashlib.sha256(blob).hexdigest(), len(blob)))
+    db.db.commit()
+    monkeypatch.setattr(maintenance, "config_read_state", lambda: (cfg, state))
+    return db, path
+
+
+def _ocr_record(db, path, state, **fields):
+    blob = path.read_bytes()
+    doc = {"schema": attachment_ocr.SCHEMA, "runtime_contract": attachment_ocr.RUNTIME_CONTRACT,
+           "engine": "yomitoku", "attachment_id": 1, "input_sha256": hashlib.sha256(blob).hexdigest(),
+           "input_bytes": len(blob), "state": state, "pages": [], **fields}
+    db.artifact_add(attachment_ocr.KIND, json.dumps(doc), project_id=1,
+                    message_id=1, meta={"attachment_id": 1})
+    db.db.commit()
+
+
+@pytest.mark.parametrize(("state", "expected"), [
+    # A due retry of any recorded failure keeps the original OCR still needs.
+    ("failed", 0), ("unavailable", 0),
+    ("unsupported", 1),
+])
+def test_recorded_ocr_outcome_decides_retention_of_expired_original(tmp_path, monkeypatch, state, expected):
+    db, path = _ocr_asset(tmp_path, monkeypatch)
+    _ocr_record(db, path, state, attempts=1, next_try=0, reason="timeout")
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == expected
     assert path.exists() is not bool(expected)
     db.close()
 
 
 def test_unreadable_config_fails_closed_and_keeps_downloaded_original(tmp_path, monkeypatch):
-    db, path = _asset(tmp_path)
-    monkeypatch.setattr(maintenance, "config_read_state", lambda: ({}, "unreadable"))
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("OCR state must not be needed when config is unreadable")
-
-    monkeypatch.setattr(attachment_ocr, "view", forbidden)
+    db, path = _ocr_asset(tmp_path, monkeypatch, cfg={}, state="unreadable")
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 0
     assert path.exists()
     db.close()
 
 
-def test_real_ocr_record_controls_retention_of_expired_original(tmp_path, monkeypatch):
-    db, path = _asset(tmp_path)
-    db.ensure_patient(1)
-    blob = path.read_bytes()
-    sha = hashlib.sha256(blob).hexdigest()
-    db.db.execute("UPDATE attachments SET sha256=?,bytes=? WHERE attachment_id=1", (sha, len(blob)))
+def test_invalid_ocr_setting_keeps_originals_and_continues_other_cleanup(tmp_path, monkeypatch):
+    db, path = _ocr_asset(tmp_path, monkeypatch, cfg={"attachment_ocr": None})
+    withdrawn = path.with_name("2")
+    withdrawn.write_bytes(b"synthetic withdrawn attachment")
+    db.db.execute("INSERT INTO attachments(attachment_id,message_id,name,local_path,state,downloaded_at) "
+                  "VALUES(2,1,'other.pdf',?,'withdrawn',?)",
+                  (str(withdrawn), time.time() - maintenance.ATTACHMENT_KEEP_S - 1))
     db.db.commit()
-    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/ocr"}}
-    monkeypatch.setattr(maintenance, "config_read_state", lambda: (cfg, "read"))
-    assert attachment_ocr.view(db.db, 1, cfg=cfg)["state"] == "unprocessed"
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
+    assert path.exists() and not withdrawn.exists()
+    db.close()
+
+
+def test_disabled_ocr_prunes_unprocessed_original_as_before(tmp_path, monkeypatch):
+    db, path = _ocr_asset(tmp_path, monkeypatch, cfg={"attachment_ocr": {"enabled": False}})
+    assert attachment_ocr.view(db.db, 1)["state"] == "unprocessed"
+    assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
+    assert not path.exists()
+    db.close()
+
+
+def test_real_ocr_record_controls_retention_of_expired_original(tmp_path, monkeypatch):
+    db, path = _ocr_asset(tmp_path, monkeypatch)
+    assert attachment_ocr.view(db.db, 1, cfg=OCR_CFG)["state"] == "unprocessed"
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 0
     assert path.exists()
 
     pages = [{"page": 1, "engine": "pdf_text", "text": "合成"}]
     pages[0]["text_hash"] = attachment_ocr._hash(pages[0]["text"])
-    doc = {"schema": attachment_ocr.SCHEMA, "runtime_contract": attachment_ocr.RUNTIME_CONTRACT,
-           "engine": "yomitoku", "engine_version": attachment_ocr.ENGINE_VERSION,
-           "state": "complete", "attachment_id": 1, "input_sha256": sha,
-           "input_bytes": len(blob), "pages": pages,
-           "text_hash": attachment_ocr._hash(json.dumps(pages, ensure_ascii=False, sort_keys=True))}
-    db.artifact_add(attachment_ocr.KIND, json.dumps(doc), project_id=1,
-                    message_id=1, meta={"attachment_id": 1})
-    db.db.commit()
-    assert attachment_ocr.view(db.db, 1, cfg=cfg)["state"] == "complete"
+    _ocr_record(db, path, "complete", engine_version=attachment_ocr.ENGINE_VERSION, pages=pages,
+                text_hash=attachment_ocr._hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)))
+    assert attachment_ocr.view(db.db, 1, cfg=OCR_CFG)["state"] == "complete"
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1
     assert not path.exists()
     db.close()
 
 
 def test_deleted_parent_payload_is_not_retained_for_ocr(tmp_path, monkeypatch):
-    db, path = _asset(tmp_path)
-    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/ocr"}}
-    monkeypatch.setattr(maintenance, "config_read_state", lambda: (cfg, "read"))
+    db, path = _ocr_asset(tmp_path, monkeypatch)
     with db.db:
         db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=1")
     assert maintenance.prune_attachments(str(tmp_path / "ledger.db")) == 1

@@ -1448,8 +1448,9 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
                         row["sha256"], row["bytes"], row["downloaded_at"], state]
             if state in attachment_ocr.EXCLUDED_STATES:
                 result["excluded"] += 1
-                if state == "unavailable":
-                    result["unavailable"] = result.get("unavailable", 0) + 1
+                if state == "original_pruned":
+                    # Present only when counted, so other patients keep their signature.
+                    result["original_pruned"] = result.get("original_pruned", 0) + 1
                 if state == "rejected_by_policy":
                     result["policy_rejected"] += 1
                     identity.extend([status["artifact_id"], status["proof"], policy])
