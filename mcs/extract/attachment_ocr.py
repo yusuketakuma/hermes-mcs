@@ -30,9 +30,12 @@ MAX_PAGES = 30
 MAX_TABLE_ENTRIES = 10000
 FAILURE_RETRY_S = 86400
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
-EXCLUDED_STATES = frozenset({"unsupported", "rejected_by_policy"})
-# Every state view() can report: stored document states plus not-yet-run and policy rejection.
-VIEW_STATES = frozenset(_STATES | {"unprocessed", "rejected_by_policy"})
+# original_pruned: the retained original was pruned before any OCR record existed,
+# so no run can produce one; it is settled as not obtained, never as reviewed.
+EXCLUDED_STATES = frozenset({"unsupported", "rejected_by_policy", "original_pruned"})
+# Every state view() can report: stored document states plus not-yet-run, policy
+# rejection and a settled original pruned before OCR.
+VIEW_STATES = frozenset(_STATES | {"unprocessed", "rejected_by_policy", "original_pruned"})
 
 # Optional packages are imported only in the separate, network-denied runtime.
 _BOOTSTRAP = f'MODELS = {MODELS!r}\nENGINE_VERSION = {ENGINE_VERSION!r}\n' + r'''
@@ -321,9 +324,26 @@ def view(db, attachment_id, project_id=None, include_text=False, *, cfg=None):
         return rejection
     prior = _latest(db, source)
     if source['state'] == 'pruned':
-        return {'state': 'unavailable', 'page_count': 0, 'original_available': False}
+        # Only a pruned original without any OCR record is settled; a recorded
+        # failure or mismatch stays unavailable (pending) and a format the
+        # runtime already refused stays unsupported.
+        state = ('original_pruned' if prior is None
+                 else 'unsupported' if _matching(prior, source) and prior['state'] == 'unsupported'
+                 else 'unavailable')
+        return {'state': state, 'page_count': 0, 'original_available': False}
     return {"state": prior["state"] if _matching(prior, source) and prior["state"] not in ("complete", "empty")
             else "unprocessed", "page_count": 0}
+
+
+def awaiting_result(db, attachment_id, *, cfg=None):
+    """Tell whether an enabled OCR run may still produce this retained original's result."""
+    source = _source(db, attachment_id)
+    if source is None or source["state"] != "downloaded" or current(db, attachment_id) is not None:
+        return False
+    if rejected_failure(db, attachment_id, cfg=cfg) is not None:
+        return False
+    prior = _latest(db, source)
+    return not (_matching(prior, source) and prior["state"] == "unsupported")
 
 
 def capture_dependencies_tx(db, *, attachment_id=None, message_id=None):

@@ -21,6 +21,9 @@ COVERAGE_COUNT_S = 3600
 # A recorded patient-context count is carried, marked stale, while refreshes
 # keep failing for at most three refresh periods; older is unknown.
 PATIENT_CONTEXT_CARRY_S = 3 * COVERAGE_COUNT_S
+# An original still awaiting its OCR result is never pruned; past this many
+# days since download it is reported by count and oldest age only.
+DEFAULT_OCR_RETAINED_WARN_DAYS = 30
 # Why an unfinished run stopped, as runs.error of a 'crashed' row. Only a
 # reason its evidence proves is written; anything else reads as 'unknown'.
 INTERRUPT_REASONS = ("watchdog_exit", "update_preempted", "host_restart", "unknown")
@@ -38,6 +41,13 @@ def _tick_settings(cfg: dict) -> tuple[float, float]:
     if not (_finite_number(missed) and missed >= 0):
         missed = DEFAULT_MAX_MISSED
     return tick, missed
+
+
+def ocr_retained_warn_days(cfg: dict) -> int:
+    """Return health.attachment_ocr_retained_warn_days, or the default for a missing or invalid value."""
+    h = cfg.get("health") if isinstance(cfg, dict) else None
+    value = h.get("attachment_ocr_retained_warn_days") if isinstance(h, dict) else None
+    return value if type(value) is int and 1 <= value <= 3650 else DEFAULT_OCR_RETAINED_WARN_DAYS
 
 
 def freshness_deadline(cfg: dict) -> int:

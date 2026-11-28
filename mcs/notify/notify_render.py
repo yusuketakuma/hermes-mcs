@@ -525,7 +525,10 @@ def attachment_ocr_records(db, mid):
         doc = attachment_ocr.current(db, row["attachment_id"], project_id=row["project_id"])
         status = (doc if doc else attachment_ocr.view(
             db, row["attachment_id"], project_id=row["project_id"], cfg=cfg))
-        if status["state"] in ("unprocessed", "unavailable") and not status.get("artifact_id"):
+        # A pruned original without a current result stays hidden like an unprocessed one,
+        # so its card source generation does not move when its state is reclassified.
+        if not doc and (status["state"] in ("unprocessed", "unavailable") and not status.get("artifact_id")
+                        or status.get("original_available") is False):
             continue
         analysis = []
         for page in doc['pages'] if doc else []:
@@ -545,7 +548,8 @@ def attachment_ocr_records(db, mid):
 # Every state attachment_ocr.view / current reports; an unknown one says so instead of a wrong word.
 OCR_STATE_LABELS = {"complete": "完了", "empty": "文字なし", "unprocessed": "未処理", "failed": "失敗",
                     "unsupported": "対応していない形式", "unavailable": "原本を取得できていないため作成できず",
-                    "rejected_by_policy": "表の読み取りが不確かなため除外"}
+                    "rejected_by_policy": "表の読み取りが不確かなため除外",
+                    "original_pruned": "原本の保持期間が過ぎたため作成できず"}
 
 
 def _ocr_label(record):

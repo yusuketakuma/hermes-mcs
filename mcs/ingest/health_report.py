@@ -9,10 +9,11 @@ import shutil
 import sqlite3
 import stat
 import time
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 
 from health_policy import (CARD_STALL_S, COVERAGE_COUNT_S, HEALTH_REL, PATIENT_CONTEXT_CARRY_S,
-                           STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL, freshness_deadline)
+                           STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL, freshness_deadline,
+                           ocr_retained_warn_days)
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -34,6 +35,24 @@ DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
 DB_MAINT_STATE_MAX_BYTES = 65536
 
 
+def _ocr_markers(data):
+    from pathlib import Path
+    return (Path(data) / 'update_in_progress.marker', Path(data) / 'restore_pending.json')
+
+
+@contextmanager
+def _ocr_ledger_snapshot(data, until):
+    """Open the ledger read-only in one snapshot whose statements stop at the deadline."""
+    from pathlib import Path
+    with closing(sqlite3.connect((Path(data) / 'ledger.db').resolve().as_uri() + '?mode=ro',
+                                 uri=True, timeout=0.2)) as db:
+        db.row_factory = sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        db.set_progress_handler(lambda: int(time.monotonic() >= until), 1000)
+        db.execute('BEGIN')
+        yield db
+
+
 def _ocr_ack_current(data, value, cfg=None):
     """Recheck receipt/source proof with a bounded read before suppressing one historical cause.
 
@@ -47,9 +66,8 @@ def _ocr_ack_current(data, value, cfg=None):
       comparison itself is not currently meaningful"""
     import attachment_ocr_ack
     import attachment_ocr
-    from pathlib import Path
     until = time.monotonic() + 2.0
-    markers = (Path(data) / 'update_in_progress.marker', Path(data) / 'restore_pending.json')
+    markers = _ocr_markers(data)
     try:
         policy = value.get("policy_binding")
         if policy and (policy != attachment_ocr.rejection_policy(cfg)
@@ -57,12 +75,7 @@ def _ocr_ack_current(data, value, cfg=None):
             return "attachment_ocr_ack_unverified"
         if any(os.path.lexists(path) for path in markers):
             return "attachment_ocr_ack_unverified"
-        with closing(sqlite3.connect((Path(data) / 'ledger.db').resolve().as_uri() + '?mode=ro',
-                                     uri=True, timeout=0.2)) as db:
-            db.row_factory = sqlite3.Row
-            db.execute('PRAGMA query_only=ON')
-            db.set_progress_handler(lambda: int(time.monotonic() >= until), 1000)
-            db.execute('BEGIN')
+        with _ocr_ledger_snapshot(data, until) as db:
             identity = attachment_ocr_ack.database_identity(db)
             current = attachment_ocr_ack.failure_counts(db, cfg=cfg if policy else None, deadline=until)
             if time.monotonic() >= until:
@@ -99,7 +112,71 @@ def _diagnostic_block(value) -> bool:
         for key, item in value.items())
 
 
+OCR_RETAINED_LIMIT = 256
+OCR_RETAINED_UNVERIFIED = {"unverified": True}
+
+
+def _ocr_retained(data, cfg, now):
+    """Count originals kept for OCR past the warning age; None when none were observed.
+
+    A walk the deadline cut short, or a read that failed once the ledger was open,
+    returns OCR_RETAINED_UNVERIFIED, never a count or None."""
+    warn_days = ocr_retained_warn_days(cfg)
+    until = time.monotonic() + 2.0
+    if not finite_number(now) or any(os.path.lexists(path) for path in _ocr_markers(data)):
+        return None
+    ages, more, opened = [], False, False
+    try:
+        with _ocr_ledger_snapshot(data, until) as db:
+            opened = True
+            # The rows prune_attachments selects (a stored original only), oldest first.
+            cursor = db.execute("SELECT attachment_id, state, downloaded_at FROM attachments "
+                                "WHERE state='downloaded' AND local_path IS NOT NULL AND downloaded_at < ? "
+                                "ORDER BY downloaded_at, attachment_id", (now - warn_days * 86400,))
+            # Narrow each batch with the predicate retention uses and walk on, so rows it
+            # would not keep never hide a kept one; the deadline bounds the walk.
+            while not more and (rows := cursor.fetchmany(OCR_RETAINED_LIMIT)):
+                kept = maintenance.ocr_retained_payloads(db, rows, cfg, "read", deadline=until)
+                for row in rows:
+                    if row["attachment_id"] in kept:
+                        if len(ages) == OCR_RETAINED_LIMIT:
+                            more = True
+                            break
+                        ages.append(now - row["downloaded_at"])
+            if time.monotonic() >= until:
+                return OCR_RETAINED_UNVERIFIED
+    except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, RecursionError):
+        # A ledger that cannot be opened is not observed; a failed read of an open ledger,
+        # or a walk the deadline stopped, leaves retention unconfirmed.
+        return OCR_RETAINED_UNVERIFIED if opened or time.monotonic() >= until else None
+    if not ages:
+        return None
+    # Counts and the oldest age only: never an attachment, message or patient identifier.
+    return {"count": len(ages), "lower_bound": more,
+            "oldest_days": int(max(ages) // 86400), "warn_days": warn_days}
+
+
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
+    """Read bounded private OCR evidence and warn on originals kept for OCR past the warning age."""
+    detail = _attachment_ocr_status(data, cfg, now)
+    if detail["state"] == "disabled" or detail.get("reason") in (
+            "attachment_ocr_config_unavailable", "attachment_ocr_config_invalid"):
+        return detail
+    retained = _ocr_retained(data, cfg, now)
+    if retained is None:
+        return detail
+    # One reason per observation: the warning, or an unconfirmed walk, replaces only
+    # 'ok'; under any other reason the result rides along in the detail and its text.
+    detail = {**detail, "retained_originals": dict(retained)}
+    if detail["state"] == "ok":
+        state, reason = (("unknown", "attachment_ocr_original_retained_unverified")
+                         if retained == OCR_RETAINED_UNVERIFIED
+                         else ("deferred", "attachment_ocr_original_retained"))
+        detail.update(state=state, reason=reason)
+    return detail
+
+
+def _attachment_ocr_status(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
     import attachment_inference_deferral
     import attachment_ocr

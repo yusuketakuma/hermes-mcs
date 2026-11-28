@@ -145,6 +145,18 @@ def test_unavailable_document_coverage_is_visible(monkeypatch, db, state, expect
     assert f'紹介状: {expected}' in ui['notes']
 
 
+def test_original_pruned_document_count_is_visible(monkeypatch, db):
+    payload = {'documents': [], 'events': [], 'coverage': {
+        'state': 'observed', 'attachments_examined': 2, 'documents': 0,
+        'pending': 0, 'original_pruned': 2, 'limited': False, 'complete': True}}
+    monkeypatch.setattr(views, 'document_timelines', lambda *a, **k: (payload, {'events': [], 'coverage': {}}))
+    monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
+    monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
+    monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
+    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=0, now=1)
+    assert any('原本未取得 2件' in note for note in ui['notes'])
+
+
 def test_pump_records_share_ocr_read_and_stay_unverified(monkeypatch):
     import ocr_document_reader
     import pump_document

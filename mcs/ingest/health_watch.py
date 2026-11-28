@@ -1171,6 +1171,10 @@ _REASON_JA = {
     "attachment_ocr_memory_deferred": ("添付OCRに必要なメモリーの余裕を確認できません", "メモリーの使用状況を確認してください。余裕を確認できるまでOCRは保留します"),
     "attachment_ocr_queue_unverified": ("添付の文字起こしの未解消エラーを全件確認できていません", "OCRの状態記録と処理待ちの範囲を確認してください"),
     "attachment_ocr_processing_deferred": ("添付の文字起こしの保存・公開が保留されています", "次回のOCR実行結果と更新の保留状態を確認してください"),
+    "attachment_ocr_original_retained": ("文字起こしの結果が無いまま長く残っている添付の原本があります",
+                                         "OCRの設定・実行環境と直近の実行結果を確認してください"),
+    "attachment_ocr_original_retained_unverified": ("文字起こしの結果が無いまま長く残っている添付の原本を確認できませんでした",
+                                                    "次回の確認を待ってください。続く場合は台帳の状態と負荷、添付の件数を確認してください"),
     "worker_start_unverified": ("通知workerの起動を確認できません",
                                 "slack_profile / profile と対象gatewayの worker_started を確認"),
     "worker_start_failed": ("通知workerの起動に失敗しました",
@@ -1582,6 +1586,22 @@ _CLOUD_REASON_JA = {
 }
 
 
+def _ocr_retained_text(ocr) -> str:
+    """Describe originals kept for OCR past the warning age by count and oldest age only."""
+    retained = ocr.get("retained_originals") if isinstance(ocr, dict) else None
+    if (retained == {"unverified": True}
+            and ocr.get("reason") != "attachment_ocr_original_retained_unverified"):
+        return "文字起こしの結果が無いまま長く残っている原本の件数は、確認できませんでした。"
+    if not isinstance(retained, dict) or not all(
+            type(retained.get(key)) is int and retained[key] > 0
+            for key in ("count", "oldest_days", "warn_days")):
+        return ""
+    more = "以上" if retained.get("lower_bound") is True else ""
+    return (f"文字起こしの結果が無いまま取得から{retained['warn_days']}日を超えて残っている原本が"
+            f"{retained['count']}件{more}あります（最も古いものは取得から{retained['oldest_days']}日）。"
+            "原本は自動では削除しません。")
+
+
 def _reason_rows(report: dict, reasons) -> list[str]:
     from collection_diagnostics import stop_explanation
     if reasons is None:
@@ -1761,6 +1781,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                         action += "。"
                     action += (f"直近の実行で失敗した記録が{latest}件あります"
                                "（未解消の記録に含まれ得ます）。")
+        if base.startswith("attachment_ocr_"):
+            note = _ocr_retained_text(report.get("attachment_ocr"))
+            if note:
+                action = action.rstrip("。") + "。" + note
         guide = None
         stop = (stop_explanation(report.get("run_stop"))
                 if base in ("run_failed", "session_expired") and not report.get("observations_recorded")

@@ -393,6 +393,11 @@ def _validate_health(h: dict) -> list[str]:
         err = _int_range(0, 100)(h["max_missed_runs"])
         if err:
             errors.append(f"health.max_missed_runs: {err}")
+    if "attachment_ocr_retained_warn_days" in h:
+        # Same bounds health_policy.ocr_retained_warn_days accepts.
+        err = _int_range(1, 3650)(h["attachment_ocr_retained_warn_days"])
+        if err:
+            errors.append(f"health.attachment_ocr_retained_warn_days: {err}")
     return errors
 
 

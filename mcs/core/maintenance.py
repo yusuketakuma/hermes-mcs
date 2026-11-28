@@ -23,7 +23,7 @@ from time import monotonic
 
 import snapshots
 from snapshots import publish_snapshot as _publish_snapshot
-from mcs_util import HOME
+from mcs_util import HOME, config_read_state
 from safe_io import atomic_write, fdopen_owned
 from maintenance_errors import MaintenanceError
 import local_backup
@@ -131,12 +131,37 @@ def _plain_file(path: str) -> bool:
         return False
 
 
+def ocr_retained_payloads(con, rows, cfg, config_state, *, deadline=None) -> set[int]:
+    """Downloaded payloads OCR may still need; unknown or invalid settings keep them all.
+
+    A ``deadline`` (monotonic) raises TimeoutError instead of returning a partial set."""
+    import attachment_ocr
+    downloaded = [row["attachment_id"] for row in rows if row["state"] == "downloaded"]
+    if config_state == "unreadable" or attachment_ocr.config_error(cfg):
+        return set(downloaded)
+    if cfg.get("attachment_ocr", {}).get("enabled") is not True:
+        return set()
+    keep = set()
+    for attachment_id in downloaded:
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError("ocr_retained_deadline")
+        try:
+            awaiting = attachment_ocr.awaiting_result(con, attachment_id, cfg=cfg)
+        except Exception:
+            awaiting = True
+        if awaiting:
+            keep.add(attachment_id)
+    return keep
+
+
 def prune_attachments(db_path: str) -> int:
     """Delete downloaded attachment payloads older than 14 days —
     retention-bound the attachments/ directory. The row survives as state='pruned' with name/bytes/sha256/url
     intact so views still record that the attachment existed; only the
     payload goes. 'pending'/'failed' rows are untouched — a failed
-    download keeps its retry path and never ages out mid-retry.
+    download keeps its retry path and never ages out mid-retry. While OCR
+    is enabled, an original it may still produce a result for is kept, and
+    unreadable or invalid OCR settings keep every downloaded original.
 
     F12: notify_flush aliases each file to `<path><ext>` for upload —
     the alias is part of the same asset and is unlinked too. Files
@@ -169,13 +194,15 @@ def prune_attachments(db_path: str) -> int:
             AND r.state IS NOT 'cancelled' AND p.attachment_id IS NOT NULL
         """))
         rows = [a for a in con.execute("""
-          SELECT attachment_id, message_id, name, local_path
+          SELECT attachment_id, message_id, name, local_path, state
           FROM attachments
           WHERE state IN ('downloaded','withdrawn','pruned')
             AND local_path IS NOT NULL AND downloaded_at < ?""",
           (cutoff,)).fetchall()
           if a["message_id"] not in keep_mids
           and a["attachment_id"] not in keep_ids]
+        keep_ids.update(ocr_retained_payloads(con, rows, *config_read_state()))
+        rows = [a for a in rows if a["attachment_id"] not in keep_ids]
         pruned = 0
         failed = False
         root = Path(db_path).resolve().parent / "attachments"

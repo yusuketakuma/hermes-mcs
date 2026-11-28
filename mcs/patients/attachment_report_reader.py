@@ -31,7 +31,7 @@ def _read(db, pid, mids, cfg, cursor, limit):
     policy = attachment_ocr.rejection_policy(cfg)
     direction, boundary = _cursor(cursor, policy)
     result = {'sources': [], 'prev_cursor': None, 'next_cursor': None,
-              'scanned': 0, 'pending': 0, 'excluded': 0, 'limited': False,
+              'scanned': 0, 'pending': 0, 'excluded': 0, 'original_pruned': 0, 'limited': False,
               'state': 'unknown', 'range_complete': False, 'excluded_documents': []}
     if policy:
         result.update(policy_binding=policy, policy_rejected=0, clinical_review='not_proven')
@@ -93,6 +93,7 @@ def _read(db, pid, mids, cfg, cursor, limit):
                 displayed.append(position)
             result['scanned'] += 1
             result['excluded' if state in attachment_ocr.EXCLUDED_STATES else 'pending'] += 1
+            result['original_pruned'] += int(state == 'original_pruned')
             first_seen, last_seen = first_seen or position, position
             continue
         pages = [page for page in document['pages'] if boundary is None

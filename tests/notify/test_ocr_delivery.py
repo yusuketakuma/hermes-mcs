@@ -94,6 +94,22 @@ def test_stale_and_corrupt_ocr_cannot_render_or_hold_generation(led):
     assert notify_render.source_fingerprint(led.db, _card()) == baseline
 
 
+@pytest.mark.parametrize("record", [None, "unsupported", "failed"])
+def test_pruned_original_without_result_keeps_card_generation(led, record):
+    _patient(led)
+    _msg(led, 100)
+    aid = _attach(led, 100)
+    baseline = notify_render.source_fingerprint(led.db, _card())
+    if record:
+        _save(led, aid, state=record)
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='pruned',local_path=NULL WHERE attachment_id=?", (aid,))
+    assert ocr.view(led.db, aid)["state"] == {None: "original_pruned", "unsupported": "unsupported",
+                                              "failed": "unavailable"}[record]
+    assert notify_render.attachment_ocr_records(led.db, 100) == []
+    assert notify_render.source_fingerprint(led.db, _card()) == baseline
+
+
 def test_legacy_null_body_state_keeps_valid_ocr_visible(led):
     _patient(led)
     _msg(led, 100)

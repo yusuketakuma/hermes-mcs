@@ -110,6 +110,39 @@ def test_source_change_during_processing_rejects_result(setup, monkeypatch, muta
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
 
 
+def _record(ledger, state):
+    sha, size = ledger.db.execute("SELECT sha256,bytes FROM attachments WHERE attachment_id=1").fetchone()
+    doc = {"schema": ocr.SCHEMA, "runtime_contract": ocr.RUNTIME_CONTRACT, "attachment_id": 1,
+           "input_sha256": sha, "input_bytes": size, "state": state, "pages": [],
+           "attempts": 1, "next_try": 0, "reason": "timeout"}
+    ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES(?,20,10,?,?,1)", (ocr.KIND, json.dumps(doc), json.dumps({"attachment_id": 1})))
+    ledger.db.commit()
+
+
+@pytest.mark.parametrize("record,expected", [
+    (None, "original_pruned"), ("failed", "unavailable"),
+    ("unavailable", "unavailable"), ("unsupported", "unsupported")])
+def test_pruned_original_is_settled_only_without_any_ocr_record(setup, record, expected):
+    ledger, cfg, _, _, path = setup
+    if record:
+        _record(ledger, record)
+    path.unlink()
+    with ledger.db:
+        ledger.db.execute("UPDATE attachments SET state='pruned' WHERE attachment_id=1")
+    assert ocr.view(ledger.db, 1, cfg=cfg) == {"state": expected, "page_count": 0, "original_available": False}
+    assert (expected in ocr.EXCLUDED_STATES) is (record in (None, "unsupported"))
+
+
+@pytest.mark.parametrize("state", ["pending", "failed"])
+def test_download_retry_state_keeps_its_pending_view(setup, state):
+    ledger, cfg, _, _, _ = setup
+    with ledger.db:
+        ledger.db.execute("UPDATE attachments SET state=? WHERE attachment_id=1", (state,))
+    assert ocr.view(ledger.db, 1, cfg=cfg)["state"] == "unavailable"
+    assert "unavailable" not in ocr.EXCLUDED_STATES
+
+
 def test_empty_is_completed_not_unprocessed(setup):
     ledger, cfg, pages, _, _ = setup
     pages[0].update(text="", text_hash=ocr._hash(""))
