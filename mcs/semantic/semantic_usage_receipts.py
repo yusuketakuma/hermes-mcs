@@ -152,10 +152,14 @@ def _quality_bound(meta):
     return request
 
 
-# A reservation whose POST never started, for a reason other than the Jev window.
+# A reservation whose POST never started, for a reason other than the Jev window,
+# names the stop that ended its attempt: a runtime guard class or a client refusal
+# raised before the POST. Any other exception there is STOPPED_BEFORE_SEND.
 STOPPED_BEFORE_SEND = "stopped_before_send"
+PRE_SEND_STOPS = frozenset({"runtime_stale", "runtime_off", "runtime_budget", "job_budget", "daily_cap",
+                            "jev_key_changed", "reservation_day_changed", "request_day_guard_unsupported"})
 _NOT_SENT_REASONS = frozenset({"semantic_until_expired", "semantic_until_invalid", "semantic_config_unreadable",
-                               STOPPED_BEFORE_SEND})
+                               STOPPED_BEFORE_SEND, *PRE_SEND_STOPS})
 # The one-time disposition of a source reservation left without a result before
 # provably unsent requests were sealed. It may have been sent, so no late answer
 # is bound to it, and its questions may be asked once more.
@@ -628,11 +632,13 @@ def supersede_unresolved_source_requests_tx(db, now):
     """Once per database, seal each source reservation still without a result as superseded.
 
     The source reserver runs this first in the write transaction of each new
-    reservation, so only reservations made before the disposition record exists
-    are reached, however many callers run it. Each is sealed once, which lets its
-    questions be asked again. A later answer for it is refused by
-    ``patient_source_answer_binding``. Returns the number sealed, or None when
-    the record already exists."""
+    reservation, so no reservation of this code commits before the disposition
+    record: the commit of that record is the point the disposition is bound to,
+    and the reservations it reaches are the ones code from before this release
+    left without a result. Its callers commit it only under the current writer
+    generation. Each is sealed once, which lets its questions be asked again. A
+    later answer for it is refused by ``patient_source_answer_binding``.
+    Returns the number sealed, or None when the record already exists."""
     if not db.in_transaction:
         raise RuntimeError("patient_source_transaction_required")
     if source_requests_superseded(db):

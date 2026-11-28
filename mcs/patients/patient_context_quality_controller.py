@@ -615,23 +615,53 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
     return 'source_candidate', ref
 
 
+def _generation_write(ledger, deadline, write):
+    """Commit one write under the run lock only while this process is the current writer generation.
+
+    The generation is checked inside the writer transaction before ``write``
+    and again before the commit, so code an update or restore has replaced
+    never commits it. Returns False when the lock, the deadline or the
+    generation refuses; the write is then rolled back."""
+    import extract_llm
+
+    def generation():
+        if extract_llm._writer_current(full=True):
+            return True
+        _note("writer_changed")
+        return False
+
+    fd = patient_context_quality_receipts._acquire(current=generation, deadline=deadline)
+    if fd is None:
+        return False
+    try:
+        if patient_context_refresh_state.time.monotonic() >= deadline:
+            return False
+        ledger.db.execute("BEGIN IMMEDIATE")
+        try:
+            if not generation():
+                ledger.db.rollback()
+                return False
+            write()
+            if not generation():
+                ledger.db.rollback()
+                return False
+            ledger.db.commit()
+            return True
+        except BaseException:
+            ledger.db.rollback()
+            raise
+    finally:
+        os.close(fd)
+
+
 def _supersede_unresolved_source_requests(ledger, deadline):
-    """Make sure the one-time disposition of unresolved source reservations has run; False if the lock is busy."""
+    """Make sure the one-time disposition of unresolved source reservations has run; False if it cannot run now."""
     import semantic_runtime
 
     if semantic_runtime.source_requests_superseded(ledger.db):
         return True
-    fd = patient_context_quality_receipts._acquire(deadline=deadline)
-    if fd is None:
-        return False
-    try:
-        ledger.db.execute("BEGIN IMMEDIATE")
-        with ledger.db:
-            semantic_runtime.supersede_unresolved_source_requests_tx(
-                ledger.db, patient_context_refresh_state.time.time())
-        return True
-    finally:
-        os.close(fd)
+    return _generation_write(ledger, deadline, lambda: semantic_runtime.supersede_unresolved_source_requests_tx(
+        ledger.db, patient_context_refresh_state.time.time()))
 
 
 def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_mode, base_doc=None, base_meta=None,
@@ -887,15 +917,11 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         purpose = identity.get("purpose", "summary")
         selected = set() if source is not None else {row["fact_ids"][0] for row in summary}
 
-        def request_status():
-            # "unknown" only for a durable request problem, which no retry can change before its input does
+        def skip_blocked_status():
+            _note("prior_failure_blocks_skip")
             problem = semantic_runtime.patient_summary_request_problem(
                 ledger.db, pid, identity, identity["fact_ids"], purpose=purpose)
             return "held" if problem == "patient_summary_invalid_exhausted" else "unknown" if problem else "deferred"
-
-        def skip_blocked_status():
-            _note("prior_failure_blocks_skip")
-            return request_status()
         if patient_context_quality_receipts._quality_pass_present(ledger.db, pid, identity):
             # A PASS marker cannot survive missing or altered answer evidence.
             if purpose == "source":
@@ -952,17 +978,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
         def seal_not_sent(unsent, reason):
             # Committed, but its POST never started: settle it so the page can be asked again.
             # The stop that ended the attempt (a stale input, the deadline) cannot void this
-            # seal, so only the run lock is waited for, as for the claim release.
-            fd = patient_context_quality_receipts._acquire()
-            if fd is None:
-                return
-            try:
-                ledger.db.execute("BEGIN IMMEDIATE")
-                with ledger.db:
-                    semantic_runtime.patient_summary_resolve_request_tx(
-                        ledger, unsent, identity, {}, set(), project_id=pid, purpose=purpose, not_sent=reason)
-            finally:
-                os.close(fd)
+            # seal, so it waits within the claim's lease and needs only the writer generation.
+            _generation_write(ledger, deadline + patient_context_refresh_state.CALL_SECONDS,
+                lambda: semantic_runtime.patient_summary_resolve_request_tx(
+                    ledger, unsent, identity, {}, set(), project_id=pid, purpose=purpose, not_sent=reason))
 
         client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline, not_sent=seal_not_sent)
         by_id = {fact["id"]: fact for fact in initial["facts"]}
@@ -1016,7 +1035,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                                               scfg["match_threshold"], reason, deadline=deadline)
                     except (ValueError, patient_context_refresh_state.Deferred):
                         _note("skip_unrecorded")
-                        return request_status(), identity
+                        return "unknown", identity
                     return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": reason,
                         **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                            if purpose == "source" else {})}

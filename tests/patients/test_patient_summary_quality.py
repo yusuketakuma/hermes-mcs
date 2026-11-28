@@ -1038,7 +1038,7 @@ def test_reservation_stopped_before_its_post_is_sealed_and_asked_again(quality_o
             lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert not sends
     (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
-    assert meta['quality_result'] == {'answers': {}, 'invalid': [], 'not_sent': 'stopped_before_send'}
+    assert meta['quality_result'] == {'answers': {}, 'invalid': [], 'not_sent': 'runtime_stale'}
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
     status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
         lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
