@@ -432,8 +432,9 @@ def _answer_every_send(monkeypatch):
 
 def _refuse_heads(monkeypatch, kind):
     """The shared send-history check refuses the head members' fresh sends:
-    a verified repeat of an already settled request, a locked read, or (for
-    a member that owns a paid unit) a budget wait that can lift by itself."""
+    a verified repeat of an already settled request, a repeat whose earlier
+    result is still unsettled, a locked read, or (for a member that owns a
+    paid unit) a budget wait that can lift by itself."""
     real = cloud_policy.request_send_block_reason
     seen = []
 
@@ -442,9 +443,11 @@ def _refuse_heads(monkeypatch, kind):
         if mid not in _CLOUD_HEADS:
             return real(ledger, cfg, body, **kwargs)
         seen.append(mid)
-        if kind == "settled_repeat":
+        if kind in ("settled_repeat", "unsettled_repeat"):
+            # the same error the real guard raises for its repeat verdict
             raise cloud_policy._classified(cloud_policy.AnthropicError(
-                "budget_exceeded", "cloud_unit_unresolved"), "repeat_failed")
+                "budget_exceeded", "cloud_unit_unresolved"),
+                "repeat_failed" if kind == "settled_repeat" else "repeat_unsettled")
         if kind == "read_locked":
             raise sqlite3.OperationalError("database is locked")
         return "daily_cap"
@@ -458,7 +461,8 @@ def _refuse_heads(monkeypatch, kind):
 
 
 @pytest.mark.parametrize("cloud_only", [True, False])
-@pytest.mark.parametrize("kind", ["settled_repeat", "read_locked", "owned_send_wait"])
+@pytest.mark.parametrize("kind", ["settled_repeat", "unsettled_repeat", "read_locked",
+                                  "owned_send_wait"])
 def test_real_cloud_unresolved_heads_yield_and_only_settled_repeats_wait(
         cloud, monkeypatch, kind, cloud_only):
     """Through the real run_due, _process_job, backlog_inference and
@@ -466,12 +470,15 @@ def test_real_cloud_unresolved_heads_yield_and_only_settled_repeats_wait(
     replaced: head jobs refused as cloud_unit_unresolved before any
     reservation hand their slot on, in the resident cloud-only lane
     (max_jobs=1) as in the mixed lane, and the tail is done in the same pass.
-    Only a verified settled repeat waits NOT_SENT_BACKOFF_S; a locked read or
-    an owned member's send wait may clear by itself and keeps the minute.
+    Only a verified repeat of a settled result (success or failure) waits
+    NOT_SENT_BACKOFF_S; a repeat whose earlier result is unsettled, a locked
+    read or an owned member's send wait may clear by itself and keeps the
+    minute.
 
     Without the fix the cloud-only lane kept the slot (out['done'] == 0) and
     the mixed lane gave every refusal the hour by its name alone (next_try ==
-    updated_at + NOT_SENT_BACKOFF_S for read_locked and owned_send_wait)."""
+    updated_at + NOT_SENT_BACKOFF_S for read_locked and owned_send_wait), and
+    a repeat_unsettled verdict also got the hour."""
     led, cfg, _, _ = cloud
     cfg.clear()
     cfg.update({**_cfg("shadow", job_budget_seconds=1260),
