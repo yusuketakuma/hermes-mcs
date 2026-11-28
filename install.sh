@@ -352,8 +352,9 @@ EOF
     }
     # A present record is trusted only when it is a regular file owned by this
     # user whose stored root identity still matches the live root. Records are
-    # published complete by an atomic rename, so an empty or partial record is
-    # never one of ours: it is kept and the install stops.
+    # published complete by a rename, so an interrupted run never leaves an
+    # empty or partial record; one found anyway (for example after a power
+    # loss) is kept and the install stops.
     _validate_claim_record() {
         if [ -L "$_claim_record" ] || [ ! -f "$_claim_record" ]; then
             die "初回導入の確保記録を確認できません。記録を保持して担当者に確認してください"
