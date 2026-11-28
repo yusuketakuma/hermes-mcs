@@ -13,7 +13,6 @@
  "refs": [
   "install.sh",
   "tests/meta/test_install_sh.py",
-  "tests/meta/test_install_sh_software.py",
-  "#405"
+  "tests/meta/test_install_sh_software.py"
  ]
 }

@@ -411,9 +411,13 @@ EOF
             # First install: prove the absence of both data/ and config.json on
             # the spot, then write the evidence record exactly once. Only the
             # noclobber winner proceeds; a loser revalidates the winner's record
-            # and funnels into the same lock arbitration below.
-            if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] \
-                    || [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
+            # and funnels into the same lock arbitration below. A config.json
+            # that appeared during the read-only checks keeps the reason the
+            # post-lock check reports for the same race.
+            if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+                die "導入前の確認中に設定が作成されました。設定を保持して中止したため、内容を確認して再実行してください"
+            fi
+            if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
                 die "初回導入の確保中に保存先が作成されました。保持したまま中止しました。担当者に確認してください"
             fi
             _claim_record_text_for
