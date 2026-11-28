@@ -979,8 +979,17 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
             return "skipped", {**identity, "_keys": patient_context_refresh_state._credential_tag(key, cloud_key), "_skip_reason": skip_reason,
                 **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                    if purpose == "source" else {})}
+        def reserve_guard(stage):
+            # Run inside the reservation's transaction at its entrance and after its last
+            # guard: one that would end within the commit margin of the deadline rolls back.
+            guard(stage)
+            if (patient_context_refresh_state.time.monotonic()
+                    >= deadline - patient_context_refresh_state.COMMIT_MARGIN):
+                raise _WriterDeadline()
+
         reserve = semantic_runtime.patient_summary_usage_reserver(
-            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity, purpose=purpose)
+            ledger, project_id=pid, guard=reserve_guard, daily_request_budget=scfg["daily_request_budget"],
+            identity=identity, purpose=purpose)
         reservation = [None]
 
         def reserve_locked(body, timeout):
@@ -994,8 +1003,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 if problems or live_cfg["daily_request_budget"] < scfg["daily_request_budget"]:
                     raise patient_context_refresh_state.Deferred("patient_summary_quality_budget_changed")
                 try:
-                    # The SQLite writer wait and the reservation's statements end within the
-                    # deadline, like the run lock's; a cut-off reservation was rolled back.
+                    # The SQLite writer wait, the reservation's statements and its commit end
+                    # within the deadline less the commit margin; a cut-off one was rolled back.
                     with _writer_within(ledger.db, deadline):
                         reservation[0] = reserve(body, timeout)
                 except _WriterDeadline:

@@ -1101,6 +1101,31 @@ def test_answer_received_after_the_deadline_is_kept_and_reused(quality_owner, mo
     assert patient_context_quality_receipts._quality_passed(led.db, 1, identity)
 
 
+def test_reservation_reaching_the_commit_margin_is_rolled_back_and_asked_next_run(quality_owner, monkeypatch):
+    led, clock, cfg, doc, sends, _ = quality_owner
+    deadline = clock.mono + 600
+    add = led.artifact_add_tx
+
+    def late(kind, *args, **kwargs):
+        artifact_id = add(kind, *args, **kwargs)
+        if kind == 'semantic_usage':
+            # The clock reaches the commit margin right after the reservation's INSERT.
+            clock.mono = deadline - patient_context_refresh_state.COMMIT_MARGIN + 0.25
+        return artifact_id
+    monkeypatch.setattr(led, 'artifact_add_tx', late)
+    with pytest.raises(patient_context_refresh_state.Deferred, match='patient_summary_quality_lock'):
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, deadline,
+            lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    # Without the commit-margin check the reservation commits and is then sealed as not sent.
+    assert not sends and not led.artifacts('semantic_usage')
+    monkeypatch.setattr(led, 'artifact_add_tx', add)
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'pending' and len(sends) == 1
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    assert semantic_runtime.patient_summary_usage_resolved(led.db, 1, meta)
+
+
 @pytest.mark.parametrize("code,reason,failure,child_wait,expected", [
     ("deadline", "source_quality_unavailable:deadline", None, False, {"quality_detail": "deadline"}),
     ("deadline", "summary_quality_deferred", None, False, {"quality_detail": "deadline"}),
