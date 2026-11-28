@@ -850,6 +850,130 @@ def test_one_time_disposition_is_committed_only_by_the_current_writer_generation
         db.close()
 
 
+def _copy_usage(db, artifact_id, *, pid=None, reservation_id=None, result=None):
+    """Insert a synthetic copy of one source reservation under another id, patient or result."""
+    import uuid
+    row = db.db.execute("SELECT project_id,model,meta FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+    meta = {**json.loads(row[2]), "reservation_id": reservation_id or uuid.uuid4().hex}
+    if result is not None:
+        meta["quality_result"] = result
+    with db.db:
+        return db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                             "VALUES('semantic_usage',?,NULL,'{}',?,?,?)",
+                             (row[0] if pid is None else pid, row[1], json.dumps(meta), time.time())).lastrowid
+
+
+def _usage_result(db, artifact_id):
+    return json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                    (artifact_id,)).fetchone()[0]).get("quality_result")
+
+
+def test_one_time_disposition_reads_every_reservation_id_in_one_pass(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        identity, wire, _ = source_case()
+        old = reserve_source(db, identity, wire)
+        # Five unresolved reservations of one patient from before the disposition.
+        copies = [_copy_usage(db, old.artifact_id) for _ in range(4)]
+        with db.db:
+            db.db.execute("DELETE FROM fetch_jobs WHERE kind='patient_source_quality_supersede'")
+        probes = []
+        db.db.set_trace_callback(lambda sql: probes.append(sql) if sql.lstrip().startswith("SELECT")
+                                 and "reservation_id" in sql else None)
+        try:
+            db.db.execute("BEGIN IMMEDIATE")
+            with db.db:
+                assert runtime.supersede_unresolved_source_requests_tx(db.db, time.time()) == 5
+        finally:
+            db.db.set_trace_callback(None)
+        # One read of the patient's reservation ids, not one search per unresolved reservation.
+        assert len(probes) == 1
+        for artifact_id in [old.artifact_id, *copies]:
+            assert _usage_result(db, artifact_id) == {"answers": {}, "invalid": [], "superseded": "unresolved_before_upgrade"}
+    finally:
+        db.close()
+
+
+def test_one_time_disposition_leaves_a_reservation_id_held_twice_in_the_patient_unresolved(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        db.ensure_patient(2)
+        identity, wire, _ = source_case()
+        shared = reserve_source(db, identity, wire)
+        # A sealed row of the same patient holds the same reservation id.
+        _copy_usage(db, shared.artifact_id, reservation_id=json.loads(db.db.execute(
+            "SELECT meta FROM artifacts WHERE artifact_id=?", (shared.artifact_id,)).fetchone()[0])["reservation_id"],
+            result={"answers": {}, "invalid": [], "not_sent": "runtime_stale"})
+        other = _copy_usage(db, shared.artifact_id, pid=2)
+        # The other patient's reservation id is also held by a row of patient 1: that does not make it ambiguous.
+        other_id = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                            (other,)).fetchone()[0])["reservation_id"]
+        _copy_usage(db, shared.artifact_id, reservation_id=other_id,
+                    result={"answers": {}, "invalid": [], "not_sent": "runtime_stale"})
+        with db.db:
+            db.db.execute("DELETE FROM fetch_jobs WHERE kind='patient_source_quality_supersede'")
+        db.db.execute("BEGIN IMMEDIATE")
+        with db.db:
+            assert runtime.supersede_unresolved_source_requests_tx(db.db, time.time()) == 1
+        assert _usage_result(db, shared.artifact_id) is None
+        assert _usage_result(db, other) == {"answers": {}, "invalid": [], "superseded": "unresolved_before_upgrade"}
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("stop", ["deadline_passes_during_the_pass", "writer_busy"])
+def test_one_time_disposition_ends_within_its_deadline_and_completes_on_a_later_pass(tmp_path, monkeypatch, stop):
+    import sqlite3
+    from contextlib import closing
+    import extract_llm
+    import patient_context_quality_controller as controller
+    import patient_context_refresh_state as refresh_state
+    db = _ledger(tmp_path)
+    try:
+        identity, wire, _ = source_case()
+        old = reserve_source(db, identity, wire)
+        with db.db:
+            db.db.execute("DELETE FROM fetch_jobs WHERE kind='patient_source_quality_supersede'")
+        monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+        if stop == "deadline_passes_during_the_pass":
+            now = [time.monotonic()]
+            monkeypatch.setattr(refresh_state.time, "monotonic", lambda: now[0])
+
+            def trace(sql):
+                # The clock reaches the deadline while the pass reads the usage rows.
+                if sql.lstrip().startswith("SELECT") and "kind='semantic_usage'" in sql and "reservation_id" in sql:
+                    now[0] += 1000
+            db.db.set_trace_callback(trace)
+            try:
+                assert controller._supersede_unresolved_source_requests(db, now[0] + 600) is False
+            finally:
+                db.db.set_trace_callback(None)
+            deadline = now[0] + 600
+        else:
+            # Another connection holds the SQLite writer lock past the deadline.
+            path = db.db.execute("PRAGMA database_list").fetchone()[2]
+            with closing(sqlite3.connect(path)) as other:
+                other.execute("BEGIN IMMEDIATE")
+                started = time.monotonic()
+                try:
+                    assert controller._supersede_unresolved_source_requests(
+                        db, started + refresh_state.COMMIT_MARGIN + 1) is False
+                finally:
+                    other.rollback()
+                # The wait ends at the deadline, not at the connection's busy timeout.
+                assert time.monotonic() - started < refresh_state.COMMIT_MARGIN + 5
+            deadline = time.monotonic() + 600
+        assert not db.db.in_transaction
+        assert _usage_result(db, old.artifact_id) is None
+        assert not runtime.source_requests_superseded(db.db)
+        # Nothing was kept from the cut-off pass; a later pass with time left completes it.
+        assert controller._supersede_unresolved_source_requests(db, deadline) is True
+        assert _usage_result(db, old.artifact_id) == {"answers": {}, "invalid": [], "superseded": "unresolved_before_upgrade"}
+        assert runtime.source_requests_superseded(db.db)
+    finally:
+        db.close()
+
+
 def test_not_sent_is_only_a_seal_without_answers(tmp_path):
     db = _ledger(tmp_path)
     try:

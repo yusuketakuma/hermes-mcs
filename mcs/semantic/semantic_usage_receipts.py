@@ -478,10 +478,11 @@ def patient_source_question_evidence(db, pid, identity, fact_ids):
     return result
 
 
-def _quality_result(db, project_id, meta, request):
+def _quality_result(db, project_id, meta, request, usage_id=None):
     parts = _quality_result_parts(meta, request)
     if request["v"] == 2:
-        usage_id = _source_usage_artifact(db, project_id, meta)
+        # A caller passing ``usage_id`` has already proven its reservation id unique in the patient.
+        usage_id = _source_usage_artifact(db, project_id, meta, usage_id)
         return bool(parts is not None and usage_id is not None and all(
             _source_answer_record(db, project_id, usage_id, meta, request, fid, ref) is not None
             for fid, ref in parts[0].items()))
@@ -636,27 +637,44 @@ def supersede_unresolved_source_requests_tx(db, now):
     record: the commit of that record is the point the disposition is bound to,
     and the reservations it reaches are the ones code from before this release
     left without a result. Its callers commit it only under the current writer
-    generation. Each is sealed once, which lets its questions be asked again. A
-    later answer for it is refused by ``patient_source_answer_binding``.
+    generation and within their deadline; an unfinished pass writes nothing and
+    is run again whole. Each is
+    sealed once, which lets its questions be asked again. A later answer for it
+    is refused by ``patient_source_answer_binding``. One pass over the usage
+    rows reads every reservation id, so the cost does not grow with the
+    number of unresolved reservations of one patient.
     Returns the number sealed, or None when the record already exists."""
     if not db.in_transaction:
         raise RuntimeError("patient_source_transaction_required")
     if source_requests_superseded(db):
         return None
     sealed = 0
-    rows = db.execute("SELECT artifact_id,project_id,meta FROM artifacts WHERE kind='semantic_usage' AND CASE "
-                      "WHEN typeof(meta)='text' AND length(meta)<=32768 AND json_valid(meta) THEN "
-                      "json_extract(meta,'$.operation')='patient_source_quality' "
-                      "AND json_type(meta,'$.quality_result') IS NULL END").fetchall()
-    for artifact_id, project_id, raw in rows:
+    # The reservation id is read with the expression _source_usage_artifact matches on,
+    # so every row that would make an id ambiguous there is counted here.
+    rows = db.execute("SELECT artifact_id,project_id,CASE WHEN json_valid(meta) THEN "
+                      "json_extract(meta,'$.reservation_id') END,CASE "
+                      "WHEN typeof(meta)='text' AND length(meta)<=32768 AND json_valid(meta) "
+                      "AND json_extract(meta,'$.operation')='patient_source_quality' "
+                      "AND json_type(meta,'$.quality_result') IS NULL THEN meta END "
+                      "FROM artifacts WHERE kind='semantic_usage'").fetchall()
+    holders = {}
+    for _, project_id, reservation_id, _ in rows:
+        if type(reservation_id) is str:
+            holders[(project_id, reservation_id)] = holders.get((project_id, reservation_id), 0) + 1
+    for artifact_id, project_id, _, raw in rows:
+        if raw is None:
+            continue
         meta = _quality_json(raw)
         request = _quality_bound(meta)
         # A malformed or v1 reservation stays unknown: no seal could make its evidence valid.
         if (request is None or request["v"] != 2 or meta.get("operation") != "patient_source_quality"
                 or "quality_result" in meta or type(project_id) is not int or project_id <= 0):
             continue
+        # A reservation id held by another row of the patient leaves the reservation ambiguous.
+        if holders.get((project_id, meta["reservation_id"])) != 1:
+            continue
         candidate = {**meta, "quality_result": {"answers": {}, "invalid": [], "superseded": SUPERSEDED_UNRESOLVED}}
-        if not _quality_result(db, project_id, candidate, request):
+        if not _quality_result(db, project_id, candidate, request, artifact_id):
             continue
         sealed += db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=? AND kind='semantic_usage' AND meta=?",
                              (json.dumps(candidate, separators=(",", ":")), artifact_id, raw)).rowcount

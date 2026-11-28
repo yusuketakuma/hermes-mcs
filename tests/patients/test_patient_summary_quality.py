@@ -1046,6 +1046,33 @@ def test_reservation_stopped_before_its_post_is_sealed_and_asked_again(quality_o
     assert len(led.artifacts('semantic_usage')) == 2
 
 
+def test_unsent_reservation_is_not_rewritten_once_the_writer_generation_expires(quality_owner, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    led, clock, cfg, doc, sends, _ = quality_owner
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+
+    def generation(**_):
+        # An update replaces this code once the reservation is committed, before the client's POST.
+        with closing(sqlite3.connect(path)) as other:
+            committed = other.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0]
+        return not committed
+    monkeypatch.setattr(worker, '_writer_current', generation)
+    with pytest.raises(semantic_runtime.RuntimeStale):
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+            lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert not sends
+    (meta,) = [json.loads(row['meta']) for row in led.artifacts('semantic_usage')]
+    # The expired generation does not seal it: it stays unresolved, as code from before this release left it.
+    assert 'quality_result' not in meta
+    monkeypatch.setattr(worker, '_writer_current', lambda **_: True)
+    status, _ = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+        lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    # Its outcome is unknown to the current generation, so the question is never sent again.
+    assert status == 'unknown' and not sends
+    assert len(led.artifacts('semantic_usage')) == 1
+
+
 def test_answer_received_after_the_deadline_is_kept_and_reused(quality_owner, monkeypatch):
     led, clock, cfg, doc, sends, _ = quality_owner
     post = semantic_jev.JevClient

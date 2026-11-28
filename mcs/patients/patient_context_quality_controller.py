@@ -1,5 +1,6 @@
 """Patient context quality audit and finite source or summary repair execution."""
 import copy
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -615,41 +616,75 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
     return 'source_candidate', ref
 
 
+class _WriterDeadline(Exception):
+    """The SQLite writer wait or a statement was cut off at the deadline before anything committed."""
+
+
+@contextmanager
+def _writer_within(db, deadline):
+    """Bound the SQLite writer wait and every statement run inside to ``deadline`` less the commit margin.
+
+    A wait or statement cut off there raises ``_WriterDeadline`` once the
+    transaction it ran in is rolled back; any other error propagates."""
+    clock = patient_context_refresh_state.time.monotonic
+    until = deadline - patient_context_refresh_state.COMMIT_MARGIN
+    db.set_progress_handler(lambda: int(clock() >= until), 1000)
+    try:
+        with patient_context_refresh_sources._scan_writer_wait(db, deadline):
+            yield until
+    except sqlite3.OperationalError as error:
+        code = getattr(error, "sqlite_errorcode", 0) & 255
+        if not db.in_transaction and (code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                                      or code == sqlite3.SQLITE_INTERRUPT and clock() >= until):
+            raise _WriterDeadline() from None
+        raise
+    finally:
+        db.set_progress_handler(None, 0)
+
+
 def _generation_write(ledger, deadline, write):
     """Commit one write under the run lock only while this process is the current writer generation.
 
     The generation is checked inside the writer transaction before ``write``
     and again before the commit, so code an update or restore has replaced
-    never commits it. Returns False when the lock, the deadline or the
-    generation refuses; the write is then rolled back."""
+    never commits it. The run lock, the SQLite writer wait and ``write``
+    itself end before ``deadline`` less the commit margin. Returns False when
+    the lock, the deadline or the generation refuses; the write is then
+    rolled back."""
     import extract_llm
 
-    def generation():
-        if extract_llm._writer_current(full=True):
-            return True
-        _note("writer_changed")
+    db = ledger.db
+    clock = patient_context_refresh_state.time.monotonic
+
+    def refused(code):
+        _note(code)
+        if db.in_transaction:
+            db.rollback()
         return False
 
     fd = patient_context_quality_receipts._acquire(deadline=deadline)
     if fd is None:
         return False
     try:
-        if patient_context_refresh_state.time.monotonic() >= deadline:
-            return False
-        ledger.db.execute("BEGIN IMMEDIATE")
-        try:
-            if not generation():
-                ledger.db.rollback()
-                return False
-            write()
-            if not generation():
-                ledger.db.rollback()
-                return False
-            ledger.db.commit()
-            return True
-        except BaseException:
-            ledger.db.rollback()
-            raise
+        with _writer_within(db, deadline) as until:
+            if clock() >= until:
+                return refused("deadline")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if not extract_llm._writer_current(full=True):
+                    return refused("writer_changed")
+                write()
+                if not extract_llm._writer_current(full=True):
+                    return refused("writer_changed")
+                if clock() >= until:
+                    return refused("deadline")
+                db.commit()
+                return True
+            except BaseException:
+                db.rollback()
+                raise
+    except _WriterDeadline:
+        return refused("deadline")
     finally:
         os.close(fd)
 
@@ -958,7 +993,14 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                 live_cfg, problems = semantic_policy.semantic_config(extract_llm.load_config(), key_present=bool(key))
                 if problems or live_cfg["daily_request_budget"] < scfg["daily_request_budget"]:
                     raise patient_context_refresh_state.Deferred("patient_summary_quality_budget_changed")
-                reservation[0] = reserve(body, timeout)
+                try:
+                    # The SQLite writer wait and the reservation's statements end within the
+                    # deadline, like the run lock's; a cut-off reservation was rolled back.
+                    with _writer_within(ledger.db, deadline):
+                        reservation[0] = reserve(body, timeout)
+                except _WriterDeadline:
+                    _note("deadline")
+                    raise patient_context_refresh_state.Deferred("patient_summary_quality_lock") from None
                 return reservation[0]
             finally:
                 os.close(fd)
