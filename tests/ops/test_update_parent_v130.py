@@ -31,12 +31,23 @@ stray sweep and verification code run unmodified. Launch paths of one run:
   mcs/ops/requires_python_admits.py, <pyproject.toml>]`` (re, sys and tomllib
   only), but only ``_migration_checkout_problem`` calls it, and only when
   MCS_UPDATE_KEEP_HERMES_CHECKOUT names a kept checkout; the harness sets none.
-- ``-S`` (skip site-packages, so no guard): in both trees only
-  release_dependency_lock and release_quarantine build such argv (searched over
-  every .py and .sh outside tests, integration and the evaluation benches).
-  Only the release route loads them (update_apply and update_execution import
-  release_apply_owner only with a release capability); this harness takes the
-  local-candidate route.
+- ``-S`` (skip site-packages, so no guard): three sites in both trees, found
+  with ``git grep -nE -e '(^|[[:space:]"'"'"'])-[A-Za-z]*S[A-Za-z]*([[:space:]"'"'"',]|$)'
+  <rev> -- '*.py' '*.sh' ':!tests' ':!integration' ':!evaluation'
+  ':!scripts/evaluation'`` (clustered flags included; the other hits are curl
+  options and docstrings). release_dependency_lock builds ``-I -S`` argv in
+  ``_runtime``, ``_build_editable`` and the ``#!/bin/sh exec <python> -I -S``
+  wrapper ``_isolated_python`` writes; release_quarantine ``quarantine_argv``
+  starts quarantine_bootstrap; deployment/install/runtime.sh
+  ``locked_dependencies`` runs ``"$1" -I -S -c ... release_dependency_lock
+  main``. The Python modules are imported only lazily, from release_apply_checks
+  (``_observe_installed``, ``_inspect_artifact``), release_auto_deps,
+  release_quarantine_native and quarantine_bootstrap: the release apply and
+  auto routes, which this local-candidate harness never enters. runtime.sh is
+  sourced only by the real install.sh, and the update code starts install.sh
+  only from ``_reinstall`` in the post-merge child, on the merged tree, whose
+  install.sh is the synthetic one-line installer committed by ``_world``; the
+  parent never starts install.sh in either tree.
 - Shell children: the synthetic one-line install.sh, the services wrapper, and
   ``/bin/sh -c RELOAD_SCRIPT`` (only for the caller's own launchd label or a
   bootout that never completes; the fake launchctl always completes it). They
