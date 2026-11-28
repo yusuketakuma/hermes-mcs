@@ -110,10 +110,27 @@ sys.exit(0)
     path.chmod(0o755)
 
 
+def _fake_pgrep(path):
+    # pgrep exit 1 is the updater's documented "no stray drainers" answer.
+    path.write_text('#!/bin/sh\nexit 1\n')
+    path.chmod(0o755)
+
+
 _PARENT_DRIVER = r'''
-import importlib.util, json, os, sys
+import importlib.util, json, os, re, subprocess, sys
 from pathlib import Path
 repo, home, base, target = sys.argv[1:]
+_real_kill = os.kill
+def _guarded_kill(pid, sig):
+    probe = subprocess.run(['ps', '-p', str(pid), '-o', 'command='],
+                           capture_output=True, text=True, timeout=2)
+    command = probe.stdout.strip()
+    if probe.returncode != 0 or not command:
+        raise RuntimeError('synthetic kill guard: target process unverifiable')
+    if re.search(r'(^|/)[Pp]ython[0-9.]*\s+\S*(extract_llm|semantic_drain)[.]py(\s|$)', command):
+        raise RuntimeError('synthetic kill guard: drainer-shaped process')
+    return _real_kill(pid, sig)
+os.kill = _guarded_kill
 os.environ['HOME'] = home
 os.environ['MCS_ROOT'] = home
 os.environ['MCS_UPDATE_REPO'] = repo
@@ -239,6 +256,7 @@ def _world(tmp_path, *, failing_install=False):
     bin_dir.mkdir()
     _fake_launchctl(bin_dir / 'launchctl')
     _fake_hermes(bin_dir / 'hermes')
+    _fake_pgrep(bin_dir / 'pgrep')
     fake_state = tmp_path / 'fake-launchd'
     env = dict(os.environ)
     env.update({
@@ -292,3 +310,18 @@ def test_real_v130_parent_rolls_back_when_child_fails_before_settings(tmp_path):
     state = json.loads((home / 'data/update_state.json').read_text())
     assert state['applying'] is None
     assert 'provider_settings_migration_started' not in json.dumps(state)
+
+
+def test_real_v130_harness_cannot_kill_drainer_shaped_process(tmp_path):
+    script = tmp_path / 'extract_llm.py'
+    script.write_text('import time\ntime.sleep(60)\n')
+    stray = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        world = _world(tmp_path)
+        result = _run_parent(world)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert stray.poll() is None
+    finally:
+        if stray.poll() is None:
+            stray.terminate()
+            stray.wait(timeout=5)
