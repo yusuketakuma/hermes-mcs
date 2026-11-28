@@ -533,13 +533,16 @@ def patient_progress_counts(db) -> dict:
     """Counts only: active patients, those with every stored post extracted, and focus candidates.
 
     Completion counts pending posts even after retries are exhausted;
-    only focus eligibility follows the worker's retry budget. The caller bounds time."""
+    only focus eligibility follows the worker's retry budget. The caller bounds time.
+    A patient left with only released holds has every row probed, so the
+    CASE settles a released hold before the costlier pending test runs."""
     active = db.execute("SELECT COUNT(*) FROM patients WHERE COALESCE(is_archived,0)=0").fetchone()[0]
     pending = pending_pred(db)
     remaining, focus = db.execute(
         f"SELECT COUNT(*), COALESCE(SUM(EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id "
-        f"AND {pending} AND ({_retry_budget_sql()}) AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
-        f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL} AND NOT {_rehold_sql()})), 0) "
+        f"AND CASE WHEN {_rehold_sql()} THEN 0 ELSE {pending} END AND ({_retry_budget_sql()}) "
+        f"AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ? "
+        f"AND NOT {_FRESH_SQL})), 0) "
         "FROM patients p WHERE COALESCE(p.is_archived,0)=0 "
         f"AND EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND {pending})",
         (time.time(),)).fetchone()
@@ -847,8 +850,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 if time.monotonic() >= deadline:
                     raise _CloudSelectionIncomplete('deadline')
 
+        # each class walks its update-released holds after its other rows
         phases = [(archived, rehold) for archived in ((True, False) if archived_first else (False, True))
-                  for rehold in ((None,) if oldest_first and fair_oldest else (False, True))]
+                  for rehold in (False, True)]
         state['phase_count'] = len(phases)
         selected, ready = [], []
         # Re-read every previously selected ID under this pass's fresh receipt snapshot.
@@ -1000,8 +1004,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             adm_params.append(json.dumps(sorted({r["message_id"] for r in selected})))
     # Active patients normally precede archived ones; the resident's
     # archive fairness turn reverses those classes. Each class keeps its
-    # usual fresh/re-extraction order, except that a fair oldest turn
-    # interleaves update-released holds by source time.
+    # usual fresh/re-extraction order, and on every turn its update-released
+    # holds follow the rest of that class.
     for archived in ((True, False) if archived_first else (False, True)):
         for fresh in ((None,) if oldest_first or prioritize_patients else (True, False)):
             if fresh is False and not archived:
@@ -1015,8 +1019,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                     rows += _select(False, limit - len(rows), False, False,
                                     scope=" AND m.project_id=?", scope_params=(pid,))
             # a never-extracted body has no hold, so fresh needs no split
-            for rehold in ((None,) if fresh or (oldest_first and fair_oldest)
-                           else (False, True)):
+            for rehold in ((None,) if fresh else (False, True)):
                 if len(rows) >= limit:
                     return rows, fresh_selected
                 scoped = fresh is False and not archived and rehold is False and focus

@@ -18,6 +18,7 @@ import pytest
 import cloud_policy
 import extract_llm
 import cloud_inference
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _message, _patient
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
 from test_cloud_response_recovery import legacy_cloud_routes as legacy_cloud_routes
@@ -291,3 +292,22 @@ def test_cloud_priority_short_budget_keeps_selected_candidates_for_next_pass(clo
     assert _claim_count(led) == 0
     assert _cloud_pass(led)['done'] == 1
     assert reservations[0]['identity']['message_id'] == expected[0]
+
+
+@pytest.mark.parametrize('walk', [False, True])
+def test_cloud_fair_oldest_turn_takes_an_older_contract_hold_after_rows_that_can_land(
+        cloud_candidates, walk):
+    led, *_ = cloud_candidates
+    prior, chash = led.db.execute(
+        'SELECT a.artifact_id, m.content_hash FROM artifacts a JOIN messages m ON m.message_id=a.message_id '
+        'WHERE a.kind=? AND a.message_id=1', (extract_llm.KIND,)).fetchone()
+    led.artifact_add(extract_llm.UPGRADE_KIND, json.dumps({
+        'state': 'held_prior', 'reason': 'protected_loss', 'hash': chash, 'prior_artifact_id': prior,
+        'target_version': extract_llm.EXTRACT_VERSION, 'contract': 'older-code'}),
+        project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION})
+    with legacy_cloud_routes():
+        rows, _ = extract_llm._select_pending(
+            led, 64, None, None, True, cloud_only=True, prioritize_patients=True, fair_oldest=True,
+            **({'deadline': time.monotonic() + 120} if walk else {}))
+    # oldest first, except that the oldest row's released hold waits behind the rest
+    assert [r['message_id'] for r in rows] == [*range(2, 65), 1]
