@@ -413,8 +413,8 @@ def test_split_parent_without_requirement_adopted_only_for_reviewed_source(legac
         assert authority['version'] == 2 and 'provider_settings_migration_required' not in state['applying']
 
 
-def test_split_parent_crash_keeps_requirement_for_manual_recovery(legacy_entry):
-    providers = _previous_split(legacy_entry)
+def test_split_parent_crash_journals_rollback_ready_rewind(legacy_entry):
+    _previous_split(legacy_entry)
     path = legacy_entry['data'] / 'update_state.json'
     state = update_journal.load_state(path)
     state['stages'].insert(0, {'stage': 'merge', 'at': 0})
@@ -423,13 +423,15 @@ def test_split_parent_crash_keeps_requirement_for_manual_recovery(legacy_entry):
     assert outcome['result'] != 0 and 'services' not in outcome['events']
     assert legacy_entry['marker'].is_file()
     crashing = update_journal.load_state(path)['applying']
-    assert crashing['provider_settings_migration_required'] is True
+    assert 'provider_settings_migration_required' not in crashing
+    assert crashing['provider_settings_migration_rewound'] is True
     assert crashing['provider_settings_migration_deferred'] is True
     authority = legacy_entry['data'] / '.provider-settings-authority.json'
     assert json.loads(authority.read_text())['version'] == 2
-    assert _run_recovery(legacy_entry, 'v2_reviewed')['result'] == 0
-    assert json.loads(authority.read_text())['version'] == 3
-    assert json.loads((legacy_entry['runtime'] / 'config.json').read_text())['provider_settings'] == providers
+    outcome = _run_recovery(legacy_entry, 'v2_reviewed')
+    assert outcome['result'] == 1, outcome
+    assert json.loads(authority.read_text())['version'] == 2
+    assert json.loads((legacy_entry['runtime'] / 'config.json').read_text()).get('provider_settings') is None
 
 
 @pytest.mark.parametrize('case', ['v2_reviewed', 'v2_unknown', 'default_recovery'])
@@ -867,13 +869,13 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     result = updater.apply(None, None, None, candidate_sha=target, base_sha=previous,
                            confirm_human=True, reason='synthetic local validation')
     assert len(spawned) == 1
-    assert _git(repo, 'rev-parse', 'HEAD') == target
     final = update_journal.load_state(data / 'update_state.json')
     if child_case == 'service_failure':
         # R4(b): the child journaled the consolidation start and completed the
         # migration before failing, so the parent holds for recovery — writers
         # stay down, no rollback onto code the new layout cannot run.
         assert result == 1
+        assert _git(repo, 'rev-parse', 'HEAD') == target
         assert parent_effects == []
         assert legacy_entry['marker'].is_file() and final['applying'] is not None
         assert final['applying']['provider_settings_migration_started'] is True
@@ -885,6 +887,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         # settings are untouched and the parent rolls back as before — writers
         # resume instead of a recovery hold.
         assert result == 1
+        assert _git(repo, 'rev-parse', 'HEAD') == previous
         assert parent_effects == ['rollback', 'restart']
         assert final['applying'] is None
         assert 'provider_settings_migration_started' not in json.dumps(final)
@@ -893,6 +896,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         assert not (data / '.provider-settings-authority.json').exists()
         return
     assert result == 0, final
+    assert _git(repo, 'rev-parse', 'HEAD') == target
     if child_case == 'v2_options':
         assert not options.exists()
         assert json.loads((runtime / 'config.json').read_text())['install_args'] == ['--no-llm']

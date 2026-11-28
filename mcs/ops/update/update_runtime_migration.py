@@ -70,6 +70,7 @@ from update_repository import (
     _git,
     _head_sha,
     _index_has_flags,
+    _local_changes_outside,
     _provider_prior_source_verified,
     _release_git_scope,
     _split_target_source_matches,
@@ -85,6 +86,43 @@ _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
 # Homebrew's default bin dirs (Apple silicon, Intel). runtime_inspection keeps
 # its own list of interpreter paths under the same prefixes; update both.
 HOMEBREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def _rewind_before_provider_migration(state: dict) -> None:
+    """Best-effort tree rewind after a child failure that cannot have touched settings.
+
+    Older parents cannot prove a v3-aware target reader safe for rollback while
+    the installation is still split. Once the child has restored HEAD to the
+    parent tree, the parent's own exact-tree proof applies; refusal conditions
+    stay with the parent's rollback path.
+    """
+    try:
+        applying = state.get("applying") or {}
+        prev, sha = applying.get("prev_sha"), applying.get("sha")
+        if (applying.get("provider_settings_migration_started") is True
+                or applying.get("schema_bump")
+                or not isinstance(prev, str) or not isinstance(sha, str)
+                or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", prev) is None
+                or len(prev) != len(sha) or _head_sha() != sha
+                or _local_changes_outside(sha, prev)):
+            return
+        if _git(["reset", "--hard", prev]).returncode != 0 \
+                or _head_sha() != prev or not _tree_clean():
+            return
+        owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+        current = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        if current.get("layout") == "single" or current.get("mode") not in ("legacy_unverified", "split"):
+            return
+        # A v1.3.x parent holds on the mere requirement because its own reader
+        # cannot prove a rollback beside split settings. The child has now
+        # proved the exact pre-update tree and the unchanged pre-publication
+        # layout, so that older parent's rollback preflight is exact-tree rather
+        # than witness-based. Keep a positive marker for the fixed recovery path.
+        applying.pop("provider_settings_migration_required", None)
+        applying["provider_settings_migration_rewound"] = True
+        journal_store.save_state(STATE_PATH, state)
+    except Exception:
+        return
 
 
 def _install_path(path: str, dirs) -> str:

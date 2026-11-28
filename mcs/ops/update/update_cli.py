@@ -70,6 +70,7 @@ from update_repository import (
 )
 from update_runtime_migration import (
     _post_merge,
+    _rewind_before_provider_migration,
 )
 
 def _drug_info_notices(cfg: dict) -> None:
@@ -560,7 +561,11 @@ def cmd_plan(args) -> int:
 
 
 def _legacy_post_merge(state):
-    return _post_merge(state, legacy_provider_migration=True)
+    try:
+        return _post_merge(state, legacy_provider_migration=True)
+    except Exception:
+        _rewind_before_provider_migration(state)
+        raise
 
 
 def cmd_post_merge() -> int:
