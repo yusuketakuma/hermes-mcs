@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "Slack独立接続のSDKを3.48.0へ更新",
+  "summary": "runtime_mode=standalone で使う Slack SDK の固定版を slack-sdk 3.47.0 から 3.48.0 へ更新しました。次回の install.sh / 更新経路の実行で新しい版が入り、それまで既存環境の SDK は3.47.0のまま動作します。",
+  "upgrade": "runtime_mode=standalone で Slack を利用する環境が対象です。更新後に install.sh を実行して依存環境を更新し、スタンドアロンの常駐処理を再起動してください。Hermes 接続のSDK構成、通知先・人承認・通信・再試行の条件は変更しません。",
+  "details": [
+    "deployment/requirements-standalone.txt の slack-sdk だけを 3.47.0 から 3.48.0 へ更新し、他の12個の依存pinは維持します。",
+    "deployment/requirements-standalone.lock の slack-sdk も 3.48.0 に揃え、sdist と wheel の sha256 を uv pip compile の生成結果で記録しました。ほかの依存の版とハッシュは変えていません。",
+    "抽出文脈・保持・候補指紋・添付抽出・患者品質の識別子は変更しません。"
+  ],
+  "refs": [
+    "deployment/requirements-standalone.txt",
+    "deployment/requirements-standalone.lock",
+    "tests/meta/test_standalone_sdk_hashes.py"
+  ]
+}
