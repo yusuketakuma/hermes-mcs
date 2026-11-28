@@ -274,6 +274,14 @@ def _cloud_drain(db, max_jobs):
                                   lane='backlog', max_jobs=max_jobs)
 
 
+def test_unsent_hold_stages_are_transport_pre_send_refusals():
+    """The evidence exemption only covers stages the transport itself
+    documents as raised before anything was dispatched."""
+    assert semantic_job_processor.UNSENT_HOLD_STAGES
+    assert semantic_job_processor.UNSENT_HOLD_STAGES <= semantic_transport._PRESEND_REFUSAL_STAGES
+    assert semantic_job_processor.UNSENT_HOLD_STAGES <= semantic_transport.MEMBER_HOLD_STAGES
+
+
 def _job_id(db, mid):
     return db.db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'"
                          " AND message_id=?", (mid,)).fetchone()[0]
