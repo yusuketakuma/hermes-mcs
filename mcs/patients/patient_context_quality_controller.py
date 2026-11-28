@@ -630,7 +630,7 @@ def _generation_write(ledger, deadline, write):
         _note("writer_changed")
         return False
 
-    fd = patient_context_quality_receipts._acquire(current=generation, deadline=deadline)
+    fd = patient_context_quality_receipts._acquire(deadline=deadline)
     if fd is None:
         return False
     try:
